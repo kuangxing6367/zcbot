@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>定时任务 · zcbot</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="main">
+        <h1 class="page-title">定时任务</h1>
+        <p class="page-subtitle">查看和管理定时任务。插件注册的任务由插件生命周期管理，仅可启停/触发；Web 任务可自由增删。</p>
+
+        <div class="card">
+            <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+                <span>任务列表</span>
+                <button class="btn btn-sm" onclick="showAddTask()">+ 添加任务</button>
+            </div>
+            <div id="taskArea"><div class="empty"><div class="loading-spinner"></div> 加载中...</div></div>
+        </div>
+    </div>
+
+    <!-- 添加任务弹窗 -->
+    <div class="overlay" id="addTaskOverlay">
+        <div class="modal" style="max-width:520px;">
+            <div class="modal-header">
+                <span class="modal-title">添加定时任务</span>
+                <button class="modal-close" onclick="closeOverlay('addTaskOverlay')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Cron 表达式（5段格式）</label>
+                    <input type="text" class="inp" id="cronInput" value="0 * * * *" placeholder="分 时 日 月 周">
+                    <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">
+                        示例：<code>0 * * * *</code> 每小时执行 · <code>*/30 * * * *</code> 每30分钟 · <code>0 8 * * 1-5</code> 工作日8点
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>任务描述</label>
+                    <input type="text" class="inp" id="descInput" placeholder="如：每小时清理缓存">
+                </div>
+                <div class="form-group">
+                    <label>处理函数名（可选，供插件注册使用）</label>
+                    <input type="text" class="inp" id="handlerInput" placeholder="custom_task">
+                    <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Web 创建的任务仅作展示记录，实际逻辑需由插件 handler 触发</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline btn-sm" onclick="closeOverlay('addTaskOverlay')">取消</button>
+                <button class="btn btn-sm" onclick="addTask()">确认创建</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <script src="/js/common.js"></script>
+    <script>
+        initPage('tasks', loadTasks);
+
+        async function loadTasks() {
+            const res = await api('/api/tasks');
+            if (!res || res.code !== 0) return;
+            const area = document.getElementById('taskArea');
+            const rows = res.data || [];
+            if (rows.length === 0) {
+                area.innerHTML = '<div class="empty">暂无定时任务</div>';
+                return;
+            }
+            const statusBadge = (s) => {
+                if (s === 'success') return '<span class="badge badge-ok">成功</span>';
+                if (s === 'failure') return '<span class="badge badge-error">失败</span>';
+                if (s === 'running') return '<span class="badge badge-warn">执行中</span>';
+                return '<span class="badge badge-dim">未执行</span>';
+            };
+            const pluginLabel = (name) => {
+                if (name === '__web__') return '<span class="badge badge-dim">Web 创建</span>';
+                return `<span class="badge badge-info">${escapeHtml(name)}</span>`;
+            };
+            area.innerHTML = `<div class="tbl-wrap"><table class="tbl">
+                <thead><tr><th>ID</th><th>来源</th><th>Cron</th><th>描述</th><th>处理函数</th><th>状态</th><th>执行次数</th><th>上次执行</th><th>下次执行</th><th>操作</th></tr></thead>
+                <tbody>${rows.map(t => `
+                    <tr style="${t.is_active ? '' : 'opacity:0.5;'}">
+                        <td>${t.id}</td>
+                        <td>${pluginLabel(t.plugin_name)}</td>
+                        <td><code>${escapeHtml(t.cron_expression)}</code></td>
+                        <td>${escapeHtml(t.description || '-')}</td>
+                        <td><code style="font-size:12px;">${escapeHtml(t.handler || '-')}</code></td>
+                        <td>${t.is_active ? '<span class="badge badge-ok">启用</span>' : '<span class="badge badge-dim">禁用</span>'} ${statusBadge(t.last_status)}</td>
+                        <td>${t.run_count || 0}</td>
+                        <td>${timeAgo(t.last_run_at)}</td>
+                        <td>${formatDate(t.next_run_at)}</td>
+                        <td style="white-space:nowrap;">
+                            <button class="btn btn-outline btn-sm" onclick="toggleTask(${t.id}, ${t.is_active ? 0 : 1})">${t.is_active ? '禁用' : '启用'}</button>
+                            <button class="btn btn-outline btn-sm" onclick="triggerTask(${t.id})">触发</button>
+                            <button class="btn btn-outline btn-sm" style="color:var(--status-error);border-color:var(--status-error);" onclick="deleteTask(${t.id}, '${escapeHtml(t.plugin_name)}')">删除</button>
+                        </td>
+                    </tr>`).join('')}
+                </tbody></table></div>`;
+        }
+
+        async function toggleTask(id, isActive) {
+            const res = await api(`/api/tasks/${id}/toggle`, {
+                method: 'POST',
+                body: JSON.stringify({ is_active: !!isActive })
+            });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) loadTasks();
+        }
+
+        async function triggerTask(id) {
+            if (!confirmDialog('确定手动触发此任务立即执行？')) return;
+            const res = await api(`/api/tasks/${id}/trigger`, { method: 'POST' });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) loadTasks();
+        }
+
+        async function deleteTask(id, pluginName) {
+            if (pluginName !== '__web__') {
+                toast(`该任务由插件 [${pluginName}] 注册，无法直接删除`, 'warn');
+                return;
+            }
+            if (!confirmDialog('确定删除此任务？')) return;
+            const res = await api(`/api/tasks/${id}`, { method: 'DELETE' });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) loadTasks();
+        }
+
+        // ─── 添加任务 ───
+        function showAddTask() {
+            document.getElementById('cronInput').value = '0 * * * *';
+            document.getElementById('descInput').value = '';
+            document.getElementById('handlerInput').value = '';
+            showOverlay('addTaskOverlay');
+        }
+
+        async function addTask() {
+            const cron = document.getElementById('cronInput').value.trim();
+            const desc = document.getElementById('descInput').value.trim();
+            const handler = document.getElementById('handlerInput').value.trim();
+
+            if (!cron) { toast('请输入 Cron 表达式', 'err'); return; }
+            if (!desc) { toast('请输入任务描述', 'err'); return; }
+
+            const res = await api('/api/tasks', {
+                method: 'POST',
+                body: JSON.stringify({ cron_expression: cron, description: desc, handler: handler })
+            });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) {
+                closeOverlay('addTaskOverlay');
+                loadTasks();
+            }
+        }
+
+        // ─── 弹窗控制 ───
+        function showOverlay(id) { document.getElementById(id).classList.add('show'); }
+        function closeOverlay(id) { document.getElementById(id).classList.remove('show'); }
+        document.getElementById('addTaskOverlay').addEventListener('click', e => {
+            if (e.target.id === 'addTaskOverlay') closeOverlay('addTaskOverlay');
+        });
+    </script>
+</body>
+</html>

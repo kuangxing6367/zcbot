@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>仪表盘 · zcbot</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="main">
+        <h1 class="page-title">仪表盘</h1>
+        <p class="page-subtitle" id="statusText">加载中...</p>
+
+        <!-- 统计卡片 -->
+        <div class="dashboard-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-icon" style="background:#eef2ff;color:#6366f1;">P</div>
+                <div class="stat-body">
+                    <div class="stat-value" id="statPlugins">-</div>
+                    <div class="stat-label">已加载插件</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon" style="background:#fef3c7;color:#f59e0b;">C</div>
+                <div class="stat-body">
+                    <div class="stat-value" id="statCommands">-</div>
+                    <div class="stat-label">命令总数</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon" style="background:#dcfce7;color:#22c55e;">B</div>
+                <div class="stat-body">
+                    <div class="stat-value" id="statBots">-</div>
+                    <div class="stat-label">Bot 在线</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon" style="background:#fce7f3;color:#ec4899;">U</div>
+                <div class="stat-body">
+                    <div class="stat-value" id="statUsers">-</div>
+                    <div class="stat-label">用户总数</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon" style="background:#e0f2fe;color:#0ea5e9;">G</div>
+                <div class="stat-body">
+                    <div class="stat-value" id="statGroups">-</div>
+                    <div class="stat-label">活跃群数</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon" style="background:#f3e8ff;color:#a855f7;">T</div>
+                <div class="stat-body">
+                    <div class="stat-value" id="statTasks">-</div>
+                    <div class="stat-label">定时任务</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 快速入口 -->
+        <div class="quick-links">
+            <a href="/plugins.html" class="quick-link">
+                <span class="ql-icon">📦</span>
+                <span class="ql-title">插件管理</span>
+                <span class="ql-desc">上传、更新、启用/禁用插件</span>
+            </a>
+            <a href="/commands.html" class="quick-link">
+                <span class="ql-icon">⚙️</span>
+                <span class="ql-title">命令管理</span>
+                <span class="ql-desc">查看和管理命令别名</span>
+            </a>
+            <a href="/tasks.html" class="quick-link">
+                <span class="ql-icon">⏰</span>
+                <span class="ql-title">定时任务</span>
+                <span class="ql-desc">查看和管理定时任务</span>
+            </a>
+            <a href="/logs.html" class="quick-link">
+                <span class="ql-icon">📋</span>
+                <span class="ql-title">运行日志</span>
+                <span class="ql-desc">实时日志与历史查询</span>
+            </a>
+            <a href="/users.html" class="quick-link">
+                <span class="ql-icon">👥</span>
+                <span class="ql-title">用户管理</span>
+                <span class="ql-desc">用户与群组管理</span>
+            </a>
+            <a href="/settings.html" class="quick-link">
+                <span class="ql-icon">🔧</span>
+                <span class="ql-title">系统设置</span>
+                <span class="ql-desc">系统配置与管理</span>
+            </a>
+        </div>
+    </div>
+
+    <script src="/js/common.js"></script>
+    <script>
+        (async function() {
+            const admin = await checkAuth();
+            if (!admin) return;
+            document.getElementById('statusText').textContent = '欢迎回来，' + admin.username;
+
+            const res = await api('/api/dashboard');
+            if (!res || res.code !== 0) return;
+
+            const d = res.data || {};
+            document.getElementById('statPlugins').textContent = (d.plugins_active ?? '-') + '/' + (d.plugins_total ?? '-');
+            document.getElementById('statCommands').textContent = d.commands_total ?? '-';
+            document.getElementById('statBots').textContent = (d.bots && d.bots.length) ? d.bots.length : 0;
+            document.getElementById('statUsers').textContent = d.users_total ?? '-';
+            document.getElementById('statGroups').textContent = d.groups_active ?? '-';
+            document.getElementById('statTasks').textContent = d.tasks_active ?? '-';
+        })();
+    </script>
+
+    <style>
+        .dashboard-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:16px; margin:24px 0; }
+        .stat-card { background:var(--card-bg); border:1px solid var(--border); border-radius:14px; padding:20px; display:flex; align-items:center; gap:16px; transition:box-shadow 0.2s; }
+        .stat-card:hover { box-shadow:var(--shadow-lg); }
+        .stat-icon { width:48px; height:48px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px; font-weight:700; flex-shrink:0; }
+        .stat-body { min-width:0; }
+        .stat-value { font-size:28px; font-weight:700; color:var(--text); line-height:1.2; }
+        .stat-label { font-size:13px; color:var(--text-secondary); margin-top:2px; }
+        .quick-links { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; margin-top:8px; }
+        .quick-link { display:flex; flex-direction:column; gap:4px; padding:16px; background:var(--card-bg); border:1px solid var(--border); border-radius:12px; text-decoration:none; transition:box-shadow 0.2s, border-color 0.2s; }
+        .quick-link:hover { box-shadow:var(--shadow-lg); border-color:var(--accent); }
+        .ql-icon { font-size:24px; }
+        .ql-title { font-size:15px; font-weight:600; color:var(--text); }
+        .ql-desc { font-size:12px; color:var(--text-secondary); }
+    </style>
+</body>
+</html>

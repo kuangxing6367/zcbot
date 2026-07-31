@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统设置 · zcbot</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="main">
+        <h1 class="page-title">系统设置</h1>
+        <p class="page-subtitle">系统配置与管理员管理</p>
+
+        <!-- 修改密码 -->
+        <div class="card">
+            <div class="card-title">修改密码</div>
+            <form id="pwdForm" onsubmit="return changePwd(event)">
+                <div class="form-group">
+                    <label>旧密码</label>
+                    <input type="password" class="inp" id="oldPwd" placeholder="当前密码" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>新密码</label>
+                        <input type="password" class="inp" id="newPwd" placeholder="至少6位" required>
+                    </div>
+                    <div class="form-group">
+                        <label>确认新密码</label>
+                        <input type="password" class="inp" id="confirmPwd" placeholder="再次输入新密码" required>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-sm">修改密码</button>
+            </form>
+        </div>
+
+        <!-- 系统配置 -->
+        <div class="card">
+            <div class="card-title">系统配置</div>
+            <p style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;">仅超级管理员可修改配置项。</p>
+            <div id="configArea"><div class="empty"><div class="loading-spinner"></div> 加载中...</div></div>
+        </div>
+
+        <!-- 管理员管理（仅超管可见） -->
+        <div class="card" id="adminCard" style="display:none;">
+            <div class="card-title">管理员管理</div>
+            <form id="addAdminForm" onsubmit="return addAdmin(event)" style="margin-bottom:20px;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>用户名</label>
+                        <input type="text" class="inp" id="adminUsername" placeholder="新管理员用户名" required>
+                    </div>
+                    <div class="form-group">
+                        <label>密码</label>
+                        <input type="password" class="inp" id="adminPassword" placeholder="至少6位" required>
+                    </div>
+                    <div class="form-group">
+                        <label>角色</label>
+                        <select class="inp" id="adminRole">
+                            <option value="admin">管理员</option>
+                            <option value="super">超级管理员</option>
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-sm">添加管理员</button>
+            </form>
+            <div id="adminArea"><div class="empty"><div class="loading-spinner"></div> 加载中...</div></div>
+        </div>
+
+        <!-- 框架操作 -->
+        <div class="card">
+            <div class="card-title">框架操作</div>
+            <p style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;">
+                重启框架后 Web UI 会短暂断开，由进程管理器（systemd/supervisor）自动拉起。
+            </p>
+            <button class="btn btn-sm" style="background:var(--status-warn);color:#fff;" onclick="restartFramework()">重启框架</button>
+        </div>
+    </div>
+
+
+
+    <script src="/js/common.js"></script>
+    <script>
+        let currentAdmin = null;
+
+        initPage('settings', async function(admin) {
+            currentAdmin = admin;
+            await loadConfig();
+            if (admin.role === 'super') {
+                document.getElementById('adminCard').style.display = '';
+                await loadAdmins();
+            }
+        });
+
+        // ─── 修改密码 ───
+        async function changePwd(e) {
+            e.preventDefault();
+            const oldPwd = document.getElementById('oldPwd').value;
+            const newPwd = document.getElementById('newPwd').value;
+            const confirmPwd = document.getElementById('confirmPwd').value;
+            if (newPwd !== confirmPwd) { toast('两次密码输入不一致', 'err'); return false; }
+            if (newPwd.length < 6) { toast('新密码至少6位', 'err'); return false; }
+            const res = await api('/api/change_password', {
+                method: 'POST',
+                body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+            });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) document.getElementById('pwdForm').reset();
+            return false;
+        }
+
+        // ─── 系统配置 ───
+        async function loadConfig() {
+            const res = await api('/api/config');
+            if (!res || res.code !== 0) return;
+            const area = document.getElementById('configArea');
+            const rows = res.data || [];
+            if (rows.length === 0) {
+                area.innerHTML = '<div class="empty">暂无配置项</div>';
+                return;
+            }
+            area.innerHTML = `<div class="tbl-wrap"><table class="tbl">
+                <thead><tr><th>配置键</th><th>值</th><th>描述</th><th>更新者</th></tr></thead>
+                <tbody>${rows.map(c => `
+                    <tr>
+                        <td><code>${escapeHtml(c.config_key)}</code></td>
+                        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(c.config_value || '')}">${escapeHtml(c.config_value || '-')}</td>
+                        <td>${escapeHtml(c.description || '-')}</td>
+                        <td>${escapeHtml(c.updated_by || '-')}</td>
+                    </tr>`).join('')}
+                </tbody></table></div>`;
+        }
+
+        // ─── 管理员管理 ───
+        async function loadAdmins() {
+            const res = await api('/api/admins');
+            if (!res || res.code !== 0) return;
+            const area = document.getElementById('adminArea');
+            const rows = res.data || [];
+            if (rows.length === 0) {
+                area.innerHTML = '<div class="empty">暂无管理员</div>';
+                return;
+            }
+            area.innerHTML = `<div class="tbl-wrap"><table class="tbl">
+                <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>状态</th><th>最后登录</th><th>登录IP</th><th>创建时间</th><th>操作</th></tr></thead>
+                <tbody>${rows.map(a => `
+                    <tr>
+                        <td>${a.id}</td>
+                        <td><strong>${escapeHtml(a.username)}</strong></td>
+                        <td>${a.role === 'super' ? '<span class="badge badge-warn">超级管理员</span>' : '<span class="badge badge-info">管理员</span>'}</td>
+                        <td>${a.is_active ? '<span class="badge badge-ok">启用</span>' : '<span class="badge badge-error">禁用</span>'}</td>
+                        <td>${formatDate(a.last_login_at)}</td>
+                        <td>${escapeHtml(a.last_login_ip || '-')}</td>
+                        <td>${formatDate(a.created_at)}</td>
+                        <td>${a.id === (currentAdmin ? currentAdmin.id : -1) ? '<span style="font-size:12px;color:var(--text-secondary);">当前用户</span>' : `<button class="btn btn-danger btn-sm" onclick="deleteAdmin(${a.id})">删除</button>`}</td>
+                    </tr>`).join('')}
+                </tbody></table></div>`;
+        }
+
+        async function addAdmin(e) {
+            e.preventDefault();
+            const username = document.getElementById('adminUsername').value.trim();
+            const password = document.getElementById('adminPassword').value;
+            const role = document.getElementById('adminRole').value;
+            const res = await api('/api/admins', {
+                method: 'POST',
+                body: JSON.stringify({ username, password, role })
+            });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) {
+                document.getElementById('addAdminForm').reset();
+                loadAdmins();
+            }
+            return false;
+        }
+
+        async function deleteAdmin(id) {
+            if (!confirmDialog('确定删除此管理员？')) return;
+            const res = await api(`/api/admins/${id}`, { method: 'DELETE' });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) loadAdmins();
+        }
+
+        // ─── 重启框架 ───
+        async function restartFramework() {
+            if (!confirmDialog('确定重启框架？重启后需等待几秒让框架自动恢复。')) return;
+            const res = await api('/api/restart', { method: 'POST' });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>插件管理 · zcbot</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="main">
+        <h1 class="page-title">插件管理</h1>
+        <p class="page-subtitle">上传、更新、启用、重载或删除插件</p>
+
+        <div class="upload-zone" id="uploadZone">
+            <div class="uz-icon"></div>
+            <div class="uz-text">点击或拖拽 ZIP 文件到此处上传插件</div>
+            <div class="uz-hint">ZIP 包内需包含 main.py</div>
+            <input type="file" id="fileInput" accept=".zip" style="display:none">
+        </div>
+
+        <!-- 隔离环境占用统计（仅在存在 .venv 时显示） -->
+        <div id="venvUsageBar" style="display:none;"></div>
+
+        <div id="pluginArea">
+            <div class="empty"><div class="loading-spinner"></div> 加载中...</div>
+        </div>
+    </div>
+
+    <!-- README 弹窗 -->
+    <div class="overlay" id="readmeOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title" id="readmeTitle">README</span>
+                <button class="modal-close" onclick="closeOverlay('readmeOverlay')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <pre id="readmeContent" style="font-family:inherit;font-size:14px;white-space:pre-wrap;word-break:break-word;color:var(--text);line-height:1.7;"></pre>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline btn-sm" onclick="closeOverlay('readmeOverlay')">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 配置文件弹窗 -->
+    <div class="overlay" id="configOverlay">
+        <div class="modal" style="max-width:680px;">
+            <div class="modal-header">
+                <span class="modal-title" id="configTitle">插件配置</span>
+                <button class="modal-close" onclick="closeOverlay('configOverlay')">&times;</button>
+            </div>
+            <div class="modal-body" id="configBody">
+                <div class="loading-spinner"></div> 加载中...
+            </div>
+            <div class="modal-footer" id="configFooter">
+                <button class="btn btn-outline btn-sm" onclick="closeOverlay('configOverlay')">关闭</button>
+                <button class="btn btn-sm" onclick="saveConfig()">保存配置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 文件查看弹窗 -->
+    <div class="overlay" id="fileOverlay">
+        <div class="modal" style="max-width:760px;">
+            <div class="modal-header">
+                <span class="modal-title" id="fileTitle">文件查看</span>
+                <button class="modal-close" onclick="closeOverlay('fileOverlay')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <pre id="fileContent" style="font-family:'Consolas','Monaco',monospace;font-size:13px;white-space:pre-wrap;word-break:break-word;color:var(--text);line-height:1.6;background:var(--bg);padding:16px;border-radius:8px;"></pre>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline btn-sm" onclick="closeOverlay('fileOverlay')">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GitHub 更新弹窗 -->
+    <div class="overlay" id="updateOverlay">
+        <div class="modal" style="max-width:520px;">
+            <div class="modal-header">
+                <span class="modal-title" id="updateTitle">GitHub 更新</span>
+                <button class="modal-close" onclick="closeOverlay('updateOverlay')">&times;</button>
+            </div>
+            <div class="modal-body" id="updateBody">
+                <div class="loading-spinner"></div> 正在检查更新...
+            </div>
+            <div class="modal-footer" id="updateFooter" style="display:none;">
+                <button class="btn btn-outline btn-sm" onclick="closeOverlay('updateOverlay')">取消</button>
+                <button class="btn btn-sm" id="doUpdateBtn" onclick="doUpdate()">确认更新</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <script src="/js/common.js"></script>
+    <script>
+        let currentUpdatePlugin = '';
+
+        initPage('plugins', loadPlugins);
+
+        // 上传区交互
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInput = document.getElementById('fileInput');
+
+        uploadZone.addEventListener('click', () => fileInput.click());
+        uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+        uploadZone.addEventListener('drop', e => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) uploadPlugin(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) uploadPlugin(fileInput.files[0]);
+            fileInput.value = '';
+        });
+
+        async function uploadPlugin(file) {
+            const fd = new FormData();
+            fd.append('file', file);
+            toast('正在上传...', 'info', 2000);
+            const res = await api('/api/plugins/upload', { method: 'POST', body: fd });
+            if (res && res.code === 0) {
+                toast(res.msg, 'ok');
+                loadPlugins();
+            } else if (res) {
+                toast(res.msg, 'err');
+            }
+        }
+
+        // 缓存 venv 占用信息，供插件卡片渲染使用
+        let venvUsageMap = {};
+        let venvTotalMB = 0;
+
+        async function loadPlugins() {
+            const res = await api('/api/plugins');
+            if (!res || res.code !== 0) return;
+            const area = document.getElementById('pluginArea');
+            const rows = res.data || [];
+
+            // 并行拉取 venv 占用统计（失败不影响主流程）
+            await loadVenvUsage();
+
+            if (rows.length === 0) {
+                area.innerHTML = '<div class="empty">暂无插件，请上传 ZIP 包安装</div>';
+                return;
+            }
+            area.innerHTML = '<div class="plugin-grid">' + rows.map(p => `
+                <div class="plugin-card">
+                    <div class="plugin-card-header">
+                        <div>
+                            <span class="plugin-name">${escapeHtml(p.plugin_name)}</span>
+                            <span class="plugin-version">v${escapeHtml(p.version || '1.0.0')}</span>
+                        </div>
+                        ${p.is_loaded
+                            ? '<span class="badge badge-ok">已加载</span>'
+                            : '<span class="badge badge-dim">未加载</span>'}
+                    </div>
+                    <div class="plugin-desc">${escapeHtml(p.description || '暂无描述')}</div>
+                    <div class="plugin-meta">
+                        <span class="plugin-meta-item"><strong>作者：</strong>${escapeHtml(p.author || '-')}</span>
+                        <span class="plugin-meta-item"><strong>优先级：</strong>${p.priority}</span>
+                        ${p.has_register ? '<span class="badge badge-info">注册命令</span>' : ''}
+                        ${p.has_github ? `<span class="badge badge-warn" title="${escapeHtml(p.github_repo)}">GitHub</span>` : ''}
+                        ${p.has_yaml ? '<span class="badge badge-dim">配置文件</span>' : ''}
+                        ${p.has_missing_deps ? '<span class="badge badge-error" title="缺失依赖: ' + escapeHtml((p.missing_deps || []).join(', ')) + '">依赖缺失</span>' : ''}
+                        ${p.has_conflict ? '<span class="badge badge-error" title="版本冲突: ' + escapeHtml((p.conflicts || []).map(c => c.name + ' ' + c.required + ' (已安装 ' + c.installed + ')').join('; ')) + '">版本冲突</span>' : ''}
+                    </div>
+                    ${p.has_conflict ? '<div class="plugin-conflict" style="margin:8px 0 0;padding:8px 10px;background:rgba(211,69,69,0.08);border:1px solid rgba(211,69,69,0.25);border-radius:6px;font-size:13px;color:var(--status-error);line-height:1.6;">' +
+                        '<strong> 版本冲突：</strong>插件需要特定版本的依赖，但已有版本不兼容。' +
+                        '<div style="margin-top:4px;font-size:12px;">' +
+                        (p.conflicts || []).map(c => '&nbsp;&nbsp;&middot; ' + escapeHtml(c.name) + ' 需要 ' + escapeHtml(c.required) + '，已安装 ' + escapeHtml(c.installed)).join('<br>') +
+                        '</div></div>' : ''}
+                    <div class="plugin-stats" style="display:flex;gap:8px;margin:8px 0 0;font-size:13px;color:var(--text-secondary);">
+                        <span> 命令 ${p.command_count || 0}</span>
+                        <span>&#9200; 任务 ${p.task_count || 0}</span>
+                        ${venvUsageMap[p.plugin_name] ? `<span title="隔离虚拟环境占用" style="color:var(--accent);"> venv ${venvUsageMap[p.plugin_name].size_mb} MB</span>` : ''}
+                    </div>
+                    <div class="plugin-actions">
+                        <button class="btn btn-outline btn-sm" onclick="reloadPlugin('${p.plugin_name}')">重载</button>
+                        <button class="btn btn-outline btn-sm" onclick="togglePlugin('${p.plugin_name}', ${p.is_active ? 0 : 1})">
+                            ${p.is_active ? '禁用' : '启用'}
+                        </button>
+                        ${p.has_github ? `<button class="btn btn-outline btn-sm" style="color:var(--status-warn);border-color:var(--status-warn);" onclick="checkUpdate('${p.plugin_name}')">更新</button>` : ''}
+                        ${p.has_schema ? `<button class="btn btn-outline btn-sm" style="color:var(--accent);border-color:var(--accent);" onclick="showConfig('${p.plugin_name}')">配置</button>` : ''}
+                        ${p.has_missing_deps ? `<button class="btn btn-outline btn-sm" style="color:var(--status-error);border-color:var(--status-error);" onclick="installDeps('${p.plugin_name}')">安装依赖</button>` : ''}
+                        ${p.has_conflict ? `<button class="btn btn-outline btn-sm" style="color:var(--accent);border-color:var(--accent);" onclick="createIsolatedEnv('${p.plugin_name}')">隔离环境</button>` : ''}
+                        ${venvUsageMap[p.plugin_name] ? `<button class="btn btn-outline btn-sm" style="color:var(--status-error);border-color:var(--status-error);" onclick="deleteVenv('${p.plugin_name}')" title="删除 .venv 释放磁盘空间">清理venv</button>` : ''}
+                        ${p.has_yaml ? `<button class="btn btn-outline btn-sm" onclick="showPluginInfo('${p.plugin_name}')">详情</button>` : ''}
+                        ${p.has_readme ? `<button class="btn btn-outline btn-sm" onclick="showReadme('${p.plugin_name}')">README</button>` : ''}
+                        <button class="btn btn-danger btn-sm" onclick="deletePlugin('${p.plugin_name}')">删除</button>
+                    </div>
+                </div>`).join('') + '</div>';
+        }
+
+        async function reloadPlugin(name) {
+            toast('正在重载...', 'info', 2000);
+            const res = await api(`/api/plugins/${name}/reload`, { method: 'POST' });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) loadPlugins();
+        }
+
+        async function togglePlugin(name, isActive) {
+            const res = await api(`/api/plugins/${name}/toggle`, {
+                method: 'POST',
+                body: JSON.stringify({ is_active: !!isActive })
+            });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) loadPlugins();
+        }
+
+        async function deletePlugin(name) {
+            if (!confirmDialog(`确定删除插件 [${name}]？此操作不可恢复。`)) return;
+            const res = await api(`/api/plugins/${name}`, { method: 'DELETE' });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) loadPlugins();
+        }
+
+        async function installDeps(name) {
+            toast('正在安装依赖...', 'info', 5000);
+            const res = await api(`/api/plugins/${name}/install_deps`, { method: 'POST' });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res) loadPlugins();
+        }
+
+        async function createIsolatedEnv(name) {
+            if (!confirmDialog(`为插件 [${name}] 创建隔离虚拟环境？\n\n框架将在插件目录下创建 .venv，并在其中安装所有依赖。\n创建后需重载插件才能生效。`)) return;
+            toast('正在创建隔离环境...', 'info', 10000);
+            const res = await api(`/api/plugins/${name}/create_isolated_env`, { method: 'POST' });
+            if (res) {
+                toast(res.msg, res.code === 0 ? 'ok' : 'err');
+                if (res.code === 0) {
+                    // 提示重载
+                    if (confirmDialog('隔离环境已创建，是否立即重载插件？')) {
+                        await reloadPlugin(name);
+                    }
+                }
+            }
+            if (res) loadPlugins();
+        }
+
+        // ===== 隔离环境磁盘占用管理 =====
+
+        async function loadVenvUsage() {
+            try {
+                const res = await api('/api/plugins/venv_usage');
+                if (!res || res.code !== 0 || !res.data) {
+                    renderVenvUsageBar(0, 0, []);
+                    return;
+                }
+                const d = res.data;
+                venvTotalMB = d.total_size_mb || 0;
+                venvUsageMap = {};
+                (d.details || []).forEach(item => {
+                    venvUsageMap[item.plugin_name] = item;
+                });
+                renderVenvUsageBar(venvTotalMB, d.venv_count || 0, d.details || []);
+            } catch (e) {
+                // 静默失败，不阻塞插件列表渲染
+                renderVenvUsageBar(0, 0, []);
+            }
+        }
+
+        function renderVenvUsageBar(totalMB, count, details) {
+            const bar = document.getElementById('venvUsageBar');
+            if (!bar) return;
+            if (!count || !details || details.length === 0) {
+                bar.style.display = 'none';
+                bar.innerHTML = '';
+                return;
+            }
+            bar.style.display = 'block';
+            // 阈值提示：超过 200MB 显示警告色
+            const warn = totalMB >= 200;
+            const bg = warn ? 'rgba(211,69,69,0.08)' : 'rgba(0,122,255,0.06)';
+            const border = warn ? 'rgba(211,69,69,0.25)' : 'rgba(0,122,255,0.18)';
+            const color = warn ? 'var(--status-error)' : 'var(--accent)';
+            const detailHtml = details.map(d =>
+                `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 9px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;font-size:12px;">
+                    <strong>${escapeHtml(d.plugin_name)}</strong>
+                    <span style="color:${color};">${d.size_mb} MB</span>
+                </span>`
+            ).join(' ');
+            bar.innerHTML = `
+                <div style="margin:12px 0;padding:10px 14px;background:${bg};border:1px solid ${border};border-radius:10px;font-size:13px;color:var(--text);">
+                    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+                        <div>
+                            <strong style="color:${color};"> 隔离环境总占用：${totalMB} MB</strong>
+                            <span style="color:var(--text-secondary);margin-left:8px;">（共 ${count} 个 .venv）</span>
+                            ${warn ? '<span style="color:var(--status-error);margin-left:8px;"> 占用较高，建议清理不再使用的隔离环境</span>' : ''}
+                        </div>
+                    </div>
+                    <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">${detailHtml}</div>
+                </div>`;
+        }
+
+        async function deleteVenv(name) {
+            const info = venvUsageMap[name];
+            const sizeHint = info ? `（当前占用 ${info.size_mb} MB）` : '';
+            if (!confirmDialog(`确定清理插件 [${name}] 的隔离虚拟环境？${sizeHint}\n\n此操作会删除插件目录下的 .venv，释放磁盘空间。\n如果插件正在运行，请先卸载。`)) return;
+            toast('正在清理隔离环境...', 'info', 5000);
+            const res = await api(`/api/plugins/${name}/isolated_env`, { method: 'DELETE' });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) loadPlugins();
+        }
+
+        async function showReadme(name) {
+            const res = await api(`/api/plugins/${name}/readme`);
+            if (res && res.code === 0) {
+                document.getElementById('readmeTitle').textContent = name + ' · README';
+                document.getElementById('readmeContent').textContent = res.data.content;
+                showOverlay('readmeOverlay');
+            } else if (res) {
+                toast(res.msg, 'err');
+            }
+        }
+
+        // ─── 配置项编辑（基于 _conf_schema.json）───
+        let currentConfigPlugin = '';
+
+        async function showConfig(name) {
+            currentConfigPlugin = name;
+            document.getElementById('configTitle').textContent = name + ' · 配置项';
+            document.getElementById('configBody').innerHTML = '<div class="loading-spinner"></div> 加载中...';
+            document.getElementById('configFooter').style.display = 'flex';
+            showOverlay('configOverlay');
+
+            const res = await api(`/api/plugins/${name}/config_schema`);
+            if (!res || res.code !== 0) {
+                document.getElementById('configBody').innerHTML = '<div class="empty">加载失败</div>';
+                document.getElementById('configFooter').style.display = 'none';
+                return;
+            }
+
+            const d = res.data;
+            const schema = d.schema || {};
+            const values = d.values || {};
+            const keys = Object.keys(schema);
+
+            if (keys.length === 0) {
+                document.getElementById('configBody').innerHTML = '<div class="empty">该插件没有可配置项</div>';
+                document.getElementById('configFooter').style.display = 'none';
+                return;
+            }
+
+            let html = '<div style="margin-bottom:16px;">以下配置项修改后保存即生效：</div>';
+            keys.forEach(key => {
+                const spec = schema[key];
+                const val = key in values ? values[key] : spec.default;
+                const valType = spec.type || 'string';
+                const desc = spec.description || spec.hint || '';
+                let input;
+
+                if (valType === 'bool' || valType === 'boolean') {
+                    const checked = val ? 'checked' : '';
+                    input = `<label class="toggle"><input type="checkbox" id="cfg_${key}" ${checked}><span class="tg-slider"></span></label>`;
+                } else if (valType === 'int' || valType === 'number') {
+                    input = `<input type="number" class="inp" id="cfg_${key}" value="${escapeHtml(String(val ?? 0))}">`;
+                } else {
+                    input = `<input type="text" class="inp" id="cfg_${key}" value="${escapeHtml(String(val ?? ''))}">`;
+                }
+
+                html += `<div class="form-group">
+                    <label>${escapeHtml(spec.description || key)}</label>
+                    ${input}
+                    <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">
+                        <code>${escapeHtml(key)}</code>
+                        ${spec.hint ? ' · ' + escapeHtml(spec.hint) : ''}
+                        · 默认: ${escapeHtml(String(spec.default ?? '-'))}
+                    </div>
+                </div>`;
+            });
+
+            document.getElementById('configBody').innerHTML = html;
+        }
+
+        async function saveConfig() {
+            const name = currentConfigPlugin;
+            if (!name) return;
+
+            // 获取 schema 以知道类型
+            const schemaRes = await api(`/api/plugins/${name}/config_schema`);
+            if (!schemaRes || schemaRes.code !== 0) {
+                toast('获取配置信息失败', 'err');
+                return;
+            }
+
+            const schema = schemaRes.data.schema || {};
+            const payload = {};
+
+            Object.keys(schema).forEach(key => {
+                const el = document.getElementById(`cfg_${key}`);
+                if (!el) return;
+                const spec = schema[key];
+                const valType = spec.type || 'string';
+
+                if (valType === 'bool' || valType === 'boolean') {
+                    payload[key] = el.checked;
+                } else if (valType === 'int' || valType === 'number') {
+                    payload[key] = parseInt(el.value, 10) || 0;
+                } else {
+                    payload[key] = el.value;
+                }
+            });
+
+            const res = await api(`/api/plugins/${name}/config_schema`, {
+                method: 'PUT',
+                body: JSON.stringify(payload)
+            });
+            if (res) toast(res.msg, res.code === 0 ? 'ok' : 'err');
+            if (res && res.code === 0) {
+                closeOverlay('configOverlay');
+            }
+        }
+
+        // ─── 插件详情查看（plugin.yaml 信息 + 触发命令）───
+        async function showPluginInfo(name) {
+            document.getElementById('configTitle').textContent = name + ' · 插件详情';
+            document.getElementById('configBody').innerHTML = '<div class="loading-spinner"></div> 加载中...';
+            document.getElementById('configFooter').style.display = 'none';
+            showOverlay('configOverlay');
+
+            const [configRes, cmdRes] = await Promise.all([
+                api(`/api/plugins/${name}/config`),
+                api(`/api/plugins/${name}/commands`)
+            ]);
+
+            if (!configRes || configRes.code !== 0) {
+                document.getElementById('configBody').innerHTML = '<div class="empty">加载失败</div>';
+                return;
+            }
+
+            const d = configRes.data;
+            let html = '';
+
+            // ── 触发的命令 ──
+            if (cmdRes && cmdRes.code === 0) {
+                const cd = cmdRes.data;
+                const staticCmds = cd.static_commands || [];
+                const dynamicCmds = cd.dynamic_commands || [];
+                const tasks = cd.tasks || [];
+
+                if (staticCmds.length > 0 || dynamicCmds.length > 0 || tasks.length > 0) {
+                    html += '<div style="font-size:15px;font-weight:600;margin-bottom:12px;">触发命令 & 组件</div>';
+
+                    if (staticCmds.length > 0) {
+                        const requireLabel = { 'admin': '管理员', 'super': '超管', '': '-' };
+                        const requireClass = { 'admin': 'badge-warn', 'super': 'badge-error' };
+                        html += `<div style="margin-bottom:16px;">
+                            <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">静态命令（${staticCmds.length}）</div>
+                            <div class="tbl-wrap"><table class="tbl">
+                                <thead><tr><th>匹配规则</th><th>别名</th><th>描述</th><th>优先级</th><th>权限</th><th>命中</th><th>状态</th></tr></thead>
+                                <tbody>${staticCmds.map(c => `
+                                    <tr style="${c.is_active ? '' : 'opacity:0.5;'}">
+                                        <td><code style="font-size:12px;">${escapeHtml(c.pattern)}</code></td>
+                                        <td>${c.alias ? c.alias.split(',').map(a => `<span class="badge badge-dim" style="margin:1px;">${escapeHtml(a.trim())}</span>`).join('') : '-'}</td>
+                                        <td style="font-size:12px;color:var(--text-secondary);">${escapeHtml(c.description || '-')}</td>
+                                        <td>${c.priority}</td>
+                                        <td>${c.require_level ? `<span class="badge ${requireClass[c.require_level] || 'badge-dim'}" style="font-size:11px;">${requireLabel[c.require_level] || c.require_level}</span>` : '-'}</td>
+                                        <td>${c.hit_count || 0}</td>
+                                        <td>${c.is_active ? '<span class="badge badge-ok">启用</span>' : '<span class="badge badge-error">禁用</span>'}</td>
+                                    </tr>`).join('')}
+                                </tbody></table></div>
+                        </div>`;
+                    }
+
+                    if (dynamicCmds.length > 0) {
+                        const matchLabel = { exact: '精确', prefix: '前缀', regex: '正则' };
+                        html += `<div style="margin-bottom:16px;">
+                            <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">动态命令（${dynamicCmds.length}）</div>
+                            <div class="tbl-wrap"><table class="tbl">
+                                <thead><tr><th>关键词</th><th>回复</th><th>匹配</th><th>命中</th><th>状态</th></tr></thead>
+                                <tbody>${dynamicCmds.map(c => `
+                                    <tr style="${c.is_active ? '' : 'opacity:0.5;'}">
+                                        <td><strong>${escapeHtml(c.keyword)}</strong></td>
+                                        <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.response)}</td>
+                                        <td><span class="badge badge-info">${matchLabel[c.match_type] || c.match_type}</span></td>
+                                        <td>${c.hit_count || 0}</td>
+                                        <td>${c.is_active ? '<span class="badge badge-ok">启用</span>' : '<span class="badge badge-dim">禁用</span>'}</td>
+                                    </tr>`).join('')}
+                                </tbody></table></div>
+                        </div>`;
+                    }
+
+                    if (tasks.length > 0) {
+                        html += `<div style="margin-bottom:16px;">
+                            <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">定时任务（${tasks.length}）</div>
+                            <div class="tbl-wrap"><table class="tbl">
+                                <thead><tr><th>Cron</th><th>处理函数</th><th>描述</th><th>执行次数</th><th>状态</th></tr></thead>
+                                <tbody>${tasks.map(t => `
+                                    <tr style="${t.is_active ? '' : 'opacity:0.5;'}">
+                                        <td><code style="font-size:12px;">${escapeHtml(t.cron_expression)}</code></td>
+                                        <td><code style="font-size:12px;">${escapeHtml(t.handler)}</code></td>
+                                        <td style="font-size:12px;color:var(--text-secondary);">${escapeHtml(t.description || '-')}</td>
+                                        <td>${t.run_count || 0}</td>
+                                        <td>${t.is_active ? '<span class="badge badge-ok">启用</span>' : '<span class="badge badge-dim">禁用</span>'}</td>
+                                    </tr>`).join('')}
+                                </tbody></table></div>
+                        </div>`;
+                    }
+                }
+            }
+
+            // ── GitHub 更新源 ──
+            if (d.github && d.github.repo) {
+                html += `
+                    <div class="card" style="margin-bottom:16px;padding:16px;">
+                        <div style="font-size:15px;font-weight:600;margin-bottom:8px;">GitHub 更新源</div>
+                        <div style="font-size:14px;color:var(--text-secondary);line-height:1.8;">
+                            <strong style="color:var(--text);">仓库：</strong> ${escapeHtml(d.github.repo)}<br>
+                            <strong style="color:var(--text);">分支：</strong> ${escapeHtml(d.github.branch || 'main')}<br>
+                            <strong style="color:var(--text);">子目录：</strong> ${escapeHtml(d.github.path || '/')}<br>
+                            <strong style="color:var(--text);">自动检查：</strong> ${d.github.auto_check ? '是' : '否'}
+                        </div>
+                    </div>`;
+            }
+
+            // ── 配置项 ──
+            if (d.config_items && d.config_items.length > 0) {
+                html += '<div style="font-size:15px;font-weight:600;margin-bottom:12px;">配置项（plugin.yaml）</div>';
+                html += `<div class="tbl-wrap" style="margin-bottom:16px;"><table class="tbl">
+                    <thead><tr><th>键</th><th>名称</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+                    <tbody>${d.config_items.map(c => `
+                        <tr>
+                            <td><code>${escapeHtml(c.key)}</code></td>
+                            <td>${escapeHtml(c.label || '-')}</td>
+                            <td><span class="badge badge-info">${escapeHtml(c.type || '-')}</span></td>
+                            <td>${escapeHtml(String(c.default ?? '-'))}</td>
+                            <td style="font-size:13px;color:var(--text-secondary);">${escapeHtml(c.description || '-')}</td>
+                        </tr>`).join('')}
+                    </tbody></table></div>`;
+            }
+
+            // ── 依赖 ──
+            if (d.dependencies && d.dependencies.python && d.dependencies.python.length > 0) {
+                html += '<div style="font-size:15px;font-weight:600;margin-bottom:8px;">Python 依赖</div>';
+                const deps = d.dependencies.python || [];
+                const depStatus = d.dep_status || {};
+                const missingDeps = depStatus.missing || [];
+                html += `<div style="margin-bottom:16px;">${deps.map(dep => {
+                    const isMissing = missingDeps.includes(dep);
+                    const badgeClass = isMissing ? 'badge-error' : 'badge-dim';
+                    return `<span class="${badgeClass}" style="margin-right:6px;${isMissing ? 'cursor:help;' : ''}" title="${isMissing ? '未安装' : '已安装'}">${escapeHtml(dep)}</span>`;
+                }).join('')}</div>`;
+            }
+
+            // ── 配置文件列表 ──
+            if (d.config_files && d.config_files.length > 0) {
+                html += '<div style="font-size:15px;font-weight:600;margin-bottom:12px;">文件列表</div>';
+                html += `<div class="tbl-wrap"><table class="tbl">
+                    <thead><tr><th>文件名</th><th>大小</th><th>操作</th></tr></thead>
+                    <tbody>${d.config_files.map(f => `
+                        <tr>
+                            <td><code>${escapeHtml(f.name)}</code></td>
+                            <td>${f.size < 1024 ? f.size + ' B' : (f.size / 1024).toFixed(1) + ' KB'}</td>
+                            <td><button class="btn btn-outline btn-sm" onclick="viewFile('${name}', '${escapeHtml(f.name)}')">查看</button></td>
+                        </tr>`).join('')}
+                    </tbody></table></div>`;
+            }
+
+            if (!html) {
+                html = '<div class="empty">该插件没有配置信息</div>';
+            }
+
+            document.getElementById('configBody').innerHTML = html;
+        }
+
+        async function viewFile(pluginName, filename) {
+            const res = await api(`/api/plugins/${pluginName}/file/${filename}`);
+            if (res && res.code === 0) {
+                document.getElementById('fileTitle').textContent = `${pluginName} / ${filename}`;
+                document.getElementById('fileContent').textContent = res.data.content;
+                showOverlay('fileOverlay');
+            } else if (res) {
+                toast(res.msg, 'err');
+            }
+        }
+
+        // ─── GitHub 更新 ───
+        async function checkUpdate(name) {
+            currentUpdatePlugin = name;
+            document.getElementById('updateTitle').textContent = name + ' · GitHub 更新';
+            document.getElementById('updateBody').innerHTML = '<div class="loading-spinner"></div> 正在检查更新...';
+            document.getElementById('updateFooter').style.display = 'none';
+            showOverlay('updateOverlay');
+
+            const res = await api(`/api/plugins/${name}/check_update`);
+            if (!res || res.code !== 0) {
+                document.getElementById('updateBody').innerHTML = `<div class="msg show err" style="display:block;">${res ? res.msg : '检查失败'}</div>`;
+                return;
+            }
+            const d = res.data;
+            document.getElementById('updateBody').innerHTML = `
+                <div style="font-size:15px;font-weight:600;margin-bottom:12px;">更新信息</div>
+                <div style="font-size:14px;color:var(--text-secondary);line-height:2;">
+                    <strong style="color:var(--text);">仓库：</strong> ${escapeHtml(d.repo)}<br>
+                    <strong style="color:var(--text);">分支：</strong> ${escapeHtml(d.branch)}<br>
+                    <strong style="color:var(--text);">当前版本：</strong> v${escapeHtml(d.current_version)}<br>
+                    <strong style="color:var(--text);">最新提交：</strong> <code>${escapeHtml(d.latest_commit)}</code><br>
+                    <strong style="color:var(--text);">提交信息：</strong> ${escapeHtml(d.commit_message)}<br>
+                    <strong style="color:var(--text);">提交者：</strong> ${escapeHtml(d.author)}<br>
+                    <strong style="color:var(--text);">提交时间：</strong> ${escapeHtml(d.commit_date)}
+                </div>
+                <div class="msg warn show" style="display:block;margin-top:16px;">
+                    更新将覆盖当前插件代码（旧代码会自动备份），更新后自动重载。确定继续？
+                </div>`;
+            document.getElementById('updateFooter').style.display = '';
+        }
+
+        async function doUpdate() {
+            if (!currentUpdatePlugin) return;
+            document.getElementById('doUpdateBtn').disabled = true;
+            document.getElementById('doUpdateBtn').textContent = '正在更新...';
+            document.getElementById('updateBody').innerHTML = '<div class="loading-spinner"></div> 正在从 GitHub 下载并更新，请稍候...';
+
+            const res = await api(`/api/plugins/${currentUpdatePlugin}/update`, { method: 'POST' });
+            document.getElementById('doUpdateBtn').disabled = false;
+            document.getElementById('doUpdateBtn').textContent = '确认更新';
+
+            if (res && res.code === 0) {
+                toast(res.msg, 'ok');
+                closeOverlay('updateOverlay');
+                loadPlugins();
+            } else {
+                document.getElementById('updateBody').innerHTML = `<div class="msg show err" style="display:block;">${res ? res.msg : '更新失败'}</div>`;
+                toast(res ? res.msg : '更新失败', 'err');
+            }
+        }
+
+        // ─── 弹窗控制 ───
+        function showOverlay(id) { document.getElementById(id).classList.add('show'); }
+        function closeOverlay(id) { document.getElementById(id).classList.remove('show'); }
+
+        // 点击遮罩关闭
+        ['readmeOverlay', 'configOverlay', 'fileOverlay', 'updateOverlay'].forEach(id => {
+            document.getElementById(id).addEventListener('click', e => {
+                if (e.target.id === id) closeOverlay(id);
+            });
+        });
+    </script>
+</body>
+</html>

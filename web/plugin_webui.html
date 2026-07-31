@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>插件页面 · zcbot</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        .webui-container { min-height: calc(100vh - 80px); }
+        .webui-frame { width:100%; border:none; border-radius:12px; background:transparent; min-height:calc(100vh - 120px); }
+        .webui-loading { display:flex; align-items:center; justify-content:center; height:60vh; }
+    </style>
+</head>
+<body>
+    <div class="main">
+        <div id="webuiArea" class="webui-container">
+            <div class="webui-loading"><div class="loading-spinner"></div> 加载中...</div>
+        </div>
+    </div>
+
+
+    <script src="/js/common.js"></script>
+    <script>
+        initPage('plugin_webui', async function() {
+            const params = new URLSearchParams(location.search);
+            const name = params.get('name');
+            const entry = params.get('entry') || 'index.html';
+
+            if (!name) {
+                document.getElementById('webuiArea').innerHTML = '<div class="empty">未指定插件名称</div>';
+                return;
+            }
+
+            // 查找插件 WebUI 信息
+            const webui = _pluginWebUIs.find(w => w.plugin_name === name);
+            const title = webui ? webui.title : name;
+            document.title = title + ' · zcbot';
+
+            // 使用同源 iframe 加载插件页面——session cookie 能正常发送
+            const iframe = document.createElement('iframe');
+            iframe.className = 'webui-frame';
+            iframe.src = `/api/plugin_webui/${encodeURIComponent(name)}?entry=${encodeURIComponent(entry)}`;
+            iframe.title = title;
+
+            const area = document.getElementById('webuiArea');
+            area.innerHTML = '';
+            area.appendChild(iframe);
+
+            // 自适应高度
+            iframe.onload = function() {
+                try {
+                    const h = iframe.contentWindow.document.documentElement.scrollHeight;
+                    iframe.style.height = Math.max(h, 400) + 'px';
+                } catch(e) { /* 跨域限制时忽略 */ }
+            };
+        });
+    </script>
+</body>
+</html>

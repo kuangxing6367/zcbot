@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 · zcbot</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        body { display: flex; flex-direction: column; min-height: 100vh; }
+        .login-main {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+        }
+        .login-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px;
+            width: 100%;
+            max-width: 380px;
+            box-shadow: var(--shadow-lg);
+            transition: background 0.3s, border 0.3s;
+        }
+        .login-logo {
+            text-align: center;
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: -0.5px;
+        }
+        .login-logo span { color: var(--text-secondary); font-weight: 400; }
+        .login-subtitle {
+            text-align: center;
+            font-size: 15px;
+            color: var(--text-secondary);
+            margin-bottom: 32px;
+        }
+        .login-footer {
+            text-align: center;
+            padding: 24px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border);
+        }
+    </style>
+</head>
+<body>
+    <div class="login-main">
+        <div class="login-card">
+            <div class="login-logo"> <span>zcbot</span></div>
+            <div class="login-subtitle">OneBot 11 机器人管理后台</div>
+
+            <div class="msg" id="msg"></div>
+
+            <form id="loginForm" onsubmit="return doLogin(event)">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" class="inp" id="username" placeholder="请输入用户名" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" class="inp" id="password" placeholder="请输入密码" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="btn btn-block" id="loginBtn">登 录</button>
+            </form>
+        </div>
+    </div>
+
+
+
+    <script>
+        // 如果已有 token，直接跳转仪表盘
+        (async function() {
+            const token = localStorage.getItem('zcbot_token');
+            if (!token) return;
+            const me = await fetch('/api/me', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            }).then(r => r.json()).catch(() => null);
+            if (me && me.code === 0) {
+                location.href = '/index.html';
+            } else {
+                localStorage.removeItem('zcbot_token');
+            }
+        })();
+
+        function showMsg(text, type) {
+            const el = document.getElementById('msg');
+            el.textContent = text;
+            el.className = 'msg show ' + type;
+        }
+
+        async function doLogin(e) {
+            e.preventDefault();
+            const btn = document.getElementById('loginBtn');
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!username || !password) {
+                showMsg('请输入用户名和密码', 'err');
+                return false;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '登录中...';
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+
+                if (data.code === 0 && data.data && data.data.token) {
+                    // 存储 token 到 localStorage
+                    localStorage.setItem('zcbot_token', data.data.token);
+                    showMsg('登录成功，正在跳转...', 'ok');
+                    setTimeout(() => location.href = '/index.html', 500);
+                } else {
+                    showMsg(data.msg || '登录失败', 'err');
+                    btn.disabled = false;
+                    btn.textContent = '登 录';
+                }
+            } catch (err) {
+                showMsg('网络错误，请稍后重试', 'err');
+                btn.disabled = false;
+                btn.textContent = '登 录';
+            }
+            return false;
+        }
+    </script>
+</body>
+</html>
