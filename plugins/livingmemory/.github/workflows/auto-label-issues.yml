@@ -1,0 +1,163 @@
+name: 自动标记和分类 Issue
+
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: 自动分类和添加标签
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const title = issue.title.toLowerCase();
+            const body = (issue.body || '').toLowerCase();
+            const labels = [];
+
+            console.log(` 处理 Issue #${issue.number}: ${issue.title}`);
+
+            // 1. 根据标题前缀自动分类
+            if (title.startsWith('[bug]') || title.startsWith('[错误]')) {
+              labels.push('bug');
+              console.log('   检测到 Bug 类型');
+            }
+            
+            if (title.startsWith('[feature]') || title.startsWith('[功能]') || title.startsWith('[需求]')) {
+              labels.push('enhancement');
+              console.log('   检测到功能需求类型');
+            }
+
+            if (title.startsWith('[docs]') || title.startsWith('[文档]')) {
+              labels.push('documentation');
+              console.log('   检测到文档类型');
+            }
+
+            if (title.startsWith('[question]') || title.startsWith('[问题]')) {
+              labels.push('question');
+              console.log('   检测到问题类型');
+            }
+
+            // 2. 根据内容关键词智能分类
+            const keywords = {
+              bug: ['报错', '错误', '异常', 'error', 'bug', '崩溃', 'crash', '失败', 'fail', '不工作', 'not work'],
+              enhancement: ['建议', '希望', '能否', '增加', '添加', 'feature', 'enhancement', '优化', 'optimize', '改进', 'improve'],
+              documentation: ['文档', '说明', '教程', 'document', 'readme', 'guide', '如何', 'how to'],
+              question: ['怎么', '如何', '为什么', 'how', 'why', 'what', '是什么', '请问'],
+              performance: ['性能', '慢', '卡顿', 'performance', 'slow', '延迟', 'latency'],
+              security: ['安全', '漏洞', 'security', 'vulnerability', '权限', 'permission'],
+              ui: ['界面', '显示', 'ui', 'ux', '样式', 'style', '布局', 'layout'],
+              api: ['api', '接口', 'endpoint', '调用'],
+              database: ['数据库', 'database', 'sql', '存储', 'storage'],
+              memory: ['记忆', '遗忘', '召回', 'memory', 'recall', '检索', 'retrieval'],
+              config: ['配置', 'config', 'setting', '设置'],
+            };
+
+            for (const [label, words] of Object.entries(keywords)) {
+              for (const word of words) {
+                if (title.includes(word) || body.includes(word)) {
+                  if (!labels.includes(label)) {
+                    labels.push(label);
+                    console.log(`    根据关键词 "${word}" 添加标签: ${label}`);
+                  }
+                  break;
+                }
+              }
+            }
+
+            // 3. 优先级检测
+            const priorityKeywords = {
+              'priority: high': ['紧急', 'urgent', '严重', 'critical', '重大', '阻塞', 'blocking'],
+              'priority: medium': ['重要', 'important', '影响', 'impact'],
+              'priority: low': ['可选', 'optional', '建议', 'suggestion', '将来', 'future']
+            };
+
+            for (const [label, words] of Object.entries(priorityKeywords)) {
+              for (const word of words) {
+                if (title.includes(word) || body.includes(word)) {
+                  labels.push(label);
+                  console.log(`   根据关键词 "${word}" 添加优先级: ${label}`);
+                  break;
+                }
+              }
+              if (labels.some(l => l.startsWith('priority:'))) break;
+            }
+
+            // 4. 检测是否需要更多信息
+            if (body.length < 100 && !labels.includes('question')) {
+              labels.push('needs more info');
+              console.log('  ℹ  内容较短，添加 "需要更多信息" 标签');
+            }
+
+            // 5. 检测是否是好的首次贡献议题
+            const easyKeywords = ['简单', 'easy', '入门', 'beginner', '新手'];
+            for (const word of easyKeywords) {
+              if (title.includes(word) || body.includes(word)) {
+                labels.push('good first issue');
+                console.log('   检测到适合新手的议题');
+                break;
+              }
+            }
+
+            // 6. 应用标签
+            if (labels.length > 0) {
+              const uniqueLabels = [...new Set(labels)];
+              console.log(`\n 将添加以下标签: ${uniqueLabels.join(', ')}`);
+              
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: uniqueLabels
+              });
+
+              console.log(' 标签添加成功！');
+            } else {
+              console.log('\nℹ  未检测到合适的标签');
+            }
+
+            // 7. 添加欢迎评论（仅针对新 Issue）
+            if (context.payload.action === 'opened') {
+              let comment = ` 感谢提交 Issue！\n\n`;
+              
+              if (labels.includes('bug')) {
+                comment += `我们已经将此 Issue 标记为 **Bug**。我们会尽快查看并修复。\n\n`;
+                comment += ` **温馨提示**: 如果可以，请提供:\n`;
+                comment += `- 复现步骤\n`;
+                comment += `- 预期行为和实际行为\n`;
+                comment += `- 相关的错误日志或截图\n`;
+              } else if (labels.includes('enhancement')) {
+                comment += `我们已经将此 Issue 标记为 **功能需求**。感谢你的建议！\n\n`;
+                comment += ` **温馨提示**: 详细描述使用场景会帮助我们更好地理解你的需求。\n`;
+              } else if (labels.includes('question')) {
+                comment += `我们已经将此 Issue 标记为 **问题咨询**。\n\n`;
+                comment += ` **温馨提示**: 请查看 [项目文档](${issue.repository_url.replace('https://api.github.com/repos', 'https://github.com')}) 看是否有相关说明。\n`;
+              }
+
+              if (labels.includes('needs more info')) {
+                comment += `\n 请提供更多详细信息，以便我们更好地帮助你。`;
+              }
+
+              comment += `\n---\n*此消息由自动化工作流生成*`;
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: comment
+              });
+
+              console.log(' 已添加欢迎评论');
+            }
+
+            console.log('\n Issue 分类完成！');
