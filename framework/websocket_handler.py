@@ -3,6 +3,10 @@ OneBot 11 WebSocket 服务端
 框架作为服务端监听端口，OneBot 客户端（go-cqhttp/NapCat 等）配置反向 WS 主动连接
 支持多个 OneBot 客户端同时连接
 向下兼容 websockets 10.x ~ 16.x+
+
+异步模型：
+- 服务端运行在主事件循环中（不再单独起线程）
+- 收到的每条事件通过有界信号量派发为 asyncio 任务，天然不阻塞事件循环
 """
 import asyncio
 import json
@@ -19,6 +23,9 @@ logger = logging.getLogger('zcbot')
 # 检测 websockets 大版本
 _WS_VERSION = tuple(int(p) for p in websockets.__version__.split('.')[:2])
 _WS_MAJOR = _WS_VERSION[0] if _WS_VERSION else 0
+
+# 事件并发处理上限（超出后排队等待，防止消息洪峰打爆任务数）
+_MAX_CONCURRENT_EVENTS = 64
 
 
 def _get_request_path(ws, path=None):
@@ -98,29 +105,30 @@ class WebSocketServer:
         self.api_caller = api_caller
 
         self._server = None
+        self._server_task = None
         self._loop = None
-        self._thread = None
         self._running = False
         self._connections = {}  # bot_name -> websocket connection
         self._conn_counter = 0
         self._lock = threading.Lock()
+        self._dispatch_semaphore = None
 
-    def start(self):
-        """启动 WebSocket 服务端（在独立线程中运行 asyncio 事件循环）"""
+    # ── 生命周期（运行在主事件循环中）──────────────────────────────
+
+    @property
+    def loop(self):
+        """主事件循环引用（供同步桥接使用）"""
+        return self._loop
+
+    def start_async(self):
+        """在主事件循环中启动服务端（需在 asyncio.run 内调用）"""
+        if self._running:
+            return
         self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True, name="ws-server")
-        self._thread.start()
-
-    def _run(self):
-        """运行 asyncio 事件循环"""
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        try:
-            self._loop.run_until_complete(self._serve())
-        except Exception as e:
-            logger.error(f"WebSocket 服务端异常: {e}")
-        finally:
-            self._loop.close()
+        self._loop = asyncio.get_running_loop()
+        self._dispatch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_EVENTS)
+        self._server_task = asyncio.create_task(self._serve(), name="ws-server")
+        return self._server_task
 
     async def _serve(self):
         """启动 WebSocket 服务"""
@@ -131,20 +139,28 @@ class WebSocketServer:
 
         # websockets 13+ 支持 process_request(connection, request)
         # websockets 10-12 支持 process_request(path, request_headers)
-        # 使用版本检测来选择合适的签名
         if _WS_MAJOR >= 13:
             serve_kwargs['process_request'] = self._process_request_v13
         elif _WS_MAJOR >= 10:
             serve_kwargs['process_request'] = self._process_request_v10
 
-        self._server = await websockets.serve(
-            self._handle_connection,
-            self.host,
-            self.port,
-            **serve_kwargs,
-        )
+        try:
+            self._server = await websockets.serve(
+                self._handle_connection,
+                self.host,
+                self.port,
+                **serve_kwargs,
+            )
+        except Exception as e:
+            logger.error(f"WebSocket 服务启动失败: {e}", exc_info=True)
+            self._running = False
+            return
         logger.info(f"WebSocket 服务端已启动: ws://{self.host}:{self.port} (websockets {websockets.__version__})")
-        await asyncio.Future()
+        try:
+            await asyncio.Future()  # 一直运行直到被取消
+        except asyncio.CancelledError:
+            logger.info("WebSocket 服务端已停止")
+            raise
 
     async def _process_request_v13(self, connection, request):
         """websockets 13.x+ 握手阶段验证 token"""
@@ -203,7 +219,11 @@ class WebSocketServer:
 
         # 触发连接回调
         try:
-            self.on_connect_callback(bot_name, ws)
+            cb = self.on_connect_callback
+            if asyncio.iscoroutinefunction(cb):
+                await cb(bot_name, ws)
+            else:
+                await asyncio.to_thread(cb, bot_name, ws)
         except Exception as e:
             logger.error(f"[{bot_name}] on_connect 回调异常: {e}")
 
@@ -223,18 +243,15 @@ class WebSocketServer:
                         conn.on_response(data)
                     continue
 
-                # 判断是否为事件上报 — 放到独立线程处理，避免阻塞事件循环
+                # 判断是否为事件上报 — 有界并发派发，不阻塞事件循环
                 post_type = data.get("post_type")
                 if post_type:
-                    threading.Thread(
-                        target=self._safe_message_callback,
-                        args=(data, bot_name),
-                        daemon=True,
-                        name=f"msg-{bot_name}"
-                    ).start()
+                    asyncio.create_task(self._dispatch(data, bot_name))
 
         except websockets.ConnectionClosed:
             pass
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"[{bot_name}] 连接处理异常: {e}", exc_info=True)
             log_broker.log_connection(bot_name, 'error', {'error': str(e)})
@@ -244,34 +261,48 @@ class WebSocketServer:
             logger.info(f"[{bot_name}] OneBot 客户端已断开")
             log_broker.log_connection(bot_name, 'disconnect')
             try:
-                self.on_disconnect_callback(bot_name)
+                cb = self.on_disconnect_callback
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(bot_name)
+                else:
+                    await asyncio.to_thread(cb, bot_name)
             except Exception as e:
                 logger.error(f"[{bot_name}] on_disconnect 回调异常: {e}")
 
-    def _safe_message_callback(self, data: dict, bot_name: str):
-        """在独立线程中安全执行消息回调"""
-        try:
-            self.on_message_callback(data, bot_name)
-        except Exception as e:
-            logger.error(f"[{bot_name}] 消息处理异常: {e}", exc_info=True)
+    async def _dispatch(self, data: dict, bot_name: str):
+        """有界并发处理一条事件（async handler 直接 await，sync handler 转线程）"""
+        async with self._dispatch_semaphore:
+            try:
+                cb = self.on_message_callback
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(data, bot_name)
+                else:
+                    await asyncio.to_thread(cb, data, bot_name)
+            except Exception as e:
+                logger.error(f"[{bot_name}] 消息处理异常: {e}", exc_info=True)
 
-    def send(self, bot_name: str, data: dict) -> bool:
-        """向指定 OneBot 客户端发送数据（线程安全，从任意线程调用）"""
+    # ── 发送 ─────────────────────────────────────────────────────
+
+    async def asend(self, bot_name: str, data: dict) -> bool:
+        """异步发送（必须在主事件循环线程内调用）"""
         with self._lock:
             ws = self._connections.get(bot_name)
         if ws is None:
             return False
-
-        if self._loop is None or not self._loop.is_running():
+        try:
+            await ws.send(json.dumps(data, ensure_ascii=False))
+            return True
+        except Exception as e:
+            logger.error(f"[{bot_name}] 发送数据失败: {e}")
             return False
 
-        future = asyncio.run_coroutine_threadsafe(
-            ws.send(json.dumps(data, ensure_ascii=False)),
-            self._loop
-        )
+    def send(self, bot_name: str, data: dict) -> bool:
+        """同步发送（线程安全，供 executor/Web 线程调用）"""
+        if self._loop is None or not self._loop.is_running():
+            return False
         try:
-            future.result(timeout=5)
-            return True
+            future = asyncio.run_coroutine_threadsafe(self.asend(bot_name, data), self._loop)
+            return future.result(timeout=5)
         except Exception as e:
             logger.error(f"[{bot_name}] 发送数据失败: {e}")
             return False
@@ -281,15 +312,34 @@ class WebSocketServer:
         with self._lock:
             return list(self._connections.keys())
 
-    def stop(self):
-        """停止服务端"""
+    async def stop_async(self):
+        """异步停止服务端（在主事件循环内调用）"""
         self._running = False
-        if self._server and self._loop and self._loop.is_running():
-            # websockets 16+: close() 是普通方法，wait_closed() 是协程
-            # websockets 10-12: close() 是协程
-            close_result = self._server.close()
-            if asyncio.iscoroutine(close_result):
-                asyncio.run_coroutine_threadsafe(close_result, self._loop)
-            elif hasattr(self._server, 'wait_closed'):
-                asyncio.run_coroutine_threadsafe(self._server.wait_closed(), self._loop)
+        if self._server_task:
+            self._server_task.cancel()
+            try:
+                await self._server_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._server_task = None
+        if self._server is not None:
+            try:
+                self._server.close()
+                await self._server.wait_closed()
+            except Exception:
+                pass
+            self._server = None
+        with self._lock:
+            self._connections.clear()
         logger.info("WebSocket 服务端已停止")
+
+    def stop(self):
+        """同步停止（供外部线程调用）"""
+        if self._loop is None or not self._loop.is_running():
+            self._running = False
+            return
+        try:
+            future = asyncio.run_coroutine_threadsafe(self.stop_async(), self._loop)
+            future.result(timeout=10)
+        except Exception as e:
+            logger.error(f"WebSocket 停止异常: {e}")

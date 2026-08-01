@@ -240,7 +240,7 @@ class PluginLoader:
     def __init__(self, plugins_dir: str, framework, plugins_dat_dir: str = None):
         self.plugins_dir = plugins_dir
         self.plugins_dat_dir = plugins_dat_dir or os.path.join(
-            os.path.dirname(plugins_dir.rstrip(os.sep)), 'plugins_dat'
+            os.path.dirname(plugins_dir.rstrip(os.sep)), 'data', 'plugins_dat'
         )
         self.framework = framework
         self.db = framework.db
@@ -256,6 +256,9 @@ class PluginLoader:
         self._group_plugin_cache = {}
         self._group_plugin_cache_time = 0
         self._group_cache_ttl = 30  # 缓存 30 秒
+
+        # ── 插件文件 mtime 快照（心跳增量注册用）──
+        self._plugin_mtimes: Dict[str, float] = {}
 
     def check_dependencies(self, plugin_name: str) -> dict:
         """
@@ -375,6 +378,10 @@ class PluginLoader:
                 'missing': dict(self._missing_deps),
                 'conflicts': dict(self._conflict_deps),
             }
+
+    def get_missing_deps(self, plugin_name: str) -> dict:
+        """获取插件缺失依赖（Web UI 等调用）"""
+        return self.get_dep_status(plugin_name)
 
     def install_missing_deps(self, plugin_name: str) -> dict:
         """一键安装插件缺失的依赖，安装成功后清除记录"""
@@ -900,6 +907,8 @@ class PluginLoader:
 
                 self._upsert_plugin_db(plugin_name, plugin_meta)
                 self.init_plugin_configs(plugin_name)
+                # 记录文件快照，避免首个心跳周期重复注册
+                self._plugin_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
 
                 logger.info(f"[{plugin_name}] 加载成功 v{plugin_meta['version']}")
                 return True
@@ -1092,25 +1101,51 @@ class PluginLoader:
         except Exception as e:
             logger.error(f"[{plugin_name}] 同步任务失败: {e}")
 
+    def _snapshot_mtime(self, plugin_name: str) -> float:
+        """计算插件目录下所有 .py 文件的最大修改时间，用于变更检测"""
+        plugin_path = os.path.join(self.plugins_dir, plugin_name)
+        if not os.path.isdir(plugin_path):
+            return -1.0
+        latest = 0.0
+        try:
+            for root, _dirs, files in os.walk(plugin_path):
+                for f in files:
+                    if f.endswith('.py'):
+                        try:
+                            latest = max(latest, os.path.getmtime(os.path.join(root, f)))
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+        return latest
+
     def heartbeat_register(self):
         """
-        1分钟心跳：对所有已加载插件重新调用 register(ctx)
-        由定时器驱动
+        心跳检查：仅对文件发生变化的插件重新 register(ctx)（增量注册）
+        避免定时全量重建定时任务/命令带来的副作用与 DB 写放大
         """
         with self._lock:
             plugin_names = list(self._loaded_plugins.keys())
 
+        changed = []
         for name in plugin_names:
+            snap = self._snapshot_mtime(name)
+            if snap == self._plugin_mtimes.get(name):
+                continue
             try:
                 self.register_commands(name)
+                self._plugin_mtimes[name] = snap
+                changed.append(name)
+                logger.debug(f"[{name}] 心跳增量注册完成")
             except Exception as e:
                 logger.error(f"[{name}] 心跳注册异常: {e}")
 
         # 心跳后使路由缓存失效（命令可能有变化）
-        try:
-            self.framework.router._invalidate_cache()
-        except Exception:
-            pass
+        if changed:
+            try:
+                self.framework.router._invalidate_cache()
+            except Exception:
+                pass
 
     def load_all(self) -> list:
         """加载所有已发现插件，返回成功列表"""
@@ -1234,6 +1269,31 @@ class PluginLoader:
 
         # 移除事件订阅
         self.framework.event_bus.unsubscribe_plugin(plugin_name)
+
+        # 清理 sys.modules：删除该插件目录下的所有模块（含短名模块，避免热重载污染）
+        try:
+            plugin_path = info.get('path') or os.path.join(self.plugins_dir, plugin_name)
+            abs_plugin = os.path.abspath(plugin_path)
+            for mod_name in list(sys.modules):
+                mod = sys.modules.get(mod_name)
+                mod_file = getattr(mod, '__file__', '') or ''
+                if mod_file and os.path.abspath(mod_file).startswith(abs_plugin + os.sep):
+                    sys.modules.pop(mod_name, None)
+            sys.modules.pop(f"plugin_{plugin_name}", None)
+        except Exception as e:
+            logger.debug(f"[{plugin_name}] 清理 sys.modules 异常: {e}")
+
+        # 清理 sys.path：移除该插件的目录（避免路径污染其他插件）
+        try:
+            plugin_path = info.get('path') or os.path.join(self.plugins_dir, plugin_name)
+            norm = os.path.normpath(plugin_path)
+            sys.path = [p for p in sys.path if os.path.normpath(p) != norm]
+        except Exception:
+            pass
+
+        # 清理文件快照
+        with self._lock:
+            self._plugin_mtimes.pop(plugin_name, None)
 
         # 强制清理模块引用，触发垃圾回收
         # 防御插件未关闭的文件句柄 / socket 连接 / 长连接残留

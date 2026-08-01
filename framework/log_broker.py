@@ -13,6 +13,7 @@ from collections import deque
 from typing import Optional
 
 MAX_CACHE = 2000  # 最大缓存条数
+MAX_SSE_SUBSCRIBERS = 32  # SSE 订阅者上限（防资源耗尽）
 
 
 class LogBroker:
@@ -91,10 +92,12 @@ class LogBroker:
         """记录框架日志（来自 Python logging）"""
         self.log('framework', level, message, {}, source=source)
 
-    def subscribe(self) -> queue.Queue:
-        """订阅实时日志流（SSE 用）"""
-        q = queue.Queue(maxsize=500)
+    def subscribe(self):
+        """订阅实时日志流（SSE 用），超过上限返回 None"""
         with self._lock:
+            if len(self._subscribers) >= MAX_SSE_SUBSCRIBERS:
+                return None
+            q = queue.Queue(maxsize=500)
             self._subscribers.append(q)
         return q
 

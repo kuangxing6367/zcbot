@@ -2,7 +2,12 @@
 消息路由器
 按插件优先级顺序分发消息，匹配静态命令
 动态命令（is_dynamic=1）仅用于展示，不参与路由匹配
+
+异步模型：
+- route() 为异步方法，handler 支持 async def（直接 await）和普通 def（转线程执行）
+- 命中计数不直接写库，交给 framework.stats_writer 批量落库，避免阻塞事件循环
 """
+import asyncio
 import logging
 import re
 import time
@@ -59,9 +64,9 @@ class MessageRouter:
         self._commands_cache = {}
         self._commands_cache_time = {}
 
-    def route(self, event: dict, bot_name: str = 'default'):
+    async def route(self, event: dict, bot_name: str = 'default'):
         """
-        路由一条消息事件
+        路由一条消息事件（异步）
         1. 按插件优先级排序 → 遍历插件
         2. 每个插件内按 commands.priority 匹配命令
         3. 未命中 → 记录未匹配日志
@@ -78,7 +83,7 @@ class MessageRouter:
         ev = Event(event, bot_name)
         ev._framework = self.framework
 
-        plugin_order = self._get_plugin_order()
+        plugin_order = await asyncio.to_thread(self._get_plugin_order)
         if not plugin_order:
             log_broker.log_system('WARN', f'无可用插件处理消息: "{message[:50]}"')
             return
@@ -88,12 +93,15 @@ class MessageRouter:
 
         for plugin_name, _ in plugin_order:
             # 群级插件开关检查（私聊不限制）
-            if ev.is_group and not self.framework.plugin_loader.is_plugin_enabled_for_group(
-                plugin_name, ev.group_id
-            ):
-                logger.debug(f"跳过 [{plugin_name}]：已在群 {ev.group_id} 中禁用")
-                continue
-            matched = self._match_plugin_commands(plugin_name, ev, message)
+            if ev.is_group:
+                enabled = await asyncio.to_thread(
+                    self.framework.plugin_loader.is_plugin_enabled_for_group,
+                    plugin_name, ev.group_id
+                )
+                if not enabled:
+                    logger.debug(f"跳过 [{plugin_name}]：已在群 {ev.group_id} 中禁用")
+                    continue
+            matched = await self._match_plugin_commands(plugin_name, ev, message)
             if not matched:
                 continue
             # 插件处理了消息，记录 info 日志
@@ -179,11 +187,12 @@ class MessageRouter:
                 return result
         return None
 
-    def _match_plugin_commands(self, plugin_name: str, ev, message: str) -> bool:
+    async def _match_plugin_commands(self, plugin_name: str, ev, message: str) -> bool:
         """
         在指定插件的命令中匹配消息（带 5 秒命令缓存）
+        is_dynamic=1 的命令仅用于 Web 展示，不参与路由匹配
         """
-        commands = self._get_cached_commands(plugin_name)
+        commands = await asyncio.to_thread(self._get_cached_commands, plugin_name)
         if not commands:
             return False
 
@@ -207,13 +216,10 @@ class MessageRouter:
                         if match:
                             matched_by = pattern
                         # 正则没匹配到，尝试自动处理 / 前缀
-                        # （和 _match_simple 的 / 前缀剥离逻辑保持一致）
                         if not match:
                             if message.startswith("/"):
-                                # 消息带 / 但正则要求不带 → 去掉 / 再试
                                 match = re.search(pattern, message[1:])
                             elif not message.startswith("/") and pattern.startswith("^/"):
-                                # 消息不带 / 但正则要求带 / → 加上 / 再试
                                 match = re.search(pattern, "/" + message)
                             if match:
                                 matched_by = pattern
@@ -232,50 +238,40 @@ class MessageRouter:
                             break
 
                 if match:
-                    # ── 权限检查（参考 AstrBot PermissionTypeFilter）──
+                    # ── 权限检查 ──
                     require = cmd.get('require_level', '')  # 'admin' | 'super' | ''
                     if require == 'admin' and not ev.is_admin:
-                        self.db.execute(
-                            "UPDATE commands SET hit_count = hit_count + 1 WHERE id = %s",
-                            (cmd['id'],)
-                        )
-                        ev._framework = self.framework  # 确保 framework 可用
+                        self._stats_hit(cmd['id'])
                         log_broker.log_plugin(plugin_name, '权限不足', {
                             'handler': cmd['handler'],
                             'user_id': ev.user_id,
                             'role': ev.role,
                             'message': message[:80],
                         })
-                        # 发送提示
-                        from framework.event import Event
-                        ev_type = 'group' if ev.is_group else 'private'
                         target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
-                        self.framework.api_caller.call(
+                        await self.framework.api_caller.acall(
                             'send_msg',
                             **target,
                             message=f'权限不足（需要 {require} 权限，当前身份: {ev.role}）'
                         )
                         return True
                     if require == 'super' and not ev.is_superuser:
-                        ev._framework = self.framework
+                        self._stats_hit(cmd['id'])
                         log_broker.log_plugin(plugin_name, '权限不足', {
                             'handler': cmd['handler'],
                             'user_id': ev.user_id,
                             'role': ev.role,
                         })
                         target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
-                        self.framework.api_caller.call(
+                        await self.framework.api_caller.acall(
                             'send_msg',
                             **target,
                             message=f'权限不足（需要超级管理员权限）'
                         )
                         return True
 
-                    # 命中计数
-                    self.db.execute(
-                        "UPDATE commands SET hit_count = hit_count + 1 WHERE id = %s",
-                        (cmd['id'],)
-                    )
+                    # 命中计数（异步批量落库，不阻塞路由）
+                    self._stats_hit(cmd['id'])
                     log_broker.log_plugin(plugin_name, '命令命中', {
                         'matched_by': matched_by,
                         'handler': cmd['handler'],
@@ -288,7 +284,11 @@ class MessageRouter:
                         # 注入当前事件的 bot 到 ctx，确保回复走正确的 OneBot 实例
                         if hasattr(module, 'ctx'):
                             module.ctx._current_bot = ev.bot_name
-                        result = handler(ev, match)
+                        if asyncio.iscoroutinefunction(handler):
+                            result = await handler(ev, match)
+                        else:
+                            # 同步 handler 转线程执行，不阻塞事件循环
+                            result = await asyncio.to_thread(handler, ev, match)
                         # handler 返回 False 表示"未实际处理，继续路由"
                         if result is False:
                             continue
@@ -304,8 +304,14 @@ class MessageRouter:
 
         return False
 
+    def _stats_hit(self, cmd_id: int):
+        """记录命令命中（交给 stats_writer 批量落库）"""
+        writer = getattr(self.framework, 'stats_writer', None)
+        if writer is not None:
+            writer.command_hit(cmd_id)
+
     def _get_cached_commands(self, plugin_name: str) -> list:
-        """获取插件命令列表（带 5 秒缓存）"""
+        """获取插件命令列表（带 5 秒缓存），动态命令（is_dynamic=1）仅展示不路由"""
         now = time.time()
         cached_time = self._commands_cache_time.get(plugin_name, 0)
         if plugin_name in self._commands_cache and (now - cached_time) < self._cache_ttl:
@@ -314,7 +320,8 @@ class MessageRouter:
         try:
             commands = self.db.query(
                 "SELECT id, pattern, alias, handler, is_dynamic, require_level, is_active FROM commands "
-                "WHERE plugin_name = %s AND (is_active = 1 OR (is_active = 0 AND alias IS NOT NULL AND alias != '')) "
+                "WHERE plugin_name = %s AND is_dynamic = 0 "
+                "AND (is_active = 1 OR (is_active = 0 AND alias IS NOT NULL AND alias != '')) "
                 "ORDER BY priority ASC, created_at ASC",
                 (plugin_name,)
             )
