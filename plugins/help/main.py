@@ -23,6 +23,7 @@
   logo_enable        布尔  启用帮助菜单 logo，默认 true
 """
 import os
+import re
 import tempfile
 from collections import OrderedDict
 
@@ -90,6 +91,23 @@ def _get_display_name_map(ctx):
     return mapping
 
 
+def _prettify_command(pattern):
+    """将正则 pattern 美化为友好的命令名显示。
+    
+    例如: ^/一言(?:\s+(.+))?\s*$ → /一言
+          ^/今日早报\s*$ → /今日早报
+    """
+    cmd = pattern
+    cmd = re.sub(r'^\^', '', cmd)
+    cmd = re.sub(r'\$$', '', cmd)
+    cmd = re.sub(r'\([^)]*\)[\?\*\+]?', '', cmd)
+    cmd = re.sub(r'\\[sS]\*|\\[sS]\+', '', cmd)
+    cmd = re.sub(r'\.\*?\??', '', cmd)
+    cmd = cmd.replace('?', '')
+    cmd = cmd.strip()
+    return cmd if cmd else pattern
+
+
 def _build_plugin_commands(ctx, rows):
     """
     将数据库查询结果转换为 draw.py 期望的格式：
@@ -142,6 +160,7 @@ def _build_plugin_commands(ctx, rows):
         pattern = (r.get("pattern") or "").strip()
         if not pattern:
             continue
+        pattern = _prettify_command(pattern)
         # 确保命令以 / 开头
         if not pattern.startswith("/"):
             pattern = "/" + pattern
@@ -211,6 +230,7 @@ def _build_fallback_text(ctx, rows):
             desc = (cmd.get("description") or "").strip()
             if not pattern:
                 continue
+            pattern = _prettify_command(pattern)
             display_cmd = pattern if pattern.startswith("/") else f"/{pattern}"
             if desc:
                 lines.append(f"  {display_cmd} - {desc}")
