@@ -10,19 +10,29 @@ build/
 *.egg
 
 # ============================================================
-# 插件目录（示例插件除外，其余插件不上传）
+# 插件目录（放行内置插件，其余不上传）
 # ============================================================
 plugins/*
-!plugins/example_plugin/
-plugins/example_plugin/*
-!plugins/example_plugin/main.py
-!plugins/example_plugin/requirements.txt
+!plugins/echo/
+!plugins/echo/main.py
+!plugins/echo/requirements.txt
+!plugins/help/
+!plugins/help/main.py
+!plugins/help/draw.py
+!plugins/help/requirements.txt
+!plugins/help/DouyinSansBold.otf
+!plugins/runtime_status/
+!plugins/runtime_status/main.py
+!plugins/runtime_status/requirements.txt
+!plugins/image_renderer/
+!plugins/image_renderer/main.py
+!plugins/image_renderer/requirements.txt
 
-# 插件数据/配置目录（仅放行 example_plugin 的说明文档）
+# 插件数据/配置目录（仅放行 help 的插件配置）
 plugins_dat/*
-!plugins_dat/example_plugin/
-plugins_dat/example_plugin/*
-!plugins_dat/example_plugin/README.md
+!plugins_dat/help/
+plugins_dat/help/*
+!plugins_dat/help/plugin.yaml
 
 # 本地依赖包（.whl 等，体积大且为第三方产物）
 packages/

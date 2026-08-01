@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import queue
+import re
 import secrets
 import shutil
 import sys
@@ -19,6 +20,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 import bcrypt
+import psutil
 import requests
 import yaml
 from flask import Flask, request, jsonify, send_from_directory, Response
@@ -39,7 +41,293 @@ def create_web_app(framework) -> Flask:
     db = framework.db
     plugins_dir = framework.plugin_loader.plugins_dir
 
+    # ---- 登录防爆破（内存限速：同一 IP 10 分钟内最多失败 5 次）----
+    _login_failures = {}  # ip -> list[timestamp]
+    _login_lock = threading.Lock()
+
+    def _check_login_rate(ip: str) -> bool:
+        now = time.time()
+        with _login_lock:
+            ts_list = [t for t in _login_failures.get(ip, []) if now - t < 600]
+            return len(ts_list) < 5
+
+    def _record_login_failure(ip: str):
+        now = time.time()
+        with _login_lock:
+            _login_failures.setdefault(ip, []).append(now)
+            _login_failures[ip] = [t for t in _login_failures[ip] if now - t < 600]
+
+    def _clear_login_failures(ip: str):
+        with _login_lock:
+            _login_failures.pop(ip, None)
+
     # ---- 工具函数 ----
+
+    def _project_root() -> str:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _data_dir() -> str:
+        d = os.path.join(_project_root(), 'data')
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _quote_ident(name: str) -> str:
+        """按数据库类型安全引用标识符（MySQL 反引号 / SQLite 双引号）"""
+        if framework.config.get('database', {}).get('type') == 'mysql':
+            return f"`{name}`"
+        return f'"{name}"'
+
+    def _yaml_config_path() -> str:
+        """返回框架实际加载的配置文件路径（支持自定义 config 启动）"""
+        return getattr(framework, 'config_path', None) or os.path.join(_project_root(), 'config.yaml')
+
+    def _read_yaml_section(section: str) -> dict:
+        """读取 config.yaml 指定段的原始 dict（不做环境变量替换）"""
+        path = _yaml_config_path()
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                doc = yaml.safe_load(f) or {}
+        except Exception:
+            return {}
+        return doc.get(section, {}) if isinstance(doc, dict) else {}
+
+    def _yaml_scalar(v):
+        """将单个值序列化为 YAML 标量（避免 PyYAML safe_dump 追加 '...' 的问题）"""
+        if v is None:
+            return 'null'
+        if isinstance(v, bool):
+            return 'true' if v else 'false'
+        if isinstance(v, (int, float)):
+            return str(v)
+        s = str(v)
+        if s == '':
+            return "''"
+        # 含 YAML 特殊字符或前后空格、或可能是保留字时，用 JSON 引号包裹（JSON 是 YAML 子集）
+        if (any(ch in s for ch in ':#{}[],&*!|>\'"%@`\n')
+                or s != s.strip()
+                or s.lower() in ('true', 'false', 'null', 'yes', 'no', 'on', 'off')):
+            return json.dumps(s, ensure_ascii=False)
+        return s
+
+    def _yaml_block_lines(data: dict, indent: int = 2, level: int = 0) -> list:
+        """将 dict 序列化为带缩进的 YAML 块文本行（保证类型可被安全加载）"""
+        lines = []
+        prefix = ' ' * (level * indent)
+        for k, v in data.items():
+            if isinstance(v, dict):
+                lines.append(f"{prefix}{k}:\n")
+                lines.extend(_yaml_block_lines(v, indent, level + 1))
+            elif isinstance(v, (list, tuple)):
+                lines.append(f"{prefix}{k}:\n")
+                for item in v:
+                    if isinstance(item, dict):
+                        sub = _yaml_block_lines(item, indent, level + 2)
+                        # 首行改为 "- " 开头（列表项 dict 的第一行）
+                        lines.append(f"{' ' * ((level + 1) * indent)}- " + sub[0].strip() + "\n")
+                        for extra in sub[1:]:
+                            lines.append(extra)
+                    else:
+                        lines.append(f"{' ' * ((level + 1) * indent)}- {_yaml_scalar(item)}\n")
+            else:
+                lines.append(f"{prefix}{k}: {_yaml_scalar(v)}\n")
+        return lines
+
+    def _update_yaml_section(section: str, values: dict) -> bool:
+        """
+        重写 config.yaml 中指定段（保留其他段及注释），返回是否成功。
+        段内原有子 key 保留，被 values 中的同名 key 覆盖。
+        """
+        path = _yaml_config_path()
+        if not os.path.isfile(path):
+            return False
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except Exception:
+            return False
+
+        # 定位段起始行（行首无缩进、非注释的 "section:"）
+        start = None
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#') and not stripped.startswith('---'):
+                m = re.match(rf'^({re.escape(section)})\s*:', stripped)
+                if m and not m.group(0)[len(section) + 1:].lstrip().startswith(('{', '[')):
+                    start = i
+                    break
+        if start is None:
+            return False
+
+        # 定位段结束（下一个行首无缩进的非注释行）
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            stripped = lines[j].strip()
+            if stripped and not stripped.startswith('#') and not stripped.startswith('---') \
+                    and not lines[j][:1].isspace():
+                end = j
+                break
+
+        merged = dict(_read_yaml_section(section))
+        merged.update(values or {})
+
+        # 段内子 key 需要一级缩进（level=1）
+        new_lines = [f"{section}:\n"] + _yaml_block_lines(merged, indent=2, level=1)
+        lines[start:end] = new_lines
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+            return True
+        except Exception:
+            return False
+
+    def _read_market_sources_custom() -> list:
+        """读取用户自定义插件源列表（存 system_config 表）"""
+        try:
+            row = db.query_one("SELECT config_value FROM system_config WHERE config_key = 'plugin_market_sources'")
+            if row and row['config_value']:
+                parsed = json.loads(row['config_value'])
+                if isinstance(parsed, list):
+                    return parsed
+        except Exception:
+            pass
+        return []
+
+    def _save_market_sources_custom(sources: list) -> None:
+        """保存用户自定义插件源列表"""
+        try:
+            existing = db.query_one("SELECT config_value FROM system_config WHERE config_key = 'plugin_market_sources'")
+            if existing:
+                db.execute(
+                    "UPDATE system_config SET config_value = %s WHERE config_key = 'plugin_market_sources'",
+                    (json.dumps(sources, ensure_ascii=False),)
+                )
+            else:
+                db.execute(
+                    "INSERT INTO system_config (config_key, config_value, description) VALUES (%s, %s, %s)",
+                    ('plugin_market_sources', json.dumps(sources, ensure_ascii=False), 'WebUI 自定义插件源列表')
+                )
+        except Exception as e:
+            logger.error(f"保存自定义插件源失败: {e}")
+
+    _DEFAULT_MARKET = {
+        'name': 'ZCBOT 官方插件源',
+        'url': 'https://raw.githubusercontent.com/kuangxing6367/zcbot_plugins/main/registry.json',
+    }
+
+    _MIRROR_MARKETS = [
+        {
+            'name': 'ZCBOT 镜像源 (ghproxy)',
+            'url': 'https://ghproxy.net/https://raw.githubusercontent.com/kuangxing6367/zcbot_plugins/main/registry.json',
+        },
+        {
+            'name': 'ZCBOT 镜像源 (ghproxy.cn)',
+            'url': 'https://ghproxy.cn/https://raw.githubusercontent.com/kuangxing6367/zcbot_plugins/main/registry.json',
+        },
+    ]
+
+    def _fetch_market_source(source: dict) -> list:
+        """拉取单个 registry 源的插件列表"""
+        url = (source.get('url') or '').strip()
+        if not url:
+            return []
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        plugins = data.get('plugins', []) if isinstance(data, dict) else []
+        result = []
+        for p in plugins:
+            if not isinstance(p, dict) or not p.get('name'):
+                continue
+            p = dict(p)
+            p['source'] = source.get('name', '')
+            result.append(p)
+        return result
+
+    def _market_installed_set() -> set:
+        """当前已安装的插件名集合（来自 DB plugins 表）"""
+        try:
+            rows = db.query("SELECT plugin_name FROM plugins")
+            return {r['plugin_name'] for r in rows}
+        except Exception:
+            return set()
+
+    def _download_and_extract_plugin(repo: str, branch: str, sub_path: str, target_dir: str):
+        """
+        从 GitHub 下载仓库 ZIP 并解压到目标目录（可指定子目录）。
+        返回 (ok, msg)
+        """
+        if repo.startswith('https://github.com/'):
+            repo = repo.replace('https://github.com/', '').rstrip('/')
+        elif repo.startswith('http://github.com/'):
+            repo = repo.replace('http://github.com/', '').rstrip('/')
+        if not repo or '..' in repo:
+            return False, '非法仓库地址'
+
+        zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+        urls_to_try = [zip_url]
+        for mirror in _MIRROR_MARKETS:
+            mirror_host = mirror['url'].split('/')[2]
+            urls_to_try.append(zip_url.replace('https://github.com/', f'https://{mirror_host}/https://github.com/'))
+
+        last_err = ''
+        for url in urls_to_try:
+            try:
+                logger.info(f"正在下载插件: {url}")
+                resp = requests.get(url, timeout=60, stream=True)
+                if resp.status_code == 404:
+                    return False, f'仓库或分支不存在: {repo}@{branch}'
+                if resp.status_code != 200:
+                    last_err = f'下载失败: HTTP {resp.status_code}'
+                    continue
+
+                tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+                for chunk in resp.iter_content(chunk_size=8192):
+                    tmp_zip.write(chunk)
+                tmp_zip.close()
+
+                os.makedirs(target_dir, exist_ok=True)
+                try:
+                    with zipfile.ZipFile(tmp_zip.name, 'r') as zf:
+                        names = zf.namelist()
+                        prefix = names[0].split('/')[0] if names else ''
+                        sub = (sub_path or '/').lstrip('/').rstrip('/')
+                        for name in names:
+                            if name.endswith('/'):
+                                continue
+                            rel_path = name
+                            if prefix and rel_path.startswith(prefix + '/'):
+                                rel_path = rel_path[len(prefix) + 1:]
+                            if sub:
+                                if rel_path == sub:
+                                    continue
+                                if not rel_path.startswith(sub + '/'):
+                                    continue
+                                rel_path = rel_path[len(sub) + 1:]
+                            if not rel_path:
+                                continue
+                            if '..' in rel_path or rel_path.startswith('/') or '\\' in rel_path:
+                                continue
+                            dest = os.path.join(target_dir, rel_path)
+                            parent = os.path.dirname(dest)
+                            if parent:
+                                os.makedirs(parent, exist_ok=True)
+                            with open(dest, 'wb') as f:
+                                f.write(zf.read(name))
+                except zipfile.BadZipFile:
+                    return False, '下载的 ZIP 文件无效'
+                finally:
+                    try:
+                        os.unlink(tmp_zip.name)
+                    except Exception:
+                        pass
+                return True, ''
+            except Exception as e:
+                last_err = str(e)
+                continue
+
+        return False, last_err or '所有下载尝试均失败'
 
     def get_client_ip():
         return request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
@@ -75,10 +363,16 @@ def create_web_app(framework) -> Flask:
         )
         if not row or not row['is_active']:
             return None
-        # 检查过期
-        timeout = web_cfg.get('token_timeout', 86400)
+        # 检查过期（SQLite 返回字符串，MySQL 返回 datetime，统一解析）
+        timeout = web_cfg.get('token_timeout') or web_cfg.get('session_timeout', 86400)
         if row['token_created_at']:
-            expiry = row['token_created_at'] + timedelta(seconds=timeout)
+            created = row['token_created_at']
+            if isinstance(created, str):
+                try:
+                    created = datetime.strptime(created, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    return None
+            expiry = created + timedelta(seconds=timeout)
             if datetime.now() > expiry:
                 return None
         return {'id': row['id'], 'username': row['username'], 'role': row['role']}
@@ -118,6 +412,12 @@ def create_web_app(framework) -> Flask:
     @app.route('/api/login', methods=['POST'])
     def login():
         """管理员登录"""
+        client_ip = get_client_ip()
+
+        # 登录限速
+        if not _check_login_rate(client_ip):
+            return jsonify({'code': 429, 'msg': '尝试过于频繁，请 10 分钟后再试'}), 429
+
         data = request.get_json(silent=True) or {}
         username = data.get('username', '').strip()
         password = data.get('password', '')
@@ -135,10 +435,12 @@ def create_web_app(framework) -> Flask:
             return jsonify({'code': 500, 'msg': f'数据库错误: {e}'}), 500
 
         if not row:
+            _record_login_failure(client_ip)
             audit_log(None, username, 'login', result='failure', error_message='用户不存在')
             return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
 
         if not row['is_active']:
+            _record_login_failure(client_ip)
             audit_log(row['id'], username, 'login', result='failure', error_message='账号已禁用')
             return jsonify({'code': 403, 'msg': '账号已禁用'}), 403
 
@@ -150,11 +452,15 @@ def create_web_app(framework) -> Flask:
             if isinstance(password, str):
                 password = password.encode('utf-8')
             if not bcrypt.checkpw(password, stored_hash):
+                _record_login_failure(client_ip)
                 audit_log(row['id'], username, 'login', result='failure', error_message='密码错误')
                 return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
         except Exception as e:
             logger.error(f"密码验证异常: {e}")
             return jsonify({'code': 500, 'msg': '密码验证失败'}), 500
+
+        # 登录成功，清除失败计数
+        _clear_login_failures(client_ip)
 
         # 生成 2048 位随机 token
         token = secrets.token_hex(1024)  # 2048 字符
@@ -917,6 +1223,134 @@ def create_web_app(framework) -> Flask:
                       'plugin', plugin_name, None, 'failure', str(e))
             return jsonify({'code': 500, 'msg': f'更新失败: {e}'}), 500
 
+    # ---- 插件市场（Registry JSON）----
+
+    _MARKET_CACHE_FILE = 'plugin_market_cache.json'
+    _MARKET_CACHE_TTL = 300  # 秒
+
+    @app.route('/api/plugins/market', methods=['GET'])
+    @require_auth
+    def plugin_market():
+        """获取在线插件市场列表（默认源 + 自定义源，带缓存）"""
+        force = request.args.get('force_refresh', 'false').lower() == 'true'
+        cache_path = os.path.join(_data_dir(), _MARKET_CACHE_FILE)
+
+        if not force and os.path.isfile(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    cache = json.load(f)
+                if time.time() - cache.get('ts', 0) < _MARKET_CACHE_TTL:
+                    return jsonify({'code': 0, 'data': cache['data']})
+            except Exception:
+                pass
+
+        sources = [_DEFAULT_MARKET] + _read_market_sources_custom()
+        all_plugins, errors = [], []
+        for src in sources:
+            try:
+                all_plugins.extend(_fetch_market_source(src))
+            except Exception as e:
+                err_msg = f"{src.get('name', src.get('url', ''))}: {str(e)[:120]}"
+                # 主源失败时，尝试镜像源
+                if src.get('url') == _DEFAULT_MARKET['url']:
+                    mirror_ok = False
+                    for mirror in _MIRROR_MARKETS:
+                        try:
+                            all_plugins.extend(_fetch_market_source(mirror))
+                            mirror_ok = True
+                            break
+                        except Exception:
+                            continue
+                    if not mirror_ok:
+                        errors.append(err_msg)
+                else:
+                    errors.append(err_msg)
+
+        installed = _market_installed_set()
+        for p in all_plugins:
+            p['installed'] = p.get('name') in installed
+
+        result = {'plugins': all_plugins, 'errors': errors, 'sources': sources}
+        try:
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump({'ts': time.time(), 'data': result}, f, ensure_ascii=False)
+        except Exception:
+            pass
+        return jsonify({'code': 0, 'data': result})
+
+    @app.route('/api/plugins/market/sources', methods=['GET'])
+    @require_auth
+    def plugin_market_sources_get():
+        """获取插件源列表（默认源 + 自定义源）"""
+        return jsonify({'code': 0, 'data': {
+            'default': _DEFAULT_MARKET,
+            'custom': _read_market_sources_custom(),
+        }})
+
+    @app.route('/api/plugins/market/sources', methods=['POST'])
+    @require_super
+    def plugin_market_sources_save():
+        """保存自定义插件源列表"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        sources = data.get('sources', [])
+        if not isinstance(sources, list):
+            return jsonify({'code': 400, 'msg': 'sources 必须是数组'}), 400
+        cleaned = []
+        for s in sources:
+            if not isinstance(s, dict):
+                continue
+            name = str(s.get('name') or '').strip()
+            url = str(s.get('url') or '').strip()
+            if name and url.startswith(('http://', 'https://')):
+                cleaned.append({'name': name, 'url': url})
+        _save_market_sources_custom(cleaned)
+        audit_log(admin['id'], admin['username'], 'update_market_sources', 'plugin', 'market', {'sources': cleaned})
+        return jsonify({'code': 0, 'msg': f'已保存 {len(cleaned)} 个自定义插件源'})
+
+    @app.route('/api/plugins/market/install', methods=['POST'])
+    @require_auth
+    def plugin_market_install():
+        """从市场安装插件（下载 ZIP 到插件目录并加载）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        plugin_name = str(data.get('name') or '').strip()
+        repo = str(data.get('repo') or '').strip()
+        branch = str(data.get('branch') or 'main').strip() or 'main'
+        sub_path = str(data.get('sub_path') or '/')
+
+        if not plugin_name or not re.match(r'^[\w\-]+$', plugin_name):
+            return jsonify({'code': 400, 'msg': '非法的插件名'}), 400
+        if not repo:
+            return jsonify({'code': 400, 'msg': '缺少仓库地址（repo）'}), 400
+
+        try:
+            target_dir = os.path.join(plugins_dir, plugin_name)
+            # 已存在则先卸载并备份
+            if os.path.isdir(target_dir) and os.listdir(target_dir):
+                framework.plugin_loader.unload_plugin(plugin_name)
+                backup_dir = target_dir + f'.bak.{int(time.time())}'
+                shutil.move(target_dir, backup_dir)
+
+            ok, msg = _download_and_extract_plugin(repo, branch, sub_path, target_dir)
+            if not ok:
+                return jsonify({'code': 500, 'msg': f'下载失败: {msg}'}), 500
+
+            # 分离配置文件到 plugins_dat
+            framework.plugin_loader.split_installed_files(plugin_name)
+
+            if framework.plugin_loader.load_plugin(plugin_name):
+                framework.plugin_loader.register_commands(plugin_name)
+                audit_log(admin['id'], admin['username'], 'install_plugin_market',
+                          'plugin', plugin_name, {'repo': repo, 'branch': branch, 'sub_path': sub_path})
+                return jsonify({'code': 0, 'msg': f'插件 [{plugin_name}] 安装成功并已加载'})
+            audit_log(admin['id'], admin['username'], 'install_plugin_market',
+                      'plugin', plugin_name, {'repo': repo}, 'failure', '加载失败')
+            return jsonify({'code': 500, 'msg': '代码已下载但加载失败，请检查 main.py'}), 500
+        except Exception as e:
+            logger.error(f"市场安装插件失败: {e}", exc_info=True)
+            return jsonify({'code': 500, 'msg': f'安装失败: {e}'}), 500
+
     # ---- 命令管理 ----
 
     @app.route('/api/commands', methods=['GET'])
@@ -1343,9 +1777,16 @@ def create_web_app(framework) -> Flask:
             if handler is None or not callable(handler):
                 return jsonify({'code': 500, 'msg': f'处理函数 {row["handler"]} 不存在'}), 500
 
-            # 执行任务
+            # 执行任务（支持 async handler）
+            import asyncio
             try:
-                handler()
+                result = handler()
+                if asyncio.iscoroutine(result):
+                    loop = getattr(framework, 'loop', None)
+                    if loop is not None and loop.is_running():
+                        asyncio.run_coroutine_threadsafe(result, loop).result(timeout=120)
+                    else:
+                        asyncio.run(result)
                 db.execute(
                     "UPDATE tasks SET last_run_at=NOW(), run_count=run_count+1, last_status='success' WHERE id=%s",
                     (task_id,)
@@ -1523,8 +1964,7 @@ def create_web_app(framework) -> Flask:
         if not admin:
             return jsonify({'code': 401, 'msg': '令牌无效或已过期'}), 401
 
-        def generate():
-            q = log_broker.subscribe()
+        def generate(q):
             try:
                 # 先发送缓存中的历史日志（最近 50 条）
                 history = log_broker.get_logs(limit=50)
@@ -1544,12 +1984,16 @@ def create_web_app(framework) -> Flask:
             finally:
                 log_broker.unsubscribe(q)
 
+        # 订阅前检查上限，超出直接拒绝，避免资源耗尽
+        sub_q = log_broker.subscribe()
+        if sub_q is None:
+            return jsonify({'code': 503, 'msg': '实时日志订阅者过多，请稍后重试'}), 503
+
         return Response(
-            generate(),
+            generate(sub_q),
             mimetype='text/event-stream',
             headers={
                 'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
                 'X-Accel-Buffering': 'no',
             }
         )
@@ -1584,6 +2028,239 @@ def create_web_app(framework) -> Flask:
             )
             audit_log(admin['id'], admin['username'], 'update_config', 'config', key, {'value': value})
             return jsonify({'code': 0, 'msg': '配置已更新'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    # ---- OneBot 连接设置 ----
+
+    @app.route('/api/connection', methods=['GET'])
+    @require_auth
+    def get_connection():
+        """获取 OneBot 连接配置与实时连接状态"""
+        cfg = _read_yaml_section('onebot') or (framework.config.get('onebot') or {})
+        bots = framework.ws_server.get_connected_bots()
+        return jsonify({'code': 0, 'data': {
+            'config': cfg,
+            'status': {
+                'connected_bots': bots,
+                'total': len(bots),
+                'ws_port': framework.config.get('onebot', {}).get('listen_port', 6830),
+            },
+        }})
+
+    @app.route('/api/connection', methods=['PUT'])
+    @require_super
+    def update_connection():
+        """更新 OneBot 连接配置（写入 config.yaml 并同步内存）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        allowed = {k: data[k] for k in ('listen_host', 'listen_port', 'access_token') if k in data}
+
+        if not allowed:
+            return jsonify({'code': 400, 'msg': '没有可更新的字段'}), 400
+        if 'listen_port' in allowed:
+            try:
+                allowed['listen_port'] = int(allowed['listen_port'])
+            except (TypeError, ValueError):
+                return jsonify({'code': 400, 'msg': 'listen_port 必须是整数'}), 400
+
+        merged = dict(_read_yaml_section('onebot'))
+        merged.update(allowed)
+        if not _update_yaml_section('onebot', merged):
+            return jsonify({'code': 500, 'msg': '写入 config.yaml 失败'}), 500
+
+        # 同步内存配置（端口/监听地址改动需重启生效，access_token 立即生效）
+        onebot = framework.config.setdefault('onebot', {})
+        onebot.update(allowed)
+        needs_restart = [k for k in allowed if k in ('listen_host', 'listen_port')]
+
+        audit_log(admin['id'], admin['username'], 'update_connection', 'config', 'onebot', allowed)
+        msg = '连接配置已保存'
+        if needs_restart:
+            msg += '，监听地址/端口改动需重启框架后生效'
+        return jsonify({'code': 0, 'msg': msg, 'data': {'needs_restart': needs_restart}})
+
+    # ---- 运行状态 ----
+
+    @app.route('/api/runtime/stats', methods=['GET'])
+    @require_auth
+    def runtime_stats():
+        """进程/系统运行状态（WebUI 实时轮询）"""
+        try:
+            proc = psutil.Process(os.getpid())
+            mem = psutil.virtual_memory()
+            boot = proc.create_time()
+            uptime = max(0, int(time.time() - boot))
+            bots = framework.ws_server.get_connected_bots()
+            db_type = framework.config.get('database', {}).get('type', 'unknown')
+
+            # 插件内存占用（已加载插件）
+            plugin_mem = {}
+            try:
+                for pname, mod in framework.plugin_loader.get_loaded_plugins().items():
+                    try:
+                        plugin_mem[pname] = round(
+                            psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 1)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            return jsonify({'code': 0, 'data': {
+                'cpu_percent': round(psutil.cpu_percent(interval=None) or 0, 1),
+                'memory': {
+                    'used_mb': round(mem.used / 1024 / 1024, 1),
+                    'total_mb': round(mem.total / 1024 / 1024, 1),
+                    'percent': round(mem.percent, 1),
+                },
+                'process_memory_mb': round(proc.memory_info().rss / 1024 / 1024, 1),
+                'threads': proc.num_threads(),
+                'uptime_seconds': uptime,
+                'python_version': sys.version.split()[0],
+                'db_type': db_type,
+                'ws': {'connected': len(bots), 'bots': bots},
+            }})
+        except Exception as e:
+            logger.error(f"获取运行状态失败: {e}")
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    # ---- 系统配置（config.yaml 分组读写）----
+
+    _YAML_SECTIONS = ('database', 'onebot', 'web', 'plugin', 'log', 'system')
+
+    @app.route('/api/config/yaml', methods=['GET'])
+    @require_auth
+    def get_yaml_config():
+        """读取 config.yaml 全量配置"""
+        path = _yaml_config_path()
+        if not os.path.isfile(path):
+            return jsonify({'code': 404, 'msg': 'config.yaml 不存在'}), 404
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                doc = yaml.safe_load(f) or {}
+            return jsonify({'code': 0, 'data': doc})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': f'解析失败: {e}'}), 500
+
+    @app.route('/api/config/yaml/<section>', methods=['PUT'])
+    @require_super
+    def update_yaml_config(section):
+        """分组更新 config.yaml（合并更新，保留未提交字段）"""
+        admin = request.admin
+        if section not in _YAML_SECTIONS:
+            return jsonify({'code': 400, 'msg': f'非法配置段，可选: {", ".join(_YAML_SECTIONS)}'}), 400
+
+        data = request.get_json(silent=True) or {}
+        values = data.get('data')
+        if not isinstance(values, dict) or not values:
+            return jsonify({'code': 400, 'msg': 'data 必须是非空对象'}), 400
+
+        merged = dict(_read_yaml_section(section))
+        merged.update(values)
+        if not _update_yaml_section(section, merged):
+            return jsonify({'code': 500, 'msg': '写入 config.yaml 失败'}), 500
+
+        framework.config.setdefault(section, {}).update(values)
+        audit_log(admin['id'], admin['username'], 'update_yaml_config', 'config', section, values)
+        return jsonify({'code': 0, 'msg': f'配置段 [{section}] 已保存，部分字段需重启生效'})
+
+    # ---- 数据库管理（内嵌 WebUI）----
+
+    @app.route('/api/db/tables', methods=['GET'])
+    @require_auth
+    def db_tables():
+        """列出数据库所有表及行数"""
+        try:
+            if framework.config.get('database', {}).get('type') == 'mysql':
+                rows = db.query("SHOW TABLES")
+                tables = [list(r.values())[0] for r in rows]
+            else:
+                rows = db.query(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                tables = [r['name'] for r in rows]
+
+            result = []
+            for t in tables:
+                try:
+                    row = db.query_one(f"SELECT COUNT(*) AS c FROM {_quote_ident(t)}")
+                    cnt = row['c'] if row else 0
+                except Exception:
+                    cnt = None
+                result.append({'name': t, 'rows': cnt})
+            return jsonify({'code': 0, 'data': result})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/db/tables/<table>/schema', methods=['GET'])
+    @require_auth
+    def db_table_schema(table):
+        """查看表结构"""
+        if not re.match(r'^[\w$]+$', table):
+            return jsonify({'code': 400, 'msg': '非法表名'}), 400
+        try:
+            if framework.config.get('database', {}).get('type') == 'mysql':
+                rows = db.query(f"SHOW COLUMNS FROM `{table}`")
+                return jsonify({'code': 0, 'data': rows})
+            rows = db.query(f"PRAGMA table_info({_quote_ident(table)})")
+            return jsonify({'code': 0, 'data': rows})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/db/tables/<table>/rows', methods=['GET'])
+    @require_auth
+    def db_table_rows(table):
+        """分页查询表数据"""
+        if not re.match(r'^[\w$]+$', table):
+            return jsonify({'code': 400, 'msg': '非法表名'}), 400
+        try:
+            page = max(1, int(request.args.get('page', 1)))
+            page_size = min(200, max(1, int(request.args.get('page_size', 50))))
+            offset = (page - 1) * page_size
+            total_row = db.query_one(f"SELECT COUNT(*) AS c FROM {_quote_ident(table)}")
+            total = total_row['c'] if total_row else 0
+            rows = db.query(f"SELECT * FROM {_quote_ident(table)} LIMIT {page_size} OFFSET {offset}")
+            # 大字段截断展示
+            for r in rows:
+                for k, v in r.items():
+                    if isinstance(v, str) and len(v) > 200:
+                        r[k] = v[:200] + '…'
+            return jsonify({'code': 0, 'data': {
+                'table': table, 'total': total,
+                'page': page, 'page_size': page_size,
+                'rows': rows,
+            }})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/db/query', methods=['POST'])
+    @require_super
+    def db_query_sql():
+        """执行 SQL（仅超级管理员，非 SELECT 需要确认）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        sql = str(data.get('sql') or '').strip()
+        write_flag = data.get('write', False)
+        if not sql:
+            return jsonify({'code': 400, 'msg': '缺少 SQL'}), 400
+        lowered = sql.lstrip().lower()
+        is_readonly = lowered.startswith('select') or lowered.startswith('show') \
+            or lowered.startswith('pragma') or lowered.startswith('explain')
+        if not is_readonly and not write_flag:
+            return jsonify({'code': 400, 'msg': 'WRITE_CONFIRM_NEEDED', 'write': True}), 400
+        try:
+            if is_readonly:
+                rows = db.query(sql)
+                if rows:
+                    for r in rows:
+                        for k, v in r.items():
+                            if isinstance(v, str) and len(v) > 200:
+                                r[k] = v[:200] + '…'
+            else:
+                db.execute(sql)
+                rows = None
+            audit_log(admin['id'], admin['username'], 'db_query', 'database', None, {'sql': sql[:200]})
+            return jsonify({'code': 0, 'data': {'rows': rows, 'count': len(rows) if rows else 0, 'write': not is_readonly}})
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
@@ -1667,7 +2344,14 @@ def create_web_app(framework) -> Flask:
             import time
             time.sleep(1)
             try:
-                framework.stop()
+                loop = getattr(framework, 'loop', None)
+                if loop is not None and loop.is_running():
+                    import asyncio
+                    fut = asyncio.run_coroutine_threadsafe(framework.stop(), loop)
+                    fut.result(timeout=15)
+                else:
+                    import asyncio
+                    asyncio.run(framework.stop())
             except Exception:
                 pass
             # os.execv 用当前 Python 解释器重载 main.py，原地替换进程
@@ -1716,6 +2400,350 @@ def create_web_app(framework) -> Flask:
         if not os.path.isfile(file_path):
             return jsonify({'code': 404, 'msg': '文件不存在'}), 404
         return send_from_directory(web_dir, filename)
+
+    # ---- 文件浏览器 ----
+
+    _FILE_BROWSER_ALLOWED_ROOTS = []  # 懒初始化
+
+    def _get_file_browser_roots():
+        """获取文件浏览器允许访问的根目录列表"""
+        if not _FILE_BROWSER_ALLOWED_ROOTS:
+            _FILE_BROWSER_ALLOWED_ROOTS.append(_project_root())
+            _FILE_BROWSER_ALLOWED_ROOTS.append(framework.plugin_loader.plugins_dir)
+            _FILE_BROWSER_ALLOWED_ROOTS.append(framework.plugin_loader.plugins_dat_dir)
+            _FILE_BROWSER_ALLOWED_ROOTS.append(_data_dir())
+        return _FILE_BROWSER_ALLOWED_ROOTS
+
+    def _safe_file_path(relative_path: str) -> str:
+        """将路径解析为绝对路径，并检查是否在允许的根目录内"""
+        roots = _get_file_browser_roots()
+        # 如果已经是绝对路径，直接规范化
+        if os.path.isabs(relative_path):
+            abs_path = os.path.normpath(relative_path)
+        else:
+            abs_path = os.path.normpath(os.path.join(roots[0], relative_path))
+        # 检查是否在任意允许的根目录下
+        for root in roots:
+            root_norm = os.path.normpath(root)
+            if os.path.commonpath([root_norm, abs_path]) == root_norm:
+                return abs_path
+        return None
+
+    @app.route('/api/files/list', methods=['GET'])
+    @require_auth
+    def file_browser_list():
+        """列出指定目录下的文件和子目录"""
+        path = request.args.get('path', '').strip()
+        if not path:
+            # 返回根目录列表
+            roots = _get_file_browser_roots()
+            return jsonify({'code': 0, 'data': {
+                'entries': [
+                    {'name': '项目根目录', 'path': _project_root(), 'is_dir': True, 'root': True},
+                    {'name': '插件目录', 'path': framework.plugin_loader.plugins_dir, 'is_dir': True, 'root': True},
+                    {'name': '插件数据目录', 'path': framework.plugin_loader.plugins_dat_dir, 'is_dir': True, 'root': True},
+                    {'name': '数据目录', 'path': _data_dir(), 'is_dir': True, 'root': True},
+                ]
+            }})
+        abs_path = _safe_file_path(path)
+        if not abs_path or not os.path.isdir(abs_path):
+            return jsonify({'code': 400, 'msg': '无效的目录路径'}), 400
+        try:
+            entries = []
+            for name in sorted(os.listdir(abs_path)):
+                fpath = os.path.join(abs_path, name)
+                is_dir = os.path.isdir(fpath)
+                # 跳过隐藏文件和 .venv
+                if name.startswith('.') and name != '.':
+                    continue
+                if name == '.venv' and is_dir:
+                    continue
+                stat = os.stat(fpath)
+                entries.append({
+                    'name': name,
+                    'path': fpath,
+                    'is_dir': is_dir,
+                    'size': stat.st_size if not is_dir else 0,
+                    'mtime': stat.st_mtime,
+                })
+            return jsonify({'code': 0, 'data': {
+                'current_path': abs_path,
+                'entries': entries,
+            }})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/files/read', methods=['GET'])
+    @require_auth
+    def file_browser_read():
+        """读取文件内容"""
+        path = request.args.get('path', '').strip()
+        if not path:
+            return jsonify({'code': 400, 'msg': '缺少 path'}), 400
+        abs_path = _safe_file_path(path)
+        if not abs_path or not os.path.isfile(abs_path):
+            return jsonify({'code': 400, 'msg': '文件不存在'}), 400
+        try:
+            ext = os.path.splitext(abs_path)[1].lower()
+            binary_exts = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.zip', '.pyc', '.db', '.sqlite'}
+            if ext in binary_exts:
+                return jsonify({'code': 400, 'msg': '不支持预览二进制文件'}), 400
+            with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+            return jsonify({'code': 0, 'data': {
+                'path': abs_path,
+                'content': content,
+                'size': os.path.getsize(abs_path),
+            }})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/files/write', methods=['PUT'])
+    @require_super
+    def file_browser_write():
+        """写入文件内容（仅超级管理员）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        path = str(data.get('path') or '').strip()
+        content = data.get('content', '')
+        if not path:
+            return jsonify({'code': 400, 'msg': '缺少 path'}), 400
+        abs_path = _safe_file_path(path)
+        if not abs_path:
+            return jsonify({'code': 400, 'msg': '路径不允许'}), 400
+        ext = os.path.splitext(abs_path)[1].lower()
+        if ext in {'.pyc', '.db', '.sqlite'}:
+            return jsonify({'code': 400, 'msg': '不允许写入该类型文件'}), 400
+        try:
+            with open(abs_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            audit_log(admin['id'], admin['username'], 'file_write', 'file', path,
+                      {'size': len(content)})
+            return jsonify({'code': 0, 'msg': '文件已保存'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    # ---- 统计图表 ----
+
+    @app.route('/api/stats/commands', methods=['GET'])
+    @require_auth
+    def stats_commands():
+        """命令命中统计：按插件分组，返回 TopN 命令"""
+        try:
+            top = min(int(request.args.get('top', 20)), 100)
+            rows = db.query(
+                "SELECT plugin_name, pattern, hit_count, description FROM commands "
+                "WHERE is_active = 1 ORDER BY hit_count DESC LIMIT %s", (top,)
+            )
+            total = sum(r['hit_count'] for r in rows) if rows else 0
+            return jsonify({'code': 0, 'data': {
+                'total_hits': total,
+                'commands': rows,
+            }})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/stats/messages', methods=['GET'])
+    @require_auth
+    def stats_messages():
+        """消息统计：按天统计消息量（最近 30 天）"""
+        try:
+            rows = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
+            if not rows:
+                return jsonify({'code': 0, 'data': {'days': [], 'total': 0}})
+            if framework.config.get('database', {}).get('type') == 'mysql':
+                day_rows = db.query(
+                    "SELECT DATE(created_at) AS day, COUNT(*) AS cnt "
+                    "FROM messages WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) "
+                    "GROUP BY DATE(created_at) ORDER BY day ASC"
+                )
+            else:
+                day_rows = db.query(
+                    "SELECT DATE(created_at) AS day, COUNT(*) AS cnt "
+                    "FROM messages WHERE created_at >= datetime('now', '-30 days') "
+                    "GROUP BY DATE(created_at) ORDER BY day ASC"
+                )
+            return jsonify({'code': 0, 'data': {
+                'days': day_rows,
+                'total': sum(r['cnt'] for r in day_rows) if day_rows else 0,
+            }})
+        except Exception:
+            return jsonify({'code': 0, 'data': {'days': [], 'total': 0}})
+
+    # ---- 环境信息 ----
+
+    @app.route('/api/envinfo', methods=['GET'])
+    @require_auth
+    def envinfo():
+        """获取系统环境信息（参考 Koishi envinfo 命令）"""
+        try:
+            import platform
+            import distro
+            has_distro = True
+        except ImportError:
+            has_distro = False
+
+        try:
+            disk = psutil.disk_usage(_project_root())
+            net = psutil.net_io_counters()
+            proc = psutil.Process(os.getpid())
+            cpu_count = psutil.cpu_count()
+            cpu_freq = psutil.cpu_freq()
+
+            # Python 包信息
+            packages = []
+            try:
+                import pkg_resources
+                for pkg in sorted(pkg_resources.working_set, key=lambda x: x.key):
+                    if pkg.key in ('pip', 'setuptools', 'wheel'):
+                        continue
+                    packages.append({'name': pkg.key, 'version': pkg.version})
+            except Exception:
+                try:
+                    import importlib.metadata as im
+                    for dist in im.distributions():
+                        if dist.metadata['Name'] and dist.metadata['Name'] not in ('pip', 'setuptools', 'wheel'):
+                            packages.append({'name': dist.metadata['Name'], 'version': dist.version})
+                except Exception:
+                    pass
+
+            return jsonify({'code': 0, 'data': {
+                'os': {
+                    'system': platform.system(),
+                    'release': platform.release(),
+                    'version': platform.version(),
+                    'machine': platform.machine(),
+                    'arch': platform.architecture()[0],
+                    'distro': distro.name(pretty=True) if has_distro else platform.platform(),
+                },
+                'cpu': {
+                    'count': cpu_count,
+                    'physical_count': psutil.cpu_count(logical=False) or cpu_count,
+                    'freq_mhz': round(cpu_freq.current / 1000, 2) if cpu_freq else None,
+                    'percent': psutil.cpu_percent(interval=None),
+                },
+                'memory': {
+                    'total_mb': round(psutil.virtual_memory().total / 1024 / 1024, 1),
+                    'available_mb': round(psutil.virtual_memory().available / 1024 / 1024, 1),
+                },
+                'disk': {
+                    'total_gb': round(disk.total / 1024 / 1024 / 1024, 1),
+                    'used_gb': round(disk.used / 1024 / 1024 / 1024, 1),
+                    'free_gb': round(disk.free / 1024 / 1024 / 1024, 1),
+                    'percent': disk.percent,
+                },
+                'network': {
+                    'bytes_sent_mb': round(net.bytes_sent / 1024 / 1024, 1),
+                    'bytes_recv_mb': round(net.bytes_recv / 1024 / 1024, 1),
+                },
+                'python': {
+                    'version': sys.version.split()[0],
+                    'executable': sys.executable,
+                    'packages': packages[:50],  # 最多 50 个
+                    'packages_total': len(packages),
+                },
+                'process': {
+                    'pid': os.getpid(),
+                    'threads': proc.num_threads(),
+                    'open_files': len(proc.open_files()),
+                    'connections': len(proc.connections()),
+                    'create_time': proc.create_time(),
+                },
+                'database': {
+                    'type': framework.config.get('database', {}).get('type', 'unknown'),
+                },
+            }})
+        except Exception as e:
+            logger.error(f"获取环境信息失败: {e}")
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    # ---- 插件依赖图 ----
+
+    import re as _re
+
+    def _parse_version_spec(dep: str):
+        """解析依赖版本说明符，返回 (包名, 运算符, 版本号)"""
+        dep = dep.strip()
+        m = _re.match(r'^([a-zA-Z_][a-zA-Z0-9_.-]*)', dep)
+        if not m:
+            return (dep, None, None)
+        pkg = m.group(1)
+        spec_part = dep[len(pkg):].strip()
+        if not spec_part:
+            return (pkg, None, None)
+        m2 = _re.match(r'^([><=!~]+)\s*([a-zA-Z0-9.*_+-]+)', spec_part)
+        if m2:
+            return (pkg, m2.group(1), m2.group(2))
+        return (pkg, None, None)
+
+    @app.route('/api/plugins/deps/graph', methods=['GET'])
+    @require_auth
+    def plugin_deps_graph():
+        """获取插件依赖关系图数据（节点 + 边）"""
+        try:
+            plugin_rows = db.query("SELECT plugin_name, version FROM plugins ORDER BY plugin_name")
+            plugins = {r['plugin_name']: r for r in plugin_rows}
+
+            nodes = []
+            edges = []
+            # 已安装插件集合
+            installed = set(plugins.keys())
+            # 所有出现在依赖中的包名
+            pkg_to_plugins = {}  # pkg_name -> [plugin_name]
+
+            for pname in installed:
+                yaml_data = framework.plugin_loader.read_plugin_yaml(pname)
+                deps = yaml_data.get('dependencies', {}).get('python', []) if yaml_data else []
+                dep_info = framework.plugin_loader.get_dep_status(pname)
+                missing = set(dep_info.get('missing', []))
+                conflicts = dep_info.get('conflicts', [])
+
+                # 解析依赖包名
+                parsed_deps = []
+                for dep in deps:
+                    pkg_name, op, ver = _parse_version_spec(dep)
+                    if pkg_name:
+                        parsed_deps.append({
+                            'raw': dep,
+                            'pkg_name': pkg_name,
+                            'operator': op,
+                            'version': ver,
+                            'missing': dep in missing,
+                            'conflict': any(c['name'] == pkg_name for c in conflicts),
+                        })
+                        pkg_to_plugins.setdefault(pkg_name, []).append(pname)
+
+                nodes.append({
+                    'id': pname,
+                    'type': 'plugin',
+                    'deps': parsed_deps,
+                    'dep_count': len(parsed_deps),
+                    'missing_count': len([d for d in parsed_deps if d['missing']]),
+                    'version': plugins[pname].get('version', '?'),
+                })
+
+            # 构建插件间依赖边（如果两个插件依赖同一个包，建立关联）
+            for pkg_name, plugin_list in pkg_to_plugins.items():
+                if len(plugin_list) >= 2:
+                    # 多个插件共享同一个依赖 → 建立关联边
+                    for i in range(len(plugin_list)):
+                        for j in range(i + 1, len(plugin_list)):
+                            edges.append({
+                                'source': plugin_list[i],
+                                'target': plugin_list[j],
+                                'label': pkg_name,
+                                'shared': True,
+                            })
+
+            return jsonify({'code': 0, 'data': {
+                'nodes': nodes,
+                'edges': edges,
+                'total_plugins': len(nodes),
+                'total_edges': len(edges),
+            }})
+        except Exception as e:
+            logger.error(f"获取依赖图数据失败: {e}")
+            return jsonify({'code': 500, 'msg': str(e)}), 500
 
     # ---- 前端静态文件 ----
 

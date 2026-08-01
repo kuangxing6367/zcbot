@@ -35,8 +35,15 @@ class OneBotAPI:
         self._default_bot = default_bot
 
     def _call(self, action: str, bot=None, **params):
-        """底层调用转发"""
+        """底层调用转发（同步桥接）"""
         return self._caller.call(action, bot=bot or self._default_bot, **params)
+
+    async def acall(self, action: str, bot=None, **params):
+        """
+        底层异步调用转发（不阻塞事件循环，async handler 推荐使用）
+        例如：await ctx.onebot.acall('send_group_msg', group_id=123, message='hi')
+        """
+        return await self._caller.acall(action, bot=bot or self._default_bot, **params)
 
     # ====================================================================
     #  1. 消息类 API（7 个）

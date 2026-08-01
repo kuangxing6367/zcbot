@@ -1,16 +1,22 @@
 """
 框架核心引擎
-组装所有模块，启动生命周期
+组装所有模块，启动生命周期（异步模型）
+
+异步架构：
+- 主事件循环驱动 WebSocket 服务端 / 定时任务 / 心跳 / 统计写库
+- 消息处理全异步：async handler 直接 await，sync handler 转线程执行
+- 框架自身的 DB 写入（用户注册、命中计数）由 AsyncStatsWriter 批量落库，
+  避免每条消息同步写库阻塞事件循环
 """
+import asyncio
 import logging
 import logging.handlers
 import os
+import shutil
 import sys
-import threading
-import time
 
-from framework.config import load_config, get_config
-from framework.db import init_db, db
+from framework.config import load_config
+from framework.db import init_db
 from framework.api import ApiCaller
 from framework.websocket_handler import WebSocketServer
 from framework.loader import PluginLoader
@@ -22,37 +28,146 @@ from framework.log_broker import log_broker, FrameworkLogHandler
 
 logger = logging.getLogger('zcbot')
 
-# ── 内部心跳：检测 GIL 被插件死循环占死导致的进程假死 ──
-# 独立守护线程定期写时间戳；主循环（或 watchdog）读，如果 3s 没更新就 os._exit(1)
-# 注意：这个时间戳必须在主循环或能被主循环读取的地方使用
-_INTERNAL_HEARTBEAT_TS = time.monotonic()
-_INTERNAL_HEARTBEAT_LOCK = threading.Lock()
 
-
-def _internal_heartbeat_worker():
-    """独立守护线程：每隔 500ms 更新一次内部心跳时间戳"""
-    global _INTERNAL_HEARTBEAT_TS
-    while True:
-        with _INTERNAL_HEARTBEAT_LOCK:
-            _INTERNAL_HEARTBEAT_TS = time.monotonic()
-        time.sleep(0.5)
-
-
-def check_internal_heartbeat(timeout_s: float = 3.0) -> bool:
+class AsyncStatsWriter:
     """
-    检查内部心跳是否超时（返回 True 表示正常）
-    如果返回 False → 说明某个插件把 GIL 占死了，进程假死
+    消息统计批量写库器
+    框架自身的用户/群自动注册、命令命中计数等写入，统一走此队列，
+    由后台任务周期性批量落库（在线程中执行），不阻塞事件循环。
     """
-    with _INTERNAL_HEARTBEAT_LOCK:
-        last_ts = _INTERNAL_HEARTBEAT_TS
-    return (time.monotonic() - last_ts) <= timeout_s
+
+    def __init__(self, framework, flush_interval: float = 5.0):
+        self.framework = framework
+        self.db = framework.db
+        self.flush_interval = flush_interval
+        self._reg_queue = asyncio.Queue()   # 用户/群注册任务
+        self._cmd_hits = {}                 # cmd_id -> count（主循环线程访问）
+        self._task = None
+
+    def start(self):
+        """启动后台批量写库任务（需在事件循环内调用）"""
+        if self._task is None:
+            self._task = asyncio.create_task(self._run(), name="stats-writer")
+
+    def command_hit(self, cmd_id: int):
+        """记录命令命中（内存聚合）"""
+        self._cmd_hits[cmd_id] = self._cmd_hits.get(cmd_id, 0) + 1
+
+    def register_user(self, user_id: int, sender: dict, message_type: str, group_id: int = None):
+        """排队用户/群自动注册（非阻塞）"""
+        self._reg_queue.put_nowait((user_id, dict(sender), message_type, group_id))
+
+    async def _run(self):
+        """后台循环：周期性 flush"""
+        while True:
+            try:
+                await asyncio.sleep(self.flush_interval)
+                await asyncio.to_thread(self._flush)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"统计批量写库异常: {e}")
+                await asyncio.sleep(1)
+
+    def _flush(self):
+        """批量落库（在线程中执行）"""
+        # 1. 命令命中计数
+        hits = self._cmd_hits
+        self._cmd_hits = {}
+        if hits:
+            for cmd_id, cnt in hits.items():
+                try:
+                    self.db.execute(
+                        "UPDATE commands SET hit_count = hit_count + %s WHERE id = %s",
+                        (cnt, cmd_id)
+                    )
+                except Exception as e:
+                    logger.error(f"命令命中计数写库失败 [{cmd_id}]: {e}")
+
+        # 2. 用户/群注册
+        items = []
+        while True:
+            try:
+                items.append(self._reg_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        for item in items:
+            try:
+                self._register_one(*item)
+            except Exception as e:
+                logger.error(f"自动注册用户失败: {e}")
+
+    def _register_one(self, user_id: int, sender: dict, message_type: str, group_id: int):
+        """单条用户/群自动注册（原 core._auto_register_user）"""
+        if not user_id:
+            return
+        nickname = sender.get('nickname', '') or sender.get('card', '') or str(user_id)
+        card = sender.get('card', '')
+
+        # INSERT ... ON DUPLICATE KEY UPDATE 实现自动注册+更新
+        # （SQLite 模式下由 db.py 自动翻译为 ON CONFLICT + CASE WHEN）
+        self.db.execute(
+            "INSERT INTO users (user_id, nickname, first_seen_at, last_active_at) "
+            "VALUES (%s, %s, NOW(), NOW()) "
+            "ON DUPLICATE KEY UPDATE "
+            "nickname = IF(VALUES(nickname) != '', VALUES(nickname), nickname), "
+            "last_active_at = NOW()",
+            (user_id, nickname)
+        )
+
+        # 如果是群消息，自动注册群信息和群成员关系
+        if group_id and message_type == 'group':
+            group_name = sender.get('group_name', '')
+
+            # 自动注册群
+            self.db.execute(
+                "INSERT INTO groups_info (group_id, group_name, is_active, join_at) "
+                "VALUES (%s, %s, 1, NOW()) "
+                "ON DUPLICATE KEY UPDATE "
+                "is_active = 1, "
+                "group_name = IF(VALUES(group_name) != '', VALUES(group_name), group_name)",
+                (group_id, group_name)
+            )
+
+            # 自动注册群成员关系
+            role = sender.get('role', 'member')
+            title = sender.get('title', '')
+            self.db.execute(
+                "INSERT INTO group_members (group_id, user_id, card, role, title, last_active_at, message_count) "
+                "VALUES (%s, %s, %s, %s, %s, NOW(), 1) "
+                "ON DUPLICATE KEY UPDATE "
+                "card = IF(VALUES(card) != '', VALUES(card), card), "
+                "role = VALUES(role), "
+                "title = IF(VALUES(title) != '', VALUES(title), title), "
+                "last_active_at = NOW(), "
+                "message_count = message_count + 1",
+                (group_id, user_id, card, role, title)
+            )
+
+    async def stop(self):
+        """停止并执行最后一次落库"""
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+        await asyncio.to_thread(self._flush)
 
 
 class Framework:
     """框架核心引擎"""
 
     def __init__(self, config_path: str = None):
+        # 记录实际使用的配置文件路径（供 Web API 读写 config.yaml 使用）
+        if config_path is None:
+            config_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.yaml')
+        self.config_path = os.path.abspath(config_path)
         self.config = load_config(config_path)
+        # 数据目录统一迁移（logs / plugins_dat → data/ 下），必须在日志与插件加载前执行
+        self._migrate_legacy_data_dirs()
         self._setup_logging()
 
         # 初始化各个模块
@@ -80,7 +195,10 @@ class Framework:
         # 定时任务调度器
         self.scheduler = TaskScheduler(self)
 
-        # WebSocket 服务端（OneBot 客户端反向连接）
+        # 统计批量写库器（框架自身 DB 写入走队列，不阻塞事件循环）
+        self.stats_writer = AsyncStatsWriter(self)
+
+        # WebSocket 服务端（OneBot 客户端反向连接，运行在主事件循环）
         onebot_cfg = self.config.get('onebot', {})
         self.ws_server = WebSocketServer(
             host=onebot_cfg.get('listen_host', '0.0.0.0'),
@@ -95,39 +213,44 @@ class Framework:
         # Web UI 服务器
         self.web_server = WebServer(self)
 
-        # 心跳定时器
-        self._heartbeat_timer = None
+        # 心跳参数
         self._heartbeat_interval = self.config['plugin'].get('heartbeat_interval', 60)
+        self._heartbeat_task = None
         self._running = False
-
-        # ── 启动内部心跳守护线程（检测 GIL 假死）──
-        # 必须放在 __init__ 末尾，确保 start() 之前就能跑起来
-        t = threading.Thread(
-            target=_internal_heartbeat_worker,
-            daemon=True,
-            name="internal_heartbeat"
-        )
-        t.start()
+        self.loop = None  # 主事件循环，由 start() 设置
 
         logger.info("框架核心引擎初始化完成")
 
-    def _setup_logging(self):
-        """配置日志"""
-        log_level = self.config.get('log', {}).get('level', 'INFO')
-        log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
-        os.makedirs(log_dir, exist_ok=True)
+    def _migrate_legacy_data_dirs(self):
+        """
+        数据目录统一迁移：将旧版分散在项目根的 logs/、plugins_dat/ 迁移到 data/ 下。
+        仅当目标目录不存在时执行一次，避免覆盖新数据。
+        """
+        project_root = os.path.dirname(os.path.dirname(__file__))
+        data_dir = os.path.join(project_root, 'data')
+        os.makedirs(data_dir, exist_ok=True)
 
-        # 清理旧日志文件（防止 Windows 文件锁导致轮转失败）
-        log_file = os.path.join(log_dir, 'framework.log')
-        try:
-            for i in range(5, 0, -1):
-                old = f"{log_file}.{i}"
-                if os.path.exists(old):
-                    os.remove(old)
-            if os.path.exists(log_file):
-                os.remove(log_file)
-        except PermissionError:
-            pass  # 文件被占用则跳过
+        for old_name, new_name in (('logs', 'logs'), ('plugins_dat', 'plugins_dat')):
+            old_path = os.path.join(project_root, old_name)
+            new_path = os.path.join(data_dir, new_name)
+            if os.path.isdir(old_path) and not os.path.exists(new_path):
+                try:
+                    shutil.move(old_path, new_path)
+                    logger.info(f"数据目录迁移: {old_path} → {new_path}")
+                except Exception as e:
+                    logger.warning(f"数据目录迁移失败 [{old_name}]: {e}")
+
+    def _setup_logging(self):
+        """配置日志（统一存放于 data/logs/ 下）"""
+        project_root = os.path.dirname(os.path.dirname(__file__))
+        log_level = self.config.get('log', {}).get('level', 'INFO')
+
+        # 日志文件路径：优先配置 log.file，默认 data/logs/zcbot.log
+        log_file = self.config.get('log', {}).get('file') or os.path.join('data', 'logs', 'zcbot.log')
+        if not os.path.isabs(log_file):
+            log_file = os.path.join(project_root, log_file)
+        log_file = os.path.abspath(log_file)
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
         # 控制台日志
         console = logging.StreamHandler(sys.stdout)
@@ -136,7 +259,7 @@ class Framework:
             datefmt='%H:%M:%S'
         ))
 
-        # 文件日志（按大小轮转，防止日志爆炸）
+        # 文件日志（按大小轮转，保留历史，不手动删除旧日志）
         file_handler = logging.handlers.RotatingFileHandler(
             log_file,
             maxBytes=10 * 1024 * 1024,  # 10MB
@@ -153,7 +276,7 @@ class Framework:
         root.addHandler(console)
         root.addHandler(file_handler)
 
-        # 桥接框架日志到 LogBroker（参考 AstrBot LogQueueHandler）
+        # 桥接框架日志到 LogBroker
         root.addHandler(FrameworkLogHandler(log_broker))
 
         # 降低第三方库日志级别
@@ -170,36 +293,38 @@ class Framework:
         return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'plugins')
 
     def _get_plugins_dat_dir(self) -> str:
-        """获取插件数据/配置目录路径（与 plugins 同级）"""
+        """获取插件数据/配置目录路径（与 plugins 同级，统一存放于 data/ 下）"""
         dat_dir = self.config.get('plugin', {}).get('dat_dir', '')
         if dat_dir:
             if os.path.isabs(dat_dir):
                 return dat_dir
             return os.path.join(os.path.dirname(os.path.dirname(__file__)), dat_dir)
-        return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'plugins_dat')
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'plugins_dat')
 
-    def start(self):
-        """启动框架"""
+    async def start(self):
+        """启动框架（异步）"""
+        self.loop = asyncio.get_running_loop()
+        self._running = True
+
         logger.info("=" * 50)
         logger.info("ZCBOT OneBot QQ机器人框架 启动中...")
         logger.info("=" * 50)
 
-        self._running = True
+        # 安全提示：Web/WS 暴露公网但 token 为空时给出警告
+        self._warn_insecure_config()
 
-        # 1. 启动定时任务调度器
-        self.scheduler.start()
+        # 1. 启动定时任务调度器（绑定主事件循环）
+        self.scheduler.start(loop=self.loop)
 
         # 1.5 确保 plugins_dat 目录存在，并迁移旧插件配置文件
         os.makedirs(self.plugin_loader.plugins_dat_dir, exist_ok=True)
         self.plugin_loader.migrate_legacy_configs()
 
-        # 2. 加载插件
+        # 2. 加载插件（启动阶段，允许同步阻塞）
         loaded = self.plugin_loader.load_all()
         logger.info(f"已加载 {len(loaded)} 个插件: {loaded}")
 
-        # 2.5 插件依赖自愈：启动时自动为缺失依赖的插件尝试安装
-        # 参考 main.py 自检思路，解决移机/迁移后插件依赖断档问题
-        # 默认开启，可通过 config.yaml → plugin.auto_install_deps_on_startup: false 关闭
+        # 2.5 插件依赖自愈
         self._auto_heal_plugin_deps()
 
         # 自愈后可能有插件从「加载失败」转为「可加载」，再尝试一次
@@ -218,42 +343,48 @@ class Framework:
         for plugin_name in loaded:
             self.plugin_loader.register_commands(plugin_name)
 
-        # 4. 启动心跳定时器
-        self._start_heartbeat()
+        # 4. 启动统计批量写库器
+        self.stats_writer.start()
 
-        # 5. 启动 WebSocket 服务端，等待 OneBot 客户端连接
-        self.ws_server.start()
+        # 5. 启动插件注册心跳（异步任务）
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="heartbeat")
 
-        # 6. 启动 Web UI
+        # 6. 启动 WebSocket 服务端（运行在主事件循环）
+        self.ws_server.start_async()
+
+        # 7. 启动 Web UI（独立线程）
         self.web_server.start()
 
-        # 7. 触发系统事件
-        self.event_bus.emit('system.plugin.loaded', {
-            'plugins': loaded
-        })
+        # 8. 触发系统事件
+        await self.event_bus.aemit('system.plugin.loaded', {'plugins': loaded})
 
         logger.info("框架启动完成，等待消息...")
 
-    def _start_heartbeat(self):
-        """启动1分钟注册心跳"""
-        def heartbeat_loop():
-            while self._running:
-                threading.Event().wait(self._heartbeat_interval)
+    def _warn_insecure_config(self):
+        """启动安全提示"""
+        web_cfg = self.config.get('web', {})
+        onebot_cfg = self.config.get('onebot', {})
+        web_host = web_cfg.get('host', '0.0.0.0')
+        token = onebot_cfg.get('access_token', '')
+        if web_host in ('0.0.0.0', '::') and not token:
+            logger.warning(
+                "⚠ 安全提示: Web 面板监听 0.0.0.0 且 OneBot access_token 为空，"
+                "公网部署存在被接管风险。请设置 config.yaml → onebot.access_token，"
+                "并将 web.host 改为 127.0.0.1。"
+            )
+
+    async def _heartbeat_loop(self):
+        """插件注册心跳：周期性检查插件文件变更并重新注册（不阻塞事件循环）"""
+        while self._running:
+            try:
+                await asyncio.sleep(self._heartbeat_interval)
                 if not self._running:
                     break
-                try:
-                    self.plugin_loader.heartbeat_register()
-                    logger.debug("插件注册心跳完成")
-                except Exception as e:
-                    logger.error(f"插件注册心跳异常: {e}")
-
-        self._heartbeat_timer = threading.Thread(
-            target=heartbeat_loop,
-            daemon=True,
-            name="heartbeat"
-        )
-        self._heartbeat_timer.start()
-        logger.info(f"插件注册心跳已启动 (间隔: {self._heartbeat_interval}s)")
+                await asyncio.to_thread(self.plugin_loader.heartbeat_register)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"插件注册心跳异常: {e}")
 
     def _auto_heal_plugin_deps(self):
         """
@@ -268,7 +399,6 @@ class Framework:
             logger.info("插件依赖自愈已关闭 (plugin.auto_install_deps_on_startup: false)")
             return
 
-        # 快照缺失依赖列表，避免迭代时被 install_missing_deps 修改
         with self.plugin_loader._lock:
             missing_snapshot = {
                 name: list(deps)
@@ -286,9 +416,7 @@ class Framework:
 
         for plugin_name, deps in missing_snapshot.items():
             try:
-                logger.info(
-                    f"[{plugin_name}] 自愈：尝试自动安装缺失依赖: {deps}"
-                )
+                logger.info(f"[{plugin_name}] 自愈：尝试自动安装缺失依赖: {deps}")
                 result = self.plugin_loader.install_missing_deps(plugin_name)
                 if result['success']:
                     if result.get('installed'):
@@ -335,8 +463,8 @@ class Framework:
         log_broker.log_connection(bot_name, 'disconnect')
         log_broker.log_system('WARN', f'OneBot 客户端 [{bot_name}] 已离线')
 
-    def _on_ws_message(self, data: dict, bot_name: str = 'default'):
-        """收到 WebSocket 消息事件"""
+    async def _on_ws_message(self, data: dict, bot_name: str = 'default'):
+        """收到 WebSocket 消息事件（异步处理）"""
         post_type = data.get('post_type', '')
 
         # 处理元事件（心跳包）
@@ -359,95 +487,40 @@ class Framework:
                 log_broker.log_message(bot_name, message_type, user_id, group_id,
                                        raw_message, message_id)
             else:
-                # 仅记录消息来源，不记录具体内容
                 source = f"群{group_id}" if group_id else f"私聊{user_id}"
                 log_broker.log('message', 'INFO',
                                f"[{bot_name}] {message_type} {source}: (原始内容未记录)",
                                {'bot': bot_name, 'message_type': message_type,
                                 'user_id': user_id, 'group_id': group_id})
 
-            # 自动注册/更新用户信息（用户发消息就自动注册）
-            self._auto_register_user(user_id, sender, message_type, group_id)
+            # 自动注册/更新用户信息（批量写库，不阻塞事件循环）
+            self.stats_writer.register_user(user_id, sender, message_type, group_id)
 
-            self.router.route(data, bot_name)
+            await self.router.route(data, bot_name)
 
         # 处理通知事件
         elif post_type == 'notice':
-            self._handle_notice(data, bot_name)
+            await self._handle_notice(data, bot_name)
 
         # 处理请求事件
         elif post_type == 'request':
-            self._handle_request(data, bot_name)
+            await self._handle_request(data, bot_name)
 
-    def _auto_register_user(self, user_id: int, sender: dict, message_type: str, group_id: int = None):
-        """
-        自动注册/更新用户信息（用户发消息就自动注册）
-        参考 AstrBot 的用户自动注册机制
-        """
-        if not user_id:
-            return
-
-        try:
-            nickname = sender.get('nickname', '') or sender.get('card', '') or str(user_id)
-            card = sender.get('card', '')
-
-            # 使用 INSERT ... ON DUPLICATE KEY UPDATE 实现自动注册+更新
-            self.db.execute(
-                "INSERT INTO users (user_id, nickname, first_seen_at, last_active_at) "
-                "VALUES (%s, %s, NOW(), NOW()) "
-                "ON DUPLICATE KEY UPDATE "
-                "nickname = IF(VALUES(nickname) != '', VALUES(nickname), nickname), "
-                "last_active_at = NOW()",
-                (user_id, nickname)
-            )
-
-            # 如果是群消息，自动注册群信息和群成员关系
-            if group_id and message_type == 'group':
-                group_name = sender.get('group_name', '')
-
-                # 自动注册群
-                self.db.execute(
-                    "INSERT INTO groups_info (group_id, group_name, is_active, join_at) "
-                    "VALUES (%s, %s, 1, NOW()) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "is_active = 1, "
-                    "group_name = IF(VALUES(group_name) != '', VALUES(group_name), group_name)",
-                    (group_id, group_name)
-                )
-
-                # 自动注册群成员关系
-                role = sender.get('role', 'member')
-                title = sender.get('title', '')
-                self.db.execute(
-                    "INSERT INTO group_members (group_id, user_id, card, role, title, last_active_at, message_count) "
-                    "VALUES (%s, %s, %s, %s, %s, NOW(), 1) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "card = IF(VALUES(card) != '', VALUES(card), card), "
-                    "role = VALUES(role), "
-                    "title = IF(VALUES(title) != '', VALUES(title), title), "
-                    "last_active_at = NOW(), "
-                    "message_count = message_count + 1",
-                    (group_id, user_id, card, role, title)
-                )
-
-        except Exception as e:
-            logger.error(f"自动注册用户失败: {e}")
-
-    def _handle_notice(self, data: dict, bot_name: str = 'default'):
+    async def _handle_notice(self, data: dict, bot_name: str = 'default'):
         """处理通知事件"""
         notice_type = data.get('notice_type', '')
-        self.event_bus.emit(f'notice.{notice_type}', data)
+        await self.event_bus.aemit(f'notice.{notice_type}', data)
 
-        # 群成员增加/减少时更新数据库
+        # 群成员增加/减少时更新数据库（在线程中执行）
         if notice_type == 'group_increase':
-            self._sync_group_member_join(data)
+            await asyncio.to_thread(self._sync_group_member_join, data)
         elif notice_type == 'group_decrease':
-            self._sync_group_member_leave(data)
+            await asyncio.to_thread(self._sync_group_member_leave, data)
 
-    def _handle_request(self, data: dict, bot_name: str = 'default'):
+    async def _handle_request(self, data: dict, bot_name: str = 'default'):
         """处理请求事件"""
         request_type = data.get('request_type', '')
-        self.event_bus.emit(f'request.{request_type}', data)
+        await self.event_bus.aemit(f'request.{request_type}', data)
 
     def _sync_group_member_join(self, data: dict):
         """同步群成员加入"""
@@ -473,28 +546,39 @@ class Framework:
         except Exception as e:
             logger.error(f"同步群成员离开失败: {e}")
 
-    def stop(self):
-        """停止框架"""
+    async def stop(self):
+        """停止框架（异步）"""
         logger.info("正在停止框架...")
         self._running = False
 
+        # 停止统计批量写库器（最后一次落库）
+        try:
+            await self.stats_writer.stop()
+        except Exception as e:
+            logger.warning(f"统计写库器停止异常: {e}")
+
+        # 停止插件心跳任务
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._heartbeat_task = None
+
         # 停止 WebSocket 服务端
-        self.ws_server.stop()
+        try:
+            await self.ws_server.stop_async()
+        except Exception as e:
+            logger.warning(f"WebSocket 服务端停止异常: {e}")
 
         # 停止 Web UI
         self.web_server.stop()
-
-        # 停止心跳
-        self._heartbeat_timer = None
 
         # 停止调度器
         self.scheduler.stop()
 
         # 触发系统事件
-        self.event_bus.emit('system.plugin.unloaded', {})
+        await self.event_bus.aemit('system.plugin.unloaded', {})
 
         logger.info("框架已停止")
-
-    def on_message(self, event, bot_name: str = 'default'):
-        """供外部调用的消息处理入口"""
-        self.router.route(event._raw, bot_name)

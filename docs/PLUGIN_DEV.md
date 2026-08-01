@@ -59,6 +59,55 @@ def handle_hello(event, match):
 
 ---
 
+## 异步支持（推荐）
+
+框架核心为全异步架构（消息处理不阻塞事件循环）。插件 handler 支持两种写法：
+
+**1. 异步 handler（推荐）** —— 使用 `async def`，配合异步 API 不占用线程：
+
+```python
+async def handle_weather(event, match):
+    # 异步发送消息（不阻塞事件循环）
+    await ctx.asend_msg(
+        user_id=event.user_id,
+        group_id=event.group_id if event.is_group else None,
+        message="今天晴，气温 25℃",
+    )
+    # 异步调用任意 OneBot API
+    await ctx.aapi("get_group_member_list", group_id=event.group_id)
+    # 异步数据库操作
+    rows = await ctx.db_query_async("SELECT * FROM users WHERE user_id = %s", (event.user_id,))
+```
+
+**2. 同步 handler（兼容旧插件）** —— 普通 `def` 依旧可用，框架会自动在线程池中执行，不会阻塞事件循环：
+
+```python
+def handle_echo(event, match):
+    ctx.send_msg(
+        user_id=event.user_id,
+        group_id=event.group_id if event.is_group else None,
+        message=match.group(1),
+    )
+```
+
+> 同步 handler 内使用 `ctx.send_msg()` / `ctx.api()` / `ctx.db_query()` 等同步方法即可，框架内部会自动桥接到主事件循环。异步 handler 建议使用 `asend_msg()` / `aapi()` / `db_query_async()` 等异步方法以获得最佳性能。
+
+异步 API 速查表：
+
+| 同步（兼容） | 异步（推荐） |
+|---|---|
+| `ctx.send_msg(...)` | `await ctx.asend_msg(...)` |
+| `ctx.api(action, **params)` | `await ctx.aapi(action, **params)` |
+| `ctx.onebot.send_group_msg(...)` | `await ctx.onebot.acall("send_group_msg", ...)` |
+| `ctx.db_query(sql, params)` | `await ctx.db_query_async(sql, params)` |
+| `ctx.db_execute(sql, params)` | `await ctx.db_execute_async(sql, params)` |
+| `ctx.emit(event, payload)` | `await ctx.aemit(event, payload)` |
+| `ctx.ban/kick/mute_all/set_card...` | `ctx.aban/akick/amute_all/aset_card...` |
+
+定时任务 `ctx.task()` 的 executor 同样支持 `async def`。事件订阅 `ctx.on()` 的 handler 也支持 `async def`。
+
+---
+
 ## 插件目录结构
 
 ZCBOT 严格分离「代码」和「数据」：

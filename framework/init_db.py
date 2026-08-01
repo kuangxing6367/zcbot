@@ -161,8 +161,9 @@ def _init_mysql(database):
         cursor = conn.cursor()
         executed = 0
         for stmt in statements:
-            stmt = stmt.strip()
-            if not stmt or stmt.startswith('--'):
+            # 剥离前导注释，便于判断语句类型
+            stmt = _strip_leading_comments(stmt)
+            if not stmt:
                 continue
             # 跳过 CREATE DATABASE / USE 语句（已手动执行）
             upper = stmt.upper()
@@ -200,8 +201,9 @@ def _init_sqlite(database):
     statements = _split_sql_statements(sql_content)
     executed = 0
     for stmt in statements:
-        stmt = stmt.strip()
-        if not stmt or stmt.startswith('--'):
+        # 剥离前导注释，便于判断语句类型
+        stmt = _strip_leading_comments(stmt)
+        if not stmt:
             continue
         # 跳过 MySQL 专有语句
         upper = stmt.upper()
@@ -218,6 +220,19 @@ def _init_sqlite(database):
 
 
 # ── 工具函数 ──────────────────────────────────────────────────
+
+def _strip_leading_comments(stmt: str) -> str:
+    """剥离语句前导的注释行与空行，返回第一条有效 SQL 行起的内容"""
+    lines = stmt.splitlines()
+    start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith('--'):
+            start = i + 1
+        else:
+            break
+    return '\n'.join(lines[start:]).strip()
+
 
 def _find_sql_file(filename: str) -> str:
     """查找 SQL 文件（支持 sql/ 目录和项目根目录）"""

@@ -36,19 +36,19 @@ database:
 # OneBot 客户端反向连接此端口（如 NapCat、Lagrange 等）
 onebot:
   listen_port: 6830
-  access_token: ""           # 留空则不校验 token
+  access_token: ""           # 必须设置！留空则不校验 token，任何客户端都能接入
 
 # ── Web UI 管理后台 ─────────────────────────────────────────
 web:
-  host: 0.0.0.0
+  host: 127.0.0.1            # 仅本机访问；需要局域网/公网访问请改为 0.0.0.0（注意安全）
   port: 8080
   # secret_key: ""          # 留空则每次重启随机生成，填入后重启保持登录态
-  session_timeout: 3600      # 登录会话超时（秒）
+  session_timeout: 3600      # 登录会话超时（秒），同时作为登录 token 的有效期
 
 # ── 插件配置 ────────────────────────────────────────────────
 plugin:
   dir: plugins               # 插件代码目录（.py 文件）
-  dat_dir: plugins_dat       # 插件数据/配置目录（.yaml/.json 等用户配置）
+  # dat_dir: data/plugins_dat # 插件数据/配置目录（默认统一存放于 data/plugins_dat）
   heartbeat_interval: 60     # 插件注册心跳间隔（秒）
   auto_install_deps_on_startup: true  # 启动时自动安装缺失依赖（移机自愈）
   max_memory_mb: 64          # 单插件内存上限（MB），超限自动卸载
@@ -56,7 +56,7 @@ plugin:
 # ── 日志配置 ────────────────────────────────────────────────
 log:
   level: INFO                # DEBUG / INFO / WARNING / ERROR
-  file: logs/zcbot.log       # 日志文件路径，留空则只输出控制台
+  file: data/logs/zcbot.log  # 日志文件路径（统一存放于 data/logs/），留空则只输出控制台
   log_raw_message: true      # 是否记录收到的原始消息内容
   log_sent_message: true     # 是否记录发送到 OneBot11 的消息内容
 

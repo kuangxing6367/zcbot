@@ -1,11 +1,13 @@
 """
 定时任务调度器
-基于 APScheduler 实现 cron 任务调度
+基于 APScheduler AsyncIOScheduler 实现 cron 任务调度
+任务 handler 支持 async def（直接 await）和普通 def（转线程执行），不阻塞事件循环
 """
+import asyncio
 import logging
 from datetime import datetime
 
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger('zcbot')
@@ -16,17 +18,25 @@ class TaskScheduler:
 
     def __init__(self, framework):
         self.framework = framework
-        self._scheduler = BackgroundScheduler()
+        self._scheduler = None
         self._plugin_tasks = {}  # task_id -> task_info
 
-    def start(self):
-        """启动调度器"""
+    def start(self, loop=None):
+        """启动调度器（绑定主事件循环）"""
+        if loop is not None:
+            self._scheduler = AsyncIOScheduler(event_loop=loop)
+        else:
+            self._scheduler = AsyncIOScheduler()
         self._scheduler.start()
-        logger.info("定时任务调度器已启动")
+        logger.info("定时任务调度器已启动（AsyncIOScheduler）")
 
     def stop(self):
         """停止调度器"""
-        self._scheduler.shutdown(wait=False)
+        if self._scheduler:
+            try:
+                self._scheduler.shutdown(wait=False)
+            except Exception as e:
+                logger.warning(f"调度器停止异常: {e}")
         logger.info("定时任务调度器已停止")
 
     def add_plugin_task(self, task_info: dict):
@@ -71,7 +81,8 @@ class TaskScheduler:
             return
 
         self._scheduler.add_job(
-            func=self._wrap_handler(handler, plugin_name),
+            func=self._run_job,
+            args=(handler, plugin_name),
             trigger=trigger,
             id=task_id,
             name=task_info.get('description', ''),
@@ -81,20 +92,28 @@ class TaskScheduler:
         self._plugin_tasks[task_id] = task_info
         logger.info(f"定时任务已注册: [{plugin_name}] {cron_expr} → {handler_name}")
 
-    def _wrap_handler(self, handler, plugin_name: str):
-        """包装 handler，捕获异常并记录执行状态"""
-        def wrapper():
+    async def _run_job(self, handler, plugin_name: str):
+        """执行任务：async handler 直接 await，sync handler 转线程"""
+        try:
+            logger.debug(f"定时任务执行: [{plugin_name}] {handler.__name__}")
+            if asyncio.iscoroutinefunction(handler):
+                await handler()
+            else:
+                await asyncio.to_thread(handler)
+            await asyncio.to_thread(
+                self._update_task_status, plugin_name, handler.__name__, 'success'
+            )
+        except Exception as e:
+            logger.error(f"定时任务异常: [{plugin_name}] {handler.__name__} - {e}")
             try:
-                logger.debug(f"定时任务执行: [{plugin_name}] {handler.__name__}")
-                handler()
-                self._update_task_status(plugin_name, handler.__name__, 'success')
-            except Exception as e:
-                logger.error(f"定时任务异常: [{plugin_name}] {handler.__name__} - {e}")
-                self._update_task_status(plugin_name, handler.__name__, 'error')
-        return wrapper
+                await asyncio.to_thread(
+                    self._update_task_status, plugin_name, handler.__name__, 'error'
+                )
+            except Exception:
+                pass
 
     def _update_task_status(self, plugin_name: str, handler_name: str, status: str):
-        """更新任务执行状态"""
+        """更新任务执行状态（在线程中执行，不阻塞事件循环）"""
         try:
             now = datetime.now()
             self.framework.db.execute(
