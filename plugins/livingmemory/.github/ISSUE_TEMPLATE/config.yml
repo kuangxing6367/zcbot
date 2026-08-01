@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name:  项目文档
+    url: https://github.com/lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory/blob/main/README.md
+    about: 查看项目的完整文档和使用说明
+  - name:  讨论区
+    url: https://github.com/lxfight-s-Astrbot-Plugins/astrbot_plugin_livingmemory/discussions
+    about: 参与社区讨论，分享经验和想法

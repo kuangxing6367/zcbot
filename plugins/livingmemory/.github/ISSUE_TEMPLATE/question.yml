@@ -1,0 +1,65 @@
+name:  问题咨询
+description: 询问使用问题或寻求帮助
+title: "[问题] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎提问！我们很乐意帮助你解决问题。
+
+  - type: textarea
+    id: question
+    attributes:
+      label:  问题描述
+      description: 请描述你的问题
+      placeholder: 例如：如何配置记忆召回的阈值？
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label:  相关背景
+      description: 提供问题的相关背景信息
+      placeholder: |
+        - 你想实现什么功能？
+        - 已经尝试了什么方法？
+        - 遇到了什么困难？
+
+  - type: textarea
+    id: config
+    attributes:
+      label:  配置信息
+      description: 如果相关，请提供你的配置信息（请隐藏敏感信息）
+      placeholder: |
+        例如：metadata.yaml 或配置文件的相关部分
+      render: yaml
+
+  - type: dropdown
+    id: documentation
+    attributes:
+      label:  文档查阅
+      description: 你是否已经查阅过文档？
+      options:
+        - 是，但没有找到答案
+        - 否，还没有查阅
+        - 文档不够清楚
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label:  其他信息
+      description: 任何其他可能有帮助的信息
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 确认事项
+      options:
+        - label: 我已经搜索过现有的 Issues
+          required: true
+        - label: 这不是一个 Bug 报告（如果是 Bug，请使用 Bug 报告模板）
+          required: true
