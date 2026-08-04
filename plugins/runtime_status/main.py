@@ -28,7 +28,6 @@ def register(ctx):
     """插件注册入口"""
     ctx.command("/status", handle_status, priority=5, description="查看框架运行状态概览")
     ctx.command("/info", handle_info, priority=5, description="查看系统详细信息（CPU/内存/磁盘）")
-    ctx.command("/help", handle_help, priority=5, description="显示此帮助信息")
     ctx.command("/uptime", handle_uptime, priority=5, description="查看框架运行时间")
     ctx.command("/plugins", handle_plugins, priority=10, description="查看已加载插件列表")
 
@@ -255,26 +254,6 @@ def handle_plugins(event, match):
         user_id=event.user_id,
         group_id=event.group_id,
         message="\n".join(lines)
-    )
-
-
-def handle_help(event, match):
-    """帮助命令"""
-    msg = (
-        " 命令帮助\n"
-        "━━━━━━━━━━━━━━━\n"
-        "/status - 查看框架运行状态\n"
-        "/info - 查看系统详细信息\n"
-        "/uptime - 查看框架运行时间\n"
-        "/plugins - 查看已加载插件\n"
-        "/help - 显示此帮助信息\n"
-        "━━━━━━━━━━━━━━━\n"
-        "更多命令请参考各插件文档"
-    )
-    ctx.api("send_msg",
-        user_id=event.user_id,
-        group_id=event.group_id,
-        message=msg
     )
 
 
