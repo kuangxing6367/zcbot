@@ -65,6 +65,20 @@ system:
   show_cpu: true             # 仪表盘显示 CPU 使用率
   show_disk: true            # 仪表盘显示磁盘使用率
   status_interval: 30        # 系统状态刷新间隔（秒）
+
+# ── 安全配置（双请求防破解认证系统） ─────────────────────────
+# 保护管理后台免受暴力破解与自动化脚本攻击
+# 客户端必须按顺序发送两次请求：先发 fake_token_len 位探针获取 nonce，再发 real_token_len 位 Token + nonce
+security:
+  fake_token_len: 8            # 探针请求的 Token 长度（任意字符串）
+  real_token_len: 8192         # 真实认证的 Token 长度
+  nonce_len: 16                # 下发 nonce 的长度
+  fake_response_msg: "🎣 你上钩了！但这里只是蜜罐，请去 GitHub 点个 Star。"
+  nonce_expiry: 60             # nonce 有效期（秒）
+  blacklist_enabled: true      # 是否启用永久黑名单
+  whitelist_ips:               # 白名单 IP，跳过所有检查
+    - "127.0.0.1"
+  # success_fake_data:         # 认证通过后返回的迷惑性数据（不填则使用默认假数据）
 """
 
 
