@@ -144,6 +144,10 @@ class AstrBotHelpDrawer:
             raise
 
     def _load_logo(self) -> None:
+        # logo 文件不存在时直接跳过（默认启用 logo 但仓库未附带该图片）
+        if not os.path.isfile(self.LOGO_PATH):
+            self.resized_logo = None
+            return
         try:
             logo_img = Image.open(self.LOGO_PATH).convert("RGBA")
             img_data = np.array(logo_img)

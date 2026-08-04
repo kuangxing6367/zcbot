@@ -48,8 +48,8 @@ onebot:
   access_token: "your-token"
 
 web:
-  host: 0.0.0.0
-  port: 8081
+  host: 127.0.0.1
+  port: 8080
 
 plugin:
   dir: "../zcbot_plugins"
@@ -79,10 +79,12 @@ __plugin_meta__ = {
 }
 
 def register(ctx):
-    """注册插件指令"""
+    """注册插件指令（ctx 为本次注册上下文，仅此处作为参数传入）"""
     ctx.command("/hello", handle_hello, description="打招呼")
 
 def handle_hello(event, match):
+    # 注意：handler 内的 ctx 是框架注入到插件模块级的全局变量
+    #（register 被调用前由框架设置 module.ctx），可直接调用 ctx.api/send_msg 等
     ctx.send_msg(
         user_id=event.user_id,
         group_id=event.group_id if event.is_group else None,

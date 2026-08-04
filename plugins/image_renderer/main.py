@@ -212,10 +212,12 @@ def _send_image(ctx, event, img):
             img.save(img_path, "PNG")
             del img
 
+        # Windows 临时路径含反斜杠, 需转为正斜杠才能被 OneBot 客户端解析
+        path_str = img_path.replace("\\", "/")
         ctx.send_msg(
             user_id=event.user_id,
             group_id=event.group_id,
-            message=f"[CQ:image,file=file:///{img_path}]",
+            message=f"[CQ:image,file=file:///{path_str}]",
         )
     except Exception as e:
         ctx.log(f"发送图片失败: {e}", level="error")

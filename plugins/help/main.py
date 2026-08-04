@@ -92,8 +92,8 @@ def _get_display_name_map(ctx):
 
 
 def _prettify_command(pattern):
-    """将正则 pattern 美化为友好的命令名显示。
-    
+    r"""将正则 pattern 美化为友好的命令名显示。
+
     例如: ^/一言(?:\s+(.+))?\s*$ → /一言
           ^/今日早报\s*$ → /今日早报
     """
