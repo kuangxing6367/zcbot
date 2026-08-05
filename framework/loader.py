@@ -39,21 +39,30 @@ def pip_install_with_mirror(pip_exec, packages, timeout=120) -> dict:
     """
     使用清华源安装 pip 包，失败自动回退到下一个镜像源
     :param pip_exec: pip 可执行路径（如 sys.executable 或 venv 内的 pip）
-    :param packages: 要安装的包列表（如 ['requests>=2.28']）或 requirements 文件路径
+    :param packages: 要安装的包列表（如 ['requests>=2.28']）、单个包名字符串、或 requirements 文件路径
     :param timeout: 单次安装超时（秒）
     :return: {'success': bool, 'mirror': str, 'error': str}
     """
+    install_args = [pip_exec, '-m', 'pip', 'install']
+    packages_list = []
+
     if isinstance(packages, str):
-        # 单个包名或 requirements 文件
-        install_args = [pip_exec, '-m', 'pip', 'install']
-        if packages.endswith('.txt') or packages == '-r':
-            install_args.extend(['-r', packages if packages != '-r' else packages])
+        pkg = packages
+        # 判断是否为 requirements 文件路径（以 .txt 结尾的路径）
+        if pkg.endswith('.txt') and os.path.isfile(pkg):
+            install_args.extend(['-r', pkg])
         else:
-            install_args.append(packages)
-        packages_list = [packages]
+            # 普通包名字符串（如 'requests>=2.28'）
+            install_args.append(pkg)
+        packages_list = [pkg]
     else:
-        install_args = [pip_exec, '-m', 'pip', 'install'] + list(packages)
-        packages_list = list(packages)
+        # 列表：逐项处理，识别 .txt 文件路径，转换为 -r 参数
+        for pkg in packages:
+            if isinstance(pkg, str) and pkg.endswith('.txt') and os.path.isfile(pkg):
+                install_args.extend(['-r', pkg])
+            else:
+                install_args.append(pkg)
+            packages_list.append(pkg)
 
     last_error = ''
     for mirror in _PIP_MIRRORS:
@@ -234,6 +243,41 @@ def _check_version_compatible(installed: str, operator: str, required: str) -> b
     return True
 
 
+def _parse_requirements_file(req_file: str) -> list:
+    """
+    解析 requirements.txt 文件，返回依赖项列表（去重、保留顺序）
+    跳过空行、注释行和不规范的行
+    """
+    if not os.path.isfile(req_file):
+        return []
+    result = []
+    seen = set()
+    try:
+        with open(req_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # 跳过空行和注释
+                if not line or line.startswith('#'):
+                    continue
+                # 跳过 -r / -e / --index-url 等 pip 选项行
+                if line.startswith('-') or line.startswith('--'):
+                    continue
+                # 去掉行内注释（pkg # comment 形式）
+                if ' #' in line:
+                    line = line.split(' #', 1)[0].strip()
+                if not line:
+                    continue
+                # 标准化为小写 key 做去重，保留原始写法
+                norm = line.lower()
+                if norm not in seen:
+                    seen.add(norm)
+                    result.append(line)
+    except Exception as e:
+        logger.warning(f"解析 requirements.txt 失败 [{req_file}]: {e}")
+        return []
+    return result
+
+
 class PluginLoader:
     """插件加载器，管理插件生命周期"""
 
@@ -260,9 +304,82 @@ class PluginLoader:
         # ── 插件文件 mtime 快照（心跳增量注册用）──
         self._plugin_mtimes: Dict[str, float] = {}
 
+    def _read_requirements_txt(self, plugin_name: str) -> list:
+        """
+        读取插件代码目录下的 requirements.txt
+        位置: {plugins_dir}/{plugin_name}/requirements.txt
+        返回依赖列表（去重）
+        """
+        req_file = os.path.join(self.plugins_dir, plugin_name, 'requirements.txt')
+        return _parse_requirements_file(req_file)
+
+    def _get_merged_dependencies(self, plugin_name: str) -> list:
+        """
+        合并插件的所有依赖声明来源，返回去重后的依赖列表（保留顺序）
+        合并顺序（优先级从低到高，同名以后续的版本约束为准）：
+          1. plugins/<name>/requirements.txt           — 插件代码目录中的依赖文件
+          2. plugins_dat/<name>/plugin.yaml → deps.python  — 配置目录的 yaml 声明
+          3. plugins/<name>/plugin.yaml → deps.python      — 代码目录 yaml（作为 fallback）
+        """
+        merged = []
+        seen_pkg = {}  # pkg_name(lower) → index in merged for overwrite
+
+        # 1. 从代码目录 requirements.txt 读取
+        for dep in self._read_requirements_txt(plugin_name):
+            pkg, _, _ = _parse_version_spec(dep)
+            key = pkg.lower()
+            if key in seen_pkg:
+                merged[seen_pkg[key]] = dep  # 覆盖为后续的版本约束
+            else:
+                seen_pkg[key] = len(merged)
+                merged.append(dep)
+
+        # 2. 从 plugins_dat 下的 plugin.yaml 读取
+        yaml_dat = self.read_plugin_yaml(plugin_name)
+        yaml_deps = yaml_dat.get('dependencies', {}).get('python', []) if isinstance(yaml_dat, dict) else []
+        for dep in yaml_deps:
+            if not isinstance(dep, str):
+                continue
+            dep = dep.strip()
+            if not dep:
+                continue
+            pkg, _, _ = _parse_version_spec(dep)
+            key = pkg.lower()
+            if key in seen_pkg:
+                merged[seen_pkg[key]] = dep
+            else:
+                seen_pkg[key] = len(merged)
+                merged.append(dep)
+
+        # 3. 从代码目录下的 plugin.yaml 读取（fallback，防止首次加载时 plugins_dat 没有 yaml）
+        code_yaml_path = os.path.join(self.plugins_dir, plugin_name, 'plugin.yaml')
+        if os.path.isfile(code_yaml_path):
+            try:
+                with open(code_yaml_path, 'r', encoding='utf-8') as f:
+                    code_yaml = yaml.safe_load(f) or {}
+                code_deps = code_yaml.get('dependencies', {}).get('python', []) if isinstance(code_yaml, dict) else []
+                for dep in code_deps:
+                    if not isinstance(dep, str):
+                        continue
+                    dep = dep.strip()
+                    if not dep:
+                        continue
+                    pkg, _, _ = _parse_version_spec(dep)
+                    key = pkg.lower()
+                    if key in seen_pkg:
+                        merged[seen_pkg[key]] = dep
+                    else:
+                        seen_pkg[key] = len(merged)
+                        merged.append(dep)
+            except Exception as e:
+                logger.warning(f"[{plugin_name}] 读取代码目录 plugin.yaml 失败: {e}")
+
+        return merged
+
     def check_dependencies(self, plugin_name: str) -> dict:
         """
         检查插件的 Python 依赖是否已安装，以及版本是否冲突
+        合并所有依赖声明来源（requirements.txt + plugin.yaml）
         返回 {
             'ok': True/False,
             'missing': [缺失的包列表],
@@ -271,8 +388,7 @@ class PluginLoader:
             'has_conflict': True/False,
         }
         """
-        yaml_data = self.read_plugin_yaml(plugin_name)
-        deps = yaml_data.get('dependencies', {}).get('python', [])
+        deps = self._get_merged_dependencies(plugin_name)
         if not deps:
             return {'ok': True, 'missing': [], 'installed': [], 'conflicts': [], 'has_conflict': False}
 
@@ -393,16 +509,14 @@ class PluginLoader:
     def create_isolated_env(self, plugin_name: str) -> dict:
         """
         为插件创建隔离虚拟环境，在 .venv 中安装所有依赖
+        合并所有依赖声明来源（requirements.txt + plugin.yaml）
         解决版本冲突问题：插件在独立环境中运行，不影响全局包
         """
         plugin_path = os.path.join(self.plugins_dir, plugin_name)
         venv_path = os.path.join(plugin_path, '.venv')
 
-        # 获取插件所有依赖
-        yaml_data = self.read_plugin_yaml(plugin_name)
-        deps = yaml_data.get('dependencies', {}).get('python', []) if yaml_data else []
-        if not deps:
-            deps = []
+        # 获取插件所有依赖（合并所有声明来源）
+        deps = self._get_merged_dependencies(plugin_name)
 
         try:
             # 1. 创建虚拟环境
@@ -446,8 +560,8 @@ class PluginLoader:
             pip_path = os.path.join(venv_path, 'bin', 'pip')
             python_path = os.path.join(venv_path, 'bin', 'python')
 
-        if not os.path.isfile(pip_path):
-            return {'success': False, 'error': 'venv 中未找到 pip'}
+        if not os.path.isfile(python_path):
+            return {'success': False, 'error': 'venv 中未找到 python'}
 
         # 安装依赖
         installed = []
@@ -455,7 +569,9 @@ class PluginLoader:
         for dep in deps:
             try:
                 logger.info(f"[{plugin_name}] 隔离环境安装依赖: {dep}")
-                r = pip_install_with_mirror(pip_path, dep, timeout=120)
+                # 注意：pip_install_with_mirror 使用 {exec} -m pip install 模式，
+                # 所以必须传 venv 的 python 路径，而不是 pip 路径（否则会变成 pip -m pip install 这样的错误命令）
+                r = pip_install_with_mirror(python_path, dep, timeout=120)
                 if r['success']:
                     installed.append(dep)
                 else:
@@ -630,18 +746,32 @@ class PluginLoader:
 
     def read_plugin_yaml(self, plugin_name: str) -> dict:
         """
-        读取插件的 plugin.yaml 配置文件（从 plugins_dat 读取）
+        读取插件的 plugin.yaml 配置文件
+        读取顺序（优先级从高到低）：
+          1. plugins_dat/<name>/plugin.yaml    — 用户数据目录（配置会被迁移到此）
+          2. plugins/<name>/plugin.yaml        — 代码目录（首次加载或未迁移时的 fallback）
         返回 dict，如果不存在返回空 dict
         """
+        # 1. 优先读取 plugins_dat（用户可编辑版本）
         yaml_path = os.path.join(self.plugins_dat_dir, plugin_name, 'plugin.yaml')
-        if not os.path.isfile(yaml_path):
-            return {}
-        try:
-            with open(yaml_path, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f) or {}
-        except Exception as e:
-            logger.warning(f"[{plugin_name}] 读取 plugin.yaml 失败: {e}")
-            return {}
+        if os.path.isfile(yaml_path):
+            try:
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                logger.warning(f"[{plugin_name}] 读取 plugins_dat/plugin.yaml 失败: {e}，回退到代码目录")
+
+        # 2. fallback: 读取代码目录下的 plugin.yaml（首次加载未迁移时）
+        yaml_path = os.path.join(self.plugins_dir, plugin_name, 'plugin.yaml')
+        if os.path.isfile(yaml_path):
+            try:
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                logger.warning(f"[{plugin_name}] 读取代码目录 plugin.yaml 失败: {e}")
+                return {}
+
+        return {}
 
     def read_config_schema(self, plugin_name: str) -> dict:
         """
