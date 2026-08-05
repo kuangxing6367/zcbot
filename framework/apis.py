@@ -883,22 +883,33 @@ def create_web_app(framework) -> Flask:
     @app.route('/api/plugins/<plugin_name>', methods=['DELETE'])
     @require_auth
     def delete_plugin(plugin_name):
-        """删除插件"""
+        """
+        删除插件
+        默认保留插件数据（plugins_dat/<插件名>/ 下的配置文件等）；
+        请求体携带 {"delete_data": true} 时一并删除插件数据目录。
+        """
         admin = request.admin
 
         if not plugin_name.replace('_', '').replace('-', '').isalnum():
             return jsonify({'code': 400, 'msg': '非法插件名'}), 400
 
+        body = request.get_json(silent=True) or {}
+        delete_data = bool(body.get('delete_data'))
+
         target_dir = os.path.join(plugins_dir, plugin_name)
         dat_dir = os.path.join(framework.plugin_loader.plugins_dat_dir, plugin_name)
+        venv_dir = os.path.join(dat_dir, '.venv')
         try:
             # 卸载
             framework.plugin_loader.unload_plugin(plugin_name)
             # 删除代码目录
             if os.path.isdir(target_dir):
                 shutil.rmtree(target_dir, ignore_errors=True)
-            # 删除数据/配置目录
-            if os.path.isdir(dat_dir):
+            # 插件虚拟环境随代码清理（venv 属于运行产物，不属于用户配置）
+            if os.path.isdir(venv_dir):
+                shutil.rmtree(venv_dir, ignore_errors=True)
+            # 是否连带删除插件数据/配置目录
+            if delete_data and os.path.isdir(dat_dir):
                 shutil.rmtree(dat_dir, ignore_errors=True)
             # 删除数据库记录
             db.execute("DELETE FROM plugins WHERE plugin_name = %s", (plugin_name,))
@@ -906,8 +917,12 @@ def create_web_app(framework) -> Flask:
             db.execute("DELETE FROM tasks WHERE plugin_name = %s", (plugin_name,))
             db.execute("DELETE FROM plugin_configs WHERE plugin_name = %s", (plugin_name,))
 
-            audit_log(admin['id'], admin['username'], 'delete_plugin', 'plugin', plugin_name)
-            return jsonify({'code': 0, 'msg': f'插件 [{plugin_name}] 已删除'})
+            audit_log(admin['id'], admin['username'], 'delete_plugin', 'plugin', plugin_name,
+                      {'delete_data': delete_data}, 'success')
+            msg = f'插件 [{plugin_name}] 已删除'
+            if not delete_data and os.path.isdir(dat_dir) and os.listdir(dat_dir):
+                msg += '（配置文件已保留在 plugins_dat，可手动清理）'
+            return jsonify({'code': 0, 'msg': msg})
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
@@ -2378,6 +2393,154 @@ def create_web_app(framework) -> Flask:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
     # ---- 框架操作 ----
+
+    # 框架源码更新白名单：只覆盖这些代码/配置文件，用户数据一律跳过
+    _FW_UPDATE_INCLUDE = {
+        'framework', 'web', 'sql', 'main.py', 'requirements.txt',
+        'start.sh', '.gitignore', 'README.md', 'LICENSE',
+    }
+
+    def _get_framework_local_commit() -> str:
+        """获取本地 git 当前提交短 SHA（无 .git 时返回空）"""
+        git_dir = os.path.join(_project_root(), '.git')
+        if not os.path.isdir(git_dir):
+            return ''
+        try:
+            head_file = os.path.join(git_dir, 'HEAD')
+            if not os.path.isfile(head_file):
+                return ''
+            with open(head_file, 'r', encoding='utf-8') as f:
+                ref = f.read().strip()
+            if ref.startswith('ref:'):
+                ref_path = os.path.join(git_dir, ref[5:].strip().replace('/', os.sep))
+                if os.path.isfile(ref_path):
+                    with open(ref_path, 'r', encoding='utf-8') as f:
+                        return f.read().strip()[:7]
+            return ref[:7]
+        except Exception:
+            return ''
+
+    @app.route('/api/framework/check_update', methods=['GET'])
+    @require_auth
+    def check_framework_update():
+        """检查框架是否有更新（对比 GitHub main 分支最新提交）"""
+        repo = 'kuangxing6367/zcbot'
+        branch = 'main'
+        try:
+            api_url = f"https://api.github.com/repos/{repo}/commits/{branch}"
+            resp = requests.get(api_url, headers={'Accept': 'application/vnd.github.v3+json'}, timeout=15)
+            if resp.status_code == 404:
+                return jsonify({'code': 404, 'msg': '仓库或分支不存在'}), 404
+            if resp.status_code != 200:
+                return jsonify({'code': 500, 'msg': f'GitHub API 返回 {resp.status_code}'}), 500
+
+            data = resp.json()
+            latest_sha = data.get('sha', '')[:7]
+            commit_msg = data.get('commit', {}).get('message', '').split('\n')[0]
+            commit_date = data.get('commit', {}).get('author', {}).get('date', '')
+            author = data.get('commit', {}).get('author', {}).get('name', '')
+
+            local_sha = _get_framework_local_commit()
+
+            return jsonify({
+                'code': 0,
+                'data': {
+                    'repo': repo,
+                    'branch': branch,
+                    'local_commit': local_sha or '未知',
+                    'latest_commit': latest_sha,
+                    'commit_message': commit_msg,
+                    'commit_date': commit_date,
+                    'author': author,
+                    'has_update': bool(local_sha) and local_sha != latest_sha,
+                }
+            })
+        except requests.exceptions.Timeout:
+            return jsonify({'code': 500, 'msg': 'GitHub API 请求超时'}), 500
+        except Exception as e:
+            logger.error(f"检查框架更新失败: {e}")
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/framework/update', methods=['POST'])
+    @require_auth
+    def update_framework():
+        """
+        从 GitHub 更新框架源码
+        只覆盖框架代码（framework/web/sql/main.py 等），
+        保留用户数据（plugins/、data/、config.yaml、*.db 等），
+        更新前自动备份 framework/ 到 data/backups/，更新后需重启生效。
+        """
+        admin = request.admin
+        repo = 'kuangxing6367/zcbot'
+        branch = 'main'
+        root = _project_root()
+
+        try:
+            zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+            logger.info(f"正在下载框架更新: {zip_url}")
+            resp = requests.get(zip_url, timeout=180, stream=True)
+            if resp.status_code == 404:
+                return jsonify({'code': 404, 'msg': f'仓库或分支不存在: {repo}@{branch}'}), 404
+            if resp.status_code != 200:
+                return jsonify({'code': 500, 'msg': f'下载失败: HTTP {resp.status_code}'}), 500
+
+            tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+            for chunk in resp.iter_content(chunk_size=8192):
+                tmp_zip.write(chunk)
+            tmp_zip.close()
+
+            # 解压到临时目录
+            tmp_dir = tempfile.mkdtemp(prefix='zcbot_fw_')
+            with zipfile.ZipFile(tmp_zip.name, 'r') as zf:
+                zf.extractall(tmp_dir)
+
+            # GitHub ZIP 内含一层 repo-branch/ 目录
+            entries = [e for e in os.listdir(tmp_dir) if os.path.isdir(os.path.join(tmp_dir, e))]
+            src_root = os.path.join(tmp_dir, entries[0]) if entries else tmp_dir
+
+            # 备份旧 framework 目录
+            backup_dir = os.path.join(root, 'data', 'backups')
+            os.makedirs(backup_dir, exist_ok=True)
+            fw_backup = os.path.join(backup_dir, f'framework.{int(time.time())}')
+            old_fw = os.path.join(root, 'framework')
+            if os.path.isdir(old_fw):
+                shutil.copytree(old_fw, fw_backup)
+
+            # 覆盖白名单内的代码/配置文件
+            updated = []
+            for name in os.listdir(src_root):
+                if name not in _FW_UPDATE_INCLUDE:
+                    continue  # 保护 plugins/ data/ config.yaml 等用户数据
+                src = os.path.join(src_root, name)
+                dst = os.path.join(root, name)
+                if os.path.isdir(src):
+                    # 删除旧目录再整体复制，避免残留旧文件
+                    if os.path.isdir(dst):
+                        shutil.rmtree(dst, ignore_errors=True)
+                    shutil.copytree(src, dst)
+                elif os.path.isfile(src):
+                    os.makedirs(os.path.dirname(dst), exist_ok=True) if os.path.dirname(dst) else None
+                    shutil.copy2(src, dst)
+                updated.append(name)
+
+            # 清理临时文件
+            os.unlink(tmp_zip.name)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
+                      {'files': updated, 'backup': fw_backup}, 'success')
+            return jsonify({
+                'code': 0,
+                'msg': f'框架已更新（{len(updated)} 项），请重启框架生效。\n已备份旧代码到 data/backups/',
+                'data': {'updated': updated, 'backup': fw_backup},
+            })
+        except zipfile.BadZipFile:
+            return jsonify({'code': 400, 'msg': '下载的 ZIP 文件无效'}), 400
+        except Exception as e:
+            logger.error(f"更新框架失败: {e}", exc_info=True)
+            audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
+                      {}, 'failure', str(e))
+            return jsonify({'code': 500, 'msg': f'更新失败: {e}'}), 500
 
     @app.route('/api/restart', methods=['POST'])
     @require_auth

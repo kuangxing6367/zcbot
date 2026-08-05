@@ -9,6 +9,7 @@
 - 自动处理 DDL 语法差异（ENGINE=、COMMENT、AUTO_INCREMENT 等）
 - 自动处理 NOW() → datetime 参数转换
 """
+import functools
 import json
 import logging
 import os
@@ -18,6 +19,17 @@ import time
 from threading import local
 
 logger = logging.getLogger('zcbot')
+
+# MySQL 连接断开类错误码（触发自动重连）
+_MYSQL_RECONNECT_ERRORS = {2006, 2013, 2055, 1927, 1040}
+# 连接断开类错误关键字（用于兜底判断）
+_MYSQL_RECONNECT_KEYWORDS = (
+    'server has gone away',
+    'lost connection',
+    'connection is closed',
+    'broken pipe',
+    'connection reset by peer',
+)
 
 # ── SQL 适配器 ──────────────────────────────────────────────────────
 
@@ -276,6 +288,12 @@ class Database:
         self.db_type = config.get('type', 'sqlite').lower()
         self._local = local()
         self._lock = __import__('threading').Lock()
+        # MySQL 连接保活/重连配置
+        self._ping_interval = float(config.get('ping_interval', 5.0))   # 空闲多久 ping 一次检测连接是否存活
+        self._connect_timeout = float(config.get('connect_timeout', 10))  # 建立连接超时（秒）
+        self._read_timeout = float(config.get('read_timeout', 30))     # 读超时（秒），避免断连后无限卡住
+        self._write_timeout = float(config.get('write_timeout', 30))   # 写超时（秒）
+        self._max_reconnect = int(config.get('max_reconnect', 3))      # 单次操作最大自动重连次数
 
         if self.db_type == 'mysql':
             self._init_mysql()
@@ -339,21 +357,78 @@ class Database:
         return conn
 
     def _get_conn_mysql(self):
-        """获取 MySQL 连接"""
+        """
+        获取 MySQL 连接
+        自动保活：连接空闲超过 ping_interval 时先 ping 检测，
+        连接被服务端断开（wait_timeout/重启/网络中断）则自动重连。
+        """
         conn = getattr(self._local, 'conn', None)
-        if conn is None or not conn.open:
-            conn = self._pymysql.connect(
-                host=self.config.get('host', '127.0.0.1'),
-                port=int(self.config.get('port', 3306)),
-                user=self.config.get('user', 'root'),
-                password=self.config.get('password', ''),
-                database=self.config.get('database', 'zcbot'),
-                charset=self.config.get('charset', 'utf8mb4'),
-                cursorclass=self._DictCursor,
-                autocommit=True
-            )
-            self._local.conn = conn
+        now = time.time()
+        last_use = getattr(self._local, 'last_use', 0.0)
+
+        if conn is not None and conn.open:
+            # 空闲超过阈值 → ping 检测（ping 失败会抛异常，触发重连）
+            if now - last_use >= self._ping_interval:
+                try:
+                    conn.ping(reconnect=True)
+                except Exception as e:
+                    logger.warning(f"MySQL 连接已失效，正在自动重连: {e}")
+                    self._close_thread_conn()
+                    conn = None
+            else:
+                return conn
+
+        if conn is None:
+            try:
+                conn = self._pymysql.connect(
+                    host=self.config.get('host', '127.0.0.1'),
+                    port=int(self.config.get('port', 3306)),
+                    user=self.config.get('user', 'root'),
+                    password=self.config.get('password', ''),
+                    database=self.config.get('database', 'zcbot'),
+                    charset=self.config.get('charset', 'utf8mb4'),
+                    cursorclass=self._DictCursor,
+                    autocommit=True,
+                    connect_timeout=self._connect_timeout,
+                    read_timeout=self._read_timeout,
+                    write_timeout=self._write_timeout,
+                )
+                self._local.conn = conn
+                self._local.last_use = time.time()
+                logger.info("MySQL 连接已建立")
+            except Exception as e:
+                logger.error(f"MySQL 连接建立失败: {e}")
+                raise
         return conn
+
+    def _close_thread_conn(self):
+        """关闭并丢弃当前线程缓存的连接（下次操作自动重连）"""
+        conn = getattr(self._local, 'conn', None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._local.conn = None
+
+    def _mark_conn_used(self):
+        """记录连接最近使用时间（避免频繁 ping）"""
+        self._local.last_use = time.time()
+
+    @staticmethod
+    def _is_reconnect_error(exc: Exception) -> bool:
+        """判断异常是否为 MySQL 连接断开类错误（需要自动重连）"""
+        if exc is None:
+            return False
+        # 按错误码判断（pymysql 异常 args[0] 通常为错误码）
+        code = None
+        if isinstance(getattr(exc, 'args', None), (tuple, list)) and exc.args:
+            code = exc.args[0]
+        if isinstance(code, int) and code in _MYSQL_RECONNECT_ERRORS:
+            return True
+        # 按错误消息关键字兜底判断
+        msg = str(exc).lower()
+        return any(kw in msg for kw in _MYSQL_RECONNECT_KEYWORDS)
 
     def _get_conn(self):
         """获取连接"""
@@ -365,39 +440,65 @@ class Database:
         """获取游标"""
         return self._get_conn().cursor()
 
+    def _run_with_reconnect(self, func, *args, **kwargs):
+        """
+        执行数据库操作，MySQL 连接断开时自动重连并重试（最多 _max_reconnect 次）。
+        重连前丢弃坏连接，避免每次操作都复用已失效的连接导致持续失败。
+        """
+        if self.db_type != 'mysql':
+            return func(*args, **kwargs)
+        for attempt in range(self._max_reconnect + 1):
+            try:
+                result = func(*args, **kwargs)
+                self._mark_conn_used()
+                return result
+            except Exception as e:
+                if not self._is_reconnect_error(e):
+                    raise
+                if attempt >= self._max_reconnect:
+                    logger.error(f"MySQL 连接断开且重连 {self._max_reconnect} 次后仍失败: {e}")
+                    raise
+                logger.warning(f"MySQL 连接断开（{e}），正在进行第 {attempt + 1} 次自动重连...")
+                self._close_thread_conn()
+                time.sleep(min(0.5 * (attempt + 1), 3))  # 递增退避，最多 3 秒
+
     # ── 公开 API ──────────────────────────────────────────────────
 
     def query(self, sql: str, params: tuple = None) -> list:
         """查询多条记录，返回 list[dict]"""
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        try:
-            if self.db_type == 'sqlite':
-                sql = _translate_sql_for_sqlite(sql)
-            self._exec(cursor, sql, params)
-            rows = cursor.fetchall()
-            if self.db_type == 'sqlite':
-                return [dict(r) for r in rows]
-            return rows
-        finally:
-            cursor.close()
+        def _do():
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    sql = _translate_sql_for_sqlite(sql)
+                self._exec(cursor, sql, params)
+                rows = cursor.fetchall()
+                if self.db_type == 'sqlite':
+                    return [dict(r) for r in rows]
+                return rows
+            finally:
+                cursor.close()
+        return self._run_with_reconnect(_do)
 
     def query_one(self, sql: str, params: tuple = None) -> dict:
         """查询单条记录，返回 dict 或 None"""
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        try:
-            if self.db_type == 'sqlite':
-                sql = _translate_sql_for_sqlite(sql)
-            self._exec(cursor, sql, params)
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            if self.db_type == 'sqlite':
-                return dict(row)
-            return row
-        finally:
-            cursor.close()
+        def _do():
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    sql = _translate_sql_for_sqlite(sql)
+                self._exec(cursor, sql, params)
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                if self.db_type == 'sqlite':
+                    return dict(row)
+                return row
+            finally:
+                cursor.close()
+        return self._run_with_reconnect(_do)
 
     def _exec(self, cursor, sql: str, params=None):
         """执行 sql，自动处理 params 为 None 的情况"""
@@ -408,66 +509,72 @@ class Database:
 
     def execute(self, sql: str, params: tuple = None) -> int:
         """执行插入/更新/删除，返回受影响行数"""
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        try:
-            if self.db_type == 'sqlite':
-                # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
-                if 'NOW()' in sql.upper():
-                    sql, params = _replace_now(sql, params)
-                sql = _translate_sql_for_sqlite(sql)
-            self._exec(cursor, sql, params)
-            conn.commit()
-            return cursor.rowcount
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            cursor.close()
+        def _do():
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
+                    if 'NOW()' in sql.upper():
+                        sql, params = _replace_now(sql, params)
+                    sql = _translate_sql_for_sqlite(sql)
+                self._exec(cursor, sql, params)
+                conn.commit()
+                return cursor.rowcount
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+        return self._run_with_reconnect(_do)
 
     def execute_many(self, sql: str, params_list: list) -> int:
         """批量执行，返回受影响行数"""
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        try:
-            if self.db_type == 'sqlite':
-                # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
-                if 'NOW()' in sql.upper():
-                    new_sql, _ = _replace_now(sql, params_list[0] if params_list else None)
-                    new_params_list = []
-                    for p in params_list:
-                        _, now_p = _replace_now(sql, p)
-                        new_params_list.append(now_p)
-                    sql = new_sql
-                    params_list = new_params_list
-                sql = _translate_sql_for_sqlite(sql)
-            cursor.executemany(sql, params_list)
-            conn.commit()
-            return cursor.rowcount
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            cursor.close()
+        def _do():
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
+                    if 'NOW()' in sql.upper():
+                        new_sql, _ = _replace_now(sql, params_list[0] if params_list else None)
+                        new_params_list = []
+                        for p in params_list:
+                            _, now_p = _replace_now(sql, p)
+                            new_params_list.append(now_p)
+                        sql = new_sql
+                        params_list = new_params_list
+                    sql = _translate_sql_for_sqlite(sql)
+                cursor.executemany(sql, params_list)
+                conn.commit()
+                return cursor.rowcount
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+        return self._run_with_reconnect(_do)
 
     def insert(self, sql: str, params: tuple = None) -> int:
         """插入并返回自增 ID"""
-        conn = self._get_conn()
-        cursor = conn.cursor()
-        try:
-            if self.db_type == 'sqlite':
-                # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
-                if 'NOW()' in sql.upper():
-                    sql, params = _replace_now(sql, params)
-                sql = _translate_sql_for_sqlite(sql)
-            self._exec(cursor, sql, params)
-            conn.commit()
-            return cursor.lastrowid
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            cursor.close()
+        def _do():
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
+                    if 'NOW()' in sql.upper():
+                        sql, params = _replace_now(sql, params)
+                    sql = _translate_sql_for_sqlite(sql)
+                self._exec(cursor, sql, params)
+                conn.commit()
+                return cursor.lastrowid
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+        return self._run_with_reconnect(_do)
 
     def get_connection(self):
         """获取原始连接（高级用法）"""
@@ -513,13 +620,7 @@ class Database:
 
     def close(self):
         """关闭连接"""
-        conn = getattr(self._local, 'conn', None)
-        if conn:
-            if self.db_type == 'sqlite':
-                conn.close()
-            elif hasattr(conn, 'open') and conn.open:
-                conn.close()
-            self._local.conn = None
+        self._close_thread_conn()
 
 
 # ── SQL 辅助函数 ──────────────────────────────────────────────────

@@ -31,6 +31,13 @@ _DEFAULT_CONFIG = """\
 database:
   type: sqlite
   path: data/zcbot.db
+  # ── MySQL 连接保活/自动重连（type: mysql 时生效） ──
+  # 数据库断开（wait_timeout/服务重启/网络中断）后自动重连，不再卡死
+  # ping_interval: 5        # 连接空闲超过该秒数后自动 ping 检测存活
+  # connect_timeout: 10     # 建立连接超时（秒）
+  # read_timeout: 30        # 读超时（秒），避免断连后无限阻塞
+  # write_timeout: 30       # 写超时（秒）
+  # max_reconnect: 3        # 单次操作最大自动重连次数
 
 # ── OneBot WebSocket 服务端 ─────────────────────────────────
 # OneBot 客户端反向连接此端口（如 NapCat、Lagrange 等）
@@ -50,7 +57,7 @@ plugin:
   dir: plugins               # 插件代码目录（.py 文件）
   # dat_dir: data/plugins_dat # 插件数据/配置目录（默认统一存放于 data/plugins_dat）
   heartbeat_interval: 60     # 插件注册心跳间隔（秒）
-  auto_install_deps_on_startup: true  # 启动时自动安装缺失依赖（移机自愈）
+  auto_install_deps_on_startup: true  # 启动时自动安装缺失依赖到全局环境（移机自愈，版本冲突自动跳过）
   max_memory_mb: 64          # 单插件内存上限（MB），超限自动卸载
 
 # ── 日志配置 ────────────────────────────────────────────────

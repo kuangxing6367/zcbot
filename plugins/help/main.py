@@ -303,6 +303,7 @@ def handle_help(event, match):
     # 读取额外配置
     plugin_blacklist = ctx.get_config("plugin_blacklist", []) or []
     custom_cmds = ctx.get_config("custom_cmds", []) or []
+    font_sizes = ctx.get_config("font_sizes", {}) or {}
 
     # 构造 drawer 配置 dict
     drawer_config = {
@@ -312,6 +313,7 @@ def handle_help(event, match):
         "show_all_cmds": show_all,
         "plugin_blacklist": plugin_blacklist,
         "custom_cmds": custom_cmds,
+        "font_sizes": font_sizes,
         "plugin_display_name": "ZGRIC",
         "plugin_version": __plugin_meta__["version"],
     }
