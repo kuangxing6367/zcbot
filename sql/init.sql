@@ -262,6 +262,23 @@ CREATE TABLE IF NOT EXISTS system_config (
 
 
 -- ============================================================
+-- IP 黑名单表（蜜罐自动拉黑 + 手动拉黑）
+-- 内网 IP（127.*、192.168.*、172.16-31.*）由框架逻辑豁免，不写入本表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ip_blacklist (
+    id          INT             AUTO_INCREMENT  PRIMARY KEY,
+    ip          VARCHAR(64)     NOT NULL        COMMENT '被封禁的 IP',
+    reason      VARCHAR(255)    DEFAULT NULL    COMMENT '拉黑原因',
+    source      VARCHAR(32)     DEFAULT 'manual' COMMENT '来源: honeypot=蜜罐自动/manual=手动',
+    expires_at  DATETIME        DEFAULT NULL    COMMENT '解封时间(NULL=永久)',
+    created_at  DATETIME        DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_ip (ip)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='IP 黑名单表';
+
+
+-- ============================================================
 -- 插入默认数据
 -- ============================================================
 

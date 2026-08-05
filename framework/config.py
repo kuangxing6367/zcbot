@@ -82,10 +82,11 @@ security:
   nonce_len: 16                # 下发 nonce 的长度
   fake_response_msg: "🎣 你上钩了！但这里只是蜜罐，请去 GitHub 点个 Star。"
   nonce_expiry: 60             # nonce 有效期（秒）
-  blacklist_enabled: true      # 是否启用永久黑名单
+  blacklist_enabled: true      # 是否启用黑名单（持久化到数据库 ip_blacklist 表，重启不清除）
   whitelist_ips:               # 白名单 IP，跳过所有检查
     - "127.0.0.1"
   # success_fake_data:         # 认证通过后返回的迷惑性数据（不填则使用默认假数据）
+  # 内网 IP（127.*、192.168.*、172.16-31.*、10.*）自动豁免蜜罐拉黑，避免误伤本机/局域网
 """
 
 
