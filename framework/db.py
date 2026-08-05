@@ -735,6 +735,19 @@ def _auto_create_tables(database):
                 UNIQUE(group_id, plugin_name)
             )
         """,
+        # IP 黑名单表（蜜罐自动拉黑 + 手动拉黑）
+        'ip_blacklist': """
+            CREATE TABLE IF NOT EXISTS ip_blacklist (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip          TEXT NOT NULL,
+                reason      TEXT,
+                source      TEXT DEFAULT 'manual',
+                expires_at  TEXT,
+                created_at  TEXT,
+                updated_at  TEXT,
+                UNIQUE(ip)
+            )
+        """,
     }
 
     # MySQL 模式下替换 AUTOINCREMENT → AUTO_INCREMENT
