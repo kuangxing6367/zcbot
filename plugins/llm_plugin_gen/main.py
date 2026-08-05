@@ -43,21 +43,33 @@ _DEFAULT_PERSONA = "你是 ZCBOT OneBot QQ 机器人框架的插件开发专家�
 
 # 插件开发规范（注入 system prompt，约束 LLM 生成符合框架语法的代码）
 _PLUGIN_DEV_GUIDE = """\
-## 插件开发规范（生成 /genplugin 时必须遵守）
-- 生成单个 main.py，必须包含 `__plugin_meta__` 字典与 `def register(ctx):` 入口
+## 插件开发规范（用户要求写插件时必须遵守）
+### 工作流程
+1. 先用 ls 查看 plugins 目录结构，了解现有插件写法（参考 plugins/echo/main.py）
+2. 用 write 工具创建 plugins/<插件名>/main.py（插件名用英文小写，如 my_plugin）
+3. 如需依赖包，用 write 创建 plugins/<插件名>/requirements.txt（每行一个包名）
+4. 最后调用 load_plugin 工具加载插件使其生效
+
+### 插件代码结构
+- 必须包含 `__plugin_meta__` 字典与 `def register(ctx):` 入口
 - 处理函数签名：`def handler(event, match):`（或 async def），通过模块级 `ctx` 访问上下文
-- ctx 常用 API：
-  - ctx.command(pattern, handler, priority=50, alias=..., description=..., require_admin=False, require_superuser=False)
-  - ctx.send_msg(user_id=..., group_id=..., message=...)  发送消息
-  - ctx.log(msg, level='info')                            记录日志
-  - ctx.get_config(key, default)                          读取插件配置
-  - ctx.db_query(sql, params) / ctx.db_execute(sql, params)  数据库
-  - ctx.api(action, **params)                              OneBot API
-  - ctx.task(cron_expr, executor)                         定时任务
-- 只用标准库 + 框架已装依赖（requests/flask/pyyaml/Pillow/numpy），额外依赖写入 dependencies 字段
+- 只能存在一个 register 函数，命令都注册在 register 里
+
+### ctx 常用 API
+- ctx.command(pattern, handler, priority=50, alias=..., description=..., require_admin=False, require_superuser=False)
+- ctx.send_msg(user_id=..., group_id=..., message=...)  发送消息
+- ctx.log(msg, level='info')                            记录日志
+- ctx.get_config(key, default)                          读取插件配置
+- ctx.db_query(sql, params) / ctx.db_execute(sql, params)  数据库
+- ctx.api(action, **params)                              OneBot API
+- ctx.task(cron_expr, executor)                         定时任务
+
+### 硬性要求
+- 只用标准库 + 框架已装依赖（requests/flask/pyyaml/Pillow/numpy），额外依赖写入 requirements.txt
 - 禁止相对导入（from .xxx），单文件实现
 - 代码要健壮：参数校验、异常捕获、不阻塞主流程
 - 注释使用中文
+- 写完代码后务必调用 load_plugin 加载；若加载失败，用 ls 查看、edit 修改后 reload_plugin 重试
 """
 
 # 默认 skills（可从配置覆盖）
@@ -130,24 +142,67 @@ _TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "load_plugin",
+            "description": "加载插件：把 plugins/<插件名> 目录下的插件加载到框架并注册命令。写插件完成后必须调用此工具使其生效",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string", "description": "插件目录名（与 main.py 所在目录一致）"},
+                },
+                "required": ["plugin_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "unload_plugin",
+            "description": "卸载插件：从框架移除并清理其命令/任务",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string", "description": "插件目录名"},
+                },
+                "required": ["plugin_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reload_plugin",
+            "description": "重载插件：先卸载再重新加载（修改代码后热更新用）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {"type": "string", "description": "插件目录名"},
+                },
+                "required": ["plugin_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_plugins",
+            "description": "列出当前已加载的插件及版本",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 
 def register(ctx):
     """插件注册入口"""
     ctx.command(
-        "/genplugin", handle_gen_plugin,
-        priority=100,
-        alias=["/生成插件"],
-        require_superuser=True,
-        description="让 LLM 生成插件并加载，用法: /genplugin <插件需求描述>",
-    )
-    ctx.command(
         "/ai", handle_ai,
         priority=100,
-        alias=["/ai开发"],
+        alias=["/ai开发", "/生成插件", "/写插件", "/开发"],
         require_superuser=True,
-        description="与 LLM 对话，可通过函数调用管理插件文件，用法: /ai <指令>",
+        description="与 LLM 对话，可让 AI 编写/修改/加载插件（群内超管可用），用法: /ai <需求>",
     )
     ctx.command(
         "/pluginlist", handle_list_plugins,
@@ -181,11 +236,17 @@ def _build_system_prompt(ctx) -> str:
 
 
 def _get_cwd(ctx) -> str:
-    """LLM 文件操作的基准目录"""
+    """LLM 文件操作的基准目录（默认项目根）"""
     cwd = str(_get_config(ctx, "cwd", "")).strip()
     if cwd:
         return os.path.abspath(cwd)
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # 默认：plugins 目录的父目录 = 项目根
+    try:
+        plugins_dir = ctx._framework.plugin_loader.plugins_dir
+        return os.path.dirname(os.path.abspath(plugins_dir))
+    except Exception:
+        # 回退：本文件所在位置的第三级上级（plugins/<name>/main.py → 项目根）
+        return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 # ---------------------------------------------------------------- LLM 调用
@@ -280,6 +341,11 @@ def _resolve_path(ctx, path: str) -> str:
 
 def _execute_tool(ctx, name: str, args: dict):
     """执行 LLM 请求的工具调用"""
+    # 插件管理工具（不依赖 path）
+    if name in ("load_plugin", "unload_plugin", "reload_plugin", "list_plugins"):
+        return _execute_plugin_tool(ctx, name, args)
+
+    # 文件操作工具：必须提供 path
     path = str(args.get("path") or "").strip()
     if not path:
         return "错误: 缺少 path 参数"
@@ -358,96 +424,74 @@ def _execute_tool(ctx, name: str, args: dict):
     return f"错误: 未知工具 {name}"
 
 
-# ---------------------------------------------------------------- 生成插件
+def _execute_plugin_tool(ctx, name: str, args: dict):
+    """执行插件管理工具（load/unload/reload/list）"""
+    if name == "list_plugins":
+        plugins = ctx._framework.plugin_loader.get_loaded_plugins()
+        if not plugins:
+            return "当前没有已加载的插件"
+        lines = ["已加载插件:"]
+        for n, info in sorted(plugins.items()):
+            meta = info.get('meta', {})
+            lines.append(f"- {meta.get('name', n)} ({n}) v{meta.get('version', '?')}")
+        return "\n".join(lines)
 
-def _extract_json(text: str) -> dict:
-    """从 LLM 输出中提取 JSON 对象（兼容 markdown 包裹/杂散文字）"""
-    text = (text or "").strip()
-    text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\s*```$', '', text)
-    start = text.find('{')
-    end = text.rfind('}')
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError(f"LLM 输出中未找到 JSON: {text[:200]}")
-    try:
-        return json.loads(text[start:end + 1])
-    except json.JSONDecodeError as e:
-        raise ValueError(f"JSON 解析失败: {e}")
+    plugin_name = str(args.get("plugin_name") or "").strip()
+    if not plugin_name or not re.match(r'^[a-zA-Z0-9_\-]+$', plugin_name):
+        return f"错误: 非法插件名 {plugin_name!r}（须为英文/数字/下划线/短横线）"
 
-
-def _validate_generated(data: dict) -> None:
-    plugin_name = str(data.get("plugin_name") or "").strip()
-    if not re.match(r'^[a-zA-Z0-9_\-]+$', plugin_name):
-        raise ValueError(f"插件名非法（须为英文/数字/下划线/短横线）: {plugin_name!r}")
-    main_py = data.get("main_py")
-    if not isinstance(main_py, str) or not main_py.strip():
-        raise ValueError("LLM 未返回 main_py 代码")
-    try:
-        ast.parse(main_py)
-    except SyntaxError as e:
-        raise ValueError(f"生成的代码语法错误: {e}")
-    if 'def register(ctx)' not in main_py and 'def register(' not in main_py:
-        raise ValueError("生成的代码缺少 register(ctx) 入口函数")
-    if '__plugin_meta__' not in main_py:
-        raise ValueError("生成的代码缺少 __plugin_meta__ 元信息")
-
-
-def _load_generated_plugin(ctx, plugin_name: str, main_py: str, dependencies: list, meta: dict) -> dict:
-    plugins_dir = ctx._framework.plugin_loader.plugins_dir
-    dat_dir = ctx._framework.plugin_loader.plugins_dat_dir
-    plugin_path = os.path.join(plugins_dir, plugin_name)
-    main_path = os.path.join(plugin_path, 'main.py')
-    backup_main = None
-    try:
-        os.makedirs(plugin_path, exist_ok=True)
-        if os.path.isfile(main_path):
-            backup_main = main_path + f'.bak.{int(time.time())}'
-            os.replace(main_path, backup_main)
-        with open(main_path, 'w', encoding='utf-8') as f:
-            f.write(main_py)
-
-        os.makedirs(dat_dir, exist_ok=True)
-        yaml_path = os.path.join(dat_dir, plugin_name, 'plugin.yaml')
-        os.makedirs(os.path.dirname(yaml_path), exist_ok=True)
-        if not os.path.isfile(yaml_path):
-            import yaml as _yaml
-            yaml_data = {
-                "name": meta.get("name", plugin_name),
-                "version": meta.get("version", "1.0.0"),
-                "author": meta.get("author", "ZGRIC"),
-                "description": meta.get("desc", ""),
-                "priority": meta.get("priority", 50),
-                "dependencies": {"python": dependencies or []},
-            }
-            with open(yaml_path, 'w', encoding='utf-8') as f:
-                _yaml.safe_dump(yaml_data, f, allow_unicode=True, sort_keys=False)
-
+    if name == "load_plugin":
         loader = ctx._framework.plugin_loader
-        ok = loader.load_plugin(plugin_name)
-        if not ok:
-            raise RuntimeError("load_plugin 失败，请查看日志（可能是依赖缺失或代码运行错误）")
-        loader.register_commands(plugin_name)
+        main_path = os.path.join(loader.plugins_dir, plugin_name, 'main.py')
+        if not os.path.isfile(main_path):
+            return f"错误: 未找到 {main_path}，请先用 write 创建插件代码"
         try:
+            with open(main_path, 'r', encoding='utf-8') as f:
+                ast.parse(f.read())
+        except SyntaxError as e:
+            return f"错误: main.py 语法错误: {e}"
+        try:
+            ok = loader.load_plugin(plugin_name)
+        except Exception as e:
+            return f"错误: 加载异常: {e}"
+        if not ok:
+            return f"错误: 加载失败，请检查代码或依赖（可 ls 查看，edit 修改，reload_plugin 重试）"
+        try:
+            loader.register_commands(plugin_name)
             ctx._framework.router._invalidate_cache()
         except Exception:
             pass
-        return {'success': True, 'plugin_path': plugin_path, 'backup': backup_main}
-    except Exception:
-        if backup_main and os.path.exists(backup_main):
-            os.replace(backup_main, main_path)
-        else:
-            try:
-                os.remove(main_path)
-            except OSError:
-                pass
-        raise
+        meta = loader.get_loaded_plugins().get(plugin_name, {}).get('meta', {})
+        return f"✅ 插件已加载: {meta.get('name', plugin_name)} v{meta.get('version', '?')}"
 
+    if name == "unload_plugin":
+        try:
+            ctx._framework.plugin_loader.unload_plugin(plugin_name)
+        except Exception as e:
+            return f"错误: {e}"
+        return f"已卸载插件: {plugin_name}"
+
+    if name == "reload_plugin":
+        loader = ctx._framework.plugin_loader
+        try:
+            loader.unload_plugin(plugin_name)
+            ok = loader.load_plugin(plugin_name)
+            if not ok:
+                return f"错误: 重载失败（代码可能有问题）"
+            loader.register_commands(plugin_name)
+            ctx._framework.router._invalidate_cache()
+        except Exception as e:
+            return f"错误: 重载异常: {e}"
+        return f"✅ 插件已重载: {plugin_name}"
+
+    return f"错误: 未知工具 {name}"
+
+
+# ---------------------------------------------------------------- handlers
 
 def _truncate(text, limit=1800):
     return text if len(text) <= limit else text[:limit] + f"...（已截断，共 {len(text)} 字）"
 
-
-# ---------------------------------------------------------------- handlers
 
 def _get_prompt(event, match, cmd_prefix):
     prompt = ""
@@ -460,55 +504,27 @@ def _get_prompt(event, match, cmd_prefix):
     return prompt
 
 
-def handle_gen_plugin(event, match):
-    prompt = _get_prompt(event, match, "/genplugin")
-    if not prompt:
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message="用法: /genplugin <插件需求描述>\n例如: /genplugin 写一个每日早报插件，每天早上8点发送天气和新闻")
-        return
-    if not str(_get_config(ctx, "base_url", "")).strip():
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message="尚未配置 LLM 接口，请在 Web UI → 插件配置 中设置 base_url / api_key / model。")
-        return
-
-    ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                 message=f"正在调用 LLM 生成插件，需求:\n{prompt}\n\n可能需要几十秒，请稍候...")
-    try:
-        system = _build_system_prompt(ctx)
-        raw = _chat_once(ctx, [
-            {"role": "system", "content": system},
-            {"role": "user", "content": f"请根据以下需求生成插件，严格以 JSON 输出（plugin_name/plugin_meta/main_py/dependencies/usage）：\n{prompt}"},
-        ]).get("content") or ""
-        data = _extract_json(raw)
-        _validate_generated(data)
-
-        plugin_name = str(data.get("plugin_name") or "").strip()
-        main_py = data.get("main_py")
-        dependencies = data.get("dependencies") or []
-        meta = data.get("plugin_meta") or {}
-        usage = str(data.get("usage") or "").strip()
-
-        result = _load_generated_plugin(ctx, plugin_name, main_py, dependencies, meta)
-        msg = (f"✅ 插件生成并加载成功\n插件名: {plugin_name}\n"
-               f"显示名: {meta.get('name', plugin_name)} v{meta.get('version', '1.0.0')}\n"
-               f"位置: {result['plugin_path']}")
-        if dependencies:
-            msg += f"\n依赖: {', '.join(dependencies)}（自动安装到全局，冲突自动跳过）"
-        if usage:
-            msg += f"\n用法: {_truncate(usage, 300)}"
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None, message=msg)
-    except Exception as e:
-        ctx.log(f"生成插件失败: {e}\n{traceback.format_exc()}", level="error")
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message=f"❌ 生成插件失败: {_truncate(str(e), 500)}")
+def _loaded_plugins_text(ctx) -> str:
+    """当前已加载插件列表（注入对话上下文）"""
+    plugins = ctx._framework.plugin_loader.get_loaded_plugins()
+    if not plugins:
+        return "（当前没有已加载的插件）"
+    lines = ["当前已加载插件："]
+    for n, info in sorted(plugins.items()):
+        meta = info.get('meta', {})
+        lines.append(f"- {meta.get('name', n)} ({n}) v{meta.get('version', '?')}")
+    return "\n".join(lines)
 
 
 def handle_ai(event, match):
-    """通用 AI 对话 + 函数调用（ls/write/edit/rm）"""
+    """
+    通用 AI 对话 + 函数调用（ls/write/edit/rm/load_plugin/unload_plugin/reload_plugin/list_plugins）
+    超管在群内即可让 AI 写插件：/ai 写一个 xxx 插件
+    """
     prompt = _get_prompt(event, match, "/ai")
     if not prompt:
         ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message="用法: /ai <指令>\n例如:\n/ai 查看 plugins 目录下有哪些插件\n/ai 写一个 hello 插件\n/ai 修改 echo 插件，加个参数")
+                     message="用法: /ai <指令>\n例如:\n/ai 写一个每日早报插件，每天早上8点发天气\n/ai 修改 echo 插件，加个参数\n/ai 查看 plugins 目录下有哪些插件")
         return
     if not str(_get_config(ctx, "base_url", "")).strip():
         ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
@@ -516,16 +532,22 @@ def handle_ai(event, match):
         return
 
     ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                 message=f"🤖 已收到指令，LLM 处理中（可操作文件: ls/write/edit/rm）...\n{prompt}")
+                 message=f"🤖 已收到指令，AI 正在处理（可写文件并加载插件，通常需 1~2 分钟）...\n{prompt}")
     try:
         system = _build_system_prompt(ctx)
+        # 注入当前插件上下文，方便 LLM 判断是否重名/复用现有插件
+        user_content = (
+            f"{_loaded_plugins_text(ctx)}\n\n"
+            f"用户指令：{prompt}\n\n"
+            "（提示：如需写新插件，请遵循插件开发规范，用 write 创建文件后调用 load_plugin 加载）"
+        )
         messages = [
             {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_content},
         ]
         result = _chat_with_tools(ctx, messages)
         if not result.strip():
-            result = "（LLM 未返回文本内容）"
+            result = "（AI 未返回文本内容）"
         ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
                      message=_truncate(result))
     except Exception as e:
