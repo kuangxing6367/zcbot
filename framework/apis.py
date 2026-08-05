@@ -26,6 +26,7 @@ import yaml
 from flask import Flask, request, jsonify, send_from_directory, Response
 
 from framework.log_broker import log_broker
+from framework.dual_auth import DualRequestAuthSystem
 
 logger = logging.getLogger('zcbot')
 
@@ -60,6 +61,17 @@ def create_web_app(framework) -> Flask:
     def _clear_login_failures(ip: str):
         with _login_lock:
             _login_failures.pop(ip, None)
+
+    # ---- 双请求防破解认证系统 ----
+    dual_auth = DualRequestAuthSystem(framework.config.get('security', {}))
+
+    @app.before_request
+    def _global_blacklist_guard():
+        """全局黑名单拦截：被封禁的 IP 无法访问任何路由（白名单除外）"""
+        ip = get_client_ip()
+        if dual_auth.is_whitelisted(ip) or not dual_auth.is_blacklisted(ip):
+            return None
+        return jsonify({'code': 403, 'msg': '访问被拒绝'}), 403
 
     # ---- 工具函数 ----
 
@@ -527,6 +539,41 @@ def create_web_app(framework) -> Flask:
         audit_log(admin['id'], admin['username'], 'change_password', result='success')
 
         return jsonify({'code': 0, 'msg': '密码已修改'})
+
+    # ---- 双请求防破解认证 ----
+
+    @app.route('/api/auth', methods=['POST'])
+    def dual_request_auth():
+        """
+        双请求防破解认证入口
+        第一次请求：{"token": "<8位任意字符串>"}        → 返回 nonce
+        第二次请求：{"token": "<8192位Token>", "nonce": "<上一步nonce>"} → 校验通过返回迷惑性数据
+        """
+        client_ip = get_client_ip()
+        data = request.get_json(silent=True) or {}
+        token = data.get('token')
+        nonce = data.get('nonce')
+        status, resp = dual_auth.handle_request(client_ip, token, nonce)
+        return jsonify(resp), status
+
+    @app.route('/api/security/status', methods=['GET'])
+    @require_super
+    def security_status():
+        """查看双请求认证系统状态（风险 IP / 黑名单 / 配置）"""
+        return jsonify({'code': 0, 'data': dual_auth.get_status()})
+
+    @app.route('/api/security/unban', methods=['POST'])
+    @require_super
+    def security_unban():
+        """从永久黑名单中移除指定 IP"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        ip = str(data.get('ip') or '').strip()
+        if not ip:
+            return jsonify({'code': 400, 'msg': '缺少 ip'}), 400
+        ok = dual_auth.unblacklist(ip)
+        audit_log(admin['id'], admin['username'], 'security_unban', 'security', ip, {'existed': ok})
+        return jsonify({'code': 0, 'msg': f'IP [{ip}] 已{"从黑名单移除" if ok else "不在黑名单中"}'})
 
     # ---- 仪表盘 ----
 
@@ -2126,7 +2173,7 @@ def create_web_app(framework) -> Flask:
 
     # ---- 系统配置（config.yaml 分组读写）----
 
-    _YAML_SECTIONS = ('database', 'onebot', 'web', 'plugin', 'log', 'system')
+    _YAML_SECTIONS = ('database', 'onebot', 'web', 'plugin', 'log', 'system', 'security')
 
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth
