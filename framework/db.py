@@ -466,7 +466,7 @@ class Database:
 
     def query(self, sql: str, params: tuple = None) -> list:
         """查询多条记录，返回 list[dict]"""
-        def _do():
+        def _do(sql, params):
             conn = self._get_conn()
             cursor = conn.cursor()
             try:
@@ -479,11 +479,11 @@ class Database:
                 return rows
             finally:
                 cursor.close()
-        return self._run_with_reconnect(_do)
+        return self._run_with_reconnect(_do, sql, params)
 
     def query_one(self, sql: str, params: tuple = None) -> dict:
         """查询单条记录，返回 dict 或 None"""
-        def _do():
+        def _do(sql, params):
             conn = self._get_conn()
             cursor = conn.cursor()
             try:
@@ -498,7 +498,7 @@ class Database:
                 return row
             finally:
                 cursor.close()
-        return self._run_with_reconnect(_do)
+        return self._run_with_reconnect(_do, sql, params)
 
     def _exec(self, cursor, sql: str, params=None):
         """执行 sql，自动处理 params 为 None 的情况"""
@@ -509,7 +509,7 @@ class Database:
 
     def execute(self, sql: str, params: tuple = None) -> int:
         """执行插入/更新/删除，返回受影响行数"""
-        def _do():
+        def _do(sql, params):
             conn = self._get_conn()
             cursor = conn.cursor()
             try:
@@ -526,11 +526,11 @@ class Database:
                 raise
             finally:
                 cursor.close()
-        return self._run_with_reconnect(_do)
+        return self._run_with_reconnect(_do, sql, params)
 
     def execute_many(self, sql: str, params_list: list) -> int:
         """批量执行，返回受影响行数"""
-        def _do():
+        def _do(sql, params_list):
             conn = self._get_conn()
             cursor = conn.cursor()
             try:
@@ -553,11 +553,11 @@ class Database:
                 raise
             finally:
                 cursor.close()
-        return self._run_with_reconnect(_do)
+        return self._run_with_reconnect(_do, sql, params_list)
 
     def insert(self, sql: str, params: tuple = None) -> int:
         """插入并返回自增 ID"""
-        def _do():
+        def _do(sql, params):
             conn = self._get_conn()
             cursor = conn.cursor()
             try:
@@ -574,7 +574,7 @@ class Database:
                 raise
             finally:
                 cursor.close()
-        return self._run_with_reconnect(_do)
+        return self._run_with_reconnect(_do, sql, params)
 
     def get_connection(self):
         """获取原始连接（高级用法）"""
