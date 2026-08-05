@@ -133,12 +133,14 @@ class AstrBotHelpDrawer:
     # ---------------- 字体 & Logo ----------------
     def _load_fonts(self) -> None:
         try:
-            self.font_title = ImageFont.truetype(self.FONT_PATH_BOLD, 36)
-            self.font_subtitle = ImageFont.truetype(self.FONT_PATH_REGULAR, 18)
-            self.font_plugin_header = ImageFont.truetype(self.FONT_PATH_BOLD, 20)
-            self.font_command = ImageFont.truetype(self.FONT_PATH_BOLD, 15)
-            self.font_desc = ImageFont.truetype(self.FONT_PATH_REGULAR, 13)
-            self.font_footer = ImageFont.truetype(self.FONT_PATH_REGULAR, 12)
+            # 支持通过配置自定义字号（未配置则使用默认，整体比旧版缩小一号）
+            font_sizes = self.config.get("font_sizes") or {}
+            self.font_title = ImageFont.truetype(self.FONT_PATH_BOLD, int(font_sizes.get("title", 30)))
+            self.font_subtitle = ImageFont.truetype(self.FONT_PATH_REGULAR, int(font_sizes.get("subtitle", 15)))
+            self.font_plugin_header = ImageFont.truetype(self.FONT_PATH_BOLD, int(font_sizes.get("plugin_header", 17)))
+            self.font_command = ImageFont.truetype(self.FONT_PATH_BOLD, int(font_sizes.get("command", 13)))
+            self.font_desc = ImageFont.truetype(self.FONT_PATH_REGULAR, int(font_sizes.get("desc", 11)))
+            self.font_footer = ImageFont.truetype(self.FONT_PATH_REGULAR, int(font_sizes.get("footer", 11)))
         except Exception as e:
             logger.error("加载字体时出错: %s", e)
             raise
