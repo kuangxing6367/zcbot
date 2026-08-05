@@ -63,7 +63,7 @@ def create_web_app(framework) -> Flask:
             _login_failures.pop(ip, None)
 
     # ---- 双请求防破解认证系统 ----
-    dual_auth = DualRequestAuthSystem(framework.config.get('security', {}))
+    dual_auth = DualRequestAuthSystem(framework.config.get('security', {}), db=db)
 
     @app.before_request
     def _global_blacklist_guard():
@@ -561,6 +561,35 @@ def create_web_app(framework) -> Flask:
     def security_status():
         """查看双请求认证系统状态（风险 IP / 黑名单 / 配置）"""
         return jsonify({'code': 0, 'data': dual_auth.get_status()})
+
+    @app.route('/api/security/blacklist', methods=['GET'])
+    @require_super
+    def security_blacklist():
+        """查看 IP 黑名单列表（含来源/原因/过期时间）"""
+        return jsonify({'code': 0, 'data': dual_auth.get_blacklist()})
+
+    @app.route('/api/security/blacklist', methods=['POST'])
+    @require_super
+    def security_blacklist_add():
+        """手动将 IP 加入黑名单（可设置过期时间，不填则永久）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        ip = str(data.get('ip') or '').strip()
+        if not ip:
+            return jsonify({'code': 400, 'msg': '缺少 ip'}), 400
+        reason = str(data.get('reason') or '手动拉黑').strip()
+        # 支持过期时间：expires_in 秒 或 expires_at 时间字符串
+        expires_at = None
+        expires_in = data.get('expires_in')
+        if isinstance(expires_in, (int, float)) and expires_in > 0:
+            expires_at = time.time() + float(expires_in)
+        dual_auth.add_manual_blacklist(ip, reason, expires_at=expires_at)
+        audit_log(admin['id'], admin['username'], 'security_blacklist_add', 'security', ip,
+                  {'reason': reason, 'expires_in': expires_in}, 'success')
+        msg = f'IP [{ip}] 已加入黑名单'
+        if expires_in:
+            msg += f'（{int(expires_in)} 秒后自动解封）'
+        return jsonify({'code': 0, 'msg': msg})
 
     @app.route('/api/security/unban', methods=['POST'])
     @require_super
