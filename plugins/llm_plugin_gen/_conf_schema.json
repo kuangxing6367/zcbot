@@ -1,0 +1,30 @@
+{
+  "base_url": {
+    "type": "string",
+    "description": "OpenAI 兼容接口地址",
+    "default": "https://api.openai.com/v1",
+    "hint": "如 https://api.openai.com/v1，或本地 vllm/ollama: http://127.0.0.1:8000/v1"
+  },
+  "api_key": {
+    "type": "string",
+    "description": "API Key",
+    "default": "",
+    "hint": "本地模型可留空"
+  },
+  "model": {
+    "type": "string",
+    "description": "模型名",
+    "default": "gpt-4o-mini",
+    "hint": "如 gpt-4o-mini / deepseek-chat / qwen2.5"
+  },
+  "temperature": {
+    "type": "number",
+    "description": "采样温度（越低越稳定）",
+    "default": 0.3
+  },
+  "max_tokens": {
+    "type": "number",
+    "description": "最大生成 token 数",
+    "default": 8192
+  }
+}
