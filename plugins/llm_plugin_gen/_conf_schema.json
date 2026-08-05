@@ -26,5 +26,23 @@
     "type": "number",
     "description": "最大生成 token 数",
     "default": 8192
+  },
+  "persona": {
+    "type": "string",
+    "description": "人格设定（自定义 system prompt，可写中文）",
+    "default": "你是 ZCBOT OneBot QQ 机器人框架的插件开发专家，擅长编写高质量、健壮的 Python 插件。",
+    "hint": "留空使用默认人格"
+  },
+  "skills": {
+    "type": "string",
+    "description": "技能列表（每行一条，注入 system prompt）",
+    "default": "生成插件：根据用户需求生成符合框架规范的插件代码\n修改插件：阅读现有插件代码后修复 Bug / 增加功能\n文件操作：使用 ls/write/edit/rm 管理插件目录文件",
+    "hint": "每行一个技能，换行分隔"
+  },
+  "cwd": {
+    "type": "string",
+    "description": "LLM 文件操作的工作目录",
+    "default": "",
+    "hint": "留空默认项目根目录"
   }
 }
