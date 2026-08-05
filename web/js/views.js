@@ -152,11 +152,11 @@ Views.pluginDetail = async function (name) {
       <div class="flex wrap mb">
         ${d.has_yaml && github.repo ? `<button class="btn sm warn" onclick="Views.pluginUpdate('${name}')">GitHub 更新</button>` : ''}
         <button class="btn sm" onclick="Views.pluginReadme('${name}')">README</button>
-        <button class="btn sm" onclick="Views.installDeps('${name}')">安装依赖</button>
-        <button class="btn sm" onclick="Views.createVenv('${name}')">创建隔离环境</button>
+        <button class="btn sm" onclick="Views.installDeps('${name}')">安装依赖(全局)</button>
+        <button class="btn sm" onclick="Views.createVenv('${name}')">创建虚拟环境</button>
       </div>
       ${deps.has_missing ? `<div class="badge err mb" style="margin-bottom:8px">缺失依赖: ${escapeHtml(deps.missing.join(', '))}</div>` : ''}
-      ${deps.has_conflict ? `<div class="badge warn" style="margin-bottom:8px">版本冲突: ${escapeHtml((deps.conflicts || []).map(c => c.name + ' ' + c.required + ' (已装 ' + c.installed + ')').join('; '))}</div>` : ''}
+      ${deps.has_conflict ? `<div class="badge warn" style="margin-bottom:8px">版本冲突(已自动跳过): ${escapeHtml((deps.conflicts || []).map(c => c.name + ' ' + c.required + ' (已装 ' + c.installed + ')').join('; '))}</div>` : ''}
       ${github.repo ? `
         <div class="form-row"><label>GitHub 仓库</label><div class="mono small">${escapeHtml(github.repo)}@${escapeHtml(github.branch || 'main')}</div></div>` : ''}
       <div class="form-row"><label>依赖 (Python)</label><div class="small">${escapeHtml((d.dependencies && d.dependencies.python || []).join(', ') || '无')}</div></div>
@@ -329,21 +329,43 @@ Views.togglePlugin = async function (name, active) {
 };
 
 Views.deletePlugin = async function (name) {
-  if (!await confirmDialog(`确定删除插件 [${name}] 吗？\n代码目录与配置数据将一并删除，且不可恢复！`, '删除插件')) return;
-  const r = await api(`/api/plugins/${name}`, { method: 'DELETE' });
+  // 带选项的确认框：默认保留插件数据，可勾选一并删除
+  const mask = openModal(`
+    <div class="modal-head"><span>删除插件</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="margin-bottom:10px">确定删除插件 <b>${escapeHtml(name)}</b> 吗？<br>（代码与虚拟环境将删除，且不可恢复）</div>
+      <label class="form-row" style="align-items:center">
+        <input type="checkbox" id="delDataChk" style="width:auto">
+        <span class="ml">同时删除插件数据/配置文件（plugins_dat）</span>
+      </label>
+      <div class="small dim mt">不勾选则保留插件配置，便于以后重新安装时复用。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn danger" onclick="Views.confirmDeletePlugin('${name}')">删除</button>
+    </div>`);
+};
+
+Views.confirmDeletePlugin = async function (name) {
+  const deleteData = !!(document.getElementById('delDataChk') && document.getElementById('delDataChk').checked);
+  const r = await api(`/api/plugins/${name}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ delete_data: deleteData }),
+  });
+  closeModal();
   if (r && r.code === 0) { toast(r.msg, 'success'); Views.plugins(document.getElementById('view')); }
   else toast((r && r.msg) || '删除失败', 'error');
 };
 
 Views.installDeps = async function (name) {
-  if (!await confirmDialog(`确定自动安装 [${name}] 的缺失依赖吗？`)) return;
+  if (!await confirmDialog(`确定将 [${name}] 的缺失依赖安装到全局环境吗？\n（版本冲突的依赖会自动跳过，不覆盖全局包）`)) return;
   const r = await api(`/api/plugins/${name}/install_deps`, { method: 'POST' });
   if (r && r.code === 0) { toast(r.msg, 'success'); }
   else toast((r && r.msg) || '安装失败', 'error');
 };
 
 Views.createVenv = async function (name) {
-  if (!await confirmDialog(`为 [${name}] 创建隔离虚拟环境？\n可在独立环境中安装依赖，避免版本冲突（占用磁盘较大）。`)) return;
+  if (!await confirmDialog(`为 [${name}] 创建虚拟环境？\n将创建在 插件数据目录(plugins_dat) 下，并在其中安装依赖（占用磁盘较大）。`)) return;
   const r = await api(`/api/plugins/${name}/create_isolated_env`, { method: 'POST' });
   if (r && r.code === 0) { toast(r.msg, 'success'); }
   else toast((r && r.msg) || '创建失败', 'error');
@@ -772,8 +794,12 @@ Views.settings = async function (view) {
         </div>
         <div class="card">
           <div class="card-title">框架操作</div>
-          <button class="btn danger" onclick="Views.restartFramework()">重启框架</button>
-          <div class="small dim mt">重启将用当前 Python 解释器原地替换进程（os.execv），不依赖外部进程管理器。</div>
+          <div class="flex wrap mb">
+            <button class="btn" onclick="Views.checkFrameworkUpdate()">检查框架更新</button>
+            <button class="btn danger" onclick="Views.restartFramework()">重启框架</button>
+          </div>
+          <div id="fwUpdateInfo"></div>
+          <div class="small dim mt">更新框架仅覆盖代码（framework/web/main.py 等），自动保留 plugins/、data/、config.yaml；旧代码备份到 data/backups/，更新后需重启生效。</div>
         </div>
       </div>
       <div class="card">
@@ -863,6 +889,34 @@ Views.restartFramework = async function () {
   if (!await confirmDialog('确定重启框架吗？正在处理的消息可能丢失。', '重启框架')) return;
   const r = await api('/api/restart', { method: 'POST' });
   if (r && r.code === 0) toast(r.msg, 'success');
+};
+
+Views.checkFrameworkUpdate = async function () {
+  const el = document.getElementById('fwUpdateInfo');
+  if (el) el.innerHTML = '<div class="small dim">正在检查更新...</div>';
+  const r = await api('/api/framework/check_update');
+  if (!r || r.code !== 0) {
+    if (el) el.innerHTML = `<div class="badge err">${escapeHtml((r && r.msg) || '检查失败')}</div>`;
+    return;
+  }
+  const d = r.data;
+  const hasUp = d.has_update;
+  if (el) el.innerHTML = `
+    <div class="small mb">
+      本地: <span class="mono">${escapeHtml(d.local_commit)}</span>
+      &nbsp;|&nbsp; 最新: <span class="mono">${escapeHtml(d.latest_commit)}</span>
+      <div class="dim">${escapeHtml(d.commit_message)} · ${escapeHtml(d.author || '')} · ${escapeHtml(d.commit_date || '')}</div>
+    </div>
+    ${hasUp
+      ? `<button class="btn primary sm" onclick="Views.doFrameworkUpdate()">立即更新框架</button>`
+      : '<span class="badge ok">已是最新版本</span>'}`;
+};
+
+Views.doFrameworkUpdate = async function () {
+  if (!await confirmDialog('确定更新框架吗？\n将覆盖 framework/web/main.py 等代码，自动保留插件与配置，更新后需重启生效。', '更新框架')) return;
+  const r = await api('/api/framework/update', { method: 'POST' });
+  if (r && r.code === 0) { toast(r.msg, 'success'); Views.checkFrameworkUpdate(); }
+  else toast((r && r.msg) || '更新失败', 'error');
 };
 
 // 离开日志页时关闭 SSE / 运行状态定时器

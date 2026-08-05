@@ -462,7 +462,7 @@ class PluginLoader:
                 logger.warning(f"[{plugin_name}] 依赖安装失败: {dep} - {e}")
 
         return {
-            'success': len(failed) == 0 and len(result['conflicts']) == 0,
+            'success': len(failed) == 0,
             'installed': installed,
             'failed': failed,
             'conflicts': result['conflicts'],
@@ -500,27 +500,34 @@ class PluginLoader:
         return self.get_dep_status(plugin_name)
 
     def install_missing_deps(self, plugin_name: str) -> dict:
-        """一键安装插件缺失的依赖，安装成功后清除记录"""
+        """
+        一键安装插件缺失的依赖（基于全局环境），安装成功后清除缺失记录。
+        版本冲突的依赖自动跳过（不覆盖全局包），冲突记录保留展示。
+        """
         result = self.auto_install_dependencies(plugin_name)
         if result['success']:
-            self._record_dep_status(plugin_name, [], [])
+            self._record_dep_status(plugin_name, [], result.get('conflicts', []))
         return result
+
+    def _venv_dir(self, plugin_name: str) -> str:
+        """插件虚拟环境目录（统一存放于 plugins_dat/<插件名>/.venv，与代码分离）"""
+        return os.path.join(self._plugin_dat_dir(plugin_name), '.venv')
 
     def create_isolated_env(self, plugin_name: str) -> dict:
         """
-        为插件创建隔离虚拟环境，在 .venv 中安装所有依赖
-        合并所有依赖声明来源（requirements.txt + plugin.yaml）
-        解决版本冲突问题：插件在独立环境中运行，不影响全局包
+        为插件创建隔离虚拟环境（手动触发，Web UI 点击「创建虚拟环境」调用）
+        venv 创建在 plugins_dat/<插件名>/.venv，与插件代码目录分离。
         """
-        plugin_path = os.path.join(self.plugins_dir, plugin_name)
-        venv_path = os.path.join(plugin_path, '.venv')
+        # 确保 plugins_dat/<插件名> 目录存在
+        self.ensure_plugins_dat_dir(plugin_name)
+        venv_path = self._venv_dir(plugin_name)
 
         # 获取插件所有依赖（合并所有声明来源）
         deps = self._get_merged_dependencies(plugin_name)
 
         try:
             # 1. 创建虚拟环境
-            logger.info(f"[{plugin_name}] 正在创建隔离环境: {venv_path}")
+            logger.info(f"[{plugin_name}] 正在创建虚拟环境: {venv_path}")
             subprocess.check_call(
                 [sys.executable, '-m', 'venv', venv_path],
                 stdout=subprocess.DEVNULL,
@@ -543,11 +550,11 @@ class PluginLoader:
         将依赖安装到插件的隔离虚拟环境中
         :param plugin_name: 插件名
         :param deps: 依赖列表
-        :param venv_path: venv 路径，None 则自动判断
+        :param venv_path: venv 路径，None 则使用 plugins_dat/<插件名>/.venv
         :return: {'success': bool, 'venv_path': str, 'python': str, 'installed': list, 'failed': list}
         """
         if venv_path is None:
-            venv_path = os.path.join(self.plugins_dir, plugin_name, '.venv')
+            venv_path = self._venv_dir(plugin_name)
 
         if not os.path.isdir(venv_path):
             return {'success': False, 'error': f'venv 不存在: {venv_path}'}
@@ -599,8 +606,8 @@ class PluginLoader:
         }
 
     def remove_isolated_env(self, plugin_name: str) -> dict:
-        """删除插件的隔离虚拟环境（.venv）"""
-        venv_path = os.path.join(self.plugins_dir, plugin_name, '.venv')
+        """删除插件的隔离虚拟环境（plugins_dat/<插件名>/.venv）"""
+        venv_path = self._venv_dir(plugin_name)
         if not os.path.isdir(venv_path):
             return {'success': True, 'msg': '无隔离环境'}
         try:
@@ -614,7 +621,7 @@ class PluginLoader:
 
     def scan_venv_usage(self) -> dict:
         """
-        扫描所有插件的 .venv 隔离环境，返回磁盘占用信息
+        扫描所有插件的 .venv 隔离环境（plugins_dat/<插件名>/.venv），返回磁盘占用信息
         用于运维监控，防止香橙派等低磁盘设备空间被虚拟环境耗尽
         """
         result = {
@@ -622,12 +629,11 @@ class PluginLoader:
             'venv_count': 0,
             'details': [],
         }
-        if not os.path.isdir(self.plugins_dir):
+        if not os.path.isdir(self.plugins_dat_dir):
             return result
 
-        for name in os.listdir(self.plugins_dir):
-            plugin_dir = os.path.join(self.plugins_dir, name)
-            venv_path = os.path.join(plugin_dir, '.venv')
+        for name in os.listdir(self.plugins_dat_dir):
+            venv_path = os.path.join(self.plugins_dat_dir, name, '.venv')
             if not os.path.isdir(venv_path):
                 continue
 
@@ -846,10 +852,10 @@ class PluginLoader:
     def _add_venv_to_path(self, plugin_name: str) -> bool:
         """
         将插件的 venv site-packages 加入 sys.path，使其依赖在主进程中可见。
+        venv 位于 plugins_dat/<插件名>/.venv。
         返回 True 表示 venv 可用，False 表示 venv 不可用。
         """
-        plugin_path = os.path.join(self.plugins_dir, plugin_name)
-        venv_path = os.path.join(plugin_path, '.venv')
+        venv_path = self._venv_dir(plugin_name)
         if not os.path.isdir(venv_path):
             return False
 
@@ -925,44 +931,16 @@ class PluginLoader:
         if plugin_path not in sys.path:
             sys.path.insert(0, plugin_path)
 
-        # 读取插件配置文件，决定环境策略
+        # 读取插件配置文件
         yaml_data = self.read_plugin_yaml(plugin_name)
-        env_type = 'system'
-        if yaml_data and isinstance(yaml_data, dict):
-            env_type = yaml_data.get('environment', 'system')
 
-        # ====== 环境准备：venv 模式先激活虚拟环境 ======
-        venv_ready = False
-        if env_type == 'venv':
-            venv_ready = self._add_venv_to_path(plugin_name)
-            if not venv_ready:
-                logger.warning(f"[{plugin_name}] venv 不存在或已损坏，正在重新创建...")
-                result = self.create_isolated_env(plugin_name)
-                if result['success']:
-                    venv_ready = self._add_venv_to_path(plugin_name)
-                else:
-                    logger.error(f"[{plugin_name}] venv 重建失败: {result.get('error')}，回退到当前环境")
-
-        # ====== 依赖检查 + 自动安装 ======
+        # ====== 依赖检查 + 自动安装（基于全局环境） ======
+        # 说明：框架不再为插件自动创建/重建隔离虚拟环境；
+        # 依赖自动安装到全局环境，存在版本冲突的依赖自动跳过（不覆盖全局包），
+        # 如需隔离请手动点击「创建虚拟环境」。
         dep_result = self.check_dependencies(plugin_name)
         if dep_result.get('missing'):
-            if env_type == 'venv':
-                if not venv_ready:
-                    logger.warning(f"[{plugin_name}] venv 不可用，尝试重新创建...")
-                    result = self.create_isolated_env(plugin_name)
-                    if result['success']:
-                        venv_ready = self._add_venv_to_path(plugin_name)
-                if venv_ready:
-                    logger.info(f"[{plugin_name}] 依赖缺失，安装到隔离环境...")
-                    result = self.install_deps_to_venv(plugin_name, dep_result['missing'])
-                    if not result['success']:
-                        logger.warning(f"[{plugin_name}] 隔离环境安装失败，回退到当前环境")
-                        # 回退到系统安装
-                        pip_install_all(plugin_name, dep_result['missing'])
-                else:
-                    pip_install_all(plugin_name, dep_result['missing'])
-            else:
-                pip_install_all(plugin_name, dep_result['missing'])
+            pip_install_all(plugin_name, dep_result['missing'])
 
             # 重新检查依赖
             dep_result = self.check_dependencies(plugin_name)
@@ -1046,16 +1024,11 @@ class PluginLoader:
             except ImportError as e:
                 logger.warning(f"[{plugin_name}] 导入失败（第{attempt + 1}次）: {e}")
                 if attempt == 0:
-                    # 第一次失败：尝试重新安装依赖再试一次
-                    logger.info(f"[{plugin_name}] 尝试重新安装依赖...")
-                    if env_type == 'venv' and venv_ready:
-                        result = self.create_isolated_env(plugin_name)
-                        if result['success']:
-                            self._add_venv_to_path(plugin_name)
-                    else:
-                        dep_result2 = self.check_dependencies(plugin_name)
-                        if dep_result2.get('missing'):
-                            pip_install_all(plugin_name, dep_result2['missing'])
+                    # 第一次失败：尝试重新安装缺失依赖（全局环境）再试一次
+                    logger.info(f"[{plugin_name}] 尝试重新安装缺失依赖...")
+                    dep_result2 = self.check_dependencies(plugin_name)
+                    if dep_result2.get('missing'):
+                        pip_install_all(plugin_name, dep_result2['missing'])
                     continue
                 else:
                     logger.error(
