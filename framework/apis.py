@@ -62,6 +62,23 @@ def create_web_app(framework) -> Flask:
         with _login_lock:
             _login_failures.pop(ip, None)
 
+    # ---- 公开接口限速（/api/version 等无需认证端点防刷）----
+    _pub_rate = {}            # ip -> list[timestamp]
+    _pub_rate_lock = threading.Lock()
+    _PUB_RATE_MAX = 30        # 每窗口最多请求数
+    _PUB_RATE_WINDOW = 60     # 窗口秒数
+
+    def _check_public_rate(ip: str) -> bool:
+        """滑动窗口限速：同一 IP 每 60 秒最多 _PUB_RATE_MAX 次"""
+        now = time.time()
+        with _pub_rate_lock:
+            ts_list = [t for t in _pub_rate.get(ip, []) if now - t < _PUB_RATE_WINDOW]
+            if len(ts_list) >= _PUB_RATE_MAX:
+                return False
+            ts_list.append(now)
+            _pub_rate[ip] = ts_list
+            return True
+
     # ---- 双请求防破解认证系统 ----
     dual_auth = DualRequestAuthSystem(framework.config.get('security', {}), db=db)
 
@@ -77,6 +94,21 @@ def create_web_app(framework) -> Flask:
 
     def _project_root() -> str:
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _get_framework_local_version() -> str:
+        """读取本地 VERSION 文件（随 ZIP 更新自动覆盖，不依赖 .git）"""
+        try:
+            with open(os.path.join(_project_root(), 'VERSION'), 'r', encoding='utf-8') as f:
+                return f.read().strip()
+        except Exception:
+            return ''
+
+    def _parse_version_tuple(v: str):
+        """版本字符串 → 可比较元组（提取所有数字段），如 0.0.1-alpha.1-build.5 → (0,0,1,1,5)"""
+        if not v:
+            return None
+        nums = re.findall(r'\d+', v)
+        return tuple(int(n) for n in nums) if nums else None
 
     def _data_dir() -> str:
         d = os.path.join(_project_root(), 'data')
@@ -735,7 +767,9 @@ def create_web_app(framework) -> Flask:
 
         # 框架信息
         data['framework_name'] = 'ZCBOT'
-        data['framework_version'] = '1.0.0'
+        fw_ver = _get_framework_local_version()
+        data['framework_version'] = fw_ver or 'unknown'
+        data['framework_alpha'] = 'alpha' in fw_ver
         data['github_repo'] = 'https://github.com/kuangxing6367/zcbot'
 
         return jsonify({'code': 0, 'data': data})
@@ -2500,7 +2534,7 @@ def create_web_app(framework) -> Flask:
     # 框架源码更新白名单：只覆盖这些代码/配置文件，用户数据一律跳过
     _FW_UPDATE_INCLUDE = {
         'framework', 'web', 'sql', 'main.py', 'requirements.txt',
-        'start.sh', '.gitignore', 'README.md', 'LICENSE',
+        'start.sh', '.gitignore', 'README.md', 'LICENSE', 'VERSION',
     }
 
     def _get_framework_local_commit() -> str:
@@ -2523,10 +2557,25 @@ def create_web_app(framework) -> Flask:
         except Exception:
             return ''
 
+    @app.route('/api/version', methods=['GET'])
+    def public_version():
+        """公开版本信息（登录页/未登录页展示，无需认证；限速防刷）"""
+        if not _check_public_rate(get_client_ip()):
+            return jsonify({'code': 429, 'msg': '请求过于频繁，请稍后再试'}), 429
+        ver = _get_framework_local_version()
+        return jsonify({
+            'code': 0,
+            'data': {
+                'name': 'ZCBOT',
+                'version': ver or 'unknown',
+                'alpha': 'alpha' in ver,
+            }
+        })
+
     @app.route('/api/framework/check_update', methods=['GET'])
     @require_auth
     def check_framework_update():
-        """检查框架是否有更新（对比 GitHub main 分支最新提交）"""
+        """检查框架是否有更新（对比 GitHub VERSION 版本号；VERSION 缺失时回退 commit 对比）"""
         repo = 'kuangxing6367/zcbot'
         branch = 'main'
         try:
@@ -2543,19 +2592,45 @@ def create_web_app(framework) -> Flask:
             commit_date = data.get('commit', {}).get('author', {}).get('date', '')
             author = data.get('commit', {}).get('author', {}).get('name', '')
 
+            # 远程版本号（raw.githubusercontent.com 的 VERSION 文件）
+            remote_version = ''
+            try:
+                vresp = requests.get(
+                    f"https://raw.githubusercontent.com/{repo}/{branch}/VERSION",
+                    timeout=15,
+                )
+                if vresp.status_code == 200:
+                    remote_version = vresp.text.strip()
+            except Exception:
+                pass
+
+            local_ver = _get_framework_local_version()
             local_sha = _get_framework_local_commit()
+
+            # 版本号对比（主依据）；本地/远程版本缺失时回退到 commit 对比
+            lt = _parse_version_tuple(local_ver)
+            rt = _parse_version_tuple(remote_version)
+            if lt is not None and rt is not None:
+                n = max(len(lt), len(rt))
+                has_update = (rt + (0,) * (n - len(rt))) > (lt + (0,) * (n - len(lt)))
+            elif local_sha and latest_sha:
+                has_update = local_sha != latest_sha
+            else:
+                has_update = None  # 无法检测（本地无版本信息，前端提示走 ZIP 更新）
 
             return jsonify({
                 'code': 0,
                 'data': {
                     'repo': repo,
                     'branch': branch,
+                    'local_version': local_ver or '未知',
+                    'latest_version': remote_version or '未知',
                     'local_commit': local_sha or '未知',
                     'latest_commit': latest_sha,
                     'commit_message': commit_msg,
                     'commit_date': commit_date,
                     'author': author,
-                    'has_update': bool(local_sha) and local_sha != latest_sha,
+                    'has_update': has_update,
                 }
             })
         except requests.exceptions.Timeout:
