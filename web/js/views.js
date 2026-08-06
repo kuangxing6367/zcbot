@@ -624,7 +624,7 @@ Views.deleteTask = async function (id) {
 };
 
 /* ═══════════════ 日志中心 ═══════════════ */
-let _logCategory = '', _logLevel = '', _logKeyword = '', _logAuto = true, _logEventSource = null;
+let _logCategory = '', _logLevel = '', _logKeyword = '', _logAuto = true, _logLastSeq = 0, _logPollTimer = null;
 
 Views.logs = async function (view) {
   _logCategory = ''; _logLevel = ''; _logKeyword = ''; _logAuto = true;
@@ -655,15 +655,13 @@ Views.logs = async function (view) {
 
   // 先加载历史
   await Views.loadLogs(true);
-  // SSE 实时推送
-  _logEventSource = new EventSource('/api/logs/sse?token=' + encodeURIComponent(getToken()));
-  _logEventSource.onmessage = (e) => {
-    try {
-      const entry = JSON.parse(e.data);
-      Views.appendLog(entry);
-    } catch (err) { /* ignore */ }
-  };
-  _logEventSource.onerror = () => { /* 断线由 EventSource 自动重连 */ };
+  // 轮询增量日志（不用 SSE 长连接，避免占满 waitress 工作线程导致 WebUI 卡死）
+  _logPollTimer = setInterval(async () => {
+    const res = await api('/api/runtime_logs?after_seq=' + _logLastSeq + '&limit=100');
+    const logs = (res && res.data) || [];
+    logs.forEach(Views.appendLog);
+    if (res && res.latest_seq) _logLastSeq = res.latest_seq;
+  }, 2000);
 };
 
 Views.appendLog = function (entry) {
@@ -696,6 +694,7 @@ Views.loadLogs = async function () {
   params.set('limit', '200');
   const res = await api('/api/runtime_logs?' + params.toString());
   const logs = (res && res.data) || [];
+  if (res && res.latest_seq) _logLastSeq = res.latest_seq;
   box.innerHTML = '';
   logs.forEach(Views.appendLog);
   if (box.children.length === 0) box.innerHTML = '<div class="empty">暂无日志</div>';
@@ -923,9 +922,9 @@ Views.doFrameworkUpdate = async function () {
   else toast((r && r.msg) || '更新失败', 'error');
 };
 
-// 离开日志页时关闭 SSE / 运行状态定时器
+// 离开日志页时关闭轮询定时器 / 运行状态定时器
 window.addEventListener('hashchange', () => {
-  if (_logEventSource) { _logEventSource.close(); _logEventSource = null; }
+  if (_logPollTimer) { clearInterval(_logPollTimer); _logPollTimer = null; }
   if (window._rtTimer) { clearInterval(window._rtTimer); window._rtTimer = null; }
 });
 
