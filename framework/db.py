@@ -299,6 +299,14 @@ class Database:
         self._read_timeout = float(config.get('read_timeout', 30))     # 读超时（秒），避免断连后无限卡住
         self._write_timeout = float(config.get('write_timeout', 30))   # 写超时（秒）
         self._max_reconnect = int(config.get('max_reconnect', 3))      # 单次操作最大自动重连次数
+        # MySQL 连接池参数（DBUtils PooledDB，替代每线程一连接方案）
+        self._pool_max = int(config.get('pool_size', 10) or 10)           # 最大连接数
+        self._pool_min_cached = int(config.get('min_cached', 0) or 0)     # 最小空闲连接
+        self._pool_max_cached = int(config.get('max_cached', 0) or 0)     # 最大空闲连接
+        if self._pool_max_cached <= 0:
+            # 未配置时默认与最大连接数一致（避免默认 0 导致空闲连接被全部回收、频繁新建）
+            self._pool_max_cached = self._pool_max
+        self._pool = None
 
         if self.db_type == 'mysql':
             self._init_mysql()
@@ -324,7 +332,7 @@ class Database:
         logger.info(f"SQLite 数据库已初始化: {db_path}")
 
     def _init_mysql(self):
-        """初始化 MySQL（检测到 MySQL 配置时，自动安装 pymysql）"""
+        """初始化 MySQL 连接池（检测到 MySQL 配置时，自动安装 pymysql/DBUtils）"""
         try:
             import pymysql
             from pymysql.cursors import DictCursor
@@ -353,6 +361,39 @@ class Database:
                 logger.error(f"pymysql 自动安装异常: {e}")
                 raise ImportError(f"无法自动安装 pymysql: {e}")
 
+        # 创建 DBUtils 连接池（真正限制连接数：空闲回收、坏连接自动重建、池满阻塞）
+        try:
+            from dbutils.pooled_db import PooledDB
+        except ImportError:
+            logger.error("缺少 DBUtils，请手动执行: pip install DBUtils")
+            raise ImportError("缺少 DBUtils，请手动执行: pip install DBUtils")
+        self._pool = PooledDB(
+            creator=self._pymysql,
+            maxconnections=self._pool_max,          # 最大连接数（pool_size）
+            mincached=self._pool_min_cached,        # 启动即建的最小空闲连接（min_cached）
+            maxcached=self._pool_max_cached,        # 最大空闲连接，超过自动关闭释放（max_cached）
+            maxshared=0,
+            blocking=True,                          # 连接全部占用时阻塞等待（而非报错）
+            setsession=[],
+            reset=True,                             # 借出时回滚残留事务
+            ping=1,                                 # 每次借出 ping 验证，坏连接自动丢弃重建
+            host=self.config.get('host', '127.0.0.1'),
+            port=int(self.config.get('port', 3306)),
+            user=self.config.get('user', 'root'),
+            password=self.config.get('password', ''),
+            database=self.config.get('database', 'zcbot'),
+            charset=self.config.get('charset', 'utf8mb4'),
+            cursorclass=self._DictCursor,
+            autocommit=True,
+            connect_timeout=self._connect_timeout,
+            read_timeout=self._read_timeout,
+            write_timeout=self._write_timeout,
+        )
+        logger.info(
+            f"MySQL 连接池已初始化: max={self._pool_max}, "
+            f"min_cached={self._pool_min_cached}, max_cached={self._pool_max_cached}"
+        )
+
     def _get_conn_sqlite(self):
         """获取 SQLite 连接（线程本地）"""
         conn = getattr(self._local, 'conn', None)
@@ -371,58 +412,21 @@ class Database:
 
     def _get_conn_mysql(self):
         """
-        获取 MySQL 连接
-        自动保活：连接空闲超过 ping_interval 时先 ping 检测，
-        连接被服务端断开（wait_timeout/重启/网络中断）则自动重连。
+        从连接池借出连接（PooledDB 自动处理：ping 保活、坏连接丢弃重建、
+        空闲连接按 maxcached 回收、连接数不超过 pool_size）。
+        归还方式：调用方在 finally 中 conn.close()（对池而言是"归还"而非真关闭）。
         """
-        conn = getattr(self._local, 'conn', None)
-        now = time.time()
-        last_use = getattr(self._local, 'last_use', 0.0)
-
-        if conn is not None and conn.open:
-            # 空闲超过阈值 → ping 检测（ping 失败会抛异常，触发重连）
-            if now - last_use >= self._ping_interval:
-                try:
-                    conn.ping(reconnect=True)
-                except Exception as e:
-                    logger.warning(f"MySQL 连接已失效，正在自动重连: {e}")
-                    self._close_thread_conn()
-                    conn = None
-            else:
-                return conn
-
-        if conn is None:
-            try:
-                conn = self._pymysql.connect(
-                    host=self.config.get('host', '127.0.0.1'),
-                    port=int(self.config.get('port', 3306)),
-                    user=self.config.get('user', 'root'),
-                    password=self.config.get('password', ''),
-                    database=self.config.get('database', 'zcbot'),
-                    charset=self.config.get('charset', 'utf8mb4'),
-                    cursorclass=self._DictCursor,
-                    autocommit=True,
-                    connect_timeout=self._connect_timeout,
-                    read_timeout=self._read_timeout,
-                    write_timeout=self._write_timeout,
-                )
-                self._local.conn = conn
-                self._local.last_use = time.time()
-                logger.info("MySQL 连接已建立")
-            except Exception as e:
-                logger.error(f"MySQL 连接建立失败: {e}")
-                raise
-        return conn
+        if self._pool is None:
+            raise RuntimeError("MySQL 连接池未初始化")
+        try:
+            return self._pool.connection()
+        except Exception as e:
+            logger.error(f"从连接池获取 MySQL 连接失败: {e}")
+            raise
 
     def _close_thread_conn(self):
-        """关闭并丢弃当前线程缓存的连接（下次操作自动重连）"""
-        conn = getattr(self._local, 'conn', None)
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        self._local.conn = None
+        """连接池接管后无需手动关闭连接（坏连接由 PooledDB 借出时 ping 检测并重建）"""
+        pass
 
     def _mark_conn_used(self):
         """记录连接最近使用时间（避免频繁 ping）"""
@@ -494,6 +498,8 @@ class Database:
                 return rows
             finally:
                 cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
         return self._run_with_reconnect(_do, sql, params)
 
     def query_one(self, sql: str, params: tuple = None) -> dict:
@@ -515,6 +521,8 @@ class Database:
                 return row
             finally:
                 cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
         return self._run_with_reconnect(_do, sql, params)
 
     def _exec(self, cursor, sql: str, params=None):
@@ -545,6 +553,8 @@ class Database:
                 raise
             finally:
                 cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
         return self._run_with_reconnect(_do, sql, params)
 
     def execute_many(self, sql: str, params_list: list) -> int:
@@ -574,6 +584,8 @@ class Database:
                 raise
             finally:
                 cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
         return self._run_with_reconnect(_do, sql, params_list)
 
     def insert(self, sql: str, params: tuple = None) -> int:
@@ -597,6 +609,8 @@ class Database:
                 raise
             finally:
                 cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
         return self._run_with_reconnect(_do, sql, params)
 
     def get_connection(self):
@@ -636,14 +650,36 @@ class Database:
     @property
     def pool_status(self) -> dict:
         """获取连接池状态"""
+        if self.db_type == 'mysql' and self._pool is not None:
+            try:
+                checked_out = len(getattr(self._pool, '_usage', {}))
+                idle = len(getattr(self._pool, '_idle_cache', []))
+                return {
+                    'type': self.db_type,
+                    'max': self._pool_max,
+                    'min_cached': self._pool_min_cached,
+                    'max_cached': self._pool_max_cached,
+                    'checked_out': checked_out,
+                    'idle': idle,
+                    'total': checked_out + idle,
+                }
+            except Exception:
+                pass
         return {
             'type': self.db_type,
             'path': getattr(self, '_db_path', None),
         }
 
     def close(self):
-        """关闭连接"""
-        self._close_thread_conn()
+        """关闭连接：MySQL 关闭整个连接池，SQLite 关闭当前线程连接"""
+        if self.db_type == 'mysql':
+            if self._pool is not None:
+                try:
+                    self._pool.close()
+                except Exception as e:
+                    logger.warning(f"关闭 MySQL 连接池失败: {e}")
+        else:
+            self._close_thread_conn()
 
 
 # ── SQL 辅助函数 ──────────────────────────────────────────────────
