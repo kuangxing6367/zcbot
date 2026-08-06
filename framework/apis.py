@@ -2583,16 +2583,29 @@ def create_web_app(framework) -> Flask:
             local_sha = _get_framework_local_commit()
             lt = _parse_version_tuple(local_ver)
 
-            # 主依据：GitHub 最新 Release（tag_name 即版本号）
+            # 主依据：GitHub Release 列表（tag_name 即版本号，含 pre-release）
+            # 不用 /releases/latest：它会跳过 pre-release，导致 alpha 版检测不到。
+            # 从所有 Release 中取版本号最高的一个（而非发布时间最新，避免低版本覆盖）。
             release = None
             try:
                 rresp = requests.get(
-                    f"https://api.github.com/repos/{repo}/releases/latest",
+                    f"https://api.github.com/repos/{repo}/releases?per_page=30",
                     headers={'Accept': 'application/vnd.github+json'},
                     timeout=15,
                 )
                 if rresp.status_code == 200:
-                    release = rresp.json()
+                    releases = rresp.json()
+                    if isinstance(releases, list) and releases:
+                        best = None
+                        best_t = None
+                        for rel in releases:
+                            t = rel.get('tag_name') or ''
+                            tv = _parse_version_tuple(t[1:] if t.startswith('v') else t)
+                            if tv is None:
+                                continue
+                            if best_t is None or tv > best_t:
+                                best, best_t = rel, tv
+                        release = best
             except Exception:
                 pass
 
