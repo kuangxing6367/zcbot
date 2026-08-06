@@ -2575,10 +2575,56 @@ def create_web_app(framework) -> Flask:
     @app.route('/api/framework/check_update', methods=['GET'])
     @require_auth
     def check_framework_update():
-        """检查框架是否有更新（对比 GitHub VERSION 版本号；VERSION 缺失时回退 commit 对比）"""
+        """检查框架是否有更新（主依据 GitHub 最新 Release 版本号；无 Release 时回退 commit 对比）"""
         repo = 'kuangxing6367/zcbot'
         branch = 'main'
         try:
+            local_ver = _get_framework_local_version()
+            local_sha = _get_framework_local_commit()
+            lt = _parse_version_tuple(local_ver)
+
+            # 主依据：GitHub 最新 Release（tag_name 即版本号）
+            release = None
+            try:
+                rresp = requests.get(
+                    f"https://api.github.com/repos/{repo}/releases/latest",
+                    headers={'Accept': 'application/vnd.github+json'},
+                    timeout=15,
+                )
+                if rresp.status_code == 200:
+                    release = rresp.json()
+            except Exception:
+                pass
+
+            if release:
+                tag = release.get('tag_name', '') or ''
+                remote_version = tag[1:] if tag.startswith('v') else tag
+                rt = _parse_version_tuple(remote_version)
+                if lt is not None and rt is not None:
+                    n = max(len(lt), len(rt))
+                    has_update = (rt + (0,) * (n - len(rt))) > (lt + (0,) * (n - len(lt)))
+                else:
+                    has_update = None  # 本地版本缺失，无法判断
+                body = release.get('body') or ''
+                name = (release.get('name') or '').strip()
+                commit_msg = name or (body.split('\n')[0] if body else '') or f"Release {tag}"
+                return jsonify({
+                    'code': 0,
+                    'data': {
+                        'repo': repo,
+                        'branch': branch,
+                        'local_version': local_ver or '未知',
+                        'latest_version': remote_version or '未知',
+                        'local_commit': local_sha or '未知',
+                        'latest_commit': tag,
+                        'commit_message': commit_msg,
+                        'commit_date': release.get('published_at', ''),
+                        'author': (release.get('author') or {}).get('login', ''),
+                        'has_update': has_update,
+                    }
+                })
+
+            # 回退：仓库无任何 Release → 按 main 分支最新提交对比
             api_url = f"https://api.github.com/repos/{repo}/commits/{branch}"
             resp = requests.get(api_url, headers={'Accept': 'application/vnd.github.v3+json'}, timeout=15)
             if resp.status_code == 404:
@@ -2591,32 +2637,7 @@ def create_web_app(framework) -> Flask:
             commit_msg = data.get('commit', {}).get('message', '').split('\n')[0]
             commit_date = data.get('commit', {}).get('author', {}).get('date', '')
             author = data.get('commit', {}).get('author', {}).get('name', '')
-
-            # 远程版本号（raw.githubusercontent.com 的 VERSION 文件）
-            remote_version = ''
-            try:
-                vresp = requests.get(
-                    f"https://raw.githubusercontent.com/{repo}/{branch}/VERSION",
-                    timeout=15,
-                )
-                if vresp.status_code == 200:
-                    remote_version = vresp.text.strip()
-            except Exception:
-                pass
-
-            local_ver = _get_framework_local_version()
-            local_sha = _get_framework_local_commit()
-
-            # 版本号对比（主依据）；本地/远程版本缺失时回退到 commit 对比
-            lt = _parse_version_tuple(local_ver)
-            rt = _parse_version_tuple(remote_version)
-            if lt is not None and rt is not None:
-                n = max(len(lt), len(rt))
-                has_update = (rt + (0,) * (n - len(rt))) > (lt + (0,) * (n - len(lt)))
-            elif local_sha and latest_sha:
-                has_update = local_sha != latest_sha
-            else:
-                has_update = None  # 无法检测（本地无版本信息，前端提示走 ZIP 更新）
+            has_update = bool(local_sha) and local_sha != latest_sha
 
             return jsonify({
                 'code': 0,
@@ -2624,7 +2645,7 @@ def create_web_app(framework) -> Flask:
                     'repo': repo,
                     'branch': branch,
                     'local_version': local_ver or '未知',
-                    'latest_version': remote_version or '未知',
+                    'latest_version': '未知（仓库无 Release）',
                     'local_commit': local_sha or '未知',
                     'latest_commit': latest_sha,
                     'commit_message': commit_msg,
