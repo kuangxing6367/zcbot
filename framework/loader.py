@@ -970,6 +970,9 @@ class PluginLoader:
                     return False
 
                 module = importlib.util.module_from_spec(spec)
+                # 注册到 sys.modules（import 机制要求；与卸载清理 loader.py 的
+                # sys.modules.pop(f"plugin_{plugin_name}") 对应）
+                sys.modules[spec.name] = module
                 spec.loader.exec_module(module)
 
                 # 检查 register 函数
