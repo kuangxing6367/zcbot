@@ -67,6 +67,11 @@ log:
   log_raw_message: true      # 是否记录收到的原始消息内容
   log_sent_message: true     # 是否记录发送到 OneBot11 的消息内容
 
+# ── GitHub 加速 ─────────────────────────────────────────────
+# 插件市场 / 插件下载 / 框架更新的 GitHub 加速代理地址
+# 留空则使用内置 ghproxy 镜像回退；国内网络直连 GitHub 慢/失败时填写，如 https://ghproxy.net
+github_proxy: ""
+
 # ── 系统配置 ────────────────────────────────────────────────
 system:
   show_cpu: true             # 仪表盘显示 CPU 使用率
