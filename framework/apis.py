@@ -271,6 +271,34 @@ def create_web_app(framework) -> Flask:
         },
     ]
 
+    def _github_proxy() -> str:
+        """读取配置的 GitHub 加速代理地址（config.yaml github_proxy，留空则走内置镜像回退）"""
+        try:
+            return str(framework.config.get('github_proxy', '') or '').strip().rstrip('/')
+        except Exception:
+            return ''
+
+    def _github_url_candidates(url: str) -> list:
+        """
+        生成候选下载地址（按优先级）：配置的加速代理 → 内置 ghproxy 镜像 → 直连 GitHub。
+        参考 AstrBot 的 GitHub 加速方案：代理前缀形式为 {host}/https://{原地址}
+        """
+        candidates = []
+        proxy = _github_proxy()
+        if proxy:
+            candidates.append(f"{proxy}/https://{url}")
+        for mirror in _MIRROR_MARKETS:
+            mirror_host = mirror['url'].split('/')[2]
+            candidates.append(f"https://{mirror_host}/https://{url}")
+        candidates.append(url)
+        # 去重保序
+        seen, out = set(), []
+        for u in candidates:
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+        return out
+
     def _fetch_market_source(source: dict) -> list:
         """拉取单个 registry 源的插件列表"""
         url = (source.get('url') or '').strip()
@@ -290,10 +318,19 @@ def create_web_app(framework) -> Flask:
         return result
 
     def _market_installed_set() -> set:
-        """当前已安装的插件名集合（来自 DB plugins 表）"""
+        """
+        当前已安装的插件名集合（磁盘为准：目录存在且含 main.py）。
+        不用 DB plugins 表：目录被删/损坏时 DB 残留会导致市场显示"已安装"但实际没装。
+        """
         try:
-            rows = db.query("SELECT plugin_name FROM plugins")
-            return {r['plugin_name'] for r in rows}
+            result = set()
+            if os.path.isdir(plugins_dir):
+                for name in os.listdir(plugins_dir):
+                    if os.path.isfile(os.path.join(plugins_dir, name, 'main.py')):
+                        result.add(name)
+            # 兜底：已加载的插件
+            result.update(framework.plugin_loader.get_loaded_plugins().keys())
+            return result
         except Exception:
             return set()
 
@@ -335,16 +372,12 @@ def create_web_app(framework) -> Flask:
             if not files:
                 return False, f'子目录不存在或无文件: {sub_path or "/"}'
 
-            # 逐个 raw 下载
+            # 逐个 raw 下载（代理 → 镜像 → 直连）
             raw_base = f"https://raw.githubusercontent.com/{repo}/{branch}"
             os.makedirs(target_dir, exist_ok=True)
             for src_path, rel in files:
                 raw_url = f"{raw_base}/{src_path}"
-                urls = [raw_url]
-                for mirror in _MIRROR_MARKETS:
-                    mirror_host = mirror['url'].split('/')[2]
-                    urls.append(raw_url.replace('https://raw.githubusercontent.com/',
-                                                f'https://{mirror_host}/https://raw.githubusercontent.com/'))
+                urls = _github_url_candidates(raw_url)
                 got = False
                 last_err = ''
                 for u in urls:
@@ -388,12 +421,9 @@ def create_web_app(framework) -> Flask:
         if ok:
             return True, ''
 
-        # 方式二：整仓 ZIP 回退
+        # 方式二：整仓 ZIP 回退（代理 → 镜像 → 直连）
         zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
-        urls_to_try = [zip_url]
-        for mirror in _MIRROR_MARKETS:
-            mirror_host = mirror['url'].split('/')[2]
-            urls_to_try.append(zip_url.replace('https://github.com/', f'https://{mirror_host}/https://github.com/'))
+        urls_to_try = _github_url_candidates(zip_url)
 
         last_err = f'API 方式失败: {msg}' if msg else ''
         for url in urls_to_try:
@@ -837,6 +867,10 @@ def create_web_app(framework) -> Flask:
             loaded = framework.plugin_loader.get_loaded_plugins()
             for r in rows:
                 r['is_loaded'] = r['plugin_name'] in loaded
+                # 幽灵插件标记：DB 有记录但代码目录/main.py 缺失（如 .bak 误注册后目录被清）
+                r['dir_missing'] = not os.path.isfile(
+                    os.path.join(framework.plugin_loader.plugins_dir, r['plugin_name'], 'main.py')
+                )
                 r['has_readme'] = os.path.isfile(
                     os.path.join(framework.plugin_loader.plugins_dat_dir, r['plugin_name'], 'README.md')
                 )
@@ -1352,18 +1386,29 @@ def create_web_app(framework) -> Flask:
             try:
                 ok_dl, dl_msg = _download_plugin_tree(repo, branch, sub_path, target_dir)
                 if not ok_dl:
-                    # 回退：整仓 ZIP
+                    # 回退：整仓 ZIP（代理 → 镜像 → 直连）
                     zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
-                    logger.info(f"文件树方式失败（{dl_msg}），回退 ZIP: {zip_url}")
-                    resp = requests.get(zip_url, timeout=60, stream=True)
-                    if resp.status_code == 404:
-                        raise RuntimeError(f'仓库或分支不存在: {repo}@{branch}')
-                    if resp.status_code != 200:
-                        raise RuntimeError(f'下载失败: HTTP {resp.status_code}')
-                    tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        tmp_zip.write(chunk)
-                    tmp_zip.close()
+                    logger.info(f"文件树方式失败（{dl_msg}），回退 ZIP")
+                    tmp_zip = None
+                    last_zip_err = ''
+                    for zurl in _github_url_candidates(zip_url):
+                        try:
+                            resp = requests.get(zurl, timeout=60, stream=True)
+                        except Exception as e:
+                            last_zip_err = str(e)
+                            continue
+                        if resp.status_code == 404:
+                            raise RuntimeError(f'仓库或分支不存在: {repo}@{branch}')
+                        if resp.status_code != 200:
+                            last_zip_err = f'下载失败: HTTP {resp.status_code}'
+                            continue
+                        tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+                        for chunk in resp.iter_content(chunk_size=8192):
+                            tmp_zip.write(chunk)
+                        tmp_zip.close()
+                        break
+                    if tmp_zip is None:
+                        raise RuntimeError(f'ZIP 下载失败: {last_zip_err}')
                     try:
                         with zipfile.ZipFile(tmp_zip.name, 'r') as zf:
                             names = zf.namelist()
@@ -1406,10 +1451,19 @@ def create_web_app(framework) -> Flask:
             # 重新加载插件
             if framework.plugin_loader.load_plugin(plugin_name):
                 framework.plugin_loader.register_commands(plugin_name)
+                # 更新成功：清理 .bak 残留，避免被 discover() 当成插件加载
+                if backup_dir and os.path.isdir(backup_dir):
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                    logger.info(f"[{plugin_name}] 已清理更新前的代码备份: {backup_dir}")
                 audit_log(admin['id'], admin['username'], 'update_plugin_github',
                           'plugin', plugin_name, {'repo': repo, 'branch': branch}, 'success')
                 return jsonify({'code': 0, 'msg': f'插件 [{plugin_name}] 已从 GitHub 更新并重新加载'})
             else:
+                # 新代码加载失败：恢复旧代码备份
+                if backup_dir and os.path.isdir(backup_dir):
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                    shutil.move(backup_dir, target_dir)
+                    logger.warning(f"[{plugin_name}] 新代码加载失败，已恢复旧代码备份")
                 audit_log(admin['id'], admin['username'], 'update_plugin_github',
                           'plugin', plugin_name, {'repo': repo, 'branch': branch}, 'failure', '加载失败')
                 return jsonify({'code': 500, 'msg': f'代码已下载但加载失败，请检查 main.py'}), 500
@@ -1447,23 +1501,23 @@ def create_web_app(framework) -> Flask:
         all_plugins, errors = [], []
         for src in sources:
             try:
-                all_plugins.extend(_fetch_market_source(src))
-            except Exception as e:
-                err_msg = f"{src.get('name', src.get('url', ''))}: {str(e)[:120]}"
-                # 主源失败时，尝试镜像源
                 if src.get('url') == _DEFAULT_MARKET['url']:
-                    mirror_ok = False
-                    for mirror in _MIRROR_MARKETS:
+                    # 默认源：按 配置加速代理 → 内置 ghproxy 镜像 → 直连 顺序尝试
+                    ok_src = False
+                    for cand in _github_url_candidates(_DEFAULT_MARKET['url']):
                         try:
-                            all_plugins.extend(_fetch_market_source(mirror))
-                            mirror_ok = True
+                            all_plugins.extend(_fetch_market_source(
+                                {'name': src.get('name', '默认源'), 'url': cand}))
+                            ok_src = True
                             break
                         except Exception:
                             continue
-                    if not mirror_ok:
-                        errors.append(err_msg)
+                    if not ok_src:
+                        errors.append(f"{src.get('name', src.get('url', ''))}: 所有源均获取失败")
                 else:
-                    errors.append(err_msg)
+                    all_plugins.extend(_fetch_market_source(src))
+            except Exception as e:
+                errors.append(f"{src.get('name', src.get('url', ''))}: {str(e)[:120]}")
 
         installed = _market_installed_set()
         for p in all_plugins:
@@ -1475,6 +1529,17 @@ def create_web_app(framework) -> Flask:
                 json.dump({'ts': time.time(), 'data': result}, f, ensure_ascii=False)
         except Exception:
             pass
+        # 网络全挂时回退缓存（参考 AstrBot：缓存 + 提示可能不是最新）
+        if not all_plugins and os.path.isfile(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    cache = json.load(f)
+                if cache.get('data', {}).get('plugins'):
+                    cache_data = cache['data']
+                    cache_data['errors'] = (cache_data.get('errors') or []) + ['网络获取失败，展示缓存数据（可能不是最新）']
+                    return jsonify({'code': 0, 'data': cache_data, 'cached': True})
+            except Exception:
+                pass
         return jsonify({'code': 0, 'data': result})
 
     @app.route('/api/plugins/market/sources', methods=['GET'])
@@ -1525,6 +1590,7 @@ def create_web_app(framework) -> Flask:
 
         try:
             target_dir = os.path.join(plugins_dir, plugin_name)
+            backup_dir = None
             # 已存在则先卸载并备份
             if os.path.isdir(target_dir) and os.listdir(target_dir):
                 framework.plugin_loader.unload_plugin(plugin_name)
@@ -1533,6 +1599,11 @@ def create_web_app(framework) -> Flask:
 
             ok, msg = _download_and_extract_plugin(repo, branch, sub_path, target_dir)
             if not ok:
+                # 下载失败：恢复旧代码备份
+                if backup_dir and os.path.isdir(backup_dir):
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                    shutil.move(backup_dir, target_dir)
+                    logger.warning(f"[{plugin_name}] 安装下载失败，已恢复旧代码")
                 return jsonify({'code': 500, 'msg': f'下载失败: {msg}'}), 500
 
             # 分离配置文件到 plugins_dat
@@ -1540,9 +1611,18 @@ def create_web_app(framework) -> Flask:
 
             if framework.plugin_loader.load_plugin(plugin_name):
                 framework.plugin_loader.register_commands(plugin_name)
+                # 安装成功：清理 .bak 残留，避免被 discover() 当成插件加载
+                if backup_dir and os.path.isdir(backup_dir):
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                    logger.info(f"[{plugin_name}] 已清理安装前的代码备份: {backup_dir}")
                 audit_log(admin['id'], admin['username'], 'install_plugin_market',
                           'plugin', plugin_name, {'repo': repo, 'branch': branch, 'sub_path': sub_path})
                 return jsonify({'code': 0, 'msg': f'插件 [{plugin_name}] 安装成功并已加载'})
+            # 加载失败：恢复旧代码备份
+            if backup_dir and os.path.isdir(backup_dir):
+                shutil.rmtree(target_dir, ignore_errors=True)
+                shutil.move(backup_dir, target_dir)
+                logger.warning(f"[{plugin_name}] 新代码加载失败，已恢复旧代码备份")
             audit_log(admin['id'], admin['username'], 'install_plugin_market',
                       'plugin', plugin_name, {'repo': repo}, 'failure', '加载失败')
             return jsonify({'code': 500, 'msg': '代码已下载但加载失败，请检查 main.py'}), 500
@@ -2688,18 +2768,29 @@ def create_web_app(framework) -> Flask:
         root = _project_root()
 
         try:
+            # 框架更新 zip 也走 代理 → 镜像 → 直连（与插件下载一致）
             zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
             logger.info(f"正在下载框架更新: {zip_url}")
-            resp = requests.get(zip_url, timeout=180, stream=True)
-            if resp.status_code == 404:
-                return jsonify({'code': 404, 'msg': f'仓库或分支不存在: {repo}@{branch}'}), 404
-            if resp.status_code != 200:
-                return jsonify({'code': 500, 'msg': f'下载失败: HTTP {resp.status_code}'}), 500
-
-            tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-            for chunk in resp.iter_content(chunk_size=8192):
-                tmp_zip.write(chunk)
-            tmp_zip.close()
+            tmp_zip = None
+            last_err = ''
+            for zurl in _github_url_candidates(zip_url):
+                try:
+                    resp = requests.get(zurl, timeout=180, stream=True)
+                except Exception as e:
+                    last_err = str(e)
+                    continue
+                if resp.status_code == 404:
+                    return jsonify({'code': 404, 'msg': f'仓库或分支不存在: {repo}@{branch}'}), 404
+                if resp.status_code != 200:
+                    last_err = f'HTTP {resp.status_code}'
+                    continue
+                tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+                for chunk in resp.iter_content(chunk_size=8192):
+                    tmp_zip.write(chunk)
+                tmp_zip.close()
+                break
+            if tmp_zip is None:
+                return jsonify({'code': 500, 'msg': f'下载失败: {last_err}'}), 500
 
             # 解压到临时目录
             tmp_dir = tempfile.mkdtemp(prefix='zcbot_fw_')
