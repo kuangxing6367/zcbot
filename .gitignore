@@ -27,6 +27,15 @@ plugins/*
 !plugins/image_renderer/
 !plugins/image_renderer/main.py
 !plugins/image_renderer/requirements.txt
+!plugins/image_renderer/native/
+!plugins/image_renderer/native/Cargo.toml
+!plugins/image_renderer/native/src/
+!plugins/image_renderer/native/src/lib.rs
+!plugins/image_renderer/native/README.md
+!plugins/image_renderer/native/bin/
+!plugins/image_renderer/native/bin/*/.gitkeep
+plugins/image_renderer/native/target/
+plugins/image_renderer/native/bin_extract/
 
 # 插件数据/配置目录（仅放行 help 的插件配置）
 plugins_dat/*

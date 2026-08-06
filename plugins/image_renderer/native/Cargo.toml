@@ -1,0 +1,20 @@
+[package]
+name = "zcbot_render"
+version = "0.1.0"
+edition = "2021"
+description = "ZCBOT 原生图片渲染扩展（pyo3 + fontdue + image）"
+license = "MIT"
+
+[lib]
+name = "zcbot_render"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py39: 稳定 ABI，一份扩展兼容 Python 3.9+（Windows .pyd / Linux .so 各编一份）
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+fontdue = "0.9"
+
+[profile.release]
+lto = true
+strip = true
