@@ -33,7 +33,9 @@ plugins/*
 !plugins/image_renderer/native/src/lib.rs
 !plugins/image_renderer/native/README.md
 !plugins/image_renderer/native/bin/
-!plugins/image_renderer/native/bin/*/.gitkeep
+!plugins/image_renderer/native/bin/**/.gitkeep
+!plugins/image_renderer/native/bin/**/zcbot_render.so
+!plugins/image_renderer/native/bin/**/zcbot_render.pyd
 plugins/image_renderer/native/target/
 plugins/image_renderer/native/bin_extract/
 
