@@ -27,12 +27,6 @@ plugins/*
 !plugins/image_renderer/
 !plugins/image_renderer/main.py
 !plugins/image_renderer/requirements.txt
-!plugins/dynamic_life_state/
-!plugins/mememaker_api/
-!plugins/livingmemory/
-!plugins/mail/
-!plugins/apis/
-!plugins/broadcast/
 !plugins/llm_plugin_gen/
 
 # 插件数据/配置目录（仅放行 help 的插件配置）
@@ -50,7 +44,6 @@ packages/
 config.yaml
 config.yaml.bak.*
 .env
-plugins/mail/astrbot_plugin_mail_config.json
 cookies.txt
 *.db
 
