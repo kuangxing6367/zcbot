@@ -66,6 +66,18 @@ Web 管理面板访问 `http://localhost:8080`（配置见 `web.port`），默�
 
 > ⚠️ 安全提示：首次部署请立即修改默认密码，并在 `config.yaml` 中设置 `onebot.access_token`（留空则任何客户端都能接入）。Web 面板如需公网访问，请改为监听 `0.0.0.0` 并注意防护。
 
+## 原生扩展（image_renderer）
+
+图片渲染插件内置 Rust + pyo3 原生渲染引擎（`zcbot_render`），**按架构强制绑定**：
+
+| 平台 | 产物路径 |
+| ---- | ---- |
+| Windows x86_64 | `plugins/image_renderer/native/bin/win64/zcbot_render.pyd` |
+| Linux x86_64 | `plugins/image_renderer/native/bin/linux-x86_64/zcbot_render.so` |
+| Linux aarch64 | `plugins/image_renderer/native/bin/linux-aarch64/zcbot_render.so` |
+
+仅支持以上架构；在其他架构运行或找不到对应二进制时，插件**自动回退 PIL（Pillow）渲染**，功能一致。原生扩展为 abi3 稳定 ABI，兼容 Python 3.9+。
+
 ## 插件开发
 
 插件存放在独立目录中，每个插件为一个包，入口文件为 `main.py`：
