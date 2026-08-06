@@ -299,6 +299,40 @@ def create_web_app(framework) -> Flask:
                 out.append(u)
         return out
 
+    def _download_zip_file(urls: list) -> str:
+        """
+        依次尝试候选 URL 下载 ZIP 文件，并校验内容确实为 ZIP（魔数 PK）。
+        镜像/代理返回的 HTML 错误页等无效内容会被跳过，继续尝试下一个候选。
+        返回有效 ZIP 的临时文件路径；全部失败返回 None（调用方负责 unlink 清理）。
+        """
+        for url in urls:
+            try:
+                logger.info(f"正在下载 ZIP: {url}")
+                resp = requests.get(url, timeout=60, stream=True)
+                if resp.status_code != 200:
+                    continue
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+                try:
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        tmp.write(chunk)
+                finally:
+                    tmp.close()
+                # 校验 ZIP 魔数：PK\x03\x04（正常）或 PK\x05\x06（空 ZIP）
+                with open(tmp.name, 'rb') as f:
+                    head = f.read(4)
+                if len(head) >= 2 and head[:2] == b'PK':
+                    return tmp.name
+                # 无效内容（如镜像返回的 HTML 错误页），尝试下一个候选
+                logger.warning(f"候选返回非 ZIP 内容，跳过: {url}")
+                try:
+                    os.unlink(tmp.name)
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning(f"ZIP 候选下载失败 {url}: {e}")
+                continue
+        return None
+
     def _fetch_market_source(source: dict) -> list:
         """拉取单个 registry 源的插件列表"""
         url = (source.get('url') or '').strip()
@@ -421,67 +455,44 @@ def create_web_app(framework) -> Flask:
         if ok:
             return True, ''
 
-        # 方式二：整仓 ZIP 回退（代理 → 镜像 → 直连）
+        # 方式二：整仓 ZIP 回退（代理 → 镜像 → 直连，逐个校验 ZIP 有效性）
         zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
-        urls_to_try = _github_url_candidates(zip_url)
-
-        last_err = f'API 方式失败: {msg}' if msg else ''
-        for url in urls_to_try:
+        tmp_zip = _download_zip_file(_github_url_candidates(zip_url))
+        if tmp_zip is None:
+            return False, f'下载的 ZIP 文件无效（{msg or "所有下载尝试均失败"}）'
+        try:
+            with zipfile.ZipFile(tmp_zip, 'r') as zf:
+                names = zf.namelist()
+                prefix = names[0].split('/')[0] if names else ''
+                sub = (sub_path or '/').lstrip('/').rstrip('/')
+                for name in names:
+                    if name.endswith('/'):
+                        continue
+                    rel_path = name
+                    if prefix and rel_path.startswith(prefix + '/'):
+                        rel_path = rel_path[len(prefix) + 1:]
+                    if sub:
+                        if rel_path == sub:
+                            continue
+                        if not rel_path.startswith(sub + '/'):
+                            continue
+                        rel_path = rel_path[len(sub) + 1:]
+                    if not rel_path:
+                        continue
+                    if '..' in rel_path or rel_path.startswith('/') or '\\' in rel_path:
+                        continue
+                    dest = os.path.join(target_dir, rel_path)
+                    parent = os.path.dirname(dest)
+                    if parent:
+                        os.makedirs(parent, exist_ok=True)
+                    with open(dest, 'wb') as f:
+                        f.write(zf.read(name))
+            return True, ''
+        finally:
             try:
-                logger.info(f"正在下载插件: {url}")
-                resp = requests.get(url, timeout=60, stream=True)
-                if resp.status_code == 404:
-                    return False, f'仓库或分支不存在: {repo}@{branch}'
-                if resp.status_code != 200:
-                    last_err = f'下载失败: HTTP {resp.status_code}'
-                    continue
-
-                tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-                for chunk in resp.iter_content(chunk_size=8192):
-                    tmp_zip.write(chunk)
-                tmp_zip.close()
-
-                os.makedirs(target_dir, exist_ok=True)
-                try:
-                    with zipfile.ZipFile(tmp_zip.name, 'r') as zf:
-                        names = zf.namelist()
-                        prefix = names[0].split('/')[0] if names else ''
-                        sub = (sub_path or '/').lstrip('/').rstrip('/')
-                        for name in names:
-                            if name.endswith('/'):
-                                continue
-                            rel_path = name
-                            if prefix and rel_path.startswith(prefix + '/'):
-                                rel_path = rel_path[len(prefix) + 1:]
-                            if sub:
-                                if rel_path == sub:
-                                    continue
-                                if not rel_path.startswith(sub + '/'):
-                                    continue
-                                rel_path = rel_path[len(sub) + 1:]
-                            if not rel_path:
-                                continue
-                            if '..' in rel_path or rel_path.startswith('/') or '\\' in rel_path:
-                                continue
-                            dest = os.path.join(target_dir, rel_path)
-                            parent = os.path.dirname(dest)
-                            if parent:
-                                os.makedirs(parent, exist_ok=True)
-                            with open(dest, 'wb') as f:
-                                f.write(zf.read(name))
-                except zipfile.BadZipFile:
-                    return False, '下载的 ZIP 文件无效'
-                finally:
-                    try:
-                        os.unlink(tmp_zip.name)
-                    except Exception:
-                        pass
-                return True, ''
-            except Exception as e:
-                last_err = str(e)
-                continue
-
-        return False, last_err or '所有下载尝试均失败'
+                os.unlink(tmp_zip)
+            except Exception:
+                pass
 
     def get_client_ip():
         return request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
@@ -1386,31 +1397,14 @@ def create_web_app(framework) -> Flask:
             try:
                 ok_dl, dl_msg = _download_plugin_tree(repo, branch, sub_path, target_dir)
                 if not ok_dl:
-                    # 回退：整仓 ZIP（代理 → 镜像 → 直连）
+                    # 回退：整仓 ZIP（代理 → 镜像 → 直连，逐个校验 ZIP 有效性）
                     zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
                     logger.info(f"文件树方式失败（{dl_msg}），回退 ZIP")
-                    tmp_zip = None
-                    last_zip_err = ''
-                    for zurl in _github_url_candidates(zip_url):
-                        try:
-                            resp = requests.get(zurl, timeout=60, stream=True)
-                        except Exception as e:
-                            last_zip_err = str(e)
-                            continue
-                        if resp.status_code == 404:
-                            raise RuntimeError(f'仓库或分支不存在: {repo}@{branch}')
-                        if resp.status_code != 200:
-                            last_zip_err = f'下载失败: HTTP {resp.status_code}'
-                            continue
-                        tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-                        for chunk in resp.iter_content(chunk_size=8192):
-                            tmp_zip.write(chunk)
-                        tmp_zip.close()
-                        break
+                    tmp_zip = _download_zip_file(_github_url_candidates(zip_url))
                     if tmp_zip is None:
-                        raise RuntimeError(f'ZIP 下载失败: {last_zip_err}')
+                        raise RuntimeError(f'下载的 ZIP 文件无效（{dl_msg}）')
                     try:
-                        with zipfile.ZipFile(tmp_zip.name, 'r') as zf:
+                        with zipfile.ZipFile(tmp_zip, 'r') as zf:
                             names = zf.namelist()
                             prefix = names[0].split('/')[0] if names else ''
                             for name in names:
@@ -1437,7 +1431,7 @@ def create_web_app(framework) -> Flask:
                                 with open(dest, 'wb') as f:
                                     f.write(zf.read(name))
                     finally:
-                        os.unlink(tmp_zip.name)
+                        os.unlink(tmp_zip)
             except Exception as e:
                 # 下载失败：回滚备份
                 if backup_dir and os.path.isdir(backup_dir):
