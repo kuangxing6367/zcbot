@@ -26,6 +26,7 @@ import ast
 import json
 import os
 import re
+import threading
 import traceback
 
 import requests
@@ -41,35 +42,11 @@ __plugin_meta__ = {
 # 默认人格
 _DEFAULT_PERSONA = "你是 ZCBOT OneBot QQ 机器人框架的插件开发专家，擅长编写高质量、健壮的 Python 插件。"
 
-# 插件开发规范（注入 system prompt，约束 LLM 生成符合框架语法的代码）
+# 插件开发提示（精简；完整文档索引在 docs/INDEX.md，需要时用 ls 读取）
 _PLUGIN_DEV_GUIDE = """\
-## 插件开发规范（用户要求写插件时必须遵守）
-### 工作流程
-1. 先用 ls 查看 plugins 目录结构，了解现有插件写法（参考 plugins/echo/main.py）
-2. 用 write 工具创建 plugins/<插件名>/main.py（插件名用英文小写，如 my_plugin）
-3. 如需依赖包，用 write 创建 plugins/<插件名>/requirements.txt（每行一个包名）
-4. 最后调用 load_plugin 工具加载插件使其生效
-
-### 插件代码结构
-- 必须包含 `__plugin_meta__` 字典与 `def register(ctx):` 入口
-- 处理函数签名：`def handler(event, match):`（或 async def），通过模块级 `ctx` 访问上下文
-- 只能存在一个 register 函数，命令都注册在 register 里
-
-### ctx 常用 API
-- ctx.command(pattern, handler, priority=50, alias=..., description=..., require_admin=False, require_superuser=False)
-- ctx.send_msg(user_id=..., group_id=..., message=...)  发送消息
-- ctx.log(msg, level='info')                            记录日志
-- ctx.get_config(key, default)                          读取插件配置
-- ctx.db_query(sql, params) / ctx.db_execute(sql, params)  数据库
-- ctx.api(action, **params)                              OneBot API
-- ctx.task(cron_expr, executor)                         定时任务
-
-### 硬性要求
-- 只用标准库 + 框架已装依赖（requests/flask/pyyaml/Pillow/numpy），额外依赖写入 requirements.txt
-- 禁止相对导入（from .xxx），单文件实现
-- 代码要健壮：参数校验、异常捕获、不阻塞主流程
-- 注释使用中文
-- 写完代码后务必调用 load_plugin 加载；若加载失败，用 ls 查看、edit 修改后 reload_plugin 重试
+## 插件开发提示
+- 完整开发文档索引：`plugins/llm_plugin_gen/docs/INDEX.md`，编写插件前先 ls 读取索引，再按需 ls 对应文档
+- 写完代码后务必调用 load_plugin 加载；失败则 ls/edit/reload_plugin 修复
 """
 
 # 默认 skills（可从配置覆盖）
@@ -197,6 +174,7 @@ _TOOLS = [
 
 def register(ctx):
     """插件注册入口"""
+    _init_db(ctx)
     ctx.command(
         "/ai", handle_ai,
         priority=100,
@@ -249,6 +227,141 @@ def _get_cwd(ctx) -> str:
         return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+# ---------------------------------------------------------------- 会话历史（数据库存储）
+
+_SESSION_MAX_MSGS = 20  # 每个会话最多保留的消息条数
+_SESSION_MAX_CHARS = 6000  # 单条消息超过此长度则截断
+_USAGE_RETENTION = 90  # 用量统计保留天数（每天清理一次）
+
+_SESSION_SYSTEM_FIRST = "这是本会话的历史记录，供后续轮次参考。工具操作细节以磁盘文件为准。"
+
+
+def _init_db(ctx) -> None:
+    """初始化会话与用量表（兼容 MySQL/SQLite）"""
+    try:
+        ctx.db_execute(
+            "CREATE TABLE IF NOT EXISTS llm_dev_sessions ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id VARCHAR(32) NOT NULL, "
+            "role VARCHAR(16) NOT NULL, "
+            "content TEXT, "
+            "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+        )
+        ctx.db_execute(
+            "CREATE TABLE IF NOT EXISTS llm_dev_usage ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id VARCHAR(32) NOT NULL, "
+            "prompt_tokens INT DEFAULT 0, "
+            "completion_tokens INT DEFAULT 0, "
+            "total_tokens INT DEFAULT 0, "
+            "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+        )
+        ctx.db_execute(
+            "CREATE INDEX IF NOT EXISTS idx_llm_dev_sessions_user ON llm_dev_sessions(user_id, id)"
+        )
+        ctx.db_execute(
+            "CREATE INDEX IF NOT EXISTS idx_llm_dev_usage_user ON llm_dev_usage(user_id, id)"
+        )
+    except Exception as e:
+        ctx.log(f"初始化数据库表失败: {e}", level="error")
+
+
+def _get_session(ctx, user_id) -> list:
+    """从数据库读取用户会话历史（含首条 system 说明）"""
+    try:
+        rows = ctx.db_query(
+            "SELECT role, content FROM llm_dev_sessions WHERE user_id = %s "
+            "ORDER BY id DESC LIMIT %s",
+            (str(user_id), _SESSION_MAX_MSGS),
+        )
+        rows = list(reversed(rows))
+        if not rows or rows[0].get('role') != 'system':
+            rows.insert(0, {"role": "system", "content": _SESSION_SYSTEM_FIRST})
+        return rows
+    except Exception as e:
+        ctx.log(f"读取会话失败: {e}", level="warning")
+        return [{"role": "system", "content": _SESSION_SYSTEM_FIRST}]
+
+
+def _append_session(ctx, user_id, role, content):
+    """写入一条会话消息"""
+    try:
+        # 若该用户尚无 system 首条，则补写
+        has = ctx.db_query(
+            "SELECT COUNT(*) AS c FROM llm_dev_sessions WHERE user_id = %s AND role = 'system'",
+            (str(user_id),),
+        )
+        if not has or not has[0].get('c'):
+            ctx.db_execute(
+                "INSERT INTO llm_dev_sessions (user_id, role, content) VALUES (%s, %s, %s)",
+                (str(user_id), 'system', _SESSION_SYSTEM_FIRST),
+            )
+        ctx.db_execute(
+            "INSERT INTO llm_dev_sessions (user_id, role, content) VALUES (%s, %s, %s)",
+            (str(user_id), role, _clip(content)),
+        )
+        # 裁剪旧消息：保留最近 N 条（含 system）
+        cnt = ctx.db_query(
+            "SELECT COUNT(*) AS c FROM llm_dev_sessions WHERE user_id = %s", (str(user_id),),
+        )
+        if cnt and cnt[0].get('c', 0) > _SESSION_MAX_MSGS:
+            extra = cnt[0]['c'] - _SESSION_MAX_MSGS
+            ctx.db_execute(
+                "DELETE FROM llm_dev_sessions WHERE user_id = %s AND role <> 'system' "
+                "AND id IN (SELECT id FROM (SELECT id FROM llm_dev_sessions WHERE user_id = %s "
+                "AND role <> 'system' ORDER BY id ASC LIMIT %s) t)",
+                (str(user_id), str(user_id), extra),
+            )
+    except Exception as e:
+        ctx.log(f"写入会话失败: {e}", level="warning")
+
+
+def _clear_session(ctx, user_id):
+    try:
+        ctx.db_execute("DELETE FROM llm_dev_sessions WHERE user_id = %s", (str(user_id),))
+    except Exception as e:
+        ctx.log(f"清空会话失败: {e}", level="warning")
+
+
+def _record_usage(ctx, user_id, usage: dict):
+    """记录一次调用的 token 消耗"""
+    if not usage:
+        return
+    try:
+        ctx.db_execute(
+            "INSERT INTO llm_dev_usage (user_id, prompt_tokens, completion_tokens, total_tokens) "
+            "VALUES (%s, %s, %s, %s)",
+            (str(user_id),
+             int(usage.get('prompt_tokens') or 0),
+             int(usage.get('completion_tokens') or 0),
+             int(usage.get('total_tokens') or 0)),
+        )
+    except Exception as e:
+        ctx.log(f"记录用量失败: {e}", level="warning")
+
+
+def _usage_summary(ctx, user_id) -> str:
+    """返回用户累计用量文本"""
+    try:
+        rows = ctx.db_query(
+            "SELECT COUNT(*) AS calls, COALESCE(SUM(prompt_tokens),0) AS pt, "
+            "COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(total_tokens),0) AS tt "
+            "FROM llm_dev_usage WHERE user_id = %s",
+            (str(user_id),),
+        )
+        if not rows:
+            return ""
+        r = rows[0]
+        return f"\nⓘ 本会话累计: {r.get('calls', 0)} 次调用, {r.get('tt', 0)} tokens (输入{r.get('pt', 0)}/输出{r.get('ct', 0)})"
+    except Exception:
+        return ""
+
+
+def _clip(text, limit=_SESSION_MAX_CHARS):
+    text = str(text or '')
+    return text if len(text) <= limit else text[:limit] + f"...（截断，共{len(text)}字）"
+
+
 # ---------------------------------------------------------------- LLM 调用
 
 def _llm_headers(ctx) -> dict:
@@ -280,7 +393,7 @@ def _llm_payload(ctx, messages, tools=None, tool_choice=None) -> dict:
 
 
 def _chat_once(ctx, messages, tools=None, tool_choice=None) -> dict:
-    """单次调用，返回原始 assistant message"""
+    """单次调用，返回 {"message":..., "usage":{...}}"""
     base_url = str(_get_config(ctx, "base_url", "")).strip().rstrip('/')
     url = base_url + "/chat/completions"
     payload = _llm_payload(ctx, messages, tools=tools, tool_choice=tool_choice)
@@ -290,23 +403,32 @@ def _chat_once(ctx, messages, tools=None, tool_choice=None) -> dict:
         raise RuntimeError(f"LLM 接口返回 HTTP {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
     try:
-        return data["choices"][0]["message"]
+        message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as e:
         raise RuntimeError(f"LLM 响应解析失败: {e} - {str(data)[:300]}")
+    usage = data.get("usage") or {}
+    return {"message": message, "usage": usage}
 
 
-def _chat_with_tools(ctx, messages: list, max_rounds: int = 12) -> str:
+def _chat_with_tools(ctx, messages: list, max_rounds: int = 12):
     """
     带函数调用的对话循环：
     1. 发送 messages + tools
     2. 若返回 tool_calls → 依次执行工具 → 把结果作为 tool 消息追加 → 继续
-    3. 无 tool_calls → 返回最终文本
+    3. 无 tool_calls → 返回 (最终文本, 累计 usage)
     """
+    total_usage = {}
     for _ in range(max_rounds):
-        msg = _chat_once(ctx, messages, tools=_TOOLS)
+        result = _chat_once(ctx, messages, tools=_TOOLS)
+        msg = result["message"]
+        # 累计 usage
+        u = result.get("usage") or {}
+        for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            total_usage[k] = total_usage.get(k, 0) + int(u.get(k) or 0)
+
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            return msg.get("content") or ""
+            return msg.get("content") or "", total_usage
 
         # 把 assistant 消息（含 tool_calls）加入历史
         messages.append({"role": "assistant", "content": msg.get("content"), "tool_calls": tool_calls})
@@ -319,13 +441,13 @@ def _chat_with_tools(ctx, messages: list, max_rounds: int = 12) -> str:
             except json.JSONDecodeError:
                 args = {}
             try:
-                result = _execute_tool(ctx, name, args)
+                result_txt = _execute_tool(ctx, name, args)
             except Exception as e:
-                result = f"错误: {e}"
+                result_txt = f"错误: {e}"
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", ""),
-                "content": str(result),
+                "content": str(result_txt),
             })
     raise RuntimeError(f"函数调用超过 {max_rounds} 轮仍未结束")
 
@@ -520,12 +642,21 @@ def handle_ai(event, match):
     """
     通用 AI 对话 + 函数调用（ls/write/edit/rm/load_plugin/unload_plugin/reload_plugin/list_plugins）
     超管在群内即可让 AI 写插件：/ai 写一个 xxx 插件
+    自动携带本用户会话上下文（跨轮记忆）；发 "/ai 重置" 清空上下文
     """
     prompt = _get_prompt(event, match, "/ai")
     if not prompt:
         ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message="用法: /ai <指令>\n例如:\n/ai 写一个每日早报插件，每天早上8点发天气\n/ai 修改 echo 插件，加个参数\n/ai 查看 plugins 目录下有哪些插件")
+                     message="用法: /ai <指令>\n例如:\n/ai 写一个每日早报插件，每天早上8点发天气\n/ai 修改 echo 插件，加个参数\n/ai 查看 plugins 目录下有哪些插件\n/ai 重置  清空上下文")
         return
+
+    # 重置上下文
+    if prompt in ("重置", "清空", "新会话", "重来"):
+        _clear_session(ctx, event.user_id)
+        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
+                     message="✅ 已清空该用户的历史上下文，AI 将从全新状态开始。")
+        return
+
     if not str(_get_config(ctx, "base_url", "")).strip():
         ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
                      message="尚未配置 LLM 接口，请在 Web UI → 插件配置 中设置 base_url / api_key / model。")
@@ -535,21 +666,36 @@ def handle_ai(event, match):
                  message=f"🤖 已收到指令，AI 正在处理（可写文件并加载插件，通常需 1~2 分钟）...\n{prompt}")
     try:
         system = _build_system_prompt(ctx)
-        # 注入当前插件上下文，方便 LLM 判断是否重名/复用现有插件
+        history = _get_session(ctx, event.user_id)
+        # 组装：system(人格) + 历史 + 当前指令（当前插件列表注入到 user 消息）
         user_content = (
             f"{_loaded_plugins_text(ctx)}\n\n"
             f"用户指令：{prompt}\n\n"
-            "（提示：如需写新插件，请遵循插件开发规范，用 write 创建文件后调用 load_plugin 加载）"
+            "（提示：如需写新插件，请先 ls plugins/llm_plugin_gen/docs/INDEX.md 阅读文档索引，"
+            "再按需 ls 具体文档；然后按规范用 write 创建文件并调用 load_plugin 加载；若加载失败可 edit/reload_plugin 修复）"
         )
         messages = [
             {"role": "system", "content": system},
+            *history,
             {"role": "user", "content": user_content},
         ]
-        result = _chat_with_tools(ctx, messages)
+        result, usage = _chat_with_tools(ctx, messages)
         if not result.strip():
             result = "（AI 未返回文本内容）"
+
+        # 记录本轮回话 + token 消耗
+        _append_session(ctx, event.user_id, "user", prompt)
+        _append_session(ctx, event.user_id, "assistant", result)
+        _record_usage(ctx, event.user_id, usage)
+
+        # 附带本次与累计 token 消耗
+        cost = ""
+        if usage.get('total_tokens'):
+            cost = f"\n[本次消耗 {usage.get('total_tokens')} tokens]"
+        summary = _usage_summary(ctx, event.user_id)
+
         ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message=_truncate(result))
+                     message=_truncate(result) + cost + summary)
     except Exception as e:
         ctx.log(f"AI 处理失败: {e}\n{traceback.format_exc()}", level="error")
         ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
