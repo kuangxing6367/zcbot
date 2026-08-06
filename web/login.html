@@ -24,6 +24,7 @@
         </div>
         <button class="btn primary" type="submit" id="loginBtn">登 录</button>
       </form>
+      <div class="login-ver" id="loginVer">加载版本信息...</div>
     </div>
   </div>
 
@@ -74,6 +75,23 @@
         .then(d => { if (d.code === 0) location.href = '/'; })
         .catch(() => {});
     }
+
+    // 加载版本信息（公开接口，无需登录）
+    (async () => {
+      const el = document.getElementById('loginVer');
+      try {
+        const r = await fetch('/api/version').then(res => res.json());
+        const d = (r && r.data) || {};
+        const esc = s => String(s ?? '').replace(/[&<>"']/g,
+          c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        el.innerHTML = `ZCBOT <span class="mono">v${esc(d.version || '-')}</span>` +
+          (d.alpha
+            ? ' <span class="badge warn" title="Alpha 预览版：功能可能变更，仅供测试，生产环境谨慎使用">Alpha 预览版</span>'
+            : '');
+      } catch (e) {
+        el.textContent = 'ZCBOT';
+      }
+    })();
   </script>
 </body>
 </html>

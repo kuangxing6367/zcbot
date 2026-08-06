@@ -243,6 +243,15 @@ async function updateStatusBar() {
   } catch (e) { /* 静默 */ }
 }
 
+async function loadFrameworkVersion() {
+  try {
+    const r = await fetch('/api/version').then(res => res.json());
+    const d = (r && r.data) || {};
+    const el = document.getElementById('sbVersion');
+    if (el) el.textContent = `v${d.version || '-'}${d.alpha ? ' · Alpha' : ''}`;
+  } catch (e) { /* 静默 */ }
+}
+
 async function renderPluginWebUI() {
   const view = document.getElementById('view');
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
@@ -291,6 +300,7 @@ async function init() {
     document.getElementById('sidebar').classList.toggle('open');
   });
 
+  loadFrameworkVersion();
   window.addEventListener('hashchange', route);
   route();
 }
