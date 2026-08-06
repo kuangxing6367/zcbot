@@ -110,6 +110,31 @@ def create_web_app(framework) -> Flask:
         nums = re.findall(r'\d+', v)
         return tuple(int(n) for n in nums) if nums else None
 
+    def _latest_release_tag(repo: str) -> str:
+        """返回仓库版本号最高的 Release tag（含 pre-release）；无 Release 返回空串"""
+        try:
+            resp = requests.get(
+                f"https://api.github.com/repos/{repo}/releases?per_page=30",
+                headers={'Accept': 'application/vnd.github+json'},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return ''
+            releases = resp.json()
+            if not isinstance(releases, list) or not releases:
+                return ''
+            best, best_t = '', None
+            for rel in releases:
+                t = rel.get('tag_name') or ''
+                tv = _parse_version_tuple(t[1:] if t.startswith('v') else t)
+                if tv is None:
+                    continue
+                if best_t is None or tv > best_t:
+                    best, best_t = t, tv
+            return best
+        except Exception:
+            return ''
+
     def _data_dir() -> str:
         d = os.path.join(_project_root(), 'data')
         os.makedirs(d, exist_ok=True)
@@ -308,7 +333,7 @@ def create_web_app(framework) -> Flask:
         for url in urls:
             try:
                 logger.info(f"正在下载 ZIP: {url}")
-                resp = requests.get(url, timeout=60, stream=True)
+                resp = requests.get(url, timeout=180, stream=True)
                 if resp.status_code != 200:
                     continue
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
@@ -2762,75 +2787,69 @@ def create_web_app(framework) -> Flask:
         root = _project_root()
 
         try:
-            # 框架更新 zip 也走 代理 → 镜像 → 直连（与插件下载一致）
-            zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
-            logger.info(f"正在下载框架更新: {zip_url}")
-            tmp_zip = None
-            last_err = ''
-            for zurl in _github_url_candidates(zip_url):
-                try:
-                    resp = requests.get(zurl, timeout=180, stream=True)
-                except Exception as e:
-                    last_err = str(e)
-                    continue
-                if resp.status_code == 404:
-                    return jsonify({'code': 404, 'msg': f'仓库或分支不存在: {repo}@{branch}'}), 404
-                if resp.status_code != 200:
-                    last_err = f'HTTP {resp.status_code}'
-                    continue
-                tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-                for chunk in resp.iter_content(chunk_size=8192):
-                    tmp_zip.write(chunk)
-                tmp_zip.close()
-                break
+            # 优先下载最新 Release 对应 tag 的 ZIP（与 check_update 版本检测一致）；
+            # 仓库无 Release 时回退 main 分支 ZIP。
+            tag = _latest_release_tag(repo)
+            if tag:
+                zip_url = f"https://github.com/{repo}/archive/refs/tags/{tag}.zip"
+                logger.info(f"正在下载框架更新（Release {tag}）: {zip_url}")
+            else:
+                zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+                logger.info(f"仓库无 Release，回退下载分支 ZIP: {zip_url}")
+
+            # 代理 → 镜像 → 直连，逐个候选下载并校验 ZIP 有效性
+            tmp_zip = _download_zip_file(_github_url_candidates(zip_url))
             if tmp_zip is None:
-                return jsonify({'code': 500, 'msg': f'下载失败: {last_err}'}), 500
+                return jsonify({'code': 500, 'msg': '框架更新 ZIP 下载失败（代理/镜像/直连均不可用）'}), 500
 
             # 解压到临时目录
             tmp_dir = tempfile.mkdtemp(prefix='zcbot_fw_')
-            with zipfile.ZipFile(tmp_zip.name, 'r') as zf:
-                zf.extractall(tmp_dir)
+            try:
+                with zipfile.ZipFile(tmp_zip, 'r') as zf:
+                    zf.extractall(tmp_dir)
 
-            # GitHub ZIP 内含一层 repo-branch/ 目录
-            entries = [e for e in os.listdir(tmp_dir) if os.path.isdir(os.path.join(tmp_dir, e))]
-            src_root = os.path.join(tmp_dir, entries[0]) if entries else tmp_dir
+                # GitHub ZIP 内含一层 repo-tag/ 目录
+                entries = [e for e in os.listdir(tmp_dir) if os.path.isdir(os.path.join(tmp_dir, e))]
+                src_root = os.path.join(tmp_dir, entries[0]) if entries else tmp_dir
 
-            # 备份旧 framework 目录
-            backup_dir = os.path.join(root, 'data', 'backups')
-            os.makedirs(backup_dir, exist_ok=True)
-            fw_backup = os.path.join(backup_dir, f'framework.{int(time.time())}')
-            old_fw = os.path.join(root, 'framework')
-            if os.path.isdir(old_fw):
-                shutil.copytree(old_fw, fw_backup)
+                # 备份旧 framework 目录
+                backup_dir = os.path.join(root, 'data', 'backups')
+                os.makedirs(backup_dir, exist_ok=True)
+                fw_backup = os.path.join(backup_dir, f'framework.{int(time.time())}')
+                old_fw = os.path.join(root, 'framework')
+                if os.path.isdir(old_fw):
+                    shutil.copytree(old_fw, fw_backup)
 
-            # 覆盖白名单内的代码/配置文件
-            updated = []
-            for name in os.listdir(src_root):
-                if name not in _FW_UPDATE_INCLUDE:
-                    continue  # 保护 plugins/ data/ config.yaml 等用户数据
-                src = os.path.join(src_root, name)
-                dst = os.path.join(root, name)
-                if os.path.isdir(src):
-                    # 删除旧目录再整体复制，避免残留旧文件
-                    if os.path.isdir(dst):
-                        shutil.rmtree(dst, ignore_errors=True)
-                    shutil.copytree(src, dst)
-                elif os.path.isfile(src):
-                    os.makedirs(os.path.dirname(dst), exist_ok=True) if os.path.dirname(dst) else None
-                    shutil.copy2(src, dst)
-                updated.append(name)
+                # 覆盖白名单内的代码/配置文件
+                updated = []
+                for name in os.listdir(src_root):
+                    if name not in _FW_UPDATE_INCLUDE:
+                        continue  # 保护 plugins/ data/ config.yaml 等用户数据
+                    src = os.path.join(src_root, name)
+                    dst = os.path.join(root, name)
+                    if os.path.isdir(src):
+                        # 删除旧目录再整体复制，避免残留旧文件
+                        if os.path.isdir(dst):
+                            shutil.rmtree(dst, ignore_errors=True)
+                        shutil.copytree(src, dst)
+                    elif os.path.isfile(src):
+                        os.makedirs(os.path.dirname(dst), exist_ok=True) if os.path.dirname(dst) else None
+                        shutil.copy2(src, dst)
+                    updated.append(name)
 
-            # 清理临时文件
-            os.unlink(tmp_zip.name)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-            audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
-                      {'files': updated, 'backup': fw_backup}, 'success')
-            return jsonify({
-                'code': 0,
-                'msg': f'框架已更新（{len(updated)} 项），请重启框架生效。\n已备份旧代码到 data/backups/',
-                'data': {'updated': updated, 'backup': fw_backup},
-            })
+                audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
+                          {'files': updated, 'backup': fw_backup}, 'success')
+                return jsonify({
+                    'code': 0,
+                    'msg': f'框架已更新（{len(updated)} 项），请重启框架生效。\n已备份旧代码到 data/backups/',
+                    'data': {'updated': updated, 'backup': fw_backup},
+                })
+            finally:
+                try:
+                    os.unlink(tmp_zip)
+                except Exception:
+                    pass
+                shutil.rmtree(tmp_dir, ignore_errors=True)
         except zipfile.BadZipFile:
             return jsonify({'code': 400, 'msg': '下载的 ZIP 文件无效'}), 400
         except Exception as e:
