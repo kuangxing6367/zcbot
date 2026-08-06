@@ -4,36 +4,30 @@ LLM 开发助手插件
 通过 OpenAI 兼容接口让 LLM 编写插件、管理插件文件，支持自定义人格与 skills。
 
 核心能力：
-  1. /genplugin <需求>  — 让 LLM 生成插件并加载
-  2. /ai <指令>         — 通用对话，LLM 可通过函数调用（ls/write/edit/rm）直接操作插件文件
-  3. /pluginlist        — 查看已加载插件
+  1. /ai <指令>      — 自然对话，LLM 通过函数调用（ls/write/edit/rm/load_plugin 等）写插件并加载
+  2. /pluginlist     — 查看已加载插件
 
-函数调用（OpenAI tools）：
-  ls       列出目录/文件
-  write    写入/新建文件
-  edit     修改已有文件（按文本替换）
-  rm       删除文件/目录
+本插件为全异步实现（async handler + httpx 异步 HTTP），不占用框架线程池，
+避免同步阻塞导致机器人假死。
 
 配置项（_conf_schema.json，Web UI 可改）：
   base_url / api_key / model / temperature / max_tokens
-  persona        人格设定（自定义 system prompt，可写中文）
-  skills         技能列表（每条一行或 JSON 数组，注入 system prompt）
-  cwd            工作目录（LLM 文件操作的基准目录，默认项目根）
+  persona / skills / cwd
 
 权限说明：命令仅超管可用；文件操作不受路径限制（超管自负其责）。
 """
 import ast
+import asyncio
 import json
 import os
 import re
-import threading
 import traceback
 
-import requests
+import httpx
 
 __plugin_meta__ = {
     "name": "LLM 开发助手",
-    "version": "1.1.0",
+    "version": "1.4.0",
     "author": "ZGRIC",
     "desc": "通过 OpenAI 兼容接口让 LLM 编写插件并管理插件文件（支持人格/skills/函数调用）",
     "priority": 100,
@@ -174,7 +168,11 @@ _TOOLS = [
 
 def register(ctx):
     """插件注册入口"""
-    _init_db(ctx)
+    # _init_db 为 async：在事件循环内则调度任务，否则同步跑完（CLI/同步加载场景）
+    try:
+        asyncio.get_running_loop().create_task(_init_db(ctx))
+    except RuntimeError:
+        asyncio.run(_init_db(ctx))
     ctx.command(
         "/ai", handle_ai,
         priority=100,
@@ -227,19 +225,18 @@ def _get_cwd(ctx) -> str:
         return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-# ---------------------------------------------------------------- 会话历史（数据库存储）
+# ---------------------------------------------------------------- 会话历史（数据库存储，异步）
 
 _SESSION_MAX_MSGS = 20  # 每个会话最多保留的消息条数
 _SESSION_MAX_CHARS = 6000  # 单条消息超过此长度则截断
-_USAGE_RETENTION = 90  # 用量统计保留天数（每天清理一次）
 
 _SESSION_SYSTEM_FIRST = "这是本会话的历史记录，供后续轮次参考。工具操作细节以磁盘文件为准。"
 
 
-def _init_db(ctx) -> None:
+async def _init_db(ctx) -> None:
     """初始化会话与用量表（兼容 MySQL/SQLite）"""
     try:
-        ctx.db_execute(
+        await ctx.db_execute_async(
             "CREATE TABLE IF NOT EXISTS llm_dev_sessions ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "user_id VARCHAR(32) NOT NULL, "
@@ -247,7 +244,7 @@ def _init_db(ctx) -> None:
             "content TEXT, "
             "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
         )
-        ctx.db_execute(
+        await ctx.db_execute_async(
             "CREATE TABLE IF NOT EXISTS llm_dev_usage ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "user_id VARCHAR(32) NOT NULL, "
@@ -256,20 +253,20 @@ def _init_db(ctx) -> None:
             "total_tokens INT DEFAULT 0, "
             "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
         )
-        ctx.db_execute(
+        await ctx.db_execute_async(
             "CREATE INDEX IF NOT EXISTS idx_llm_dev_sessions_user ON llm_dev_sessions(user_id, id)"
         )
-        ctx.db_execute(
+        await ctx.db_execute_async(
             "CREATE INDEX IF NOT EXISTS idx_llm_dev_usage_user ON llm_dev_usage(user_id, id)"
         )
     except Exception as e:
         ctx.log(f"初始化数据库表失败: {e}", level="error")
 
 
-def _get_session(ctx, user_id) -> list:
+async def _get_session(ctx, user_id) -> list:
     """从数据库读取用户会话历史（含首条 system 说明）"""
     try:
-        rows = ctx.db_query(
+        rows = await ctx.db_query_async(
             "SELECT role, content FROM llm_dev_sessions WHERE user_id = %s "
             "ORDER BY id DESC LIMIT %s",
             (str(user_id), _SESSION_MAX_MSGS),
@@ -283,30 +280,29 @@ def _get_session(ctx, user_id) -> list:
         return [{"role": "system", "content": _SESSION_SYSTEM_FIRST}]
 
 
-def _append_session(ctx, user_id, role, content):
+async def _append_session(ctx, user_id, role, content):
     """写入一条会话消息"""
     try:
-        # 若该用户尚无 system 首条，则补写
-        has = ctx.db_query(
+        has = await ctx.db_query_async(
             "SELECT COUNT(*) AS c FROM llm_dev_sessions WHERE user_id = %s AND role = 'system'",
             (str(user_id),),
         )
         if not has or not has[0].get('c'):
-            ctx.db_execute(
+            await ctx.db_execute_async(
                 "INSERT INTO llm_dev_sessions (user_id, role, content) VALUES (%s, %s, %s)",
                 (str(user_id), 'system', _SESSION_SYSTEM_FIRST),
             )
-        ctx.db_execute(
+        await ctx.db_execute_async(
             "INSERT INTO llm_dev_sessions (user_id, role, content) VALUES (%s, %s, %s)",
             (str(user_id), role, _clip(content)),
         )
         # 裁剪旧消息：保留最近 N 条（含 system）
-        cnt = ctx.db_query(
+        cnt = await ctx.db_query_async(
             "SELECT COUNT(*) AS c FROM llm_dev_sessions WHERE user_id = %s", (str(user_id),),
         )
         if cnt and cnt[0].get('c', 0) > _SESSION_MAX_MSGS:
             extra = cnt[0]['c'] - _SESSION_MAX_MSGS
-            ctx.db_execute(
+            await ctx.db_execute_async(
                 "DELETE FROM llm_dev_sessions WHERE user_id = %s AND role <> 'system' "
                 "AND id IN (SELECT id FROM (SELECT id FROM llm_dev_sessions WHERE user_id = %s "
                 "AND role <> 'system' ORDER BY id ASC LIMIT %s) t)",
@@ -316,19 +312,19 @@ def _append_session(ctx, user_id, role, content):
         ctx.log(f"写入会话失败: {e}", level="warning")
 
 
-def _clear_session(ctx, user_id):
+async def _clear_session(ctx, user_id):
     try:
-        ctx.db_execute("DELETE FROM llm_dev_sessions WHERE user_id = %s", (str(user_id),))
+        await ctx.db_execute_async("DELETE FROM llm_dev_sessions WHERE user_id = %s", (str(user_id),))
     except Exception as e:
         ctx.log(f"清空会话失败: {e}", level="warning")
 
 
-def _record_usage(ctx, user_id, usage: dict):
+async def _record_usage(ctx, user_id, usage: dict):
     """记录一次调用的 token 消耗"""
     if not usage:
         return
     try:
-        ctx.db_execute(
+        await ctx.db_execute_async(
             "INSERT INTO llm_dev_usage (user_id, prompt_tokens, completion_tokens, total_tokens) "
             "VALUES (%s, %s, %s, %s)",
             (str(user_id),
@@ -340,10 +336,10 @@ def _record_usage(ctx, user_id, usage: dict):
         ctx.log(f"记录用量失败: {e}", level="warning")
 
 
-def _usage_summary(ctx, user_id) -> str:
+async def _usage_summary(ctx, user_id) -> str:
     """返回用户累计用量文本"""
     try:
-        rows = ctx.db_query(
+        rows = await ctx.db_query_async(
             "SELECT COUNT(*) AS calls, COALESCE(SUM(prompt_tokens),0) AS pt, "
             "COALESCE(SUM(completion_tokens),0) AS ct, COALESCE(SUM(total_tokens),0) AS tt "
             "FROM llm_dev_usage WHERE user_id = %s",
@@ -392,13 +388,15 @@ def _llm_payload(ctx, messages, tools=None, tool_choice=None) -> dict:
     return payload
 
 
-def _chat_once(ctx, messages, tools=None, tool_choice=None) -> dict:
-    """单次调用，返回 {"message":..., "usage":{...}}"""
+async def _chat_once(ctx, messages, tools=None, tool_choice=None) -> dict:
+    """单次调用（httpx 异步），返回 {"message":..., "usage":{...}}"""
     base_url = str(_get_config(ctx, "base_url", "")).strip().rstrip('/')
     url = base_url + "/chat/completions"
     payload = _llm_payload(ctx, messages, tools=tools, tool_choice=tool_choice)
     ctx.log(f"调用 LLM: {base_url}", level="info")
-    resp = requests.post(url, headers=_llm_headers(ctx), json=payload, timeout=300)
+    # 每次新建 AsyncClient：避免跨事件循环复用被关闭的客户端（插件可热重载）
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+        resp = await client.post(url, headers=_llm_headers(ctx), json=payload)
     if resp.status_code != 200:
         raise RuntimeError(f"LLM 接口返回 HTTP {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
@@ -410,16 +408,16 @@ def _chat_once(ctx, messages, tools=None, tool_choice=None) -> dict:
     return {"message": message, "usage": usage}
 
 
-def _chat_with_tools(ctx, messages: list, max_rounds: int = 12):
+async def _chat_with_tools(ctx, messages: list, max_rounds: int = 12):
     """
-    带函数调用的对话循环：
+    带函数调用的对话循环（全异步，不占线程池）：
     1. 发送 messages + tools
-    2. 若返回 tool_calls → 依次执行工具 → 把结果作为 tool 消息追加 → 继续
+    2. 若返回 tool_calls → 依次执行工具（to_thread 内同步 IO）→ 追加结果 → 继续
     3. 无 tool_calls → 返回 (最终文本, 累计 usage)
     """
     total_usage = {}
     for _ in range(max_rounds):
-        result = _chat_once(ctx, messages, tools=_TOOLS)
+        result = await _chat_once(ctx, messages, tools=_TOOLS)
         msg = result["message"]
         # 累计 usage
         u = result.get("usage") or {}
@@ -441,7 +439,8 @@ def _chat_with_tools(ctx, messages: list, max_rounds: int = 12):
             except json.JSONDecodeError:
                 args = {}
             try:
-                result_txt = _execute_tool(ctx, name, args)
+                # 文件/插件操作放到线程池，避免阻塞事件循环
+                result_txt = await asyncio.to_thread(_execute_tool, ctx, name, args)
             except Exception as e:
                 result_txt = f"错误: {e}"
             messages.append({
@@ -638,35 +637,36 @@ def _loaded_plugins_text(ctx) -> str:
     return "\n".join(lines)
 
 
-def handle_ai(event, match):
+async def handle_ai(event, match):
     """
     通用 AI 对话 + 函数调用（ls/write/edit/rm/load_plugin/unload_plugin/reload_plugin/list_plugins）
     超管在群内即可让 AI 写插件：/ai 写一个 xxx 插件
     自动携带本用户会话上下文（跨轮记忆）；发 "/ai 重置" 清空上下文
+    全异步：不占用框架线程池（httpx 异步 HTTP + db_*_async + asend_msg）
     """
     prompt = _get_prompt(event, match, "/ai")
     if not prompt:
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message="用法: /ai <指令>\n例如:\n/ai 写一个每日早报插件，每天早上8点发天气\n/ai 修改 echo 插件，加个参数\n/ai 查看 plugins 目录下有哪些插件\n/ai 重置  清空上下文")
+        await ctx.asend_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
+                            message="用法: /ai <指令>\n例如:\n/ai 写一个每日早报插件，每天早上8点发天气\n/ai 修改 echo 插件，加个参数\n/ai 查看 plugins 目录下有哪些插件\n/ai 重置  清空上下文")
         return
 
     # 重置上下文
     if prompt in ("重置", "清空", "新会话", "重来"):
-        _clear_session(ctx, event.user_id)
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message="✅ 已清空该用户的历史上下文，AI 将从全新状态开始。")
+        await _clear_session(ctx, event.user_id)
+        await ctx.asend_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
+                            message="✅ 已清空该用户的历史上下文，AI 将从全新状态开始。")
         return
 
     if not str(_get_config(ctx, "base_url", "")).strip():
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message="尚未配置 LLM 接口，请在 Web UI → 插件配置 中设置 base_url / api_key / model。")
+        await ctx.asend_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
+                            message="尚未配置 LLM 接口，请在 Web UI → 插件配置 中设置 base_url / api_key / model。")
         return
 
-    ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                 message=f"🤖 已收到指令，AI 正在处理（可写文件并加载插件，通常需 1~2 分钟）...\n{prompt}")
+    await ctx.asend_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
+                        message=f"🤖 已收到指令，AI 正在处理（可写文件并加载插件，通常需 1~2 分钟）...\n{prompt}")
     try:
         system = _build_system_prompt(ctx)
-        history = _get_session(ctx, event.user_id)
+        history = await _get_session(ctx, event.user_id)
         # 组装：system(人格) + 历史 + 当前指令（当前插件列表注入到 user 消息）
         user_content = (
             f"{_loaded_plugins_text(ctx)}\n\n"
@@ -679,30 +679,30 @@ def handle_ai(event, match):
             *history,
             {"role": "user", "content": user_content},
         ]
-        result, usage = _chat_with_tools(ctx, messages)
+        result, usage = await _chat_with_tools(ctx, messages)
         if not result.strip():
             result = "（AI 未返回文本内容）"
 
         # 记录本轮回话 + token 消耗
-        _append_session(ctx, event.user_id, "user", prompt)
-        _append_session(ctx, event.user_id, "assistant", result)
-        _record_usage(ctx, event.user_id, usage)
+        await _append_session(ctx, event.user_id, "user", prompt)
+        await _append_session(ctx, event.user_id, "assistant", result)
+        await _record_usage(ctx, event.user_id, usage)
 
         # 附带本次与累计 token 消耗
         cost = ""
         if usage.get('total_tokens'):
             cost = f"\n[本次消耗 {usage.get('total_tokens')} tokens]"
-        summary = _usage_summary(ctx, event.user_id)
+        summary = await _usage_summary(ctx, event.user_id)
 
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message=_truncate(result) + cost + summary)
+        await ctx.asend_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
+                            message=_truncate(result) + cost + summary)
     except Exception as e:
         ctx.log(f"AI 处理失败: {e}\n{traceback.format_exc()}", level="error")
-        ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
-                     message=f"❌ 处理失败: {_truncate(str(e), 500)}")
+        await ctx.asend_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None,
+                            message=f"❌ 处理失败: {_truncate(str(e), 500)}")
 
 
-def handle_list_plugins(event, match):
+async def handle_list_plugins(event, match):
     loader = ctx._framework.plugin_loader
     plugins = loader.get_loaded_plugins()
     if not plugins:
@@ -713,4 +713,4 @@ def handle_list_plugins(event, match):
             meta = info.get('meta', {})
             lines.append(f"- {meta.get('name', name)} ({name}) v{meta.get('version', '?')}")
         text = "\n".join(lines)
-    ctx.send_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None, message=text)
+    await ctx.asend_msg(user_id=event.user_id, group_id=event.group_id if event.is_group else None, message=text)
