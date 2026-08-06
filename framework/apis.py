@@ -265,9 +265,83 @@ def create_web_app(framework) -> Flask:
         except Exception:
             return set()
 
+    def _download_plugin_tree(repo: str, branch: str, sub_path: str, target_dir: str):
+        """
+        通过 GitHub API 获取仓库文件树，仅下载 sub_path 目录下的文件（raw 单文件拉取），
+        避免整仓 ZIP 下载。返回 (ok, msg)。
+        """
+        try:
+            # 获取仓库文件树（递归）
+            api_url = f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1"
+            headers = {'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'zcbot'}
+            resp = requests.get(api_url, headers=headers, timeout=30)
+            if resp.status_code == 404:
+                return False, f'仓库或分支不存在: {repo}@{branch}'
+            if resp.status_code != 200:
+                return False, f'GitHub API 返回 HTTP {resp.status_code}'
+            tree = resp.json().get('tree', [])
+
+            sub = (sub_path or '/').lstrip('/').rstrip('/')
+            files = []
+            for item in tree:
+                if item.get('type') != 'blob':
+                    continue
+                path = item.get('path', '')
+                if sub:
+                    if path == sub:
+                        rel = os.path.basename(path)
+                    elif path.startswith(sub + '/'):
+                        rel = path[len(sub) + 1:]
+                    else:
+                        continue
+                else:
+                    rel = path
+                if not rel or '..' in rel or rel.startswith('/') or '\\' in rel:
+                    continue
+                files.append((path, rel))
+
+            if not files:
+                return False, f'子目录不存在或无文件: {sub_path or "/"}'
+
+            # 逐个 raw 下载
+            raw_base = f"https://raw.githubusercontent.com/{repo}/{branch}"
+            os.makedirs(target_dir, exist_ok=True)
+            for src_path, rel in files:
+                raw_url = f"{raw_base}/{src_path}"
+                urls = [raw_url]
+                for mirror in _MIRROR_MARKETS:
+                    mirror_host = mirror['url'].split('/')[2]
+                    urls.append(raw_url.replace('https://raw.githubusercontent.com/',
+                                                f'https://{mirror_host}/https://raw.githubusercontent.com/'))
+                got = False
+                last_err = ''
+                for u in urls:
+                    try:
+                        r = requests.get(u, timeout=30)
+                        if r.status_code == 200:
+                            dest = os.path.join(target_dir, rel)
+                            parent = os.path.dirname(dest)
+                            if parent:
+                                os.makedirs(parent, exist_ok=True)
+                            with open(dest, 'wb') as f:
+                                f.write(r.content)
+                            got = True
+                            break
+                        last_err = f'HTTP {r.status_code}'
+                    except Exception as e:
+                        last_err = str(e)
+                if not got:
+                    return False, f'下载文件失败 {src_path}: {last_err}'
+
+            logger.info(f"已通过文件树下载插件 {repo}@{branch} 子目录 {sub or '/'}（{len(files)} 个文件）")
+            return True, ''
+        except Exception as e:
+            return False, str(e)
+
     def _download_and_extract_plugin(repo: str, branch: str, sub_path: str, target_dir: str):
         """
-        从 GitHub 下载仓库 ZIP 并解压到目标目录（可指定子目录）。
+        从 GitHub 下载插件代码到目标目录（可指定子目录）。
+        优先使用 GitHub API 文件树逐个拉取文件（省流量），失败回退整仓 ZIP。
         返回 (ok, msg)
         """
         if repo.startswith('https://github.com/'):
@@ -277,13 +351,19 @@ def create_web_app(framework) -> Flask:
         if not repo or '..' in repo:
             return False, '非法仓库地址'
 
+        # 方式一：GitHub API 文件树 + raw 单文件下载（只拉插件目录，不下载整仓）
+        ok, msg = _download_plugin_tree(repo, branch, sub_path, target_dir)
+        if ok:
+            return True, ''
+
+        # 方式二：整仓 ZIP 回退
         zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
         urls_to_try = [zip_url]
         for mirror in _MIRROR_MARKETS:
             mirror_host = mirror['url'].split('/')[2]
             urls_to_try.append(zip_url.replace('https://github.com/', f'https://{mirror_host}/https://github.com/'))
 
-        last_err = ''
+        last_err = f'API 方式失败: {msg}' if msg else ''
         for url in urls_to_try:
             try:
                 logger.info(f"正在下载插件: {url}")
@@ -1223,74 +1303,68 @@ def create_web_app(framework) -> Flask:
             elif repo.startswith('http://github.com/'):
                 repo = repo.replace('http://github.com/', '').rstrip('/')
 
-            # 下载 ZIP
-            zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
-            logger.info(f"正在从 GitHub 下载插件: {zip_url}")
-            resp = requests.get(zip_url, timeout=60, stream=True)
-
-            if resp.status_code == 404:
-                return jsonify({'code': 404, 'msg': f'仓库或分支不存在: {repo}@{branch}'}), 404
-            if resp.status_code != 200:
-                return jsonify({'code': 500, 'msg': f'下载失败: HTTP {resp.status_code}'}), 500
-
-            # 保存到临时文件
-            tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
-            for chunk in resp.iter_content(chunk_size=8192):
-                tmp_zip.write(chunk)
-            tmp_zip.close()
-
+            # 下载插件代码（优先文件树方式，回退 ZIP）
             target_dir = os.path.join(plugins_dir, plugin_name)
 
             # 卸载当前插件
             framework.plugin_loader.unload_plugin(plugin_name)
 
             # 备份旧代码
+            backup_dir = None
             if os.path.isdir(target_dir):
                 backup_dir = target_dir + f'.bak.{int(time.time())}'
                 shutil.move(target_dir, backup_dir)
 
-            os.makedirs(target_dir, exist_ok=True)
-
-            # 解压
-            with zipfile.ZipFile(tmp_zip.name, 'r') as zf:
-                # GitHub ZIP 内会有一层 repo-branch/ 目录
-                names = zf.namelist()
-                # 找到前缀目录名
-                prefix = names[0].split('/')[0] if names else ''
-
-                for name in names:
-                    if name.endswith('/'):
-                        continue
-                    # 去掉前缀目录
-                    if prefix and name.startswith(prefix + '/'):
-                        rel_path = name[len(prefix) + 1:]
-                    else:
-                        rel_path = name
-
-                    if not rel_path:
-                        continue
-
-                    # 如果配置了子目录，只提取该目录下的文件
-                    if sub_path and sub_path != '/':
-                        sp = sub_path.lstrip('/')
-                        if not rel_path.startswith(sp + '/') and rel_path != sp:
-                            continue
-                        rel_path = rel_path[len(sp) + 1:] if rel_path.startswith(sp + '/') else rel_path
-
-                    if not rel_path:
-                        continue
-
-                    # 安全检查
-                    if '..' in rel_path or rel_path.startswith('/'):
-                        continue
-
-                    dest = os.path.join(target_dir, rel_path)
-                    os.makedirs(os.path.dirname(dest), exist_ok=True) if os.path.dirname(dest) else None
-                    with open(dest, 'wb') as f:
-                        f.write(zf.read(name))
-
-            # 清理临时文件
-            os.unlink(tmp_zip.name)
+            try:
+                ok_dl, dl_msg = _download_plugin_tree(repo, branch, sub_path, target_dir)
+                if not ok_dl:
+                    # 回退：整仓 ZIP
+                    zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+                    logger.info(f"文件树方式失败（{dl_msg}），回退 ZIP: {zip_url}")
+                    resp = requests.get(zip_url, timeout=60, stream=True)
+                    if resp.status_code == 404:
+                        raise RuntimeError(f'仓库或分支不存在: {repo}@{branch}')
+                    if resp.status_code != 200:
+                        raise RuntimeError(f'下载失败: HTTP {resp.status_code}')
+                    tmp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+                    for chunk in resp.iter_content(chunk_size=8192):
+                        tmp_zip.write(chunk)
+                    tmp_zip.close()
+                    try:
+                        with zipfile.ZipFile(tmp_zip.name, 'r') as zf:
+                            names = zf.namelist()
+                            prefix = names[0].split('/')[0] if names else ''
+                            for name in names:
+                                if name.endswith('/'):
+                                    continue
+                                if prefix and name.startswith(prefix + '/'):
+                                    rel_path = name[len(prefix) + 1:]
+                                else:
+                                    rel_path = name
+                                if not rel_path:
+                                    continue
+                                if sub_path and sub_path != '/':
+                                    sp = sub_path.lstrip('/')
+                                    if not rel_path.startswith(sp + '/') and rel_path != sp:
+                                        continue
+                                    rel_path = rel_path[len(sp) + 1:] if rel_path.startswith(sp + '/') else rel_path
+                                if not rel_path:
+                                    continue
+                                if '..' in rel_path or rel_path.startswith('/'):
+                                    continue
+                                dest = os.path.join(target_dir, rel_path)
+                                if os.path.dirname(dest):
+                                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                                with open(dest, 'wb') as f:
+                                    f.write(zf.read(name))
+                    finally:
+                        os.unlink(tmp_zip.name)
+            except Exception as e:
+                # 下载失败：回滚备份
+                if backup_dir and os.path.isdir(backup_dir):
+                    shutil.rmtree(target_dir, ignore_errors=True)
+                    shutil.move(backup_dir, target_dir)
+                raise e
 
             # 分离配置文件到 plugins_dat（保留用户已有配置不被覆盖）
             framework.plugin_loader.split_installed_files(plugin_name)
