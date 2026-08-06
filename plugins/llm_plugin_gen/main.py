@@ -234,11 +234,11 @@ _SESSION_SYSTEM_FIRST = "这是本会话的历史记录，供后续轮次参考�
 
 
 async def _init_db(ctx) -> None:
-    """初始化会话与用量表（兼容 MySQL/SQLite）"""
+    """初始化会话与用量表（MySQL 方言，SQLite 模式由框架自动翻译）"""
     try:
         await ctx.db_execute_async(
             "CREATE TABLE IF NOT EXISTS llm_dev_sessions ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "id INT PRIMARY KEY AUTO_INCREMENT, "
             "user_id VARCHAR(32) NOT NULL, "
             "role VARCHAR(16) NOT NULL, "
             "content TEXT, "
@@ -246,7 +246,7 @@ async def _init_db(ctx) -> None:
         )
         await ctx.db_execute_async(
             "CREATE TABLE IF NOT EXISTS llm_dev_usage ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "id INT PRIMARY KEY AUTO_INCREMENT, "
             "user_id VARCHAR(32) NOT NULL, "
             "prompt_tokens INT DEFAULT 0, "
             "completion_tokens INT DEFAULT 0, "
