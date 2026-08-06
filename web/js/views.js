@@ -44,10 +44,11 @@ Views.dashboard = async function (view) {
         ${botsHtml || '<div class="empty">暂无在线客户端</div>'}
       </div>
       <div class="card">
-        <div class="card-title">框架信息</div>
+        <div class="card-title">框架信息 ${data.framework_alpha ? '<span class="badge warn">Alpha 预览版</span>' : ''}</div>
         <div class="flex between" style="padding:4px 0"><span class="muted">名称</span><span>${escapeHtml(data.framework_name || '-')}</span></div>
         <div class="flex between" style="padding:4px 0"><span class="muted">版本</span><span>${escapeHtml(data.framework_version || '-')}</span></div>
         <div class="flex between" style="padding:4px 0"><span class="muted">仓库</span><a href="${escapeHtml(data.github_repo || '#')}" target="_blank">${escapeHtml((data.github_repo || '').replace('https://', ''))}</a></div>
+        ${data.framework_alpha ? '<div class="small dim mt">Alpha 预览版：功能可能变更，仅供测试，生产环境谨慎使用。</div>' : ''}
       </div>
     </div>
 
@@ -903,13 +904,16 @@ Views.checkFrameworkUpdate = async function () {
   const hasUp = d.has_update;
   if (el) el.innerHTML = `
     <div class="small mb">
-      本地: <span class="mono">${escapeHtml(d.local_commit)}</span>
-      &nbsp;|&nbsp; 最新: <span class="mono">${escapeHtml(d.latest_commit)}</span>
+      本地: <span class="mono">${escapeHtml(d.local_version)}</span>
+      &nbsp;|&nbsp; 最新: <span class="mono">${escapeHtml(d.latest_version)}</span>
       <div class="dim">${escapeHtml(d.commit_message)} · ${escapeHtml(d.author || '')} · ${escapeHtml(d.commit_date || '')}</div>
+      <div class="dim mono small">commit: ${escapeHtml(d.local_commit)} → ${escapeHtml(d.latest_commit)}</div>
     </div>
-    ${hasUp
+    ${hasUp === true
       ? `<button class="btn primary sm" onclick="Views.doFrameworkUpdate()">立即更新框架</button>`
-      : '<span class="badge ok">已是最新版本</span>'}`;
+      : hasUp === null || hasUp === undefined
+        ? '<span class="badge warn">本地版本未知，无法自动检测，请使用面板「更新框架」或覆盖部署</span>'
+        : '<span class="badge ok">已是最新版本</span>'}`;
 };
 
 Views.doFrameworkUpdate = async function () {
