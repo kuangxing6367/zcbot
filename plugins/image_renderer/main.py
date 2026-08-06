@@ -51,7 +51,7 @@ def _load_native_renderer():
         subdirs = ['win64', 'win-amd64']
         names = ['zcbot_render.pyd', 'zcbot_render.abi3.pyd']
     elif sys.platform.startswith('linux'):
-        subdirs = ['linux64', 'linux-x86_64']
+        subdirs = ['linux-aarch64', 'linux64', 'linux-x86_64']
         names = ['zcbot_render.so', 'zcbot_render.abi3.so']
     else:
         return None
