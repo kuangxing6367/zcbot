@@ -298,6 +298,14 @@ class Database:
         if self.db_type == 'mysql':
             self._init_mysql()
         else:
+            # 启动警告：SQLite 模式下配置了 MySQL 字段，字段将被忽略
+            mysql_only = ['host', 'port', 'user', 'password']
+            configured = [k for k in mysql_only if config.get(k) not in (None, '')]
+            if configured:
+                logger.warning(
+                    f"检测到 database.type = sqlite，但配置了 MySQL 字段（{', '.join(configured)}），"
+                    f"这些字段将被忽略。如果要用 MySQL，请将 type 改为 mysql。"
+                )
             self._init_sqlite()
 
     def _init_sqlite(self):
