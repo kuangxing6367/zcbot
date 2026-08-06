@@ -118,6 +118,11 @@ def _convert_placeholders(sql: str) -> str:
     return sql.replace('%s', '?')
 
 
+def _translate_sql_for_mysql(sql: str) -> str:
+    """SQLite 方言 DDL → MySQL 兼容（防御：AUTOINCREMENT → AUTO_INCREMENT，避免 1064 语法错误）"""
+    return sql.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+
+
 def _is_ddl_or_dml(sql: str) -> bool:
     """判断是否需要语法翻译（跳过前导注释行）DDL + INSERT/UPDATE/DELETE 都需要"""
     for line in sql.strip().splitlines():
@@ -480,6 +485,8 @@ class Database:
             try:
                 if self.db_type == 'sqlite':
                     sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
                 self._exec(cursor, sql, params)
                 rows = cursor.fetchall()
                 if self.db_type == 'sqlite':
@@ -497,6 +504,8 @@ class Database:
             try:
                 if self.db_type == 'sqlite':
                     sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
                 self._exec(cursor, sql, params)
                 row = cursor.fetchone()
                 if row is None:
@@ -526,6 +535,8 @@ class Database:
                     if 'NOW()' in sql.upper():
                         sql, params = _replace_now(sql, params)
                     sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
                 self._exec(cursor, sql, params)
                 conn.commit()
                 return cursor.rowcount
@@ -553,6 +564,8 @@ class Database:
                         sql = new_sql
                         params_list = new_params_list
                     sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
                 cursor.executemany(sql, params_list)
                 conn.commit()
                 return cursor.rowcount
@@ -574,6 +587,8 @@ class Database:
                     if 'NOW()' in sql.upper():
                         sql, params = _replace_now(sql, params)
                     sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
                 self._exec(cursor, sql, params)
                 conn.commit()
                 return cursor.lastrowid
