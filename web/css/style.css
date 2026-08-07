@@ -765,6 +765,28 @@ mark { background: rgba(245, 158, 11, 0.25); color: var(--warning); padding: 0 2
 .fb-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .fb-empty { padding: 36px; text-align: center; color: var(--text-dim); }
 .tbl tr.active td { background: var(--accent-soft); }
+.fb-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 148px;
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  font-size: 13px;
+}
+.fb-menu-item {
+  padding: 7px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+  user-select: none;
+}
+.fb-menu-item:hover { background: var(--surface-hover); }
+.fb-menu-item.danger { color: var(--danger); }
+.fb-menu-item.danger:hover { background: var(--danger-soft); }
 
 /* ─────────────── 统计图表 ─────────────── */
 

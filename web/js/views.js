@@ -1696,7 +1696,7 @@ Views.filebrowser = async function (view, basePath) {
     const crumbs = buildCrumbs(current);
 
     view.innerHTML = `
-      <div class="card mb">
+      <div class="card mb fb-main">
         <div class="fb-toolbar">
           <button class="btn" onclick="Views._fbMkdir()">＋ 新建目录</button>
           <button class="btn" onclick="document.getElementById('fbUploadInput').click()">↑ 上传文件</button>
@@ -1755,9 +1755,74 @@ Views.filebrowser = async function (view, basePath) {
         tr.style.display = name.indexOf(q) >= 0 ? '' : 'none';
       });
     });
+    // 右键菜单
+    const fbMain = view.querySelector('.fb-main');
+    if (fbMain) fbMain.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const x = Math.min(e.clientX, window.innerWidth - 150);
+      const y = Math.min(e.clientY, window.innerHeight - 220);
+      const tr = e.target.closest('tr[data-path]');
+      if (tr) {
+        const p = decodeURIComponent(tr.getAttribute('data-path'));
+        const isDir = tr.querySelector('.ficon') && tr.querySelector('.ficon').textContent === '📁';
+        const name = p.split(/[\\/]/).pop();
+        Views._fbShowMenu(x, y, [
+          { label: isDir ? '打开目录' : '打开 / 预览', action: () => isDir ? Views._fbEnterDir(encodeURIComponent(p)) : Views._fbOpenFile(encodeURIComponent(p)) },
+          { label: '下载', show: !isDir, action: () => Views._fbDownload(encodeURIComponent(p)) },
+          { label: '复制副本', action: () => Views._fbCopy(p) },
+          { label: '重命名', action: () => Views._fbRename(encodeURIComponent(p), name) },
+          { label: '删除', danger: true, action: () => Views._fbDelete(encodeURIComponent(p), name) },
+        ]);
+      } else {
+        Views._fbShowMenu(x, y, [
+          { label: '新建目录', action: () => Views._fbMkdir() },
+          { label: '上传文件', action: () => document.getElementById('fbUploadInput').click() },
+          { label: '刷新', action: () => Views.filebrowser(document.getElementById('view'), window._fbPath) },
+        ]);
+      }
+    });
   };
 
   await render();
+};
+
+Views._fbShowMenu = function (x, y, items) {
+  Views._fbCloseMenu();
+  const menu = document.createElement('div');
+  menu.className = 'fb-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.innerHTML = items.filter(i => i.show !== false)
+    .map(i => `<div class="fb-menu-item${i.danger ? ' danger' : ''}">${i.label}</div>`).join('');
+  document.body.appendChild(menu);
+  menu.querySelectorAll('.fb-menu-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      Views._fbCloseMenu();
+      const idx = Array.prototype.indexOf.call(menu.querySelectorAll('.fb-menu-item'), el);
+      const it = items.filter(i => i.show !== false)[idx];
+      it && it.action && it.action();
+    });
+  });
+  setTimeout(() => {
+    document.addEventListener('mousedown', (ev) => {
+      if (!menu.contains(ev.target)) Views._fbCloseMenu();
+    }, { once: true });
+  }, 0);
+};
+
+Views._fbCloseMenu = function () {
+  const m = document.getElementById('fbMenu');
+  if (m) m.remove();
+};
+
+Views._fbCopy = async function (path) {
+  const r = await api('/api/files/copy', {
+    method: 'POST',
+    body: JSON.stringify({ src: path, dest_dir: window._fbPath || '' }),
+  });
+  toast((r && r.msg) || '复制失败', r && r.code === 0 ? 'success' : 'error');
+  if (r && r.code === 0) Views.filebrowser(document.getElementById('view'), window._fbPath);
 };
 
 Views._fbEnterDir = function (path) {
