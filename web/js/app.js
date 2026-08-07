@@ -9,6 +9,27 @@ function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
 function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
 function clearToken() { localStorage.removeItem(TOKEN_KEY); document.cookie = 'zcbot_token=; Max-Age=0; path=/'; }
 
+/* ─────────── 主题切换（深色/浅色，记忆偏好）─────────── */
+const THEME_KEY = 'zcbot_theme';
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const el = document.getElementById('themeToggle');
+  if (el) el.textContent = theme === 'light' ? '☀' : '☾';
+}
+function initTheme() {
+  let t = localStorage.getItem(THEME_KEY);
+  if (!t && window.matchMedia) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  if (!t) t = 'dark';
+  applyTheme(t);
+  const el = document.getElementById('themeToggle');
+  if (el) el.addEventListener('click', () => {
+    const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme(next);
+  });
+}
+initTheme();
+
 /* ─────────── API 封装 ─────────── */
 async function api(url, options = {}) {
   const opts = { ...options, headers: { ...(options.headers || {}) } };

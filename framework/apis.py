@@ -3163,6 +3163,133 @@ def create_web_app(framework) -> Flask:
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
+    @app.route('/api/files/mkdir', methods=['POST'])
+    @require_super
+    def file_browser_mkdir():
+        """新建目录（仅超级管理员）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        path = str(data.get('path') or '').strip()
+        if not path:
+            return jsonify({'code': 400, 'msg': '缺少 path'}), 400
+        abs_path = _safe_file_path(path)
+        if not abs_path:
+            return jsonify({'code': 400, 'msg': '路径不允许'}), 400
+        if os.path.exists(abs_path):
+            return jsonify({'code': 400, 'msg': '目录已存在'}), 400
+        try:
+            os.makedirs(abs_path, exist_ok=True)
+            audit_log(admin['id'], admin['username'], 'file_mkdir', 'dir', abs_path)
+            return jsonify({'code': 0, 'msg': '目录已创建'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/files/rename', methods=['POST'])
+    @require_super
+    def file_browser_rename():
+        """重命名文件/目录（仅超级管理员）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        path = str(data.get('path') or '').strip()
+        new_name = str(data.get('new_name') or '').strip()
+        if not path or not new_name:
+            return jsonify({'code': 400, 'msg': '缺少 path 或 new_name'}), 400
+        if '/' in new_name or '\\' in new_name or new_name in ('.', '..'):
+            return jsonify({'code': 400, 'msg': '非法名称'}), 400
+        abs_path = _safe_file_path(path)
+        if not abs_path or not os.path.exists(abs_path):
+            return jsonify({'code': 400, 'msg': '文件不存在'}), 400
+        new_abs = os.path.join(os.path.dirname(abs_path), new_name)
+        if not _safe_file_path(new_abs):
+            return jsonify({'code': 400, 'msg': '路径不允许'}), 400
+        if os.path.exists(new_abs):
+            return jsonify({'code': 400, 'msg': '目标已存在'}), 400
+        try:
+            os.rename(abs_path, new_abs)
+            audit_log(admin['id'], admin['username'], 'file_rename', 'file', f"{path} -> {new_name}")
+            return jsonify({'code': 0, 'msg': '重命名成功'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/files/delete', methods=['POST'])
+    @require_super
+    def file_browser_delete():
+        """删除文件/目录（递归，仅超级管理员）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        path = str(data.get('path') or '').strip()
+        if not path:
+            return jsonify({'code': 400, 'msg': '缺少 path'}), 400
+        abs_path = _safe_file_path(path)
+        if not abs_path or not os.path.exists(abs_path):
+            return jsonify({'code': 400, 'msg': '文件不存在'}), 400
+        if os.path.abspath(abs_path) == os.path.normpath(_project_root()):
+            return jsonify({'code': 400, 'msg': '禁止删除项目根目录'}), 400
+        try:
+            if os.path.isdir(abs_path):
+                shutil.rmtree(abs_path)
+            else:
+                os.remove(abs_path)
+            audit_log(admin['id'], admin['username'], 'file_delete', 'file', path)
+            return jsonify({'code': 0, 'msg': '已删除'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/files/upload', methods=['POST'])
+    @require_super
+    def file_browser_upload():
+        """上传文件到指定目录（multipart/form-data：字段 dir + 文件列表，仅超级管理员）"""
+        admin = request.admin
+        target = str(request.form.get('dir') or '').strip()
+        if not target:
+            return jsonify({'code': 400, 'msg': '缺少 dir'}), 400
+        abs_dir = _safe_file_path(target)
+        if not abs_dir or not os.path.isdir(abs_dir):
+            return jsonify({'code': 400, 'msg': '目标目录不存在'}), 400
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({'code': 400, 'msg': '未选择文件'}), 400
+        saved, failed = [], []
+        for f in files:
+            name = os.path.basename(f.filename or '')
+            if not name or name in ('.', '..'):
+                failed.append({'name': f.filename, 'err': '非法文件名'})
+                continue
+            dest = os.path.join(abs_dir, name)
+            if os.path.exists(dest):
+                base, ext = os.path.splitext(name)
+                i = 1
+                while os.path.exists(dest):
+                    dest = os.path.join(abs_dir, f"{base}({i}){ext}")
+                    i += 1
+            try:
+                f.save(dest)
+                saved.append(os.path.basename(dest))
+            except Exception as e:
+                failed.append({'name': name, 'err': str(e)})
+        if saved:
+            audit_log(admin['id'], admin['username'], 'file_upload', 'dir', target,
+                      {'saved': saved, 'failed': failed})
+        if failed:
+            return jsonify({'code': 0, 'msg': f'上传完成：成功 {len(saved)}，失败 {len(failed)}', 'saved': saved}), 200
+        return jsonify({'code': 0, 'msg': f'上传成功 {len(saved)} 个文件', 'saved': saved})
+
+    @app.route('/api/files/download', methods=['GET'])
+    @require_auth
+    def file_browser_download():
+        """下载文件"""
+        path = request.args.get('path', '').strip()
+        if not path:
+            return jsonify({'code': 400, 'msg': '缺少 path'}), 400
+        abs_path = _safe_file_path(path)
+        if not abs_path or not os.path.isfile(abs_path):
+            return jsonify({'code': 400, 'msg': '文件不存在'}), 400
+        return send_from_directory(
+            os.path.dirname(abs_path),
+            os.path.basename(abs_path),
+            as_attachment=True,
+        )
+
     # ---- 统计图表 ----
 
     @app.route('/api/stats/commands', methods=['GET'])
