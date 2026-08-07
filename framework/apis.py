@@ -611,8 +611,9 @@ def create_web_app(framework) -> Flask:
             secure=bool(request.is_secure),
         )
 
-    def require_auth(fn):
-        """登录验证装饰器（基于 token）"""
+    def _auth_wrap(fn, super_only=False):
+        """鉴权装饰器工厂：校验通过后把 token 同步种到 Cookie（iframe 场景兜底），
+        已登录的老会话无需重新登录即可获得 Cookie。"""
         @wraps(fn)
         def wrapper(*args, **kwargs):
             token = _extract_token(request)
@@ -621,25 +622,26 @@ def create_web_app(framework) -> Flask:
             admin = _verify_token(token)
             if not admin:
                 return jsonify({'code': 401, 'msg': '令牌无效或已过期'}), 401
+            if super_only and admin.get('role') != 'super':
+                return jsonify({'code': 403, 'msg': '权限不足，需要超级管理员'}), 403
             request.admin = admin  # 将 admin 信息附加到 request
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
+            if isinstance(result, tuple):
+                resp, status = result[0], (result[1] if len(result) > 1 else None)
+            else:
+                resp, status = result, None
+            if isinstance(resp, Response):
+                _sync_token_cookie(resp, token)
+            return (resp, status) if status else resp
         return wrapper
+
+    def require_auth(fn):
+        """登录验证装饰器（基于 token）"""
+        return _auth_wrap(fn, super_only=False)
 
     def require_super(fn):
         """超级管理员验证装饰器（基于 token）"""
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            token = _extract_token(request)
-            if not token:
-                return jsonify({'code': 401, 'msg': '未提供认证令牌'}), 401
-            admin = _verify_token(token)
-            if not admin:
-                return jsonify({'code': 401, 'msg': '令牌无效或已过期'}), 401
-            if admin.get('role') != 'super':
-                return jsonify({'code': 403, 'msg': '权限不足，需要超级管理员'}), 403
-            request.admin = admin
-            return fn(*args, **kwargs)
-        return wrapper
+        return _auth_wrap(fn, super_only=True)
 
     # ---- 认证接口 ----
 
@@ -3208,6 +3210,49 @@ def create_web_app(framework) -> Flask:
             os.rename(abs_path, new_abs)
             audit_log(admin['id'], admin['username'], 'file_rename', 'file', f"{path} -> {new_name}")
             return jsonify({'code': 0, 'msg': '重命名成功'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/files/copy', methods=['POST'])
+    @require_super
+    def file_browser_copy():
+        """复制文件/目录到指定目录（自动避重名，仅超级管理员）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        src = str(data.get('src') or '').strip()
+        dest_dir = str(data.get('dest_dir') or '').strip()
+        if not src or not dest_dir:
+            return jsonify({'code': 400, 'msg': '缺少 src 或 dest_dir'}), 400
+        abs_src = _safe_file_path(src)
+        abs_dest = _safe_file_path(dest_dir)
+        if not abs_src or not os.path.exists(abs_src):
+            return jsonify({'code': 400, 'msg': '源文件不存在'}), 400
+        if not abs_dest or not os.path.isdir(abs_dest):
+            return jsonify({'code': 400, 'msg': '目标目录不存在'}), 400
+        # 禁止把目录复制进自身内部
+        if os.path.isdir(abs_src):
+            src_real = os.path.realpath(abs_src)
+            dest_real = os.path.realpath(abs_dest)
+            if dest_real != src_real and os.path.commonpath([src_real, dest_real]) == src_real:
+                return jsonify({'code': 400, 'msg': '不能复制到自身内部'}), 400
+        name = os.path.basename(abs_src.rstrip('/\\'))
+        if not name:
+            return jsonify({'code': 400, 'msg': '非法路径'}), 400
+        target = os.path.join(abs_dest, name)
+        if os.path.exists(target):
+            base, ext = os.path.splitext(name)
+            i = 1
+            while os.path.exists(target):
+                target = os.path.join(abs_dest, f"{base}({i}){ext}")
+                i += 1
+        try:
+            if os.path.isdir(abs_src):
+                shutil.copytree(abs_src, target)
+            else:
+                shutil.copy2(abs_src, target)
+            audit_log(admin['id'], admin['username'], 'file_copy', 'file',
+                      f"{src} -> {target}")
+            return jsonify({'code': 0, 'msg': f'已复制为 {os.path.basename(target)}'})
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
