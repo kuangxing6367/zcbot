@@ -1648,50 +1648,113 @@ function fmtUptime(s) {
   return out;
 }
 
-/* ═══════════════ 文件浏览器 ═══════════════ */
+/* ═══════════════ 文件浏览器（宝塔风） ═══════════════ */
+
+function fmtFileSize(n) {
+  if (n === null || n === undefined || isNaN(n)) return '-';
+  if (n < 1024) return n + ' B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n, i = -1;
+  do { v = v / 1024; i++; } while (v >= 1024 && i < units.length - 1);
+  return v.toFixed(1) + ' ' + units[i];
+}
+
+function fmtMtime(t) {
+  if (!t) return '-';
+  try { return new Date(t * 1000).toLocaleString('zh-CN', { hour12: false }); }
+  catch (e) { return '-'; }
+}
+
+function escapeJs(s) {
+  return String(s)
+    .replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+    .replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
+function buildCrumbs(p) {
+  const segs = p ? p.split(/[\\/]+/).filter(Boolean) : [];
+  const parts = [{ label: '根目录', path: '' }];
+  let acc = '';
+  segs.forEach(s => {
+    acc = acc ? acc + '/' + s : s;
+    parts.push({ label: s, path: acc });
+  });
+  return parts;
+}
+
 Views.filebrowser = async function (view, basePath) {
-  window._fbPath = typeof basePath === 'string' ? basePath : '';
+  if (typeof basePath === 'string') window._fbPath = basePath;
+  else window._fbPath = window._fbPath || '';
+  const current = window._fbPath;
 
   const render = async () => {
-    const listRes = await api('/api/files/list?path=' + encodeURIComponent(window._fbPath));
-    const data = (listRes && listRes.data) || { entries: [], current_path: '' };
+    const listRes = await api('/api/files/list?path=' + encodeURIComponent(current));
+    const data = (listRes && listRes.code === 0 && listRes.data) || { entries: [] };
     const entries = data.entries || [];
     const dirs = entries.filter(e => e.is_dir);
     const files = entries.filter(e => !e.is_dir);
-    const currentPath = data.current_path || '';
+    const crumbs = buildCrumbs(current);
 
     view.innerHTML = `
-      <div class="flex between mb">
-        <div class="flex">
+      <div class="card mb">
+        <div class="fb-toolbar">
+          <button class="btn" onclick="Views._fbMkdir()">＋ 新建目录</button>
+          <button class="btn" onclick="document.getElementById('fbUploadInput').click()">↑ 上传文件</button>
+          <input type="file" id="fbUploadInput" multiple style="display:none">
+          <input class="input" id="fbSearch" placeholder="搜索名称..." style="max-width:220px">
           <button class="btn" onclick="Views.filebrowser(document.getElementById('view'), window._fbPath)">⟳ 刷新</button>
-          <span class="small muted ml" style="align-self:center">${escapeHtml(currentPath) || '选择目录'}</span>
         </div>
-        <span class="muted small">${dirs.length} 目录 · ${files.length} 文件</span>
+        <div class="fb-crumb">
+          ${crumbs.map((c, i) => `
+            <span class="seg" onclick="Views.filebrowser(document.getElementById('view'), '${escapeJs(c.path)}')">${escapeHtml(c.label)}</span>
+            ${i < crumbs.length - 1 ? '<span class="sep">/</span>' : ''}`).join('')}
+        </div>
+        <table class="tbl">
+          <tr><th>名称</th><th style="width:90px">大小</th><th style="width:170px">修改时间</th><th style="width:200px">操作</th></tr>
+          ${!current ? '' : `<tr><td><div class="fb-name" onclick="Views._fbGoUp()">↩ ..（上级）</div></td><td class="small dim">-</td><td class="small dim">-</td><td></td></tr>`}
+          ${dirs.map(e => `
+            <tr data-path="${encodeURIComponent(e.path)}">
+              <td><div class="fb-name" onclick="Views._fbEnterDir('${encodeURIComponent(e.path)}')"><span class="ficon">📁</span>${escapeHtml(e.name)}</div></td>
+              <td class="small dim">-</td><td class="small dim">${fmtMtime(e.mtime)}</td>
+              <td><div class="fb-actions">
+                <button class="btn sm" onclick="Views._fbRename('${encodeURIComponent(e.path)}', '${escapeJs(e.name)}')">重命名</button>
+                <button class="btn sm danger" onclick="Views._fbDelete('${encodeURIComponent(e.path)}', '${escapeJs(e.name)}')">删除</button>
+              </div></td>
+            </tr>`).join('')}
+          ${files.map(e => `
+            <tr data-path="${encodeURIComponent(e.path)}">
+              <td><div class="fb-name" onclick="Views._fbOpenFile('${encodeURIComponent(e.path)}')"><span class="ficon">📄</span>${escapeHtml(e.name)}</div></td>
+              <td class="small dim">${fmtFileSize(e.size)}</td><td class="small dim">${fmtMtime(e.mtime)}</td>
+              <td><div class="fb-actions">
+                <button class="btn sm" onclick="Views._fbDownload('${encodeURIComponent(e.path)}')">下载</button>
+                <button class="btn sm" onclick="Views._fbRename('${encodeURIComponent(e.path)}', '${escapeJs(e.name)}')">重命名</button>
+                <button class="btn sm danger" onclick="Views._fbDelete('${encodeURIComponent(e.path)}', '${escapeJs(e.name)}')">删除</button>
+              </div></td>
+            </tr>`).join('')}
+        </table>
+        ${!entries.length ? '<div class="fb-empty">空目录</div>' : ''}
       </div>
-      <div class="file-panel">
-        <div class="file-tree">
-          ${!window._fbPath ? '' : `<div class="file-tree-item" onclick="Views._fbGoUp()"><span class="ficon">↩</span><span class="fname">.. (上级)</span></div>`}
-          ${dirs.map(e => {
-            return `<div class="file-tree-item" onclick="Views._fbEnterDir('${encodeURIComponent(e.path)}')">
-              <span class="ficon">📁</span><span class="fname">${escapeHtml(e.name)}</span></div>`;
-          }).join('')}
-          ${files.map(e => {
-            const active = window._fbFile === e.path ? 'active' : '';
-            return `<div class="file-tree-item ${active}" onclick="Views._fbOpenFile('${encodeURIComponent(e.path)}')">
-              <span class="ficon">📄</span><span class="fname">${escapeHtml(e.name)}</span>
-              <span class="fsize">${e.size < 1024 ? e.size + 'B' : (e.size / 1024).toFixed(1) + 'KB'}</span></div>`;
-          }).join('')}
-          ${!entries.length ? '<div class="empty">空目录</div>' : ''}
-        </div>
-        <div class="file-editor" id="fbEditor">
-          <div class="file-path-bar" id="fbPathBar">选择左侧文件查看内容</div>
-          <textarea class="textarea" id="fbContent" placeholder="选择文件后编辑内容..." readonly></textarea>
-          <div class="flex">
-            <button class="btn primary" id="fbSaveBtn" style="display:none" onclick="Views._fbSaveFile()">保存</button>
-            <span class="small dim ml" id="fbSaveMsg"></span>
-          </div>
+      <div class="card">
+        <div class="file-path-bar" id="fbPathBar">点击文件名查看 / 编辑内容</div>
+        <textarea class="textarea" id="fbContent" placeholder="选择文件后编辑内容..." readonly style="min-height:280px"></textarea>
+        <div class="flex">
+          <button class="btn primary" id="fbSaveBtn" style="display:none" onclick="Views._fbSaveFile()">保存</button>
+          <span class="small dim ml" id="fbSaveMsg"></span>
         </div>
       </div>`;
+
+    // 上传
+    const up = document.getElementById('fbUploadInput');
+    if (up) up.addEventListener('change', Views._fbUpload);
+    // 搜索过滤
+    const search = document.getElementById('fbSearch');
+    if (search) search.addEventListener('input', () => {
+      const q = search.value.toLowerCase();
+      view.querySelectorAll('.tbl tr[data-path]').forEach(tr => {
+        const name = decodeURIComponent(tr.getAttribute('data-path')).split(/[\\/]/).pop().toLowerCase();
+        tr.style.display = name.indexOf(q) >= 0 ? '' : 'none';
+      });
+    });
   };
 
   await render();
@@ -1709,6 +1772,80 @@ Views._fbGoUp = function () {
   window._fbPath = parent || '';
   window._fbFile = '';
   Views.filebrowser(document.getElementById('view'), parent || '');
+};
+
+Views._fbMkdir = function () {
+  const mask = openModal(`
+    <div class="modal-head"><span>新建目录</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label>目录名</label><input class="input" id="fbMkdirName" placeholder="请输入目录名"></div>
+      <div class="small dim">位置：${escapeHtml(window._fbPath || '根目录')}</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" onclick="Views._fbMkdirDo()">创建</button>
+    </div>`);
+  const input = mask.querySelector('#fbMkdirName');
+  setTimeout(() => input && input.focus(), 50);
+};
+
+Views._fbMkdirDo = async function () {
+  const name = (document.getElementById('fbMkdirName').value || '').trim();
+  if (!name || /[\\/]/.test(name) || name === '.' || name === '..') { toast('非法目录名', 'warning'); return; }
+  const target = window._fbPath ? window._fbPath.replace(/[\\/]+$/, '') + '/' + name : name;
+  const r = await api('/api/files/mkdir', { method: 'POST', body: JSON.stringify({ path: target }) });
+  toast((r && r.msg) || '创建失败', r && r.code === 0 ? 'success' : 'error');
+  if (r && r.code === 0) { closeModal(); Views.filebrowser(document.getElementById('view'), window._fbPath); }
+};
+
+Views._fbUpload = async function () {
+  const input = document.getElementById('fbUploadInput');
+  if (!input || !input.files || !input.files.length) return;
+  const fd = new FormData();
+  fd.append('dir', window._fbPath || '');
+  for (const f of input.files) fd.append('files', f);
+  const r = await api('/api/files/upload', { method: 'POST', body: fd });
+  toast((r && r.msg) || '上传失败', r && r.code === 0 ? 'success' : 'error');
+  if (r && r.code === 0) Views.filebrowser(document.getElementById('view'), window._fbPath);
+};
+
+Views._fbRename = function (path, oldName) {
+  const mask = openModal(`
+    <div class="modal-head"><span>重命名</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label>新名称</label><input class="input" id="fbRenameName" value="${escapeHtml(oldName)}"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" onclick="Views._fbRenameDo('${path}')">重命名</button>
+    </div>`);
+  const input = mask.querySelector('#fbRenameName');
+  setTimeout(() => { if (input) { input.focus(); input.select(); } }, 50);
+};
+
+Views._fbRenameDo = async function (path) {
+  const newName = (document.getElementById('fbRenameName').value || '').trim();
+  if (!newName || /[\\/]/.test(newName) || newName === '.' || newName === '..') { toast('非法名称', 'warning'); return; }
+  const r = await api('/api/files/rename', {
+    method: 'POST',
+    body: JSON.stringify({ path: decodeURIComponent(path), new_name: newName }),
+  });
+  toast((r && r.msg) || '重命名失败', r && r.code === 0 ? 'success' : 'error');
+  if (r && r.code === 0) { closeModal(); Views.filebrowser(document.getElementById('view'), window._fbPath); }
+};
+
+Views._fbDelete = async function (path, name) {
+  if (!await confirmDialog(`确定删除「${escapeHtml(name)}」吗？目录将递归删除，不可恢复。`, '删除')) return;
+  const r = await api('/api/files/delete', { method: 'POST', body: JSON.stringify({ path: decodeURIComponent(path) }) });
+  toast((r && r.msg) || '删除失败', r && r.code === 0 ? 'success' : 'error');
+  if (r && r.code === 0) {
+    if (window._fbFile === decodeURIComponent(path)) window._fbFile = '';
+    Views.filebrowser(document.getElementById('view'), window._fbPath);
+  }
+};
+
+Views._fbDownload = function (path) {
+  window.open('/api/files/download?path=' + path, '_blank');
 };
 
 Views._fbOpenFile = async function (path) {
@@ -1729,10 +1866,8 @@ Views._fbOpenFile = async function (path) {
   el.readOnly = false;
   if (bar) bar.textContent = res.data.path;
   if (saveBtn) saveBtn.style.display = 'inline-flex';
-  // 高亮激活项
-  document.querySelectorAll('.file-tree-item').forEach(item => item.classList.remove('active'));
-  const activeItem = document.querySelector(`.file-tree-item[onclick*="${escapeHtml(path)}"]`);
-  if (activeItem) activeItem.classList.add('active');
+  document.querySelectorAll('.tbl tr[data-path]').forEach(tr =>
+    tr.classList.toggle('active', tr.getAttribute('data-path') === encodeURIComponent(path)));
 };
 
 Views._fbSaveFile = async function () {
