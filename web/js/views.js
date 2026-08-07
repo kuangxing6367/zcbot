@@ -796,9 +796,11 @@ Views.settings = async function (view) {
           <div class="card-title">框架操作</div>
           <div class="flex wrap mb">
             <button class="btn" onclick="Views.checkFrameworkUpdate()">检查框架更新</button>
+            <button class="btn" onclick="Views.loadFrameworkBackups()">查看备份 / 回滚</button>
             <button class="btn danger" onclick="Views.restartFramework()">重启框架</button>
           </div>
           <div id="fwUpdateInfo"></div>
+          <div id="fwBackupInfo"></div>
           <div class="small dim mt">更新框架仅覆盖代码（framework/web/main.py 等），自动保留 plugins/、data/、config.yaml；旧代码备份到 data/backups/，更新后需重启生效。</div>
         </div>
       </div>
@@ -920,6 +922,30 @@ Views.doFrameworkUpdate = async function () {
   const r = await api('/api/framework/update', { method: 'POST' });
   if (r && r.code === 0) { toast(r.msg, 'success'); Views.checkFrameworkUpdate(); }
   else toast((r && r.msg) || '更新失败', 'error');
+};
+
+Views.loadFrameworkBackups = async function () {
+  const el = document.getElementById('fwBackupInfo');
+  const r = await api('/api/framework/backups');
+  if (!el) return;
+  if (!r || r.code !== 0) { el.innerHTML = `<div class="small dim">${escapeHtml((r && r.msg) || '获取备份失败')}</div>`; return; }
+  const list = (r.data && r.data.backups) || [];
+  el.innerHTML = `
+    <div class="small mb">框架更新备份（${list.length}）:</div>
+    ${list.length ? list.map(b => `
+      <div class="flex between mb">
+        <span class="small mono">${escapeHtml(b.name)} <span class="dim">(${escapeHtml(b.time)})</span></span>
+        <button class="btn sm danger" onclick="Views.rollbackFramework('${escapeHtml(b.name)}')">回滚</button>
+      </div>`).join('')
+      : '<div class="small dim">暂无备份。每次「更新框架」都会自动生成备份。</div>'}
+  `;
+};
+
+Views.rollbackFramework = async function (name) {
+  if (!await confirmDialog(`确定回滚到 ${name} 吗？\n当前 framework 代码将被替换（旧代码留档 data/backups/current/），回滚后需重启生效。`, '回滚框架')) return;
+  const r = await api('/api/framework/rollback', { method: 'POST', body: JSON.stringify({ backup: name }) });
+  if (r && r.code === 0) { toast(r.msg, 'success'); Views.loadFrameworkBackups(); }
+  else toast((r && r.msg) || '回滚失败', 'error');
 };
 
 // 离开日志页时关闭轮询定时器 / 运行状态定时器
