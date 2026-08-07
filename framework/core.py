@@ -358,19 +358,27 @@ class Framework:
         for plugin_name in loaded:
             self.plugin_loader.register_commands(plugin_name)
 
-        # 4. 启动统计批量写库器
+        # 4. 启动路由表后台刷新（构建纯内存路由表，热路径零 DB）
+        self.router.start(self.loop)
+        # 预热路由表：首次构建是阻塞的，确保服务端启动后即可路由
+        try:
+            await asyncio.to_thread(self.router._rebuild_routes)
+        except Exception as e:
+            logger.error(f"路由表预热失败: {e}")
+
+        # 5. 启动统计批量写库器
         self.stats_writer.start()
 
-        # 5. 启动插件注册心跳（异步任务）
+        # 6. 启动插件注册心跳（异步任务）
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="heartbeat")
 
-        # 6. 启动 WebSocket 服务端（运行在主事件循环）
+        # 7. 启动 WebSocket 服务端（运行在主事件循环）
         self.ws_server.start_async()
 
-        # 7. 启动 Web UI（独立线程）
+        # 8. 启动 Web UI（独立线程）
         self.web_server.start()
 
-        # 8. 触发系统事件
+        # 9. 触发系统事件
         await self.event_bus.aemit('system.plugin.loaded', {'plugins': loaded})
 
         logger.info("框架启动完成，等待消息...")
@@ -571,6 +579,12 @@ class Framework:
             await self.stats_writer.stop()
         except Exception as e:
             logger.warning(f"统计写库器停止异常: {e}")
+
+        # 停止路由表刷新任务
+        try:
+            await self.router.stop()
+        except Exception as e:
+            logger.warning(f"路由表刷新任务停止异常: {e}")
 
         # 停止插件心跳任务
         if self._heartbeat_task:
