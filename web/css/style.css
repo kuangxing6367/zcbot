@@ -34,6 +34,46 @@
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --mono: "JetBrains Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  --statusbar-bg: #1f2233;
+  --log-bg: #0b0d13;
+  --scrollbar-thumb: #2c3146;
+  --scrollbar-hover: #3a415c;
+  --topbar-bg: rgba(15, 17, 23, 0.82);
+  color-scheme: dark;
+}
+
+/* ─────────────── 浅色主题（data-theme="light"）─────────────── */
+
+:root[data-theme="light"] {
+  --bg: #f2f4fa;
+  --bg-elev: #ffffff;
+  --surface: #ffffff;
+  --surface-hover: #eef1f8;
+  --surface-active: #e5e9f4;
+  --border: #e2e6f0;
+  --border-light: #d3dbeb;
+  --text: #1c2233;
+  --text-muted: #57617a;
+  --text-dim: #9aa1b5;
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-soft: rgba(99, 102, 241, 0.1);
+  --accent-border: rgba(99, 102, 241, 0.35);
+  --success: #16a34a;
+  --success-soft: rgba(22, 163, 74, 0.1);
+  --warning: #d97706;
+  --warning-soft: rgba(217, 119, 6, 0.1);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.1);
+  --info: #0284c7;
+  --info-soft: rgba(2, 132, 199, 0.1);
+  --shadow: 0 4px 20px rgba(18, 25, 45, 0.12);
+  --statusbar-bg: #e9edf6;
+  --log-bg: #ffffff;
+  --scrollbar-thumb: #c3cadb;
+  --scrollbar-hover: #a9b2cb;
+  --topbar-bg: rgba(255, 255, 255, 0.85);
+  color-scheme: light;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -53,8 +93,8 @@ a { color: var(--accent-hover); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: #2c3146; border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: #3a415c; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ─────────────── 布局骨架 ─────────────── */
@@ -86,15 +126,11 @@ a:hover { text-decoration: underline; }
 .brand-logo {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #6366f1, #a855f7);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: -0.5px;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .brand-name { font-weight: 700; font-size: 15px; letter-spacing: 0.3px; }
@@ -158,7 +194,7 @@ a:hover { text-decoration: underline; }
   position: sticky;
   top: 0;
   height: var(--topbar-h);
-  background: rgba(15, 17, 23, 0.82);
+  background: var(--topbar-bg);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -166,6 +202,21 @@ a:hover { text-decoration: underline; }
   gap: 14px;
   padding: 0 22px;
   z-index: 90;
+}
+
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+
+.theme-toggle {
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.login-theme-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 200;
 }
 
 .topbar-title { font-size: 16px; font-weight: 700; flex: 1; }
@@ -195,7 +246,7 @@ a:hover { text-decoration: underline; }
 
 .statusbar {
   height: 26px;
-  background: #1f2233;
+  background: var(--statusbar-bg);
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -498,7 +549,7 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .log-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
 .log-toolbar .input { flex: 1; min-width: 180px; }
 .log-box {
-  background: #0b0d13;
+  background: var(--log-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 12px;
@@ -595,17 +646,25 @@ mark { background: rgba(245, 158, 11, 0.25); color: var(--warning); padding: 0 2
 }
 
 .login-logo {
-  width: 52px;
-  height: 52px;
+  width: 64px;
+  height: 64px;
   border-radius: 14px;
-  background: linear-gradient(135deg, #6366f1, #a855f7);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
-  font-weight: 700;
-  color: #fff;
   margin: 0 auto 16px;
+}
+.login-logo-img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+  object-fit: contain;
+}
+.brand-logo-img {
+  width: 26px;
+  height: auto;
+  border-radius: 6px;
+  display: block;
 }
 
 .login-title { text-align: center; font-size: 19px; font-weight: 700; margin-bottom: 4px; }
@@ -693,6 +752,19 @@ mark { background: rgba(245, 158, 11, 0.25); color: var(--warning); padding: 0 2
 .file-editor { flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .file-editor .textarea { flex: 1; min-height: 200px; font-family: var(--mono); font-size: 13px; line-height: 1.6; }
 .file-path-bar { padding: 6px 10px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; color: var(--text-muted); font-family: var(--mono); word-break: break-all; }
+
+/* ─────────────── 文件浏览器（宝塔风） ─────────────── */
+.fb-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+.fb-crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; padding: 7px 10px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 12px; font-size: 12.5px; }
+.fb-crumb .seg { cursor: pointer; color: var(--text-muted); padding: 2px 6px; border-radius: 4px; user-select: none; }
+.fb-crumb .seg:hover { background: var(--surface-hover); color: var(--text); }
+.fb-crumb .sep { color: var(--text-dim); }
+.fb-name { cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.fb-name:hover { color: var(--accent-hover); }
+.fb-name .ficon { width: 16px; text-align: center; flex-shrink: 0; }
+.fb-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.fb-empty { padding: 36px; text-align: center; color: var(--text-dim); }
+.tbl tr.active td { background: var(--accent-soft); }
 
 /* ─────────────── 统计图表 ─────────────── */
 

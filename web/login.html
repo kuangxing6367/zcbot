@@ -3,13 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
   <title>登录 · ZCBOT 管理面板</title>
+  <script>
+    try {
+      var t = localStorage.getItem('zcbot_theme') ||
+        (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
+  <button class="theme-toggle login-theme-toggle" id="themeToggle" title="切换主题">◐</button>
   <div class="login-wrap">
     <div class="login-card">
-      <div class="login-logo">ZC</div>
+      <div class="login-logo"><img src="/img/logo.png" alt="ZCBOT" class="login-logo-img"></div>
       <div class="login-title">ZCBOT 管理面板</div>
       <div class="login-sub">OneBot QQ 机器人统一管理平台</div>
 
@@ -31,6 +40,18 @@
   <div class="toast-container" id="toasts"></div>
   <script>
     const TOKEN_KEY = 'zcbot_token';
+
+    (function themeToggle() {
+      const el = document.getElementById('themeToggle');
+      if (!el) return;
+      el.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀' : '☾';
+      el.addEventListener('click', () => {
+        const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('zcbot_theme', next);
+        el.textContent = next === 'light' ? '☀' : '☾';
+      });
+    })();
 
     function toast(msg, type = 'info') {
       const c = document.getElementById('toasts');
