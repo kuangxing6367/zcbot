@@ -1649,8 +1649,8 @@ function fmtUptime(s) {
 }
 
 /* ═══════════════ 文件浏览器 ═══════════════ */
-Views.filebrowser = async function (view) {
-  window._fbPath = '';
+Views.filebrowser = async function (view, basePath) {
+  window._fbPath = typeof basePath === 'string' ? basePath : '';
 
   const render = async () => {
     const listRes = await api('/api/files/list?path=' + encodeURIComponent(window._fbPath));
@@ -1663,7 +1663,7 @@ Views.filebrowser = async function (view) {
     view.innerHTML = `
       <div class="flex between mb">
         <div class="flex">
-          <button class="btn" onclick="Views.filebrowser(document.getElementById('view'))">⟳ 刷新</button>
+          <button class="btn" onclick="Views.filebrowser(document.getElementById('view'), window._fbPath)">⟳ 刷新</button>
           <span class="small muted ml" style="align-self:center">${escapeHtml(currentPath) || '选择目录'}</span>
         </div>
         <span class="muted small">${dirs.length} 目录 · ${files.length} 文件</span>
@@ -1698,16 +1698,17 @@ Views.filebrowser = async function (view) {
 };
 
 Views._fbEnterDir = function (path) {
-  window._fbPath = decodeURIComponent(path);
+  const p = decodeURIComponent(path);
+  window._fbPath = p;
   window._fbFile = '';
-  Views.filebrowser(document.getElementById('view'));
+  Views.filebrowser(document.getElementById('view'), p);
 };
 
 Views._fbGoUp = function () {
   const parent = window._fbPath ? window._fbPath.replace(/[\\/]+$/, '').split(/[\\/]/).slice(0, -1).join('/') : '';
   window._fbPath = parent || '';
   window._fbFile = '';
-  Views.filebrowser(document.getElementById('view'));
+  Views.filebrowser(document.getElementById('view'), parent || '');
 };
 
 Views._fbOpenFile = async function (path) {
