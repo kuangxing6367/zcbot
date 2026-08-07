@@ -1124,6 +1124,12 @@ class PluginLoader:
             self._sync_dashboard_cards(plugin_name, dashboard_cards)
 
         logger.info(f"[{plugin_name}] 注册完成: {len(commands)} 命令, {len(tasks)} 定时任务")
+
+        # 命令已写入 DB，让路由表立即重建（热路径内存快照要求一致）
+        try:
+            self.framework.router._invalidate_cache()
+        except Exception:
+            pass
         return True
 
     def _sync_commands(self, plugin_name: str, commands: list):
@@ -1252,6 +1258,11 @@ class PluginLoader:
                 self.framework.router._invalidate_cache()
             except Exception:
                 pass
+        # 无论是否发生变化，心跳后也刷新一次路由表（兜底：DB 与内存对齐）
+        try:
+            self.framework.router._invalidate_cache()
+        except Exception:
+            pass
 
     def load_all(self) -> list:
         """加载所有已发现插件，返回成功列表"""
@@ -1416,6 +1427,12 @@ class PluginLoader:
 
         logger.info(f"[{plugin_name}] 已卸载")
 
+        # 插件已从内存移除，让路由表立即重建，避免路由到已卸载插件
+        try:
+            self.framework.router._invalidate_cache()
+        except Exception:
+            pass
+
     def get_loaded_plugins(self) -> Dict[str, dict]:
         """获取已加载插件列表"""
         with self._lock:
@@ -1526,6 +1543,19 @@ class PluginLoader:
         # 刷新缓存
         self._refresh_group_plugin_cache()
 
+        group_settings = self._group_plugin_cache.get(group_id)
+        if group_settings is not None and plugin_name in group_settings:
+            return group_settings[plugin_name]
+        return True  # 无记录 = 启用
+
+    def is_plugin_enabled_for_group_cached(self, plugin_name: str, group_id: int) -> bool:
+        """
+        检查插件在指定群是否启用（纯内存，不刷新缓存、不查库）
+        供消息路由热路径使用：群开关缓存由路由表的后台刷新任务周期性维护
+        默认启用（表中无记录时视为启用）
+        """
+        if not group_id:
+            return True  # 私聊不做限制
         group_settings = self._group_plugin_cache.get(group_id)
         if group_settings is not None and plugin_name in group_settings:
             return group_settings[plugin_name]

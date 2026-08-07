@@ -2,6 +2,31 @@
 Event 对象
 封装 OneBot 11 上报的事件数据，供插件 handler 使用
 """
+import time
+
+# 权限查询 TTL 缓存（热路径性能：避免每个事件反复查库）
+# 用户：user_id -> (role, is_blacklist, ts) ；群成员：(`group_id`,`user_id`) -> (role, ts)
+_ROLE_CACHE_TTL = 60.0
+_user_role_cache: dict = {}
+_group_role_cache: dict = {}
+
+
+def invalidate_user_role_cache(user_id: int = None):
+    """清除用户权限缓存（Web 端修改权限后调用，None=全部）"""
+    if user_id is None:
+        _user_role_cache.clear()
+    else:
+        _user_role_cache.pop(user_id, None)
+
+
+def invalidate_group_role_cache(group_id: int = None, user_id: int = None):
+    """清除群成员权限缓存"""
+    if group_id is None:
+        _group_role_cache.clear()
+    else:
+        for k in [k for k in _group_role_cache if
+                  k[0] == group_id and (user_id is None or k[1] == user_id)]:
+            _group_role_cache.pop(k, None)
 
 
 def _extract_text(message):
@@ -85,7 +110,7 @@ class Event:
         """
         完整身份等级（参考 AstrBot 权限层级）：
         super（超管）> owner（群主）> admin（管理员）> member（成员）> blacklist（黑名单）
-        首次查询后缓存结果，避免重复查库
+        首次查询后缓存结果，避免重复查库；底层权限查询带 60s TTL 内存缓存
         """
         if self._role_cache is not None:
             return self._role_cache
@@ -94,23 +119,48 @@ class Event:
             return self._role_cache
         try:
             db = self._framework.db
-            # 超管检查
-            row = db.query_one("SELECT role FROM users WHERE user_id=%s", (self.user_id,))
-            if row and row.get('role') == 'super':
+            now = time.time()
+            uid = self.user_id
+
+            # 用户级（super / blacklist）查询（60s TTL 内存缓存）
+            u_entry = _user_role_cache.get(uid)
+            if u_entry is None or now - u_entry[2] > _ROLE_CACHE_TTL:
+                row = db.query_one(
+                    "SELECT role, is_blacklist FROM users WHERE user_id=%s", (uid,))
+                if row:
+                    u_entry = (
+                        row.get('role') or '',
+                        1 if row.get('is_blacklist') else 0,
+                        now,
+                    )
+                else:
+                    u_entry = ('', 0, now)
+                _user_role_cache[uid] = u_entry
+            role, is_blacklist, _ = u_entry
+
+            if role == 'super':
                 self._role_cache = 'super'
                 return 'super'
-            if row and row.get('is_blacklist') == 1:
+            if is_blacklist:
                 self._role_cache = 'blacklist'
                 return 'blacklist'
-            # 群内角色
+
+            # 群内角色（TTL 缓存）
             if self.is_group and self.group_id:
-                grp = db.query_one(
-                    "SELECT role FROM group_members WHERE group_id=%s AND user_id=%s",
-                    (self.group_id, self.user_id)
-                )
-                if grp and grp.get('role') in ('owner', 'admin'):
-                    self._role_cache = grp['role']
-                    return grp['role']
+                gkey = (self.group_id, uid)
+                grp_cached = _group_role_cache.get(gkey)
+                if grp_cached is None or now - grp_cached[1] > _ROLE_CACHE_TTL:
+                    grp = db.query_one(
+                        "SELECT role FROM group_members WHERE group_id=%s AND user_id=%s",
+                        (self.group_id, uid)
+                    )
+                    grole = (grp.get('role') or 'member') if grp else 'member'
+                    _group_role_cache[gkey] = (grole, now)
+                else:
+                    grole = grp_cached[0]
+                if grole in ('owner', 'admin'):
+                    self._role_cache = grole
+                    return grole
             self._role_cache = 'member'
             return 'member'
         except Exception:
