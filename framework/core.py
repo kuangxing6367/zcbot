@@ -14,6 +14,7 @@ import logging.handlers
 import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 from framework.config import load_config
 from framework.db import init_db
@@ -62,12 +63,19 @@ class AsyncStatsWriter:
         while True:
             try:
                 await asyncio.sleep(self.flush_interval)
-                await asyncio.to_thread(self._flush)
+                await self._run_in_db_thread(self._flush)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error(f"统计批量写库异常: {e}")
                 await asyncio.sleep(1)
+
+    async def _run_in_db_thread(self, func):
+        """在数据库专用线程池中执行（与默认线程池隔离，DB 阻塞不影响消息处理）"""
+        ex = getattr(self.framework, '_db_executor', None)
+        if ex is not None:
+            return await asyncio.get_running_loop().run_in_executor(ex, func)
+        return await asyncio.to_thread(func)
 
     def _flush(self):
         """批量落库（在线程中执行）"""
@@ -175,6 +183,13 @@ class Framework:
 
         # 数据库
         self.db = init_db(self.config['database'])
+
+        # 数据库专用线程池：DB 操作与默认线程池（sync handler / 定时任务）隔离，
+        # 避免某次 DB 阻塞（如连接池繁忙）把整个框架的线程池占满导致消息停摆
+        self._db_executor = ThreadPoolExecutor(
+            max_workers=max(8, min(32, (os.cpu_count() or 4) * 2)),
+            thread_name_prefix='zcdb',
+        )
 
         # API 调用器
         self.api_caller = ApiCaller()
@@ -577,6 +592,12 @@ class Framework:
 
         # 停止调度器
         self.scheduler.stop()
+
+        # 关闭数据库专用线程池
+        try:
+            self._db_executor.shutdown(wait=False)
+        except Exception as e:
+            logger.warning(f"数据库线程池关闭异常: {e}")
 
         # 触发系统事件
         await self.event_bus.aemit('system.plugin.unloaded', {})
