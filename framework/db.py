@@ -783,14 +783,17 @@ def init_db(config: dict):
 
 def _auto_create_tables(database):
     """自动创建框架所需的扩展表"""
+    # 列类型统一用 VARCHAR（SQLite 宽松类型同样兼容）：
+    # - TEXT 列不能作为 MySQL 索引键（缺 key length）
+    # - TEXT 列不能带 DEFAULT（MySQL 报错）
     tables = {
         'group_plugin_settings': """
             CREATE TABLE IF NOT EXISTS group_plugin_settings (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 group_id    INTEGER NOT NULL,
-                plugin_name TEXT NOT NULL,
+                plugin_name VARCHAR(64) NOT NULL,
                 enabled     INTEGER DEFAULT 1,
-                updated_at  TEXT,
+                updated_at  VARCHAR(32),
                 UNIQUE(group_id, plugin_name)
             )
         """,
@@ -798,12 +801,12 @@ def _auto_create_tables(database):
         'ip_blacklist': """
             CREATE TABLE IF NOT EXISTS ip_blacklist (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                ip          TEXT NOT NULL,
-                reason      TEXT,
-                source      TEXT DEFAULT 'manual',
-                expires_at  TEXT,
-                created_at  TEXT,
-                updated_at  TEXT,
+                ip          VARCHAR(64) NOT NULL,
+                reason      VARCHAR(255),
+                source      VARCHAR(32) DEFAULT 'manual',
+                expires_at  VARCHAR(32),
+                created_at  VARCHAR(32),
+                updated_at  VARCHAR(32),
                 UNIQUE(ip)
             )
         """,
