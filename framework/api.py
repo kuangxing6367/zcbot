@@ -98,6 +98,17 @@ class BotConnection:
                 return {"status": "failed", "retcode": -2, "msg": "请求超时"}
 
             resp = self._responses.pop(echo, {})
+            # 消息发送成功后的生命周期钩子（action 属于发送类且回执无错误）
+            if action in _SENT_ACTIONS:
+                retcode = resp.get('retcode')
+                if retcode in (0, None):
+                    caller = getattr(self, '_caller', None)
+                    cb = getattr(caller, 'on_message_sent', None)
+                    if cb is not None:
+                        try:
+                            cb(self.name, action, params, resp)
+                        except Exception as e:
+                            logger.error(f"after_message_sent 回调异常: {e}")
             return resp
 
         except Exception as e:
@@ -139,10 +150,12 @@ class ApiCaller:
 
     def __init__(self):
         self._connections = {}  # name -> BotConnection
+        self.on_message_sent = None  # 生命周期钩子: (bot_name, action, params, resp) -> None
 
     def register_connection(self, name: str) -> BotConnection:
         """注册一个 OneBot 连接通道"""
         conn = BotConnection(name)
+        conn._caller = self
         self._connections[name] = conn
         return conn
 

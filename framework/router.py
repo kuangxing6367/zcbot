@@ -411,11 +411,26 @@ class MessageRouter:
                     # 注入当前事件的 bot 到 ctx，确保回复走正确的 OneBot 实例
                     if hasattr(module, 'ctx'):
                         module.ctx._current_bot = ev.bot_name
-                    if asyncio.iscoroutinefunction(handler):
-                        result = await handler(ev, match)
-                    else:
-                        # 同步 handler 转线程执行，不阻塞事件循环
-                        result = await asyncio.to_thread(handler, ev, match)
+                    try:
+                        if asyncio.iscoroutinefunction(handler):
+                            result = await handler(ev, match)
+                        else:
+                            # 同步 handler 转线程执行，不阻塞事件循环
+                            result = await asyncio.to_thread(handler, ev, match)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.error(
+                            f"[{plugin_name}] handler 异常: {cmd.handler_name} - {e}",
+                            exc_info=True)
+                        # 生命周期钩子：插件 on_error(event, error) 处理自己的错误
+                        try:
+                            on_error = getattr(module, 'on_error', None)
+                            if callable(on_error):
+                                on_error(ev, e)
+                        except Exception as he:
+                            logger.error(f"[{plugin_name}] on_error 钩子异常: {he}")
+                        return True  # 视为已处理，避免半处理消息继续传播
                     # handler 返回 False 表示"未实际处理，继续路由"
                     if result is False:
                         continue
