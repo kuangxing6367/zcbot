@@ -1125,6 +1125,16 @@ class PluginLoader:
 
         logger.info(f"[{plugin_name}] 注册完成: {len(commands)} 命令, {len(tasks)} 定时任务")
 
+        # 生命周期钩子：插件首次加载完成后触发一次（重载会重新触发）
+        try:
+            if not info.get('hook_loaded'):
+                on_loaded = getattr(module, 'on_loaded', None)
+                if callable(on_loaded):
+                    on_loaded(ctx)
+                info['hook_loaded'] = True
+        except Exception as e:
+            logger.error(f"[{plugin_name}] on_loaded 钩子异常: {e}")
+
         # 命令已写入 DB，让路由表立即重建（热路径内存快照要求一致）
         try:
             self.framework.router._invalidate_cache()

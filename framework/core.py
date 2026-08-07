@@ -193,6 +193,7 @@ class Framework:
 
         # API 调用器
         self.api_caller = ApiCaller()
+        self.api_caller.on_message_sent = self._on_message_sent
 
         # 事件总线
         self.event_bus = EventBus()
@@ -465,6 +466,18 @@ class Framework:
                         )
             except Exception as e:
                 logger.error(f"[{plugin_name}] 依赖自愈异常: {e}")
+
+    def _on_message_sent(self, bot_name: str, action: str, params: dict, resp: dict):
+        """消息发送成功后的生命周期钩子（转发为 after_message_sent 事件）"""
+        try:
+            self.loop.create_task(self.event_bus.aemit('after_message_sent', {
+                'bot': bot_name,
+                'action': action,
+                'params': params,
+                'response': resp,
+            }))
+        except Exception as e:
+            logger.debug(f"after_message_sent 事件派发失败: {e}")
 
     def _on_bot_connect(self, bot_name: str, ws):
         """OneBot 客户端连接时的回调"""

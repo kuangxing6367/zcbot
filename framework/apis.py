@@ -103,6 +103,35 @@ def create_web_app(framework) -> Flask:
         except Exception:
             return ''
 
+    def _install_new_requirements():
+        """扫描新 requirements.txt，自动安装缺失依赖（框架更新后调用）"""
+        import importlib.metadata
+        req_file = os.path.join(_project_root(), 'requirements.txt')
+        if not os.path.isfile(req_file):
+            return
+        missing = []
+        with open(req_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                m = re.match(r'^([a-zA-Z0-9_.\-]+)', line)
+                if not m:
+                    continue
+                try:
+                    importlib.metadata.version(m.group(1))
+                except importlib.metadata.PackageNotFoundError:
+                    missing.append(m.group(1))
+        if not missing:
+            return
+        logger.info(f"框架更新：检测到 {len(missing)} 个新依赖: {', '.join(missing)}，开始安装...")
+        from framework.loader import pip_install_requirements
+        result = pip_install_requirements(sys.executable, req_file, timeout=300)
+        if result['success']:
+            logger.info(f"框架更新：依赖安装完成（镜像: {result['mirror']}）")
+        else:
+            raise RuntimeError(f"依赖安装失败: {result.get('error')}")
+
     def _parse_version_tuple(v: str):
         """版本字符串 → 可比较元组（提取所有数字段），如 0.0.1-alpha.1-build.5 → (0,0,1,1,5)"""
         if not v:
@@ -2837,6 +2866,12 @@ def create_web_app(framework) -> Flask:
                         shutil.copy2(src, dst)
                     updated.append(name)
 
+                # 新版本可能引入新增依赖：自动安装缺失项（不覆盖已安装包）
+                try:
+                    _install_new_requirements()
+                except Exception as e:
+                    logger.warning(f"框架更新：依赖自动安装异常: {e}")
+
                 audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
                           {'files': updated, 'backup': fw_backup}, 'success')
                 return jsonify({
@@ -2857,6 +2892,66 @@ def create_web_app(framework) -> Flask:
             audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
                       {}, 'failure', str(e))
             return jsonify({'code': 500, 'msg': f'更新失败: {e}'}), 500
+
+    # ── 框架备份列表 / 一键回滚 ──────────────────────────────────────
+
+    def _fw_backup_root() -> str:
+        return os.path.join(_project_root(), 'data', 'backups')
+
+    @app.route('/api/framework/backups', methods=['GET'])
+    @require_auth
+    def list_framework_backups():
+        """列出框架更新备份（framework.<时间戳> 目录）"""
+        backups = []
+        root = _fw_backup_root()
+        if os.path.isdir(root):
+            for name in sorted(os.listdir(root)):
+                if re.match(r'^framework\.\d+$', name) and os.path.isdir(os.path.join(root, name)):
+                    try:
+                        ts = int(name.split('.')[-1])
+                        backups.append({
+                            'name': name,
+                            'time': datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S'),
+                        })
+                    except (ValueError, OSError):
+                        backups.append({'name': name, 'time': '未知'})
+        return jsonify({'code': 0, 'data': {'backups': backups}})
+
+    @app.route('/api/framework/rollback', methods=['POST'])
+    @require_auth
+    def rollback_framework():
+        """一键回滚框架到指定备份（白名单校验备份名，防路径穿越）"""
+        admin = request.admin
+        name = (request.json or {}).get('backup', '')
+        if not re.match(r'^framework\.\d+$', name):
+            return jsonify({'code': 400, 'msg': '非法备份名'}), 400
+
+        root = _project_root()
+        src = os.path.join(_fw_backup_root(), name)
+        if not os.path.isdir(src):
+            return jsonify({'code': 404, 'msg': f'备份不存在: {name}'}), 404
+
+        try:
+            fw = os.path.join(root, 'framework')
+            # 当前代码先留档到 current，回滚误操作可找回
+            if os.path.isdir(fw):
+                keep = os.path.join(_fw_backup_root(), 'current')
+                if os.path.isdir(keep):
+                    shutil.rmtree(keep, ignore_errors=True)
+                shutil.copytree(fw, keep)
+                shutil.rmtree(fw, ignore_errors=True)
+            shutil.copytree(src, fw)
+            audit_log(admin['id'], admin['username'], 'rollback_framework', 'system', 'framework',
+                      {'backup': name, 'current_backed_to': 'current'}, 'success')
+            return jsonify({
+                'code': 0,
+                'msg': f'已回滚到 {name}，请重启框架生效。\n当前代码已备份到 data/backups/current/',
+            })
+        except Exception as e:
+            logger.error(f"回滚框架失败: {e}", exc_info=True)
+            audit_log(admin['id'], admin['username'], 'rollback_framework', 'system', 'framework',
+                      {'backup': name}, 'failure', str(e))
+            return jsonify({'code': 500, 'msg': f'回滚失败: {e}'}), 500
 
     @app.route('/api/restart', methods=['POST'])
     @require_auth
