@@ -1362,7 +1362,8 @@ class PluginLoader:
         try:
             self.db.execute("DELETE FROM commands WHERE plugin_name = %s", (plugin_name,))
             self.db.execute("DELETE FROM tasks WHERE plugin_name = %s", (plugin_name,))
-            self.db.execute("DELETE FROM plugin_configs WHERE plugin_name = %s", (plugin_name,))
+            # 注意：不删除 plugin_configs —— 卸载/重载/更新/禁用都应保留用户配置，
+            # 只有真正删除插件（delete_plugin）时才清配置
             self.db.execute("UPDATE plugins SET status='stopped', has_register=0 WHERE plugin_name=%s", (plugin_name,))
         except Exception as e:
             logger.error(f"[{plugin_name}] 卸载清理失败: {e}")
