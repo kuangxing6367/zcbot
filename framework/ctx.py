@@ -450,25 +450,32 @@ class PluginContext:
 
     # ---- 异步数据库操作（不阻塞事件循环，async handler 推荐使用）----
 
+    async def _db_thread(self, func, *args):
+        """在数据库专用线程池执行（与默认线程池隔离；DB 繁忙时不影响消息处理）"""
+        ex = getattr(self._framework, '_db_executor', None)
+        if ex is not None:
+            return await asyncio.get_running_loop().run_in_executor(ex, func, *args)
+        return await asyncio.to_thread(func, *args)
+
     async def db_query_async(self, sql: str, params: tuple = None) -> list:
         """异步查询数据库，返回 list[dict]"""
-        return await asyncio.to_thread(self._db.query, sql, params)
+        return await self._db_thread(self._db.query, sql, params)
 
     async def db_query_one_async(self, sql: str, params: tuple = None) -> dict:
         """异步查询单条，返回 dict 或 None"""
-        return await asyncio.to_thread(self._db.query_one, sql, params)
+        return await self._db_thread(self._db.query_one, sql, params)
 
     async def db_execute_async(self, sql: str, params: tuple = None) -> int:
         """异步执行插入/更新/删除，返回受影响行数"""
-        return await asyncio.to_thread(self._db.execute, sql, params)
+        return await self._db_thread(self._db.execute, sql, params)
 
     async def db_execute_many_async(self, sql: str, params_list: list) -> int:
         """异步批量执行，返回受影响行数"""
-        return await asyncio.to_thread(self._db.execute_many, sql, params_list)
+        return await self._db_thread(self._db.execute_many, sql, params_list)
 
     async def db_insert_async(self, sql: str, params: tuple = None) -> int:
         """异步插入并返回自增 ID"""
-        return await asyncio.to_thread(self._db.insert, sql, params)
+        return await self._db_thread(self._db.insert, sql, params)
 
     @property
     def db_pool_status(self) -> dict:

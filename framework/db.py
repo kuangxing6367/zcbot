@@ -303,6 +303,7 @@ class Database:
         self._pool_max = int(config.get('pool_size', 10) or 10)           # 最大连接数
         self._pool_min_cached = int(config.get('min_cached', 0) or 0)     # 最小空闲连接
         self._pool_max_cached = int(config.get('max_cached', 0) or 0)     # 最大空闲连接
+        self._pool_wait_timeout = float(config.get('pool_wait_timeout', 30) or 30)  # 池满等待超时（秒）
         if self._pool_max_cached <= 0:
             # 未配置时默认与最大连接数一致（避免默认 0 导致空闲连接被全部回收、频繁新建）
             self._pool_max_cached = self._pool_max
@@ -373,7 +374,7 @@ class Database:
             mincached=self._pool_min_cached,        # 启动即建的最小空闲连接（min_cached）
             maxcached=self._pool_max_cached,        # 最大空闲连接，超过自动关闭释放（max_cached）
             maxshared=0,
-            blocking=True,                          # 连接全部占用时阻塞等待（而非报错）
+            blocking=False,                         # 池满不无限等待，由 _get_conn_mysql 有界重试
             setsession=[],
             reset=True,                             # 借出时回滚残留事务
             ping=1,                                 # 每次借出 ping 验证，坏连接自动丢弃重建
@@ -414,15 +415,30 @@ class Database:
         """
         从连接池借出连接（PooledDB 自动处理：ping 保活、坏连接丢弃重建、
         空闲连接按 maxcached 回收、连接数不超过 pool_size）。
+        池满时**有界等待**（pool_wait_timeout 秒），超时抛清晰错误而非无限阻塞——
+        避免个别连接未归还（如插件 get_connection 泄漏）把整个框架 DB 操作堵死。
         归还方式：调用方在 finally 中 conn.close()（对池而言是"归还"而非真关闭）。
         """
         if self._pool is None:
             raise RuntimeError("MySQL 连接池未初始化")
-        try:
-            return self._pool.connection()
-        except Exception as e:
-            logger.error(f"从连接池获取 MySQL 连接失败: {e}")
-            raise
+        deadline = time.time() + self._pool_wait_timeout
+        last_err = None
+        while True:
+            try:
+                return self._pool.connection()
+            except Exception as e:
+                last_err = e
+                if time.time() >= deadline:
+                    logger.error(
+                        f"MySQL 连接池繁忙: {self._pool_max} 个连接全被占用超 "
+                        f"{self._pool_wait_timeout}s（{last_err}）。"
+                        f"请检查是否存在连接未归还（如 ctx.get_connection() 未 close）"
+                    )
+                    raise RuntimeError(
+                        f"MySQL 连接池繁忙（{self._pool_max} 个连接全被占用超 "
+                        f"{self._pool_wait_timeout}s），请检查连接泄漏"
+                    ) from None
+                time.sleep(0.05)
 
     def _close_thread_conn(self):
         """连接池接管后无需手动关闭连接（坏连接由 PooledDB 借出时 ping 检测并重建）"""
