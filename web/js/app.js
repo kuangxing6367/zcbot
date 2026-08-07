@@ -7,7 +7,7 @@ const TOKEN_KEY = 'zcbot_token';
 /* ─────────── Token 管理 ─────────── */
 function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
 function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
-function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); document.cookie = 'zcbot_token=; Max-Age=0; path=/'; }
 
 /* ─────────── API 封装 ─────────── */
 async function api(url, options = {}) {

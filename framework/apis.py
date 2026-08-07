@@ -566,11 +566,12 @@ def create_web_app(framework) -> Flask:
             logger.error(f"审计日志写入失败: {e}")
 
     def _extract_token(req):
-        """从 Authorization: Bearer xxx 头提取 token"""
+        """从 Authorization: Bearer xxx 头或 Cookie 提取 token"""
         auth = req.headers.get('Authorization', '')
         if auth.startswith('Bearer '):
             return auth[7:]
-        return None
+        # iframe 直接导航的插件页面/资源无法携带自定义 Header，走同源 Cookie 兜底
+        return req.cookies.get('zcbot_token')
 
     def _verify_token(token):
         """验证 token，返回 admin 字典或 None"""
@@ -595,6 +596,20 @@ def create_web_app(framework) -> Flask:
             if datetime.now() > expiry:
                 return None
         return {'id': row['id'], 'username': row['username'], 'role': row['role']}
+
+    def _sync_token_cookie(resp, token: str):
+        """将登录 token 同步到 HttpOnly Cookie（SameSite=Lax），供 iframe/页面直接导航场景兜底鉴权。
+        token 传空串则清除 Cookie。每次请求仍走 _verify_token 全量校验，不绕过鉴权。"""
+        try:
+            timeout = web_cfg.get('token_timeout') or web_cfg.get('session_timeout', 86400)
+        except Exception:
+            timeout = 86400
+        resp.set_cookie(
+            'zcbot_token', token or '',
+            max_age=timeout, path='/',
+            httponly=True, samesite='Lax',
+            secure=bool(request.is_secure),
+        )
 
     def require_auth(fn):
         """登录验证装饰器（基于 token）"""
@@ -689,11 +704,13 @@ def create_web_app(framework) -> Flask:
         )
         audit_log(row['id'], username, 'login', result='success')
 
-        return jsonify({
+        resp = jsonify({
             'code': 0,
             'msg': '登录成功',
             'data': {'token': token, 'username': username, 'role': row['role']}
         })
+        _sync_token_cookie(resp, token)
+        return resp
 
     @app.route('/api/logout', methods=['POST'])
     @require_auth
@@ -708,7 +725,9 @@ def create_web_app(framework) -> Flask:
         except Exception as e:
             logger.error(f"清除 token 失败: {e}")
         audit_log(admin['id'], admin['username'], 'logout')
-        return jsonify({'code': 0, 'msg': '已退出'})
+        resp = jsonify({'code': 0, 'msg': '已退出'})
+        _sync_token_cookie(resp, '')
+        return resp
 
     @app.route('/api/me', methods=['GET'])
     @require_auth
