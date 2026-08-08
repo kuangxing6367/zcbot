@@ -2,6 +2,7 @@
 Event 对象
 封装 OneBot 11 上报的事件数据，供插件 handler 使用
 """
+import re
 import time
 
 # 权限查询 TTL 缓存（热路径性能：避免每个事件反复查库）
@@ -33,6 +34,8 @@ def _extract_text(message):
     """
     从 OneBot 11 消息中提取纯文本
     支持：字符串格式（CQ码）和数组格式（消息段）
+    - share 段（分享卡片）：提取 data.url 链接
+    - json 段（小程序/链接卡片）：正则提取其中的 http(s) 链接
     """
     if isinstance(message, str):
         return message
@@ -49,9 +52,34 @@ def _extract_text(message):
                     parts.append(f'[@{qq}]')
                 elif seg_type == 'reply':
                     pass  # 回复消息不提取
+                elif seg_type == 'share':
+                    url = seg_data.get('url', '')
+                    if url:
+                        parts.append(url)
+                elif seg_type == 'json':
+                    # 小程序/链接卡片：提取其中的 http(s) 链接
+                    raw = seg_data.get('data', '') or ''
+                    for m in re.finditer(r'https?://[^\s"\'<]+', raw):
+                        parts.append(m.group(0))
                 # 其他类型（image/face/record等）忽略
         return ''.join(parts)
     return str(message)
+
+
+def _has_text_segment(message) -> bool:
+    """
+    判断消息是否包含纯文本段（区别于从卡片/图片提取出的链接文本）
+    用于区分"文本消息"与"纯富媒体消息（分享卡片/图片等）"
+    """
+    if isinstance(message, str):
+        return bool(message)
+    if isinstance(message, list):
+        return any(
+            isinstance(s, dict) and s.get('type') == 'text'
+            and (s.get('data', {}) or {}).get('text', '')
+            for s in message
+        )
+    return bool(message)
 
 
 class Event:
@@ -97,6 +125,7 @@ class Event:
 
         # ----- 事件传播控制（参考 AstrBot PipelineScheduler）-----
         self._stopped = False  # 是否停止传播
+        self._continue_route = False  # 是否允许系统关键词回复继续尝试
 
     # ===== 权限属性（参考 AstrBot PermissionTypeFilter + is_admin） =====
 
@@ -201,6 +230,18 @@ class Event:
         参考 AstrBot PipelineScheduler: 在 pipeline 的各阶段和 handler 循环中检查。
         """
         return self._stopped
+
+    def continue_route(self) -> None:
+        """
+        标记"本插件已处理，但允许系统关键词自动回复继续尝试"。
+        与 stop_event() 相对：插件命中命令后默认独占消息（关键词不再触发），
+        调用此方法可让系统关键词自动回复（dynamic_commands）仍继续尝试。
+        """
+        self._continue_route = True
+
+    def is_continue_route(self) -> bool:
+        """是否声明了继续路由（允许系统关键词回复继续尝试）"""
+        return self._continue_route
 
     # ===== 富媒体辅助属性 =====
 

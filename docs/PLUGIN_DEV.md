@@ -411,6 +411,26 @@ def on_new_member(payload):
     ctx.send_msg(group_id=group_id, message=f"欢迎新成员 {user_id}")
 ```
 
+#### 文本消息监听（message 事件）
+
+插件命令**均未命中**时，框架会把文本消息广播为 `message` 事件（载荷为 Event 对象），内容监听型插件（关键词回复、违禁词、自动应答等）无需注册命令即可监听任意文本：
+
+```python
+def register(ctx):
+    ctx.on("message", on_any_message)
+
+def on_any_message(ev):
+    # ev 是 Event 对象；返回 True = 已处理（路由终止，系统关键词不再触发）
+    # 返回 None/False = 未处理，继续走系统关键词自动回复
+    if "敏感词" in ev.message:
+        ctx.send_msg(group_id=ev.group_id, message="请注意用词")
+        return True
+```
+
+**路由优先级**：插件命令 > `message` 事件监听 > 系统关键词自动回复。
+
+> 注意：纯富媒体消息（无文本段的分享卡片/图片）走 `message.share` / `message.media` 事件，与 `message` 事件互不干扰。
+
 #### 非文本消息事件（分享卡片 / 图片等）
 
 **无文本的消息**（如纯分享卡片、纯图片、纯视频）不参与命令匹配（命令匹配需要文本），框架会在收到此类消息时将其**广播到事件总线**，插件通过 `ctx.on()` 订阅即可处理：
@@ -614,8 +634,10 @@ event.segments        # 原始消息段数组
 ### 事件传播控制
 
 ```python
-event.stop_event()    # 阻止后续插件收到此事件
-event.is_stopped()    # 是否已被停止
+event.stop_event()        # 阻止后续插件收到此事件
+event.is_stopped()        # 是否已被停止
+event.continue_route()    # 本插件已处理，但允许系统关键词自动回复继续尝试
+event.is_continue_route() # 是否声明了继续路由
 ```
 
 ---
@@ -648,6 +670,48 @@ event.is_stopped()    # 是否已被停止
 | DELETE | `/api/dynamic-commands/<id>` | 删除 |
 
 > 回复内容支持 CQ 码（如 `[CQ:image,file=...]`）。关键词规则由后台任务周期性加载进内存（默认 5s），API/Web 修改后即时重建，命中计数批量落库。
+
+### 关键词 handler 回调（动态生成回复）
+
+`dynamic_commands.handler` 字段支持 `plugin:func` 格式，命中关键词时调用插件函数**动态生成**回复内容（失败自动回退静态 `response`）：
+
+```python
+# 表中配置：keyword=天气, response=（兜底文本）, handler=my_plugin:gen_weather, match_type=prefix
+
+def gen_weather(rule, message):
+    """rule 为关键词规则对象（含 keyword/response/match_type），message 为触发消息"""
+    city = message.replace("天气", "").strip()
+    return f"{city} 今日晴，气温 25℃"   # 返回 None 则用静态 response
+```
+
+### 插件建表统一入口
+
+插件需要建表时使用 `ctx.create_table(ddl)`，自动适配方言，无需判断数据库类型：
+
+```python
+ctx.create_table("""
+    CREATE TABLE IF NOT EXISTS my_rules (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        keyword VARCHAR(300) NOT NULL,
+        params TEXT,
+        enabled TINYINT(1) DEFAULT 1,
+        INDEX idx_kw (keyword)
+    )
+""")
+```
+
+- **SQLite**：自动翻译（ENUM→TEXT、AUTO_INCREMENT→AUTOINCREMENT、INDEX 移除等）
+- **MySQL**：自动将长列（`TEXT` / `VARCHAR`>191）索引改写为前缀索引 `` `col`(191) ``，避免错误 1170/1064
+
+### 与插件的协作（continue_route）
+
+插件命令命中后默认"独占"消息（系统关键词不再触发）。若希望**插件处理完仍允许系统关键词自动回复继续尝试**，在 handler 内调用 `event.continue_route()`：
+
+```python
+def handle_xxx(event, match):
+    event.continue_route()  # 本插件已处理，但允许关键词自动回复继续
+    return True
+```
 
 ---
 

@@ -44,25 +44,33 @@ class EventBus:
                 if not self._subscribers[event_name]:
                     del self._subscribers[event_name]
 
-    async def aemit(self, event_name: str, payload: dict = None):
-        """异步发布事件，通知所有订阅者"""
+    async def aemit(self, event_name: str, payload: dict = None) -> bool:
+        """
+        异步发布事件，通知所有订阅者
+        返回 bool：任一订阅 handler 返回 True 视为"已处理"（调用方可用于路由终止判断）
+        向后兼容：现有订阅者返回 None/False 不影响
+        """
         with self._lock:
             subscribers = list(self._subscribers.get(event_name, []))
         if not subscribers:
-            return
+            return False
 
         payload = payload or {}
         logger.debug(f"事件触发: {event_name} → {len(subscribers)} 个订阅者")
 
+        handled = False
         for sub in subscribers:
             try:
                 handler = sub['handler']
                 if asyncio.iscoroutinefunction(handler):
-                    await handler(payload)
+                    result = await handler(payload)
                 else:
-                    await asyncio.to_thread(handler, payload)
+                    result = await asyncio.to_thread(handler, payload)
+                if result is True:
+                    handled = True
             except Exception as e:
                 logger.error(f"事件处理异常: [{sub['plugin_name']}] {event_name} - {e}")
+        return handled
 
     def emit(self, event_name: str, payload: dict = None):
         """
