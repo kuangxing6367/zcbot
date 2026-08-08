@@ -235,6 +235,22 @@ class Event:
         return any(s.get('type') == 'face' for s in self.segments)
 
     @property
+    def has_share(self) -> bool:
+        """消息是否包含分享卡片"""
+        return any(s.get('type') == 'share' for s in self.segments)
+
+    @property
+    def share(self) -> dict:
+        """
+        获取分享卡片数据（title/url/desc 等）
+        没有分享卡片则返回空 dict
+        """
+        for s in self.segments:
+            if s.get('type') == 'share':
+                return s.get('data', {}) or {}
+        return {}
+
+    @property
     def has_at(self) -> bool:
         """消息是否包含 @ 提及"""
         return any(s.get('type') == 'at' for s in self.segments)

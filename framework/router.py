@@ -233,6 +233,9 @@ class MessageRouter:
 
         message = _extract_text(event.get('message', ''))
         if not message:
+            # 无文本消息（纯分享卡片/图片/视频等）：不走命令匹配，
+            # 直接广播到事件总线，供插件通过 ctx.on('message.share') 等订阅处理
+            await self._broadcast_non_text(event, bot_name)
             return
 
         from framework.event import Event
@@ -276,6 +279,26 @@ class MessageRouter:
             logger.debug(f"消息由 [{plugin_name}] 处理，事件继续传播给下一插件")
 
         log_broker.log_system('DEBUG', f'消息未匹配任何命令: "{message[:80]}"')
+
+    async def _broadcast_non_text(self, event: dict, bot_name: str = 'default'):
+        """
+        广播无文本消息到事件总线（供插件订阅，绕开命令匹配）
+        事件名：message.<消息段类型>（如 message.share）+ 通用 message.media
+        载荷：Event 对象，插件可通过 ev.segments / ev.share 等访问富媒体数据
+        """
+        from framework.event import Event
+        ev = Event(event, bot_name)
+        ev._framework = self.framework
+        # 提取非文本/非回复消息段类型（text/at/reply 不参与广播）
+        types = {
+            s.get('type') for s in ev.segments
+            if s.get('type') not in ('text', 'at', 'reply')
+        }
+        if not types:
+            return
+        for t in types:
+            await self.framework.event_bus.aemit(f'message.{t}', ev)
+        await self.framework.event_bus.aemit('message.media', ev)
 
     # 正则特殊字符，用于判断 pattern 是命令名还是正则
     _REGEX_CHARS = set('^$.*+?()[]{}|\\')
