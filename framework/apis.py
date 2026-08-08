@@ -1773,6 +1773,13 @@ def create_web_app(framework) -> Flask:
             out['match_type'] = match_type
         if 'plugin_name' in data:
             out['plugin_name'] = (data.get('plugin_name') or 'system').strip()[:50] or 'system'
+        if 'handler' in data:
+            handler = (data.get('handler') or '').strip()
+            if len(handler) > 100:
+                return 'handler 过长（最多 100 字符，格式 plugin:func）', None
+            if handler and ':' not in handler:
+                return 'handler 格式应为 plugin:func', None
+            out['handler'] = handler
         if 'is_active' in data:
             out['is_active'] = 1 if data.get('is_active') else 0
         return None, out
@@ -1783,7 +1790,7 @@ def create_web_app(framework) -> Flask:
         """获取关键词自动回复列表（dynamic_commands 表）"""
         try:
             rows = db.query(
-                "SELECT id, keyword, response, match_type, plugin_name, "
+                "SELECT id, keyword, response, match_type, handler, plugin_name, "
                 "is_active, hit_count, created_at, updated_at "
                 "FROM dynamic_commands ORDER BY id DESC"
             )
@@ -1803,9 +1810,10 @@ def create_web_app(framework) -> Flask:
         try:
             kw_id = db.insert(
                 "INSERT INTO dynamic_commands "
-                "(keyword, response, match_type, plugin_name, is_active) "
-                "VALUES (%s, %s, %s, %s, %s)",
+                "(keyword, response, match_type, handler, plugin_name, is_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
                 (cleaned['keyword'], cleaned['response'], cleaned['match_type'],
+                 cleaned.get('handler', ''),
                  cleaned.get('plugin_name', 'system'),
                  cleaned.get('is_active', 1))
             )

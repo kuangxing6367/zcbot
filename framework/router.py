@@ -3,6 +3,7 @@
 按插件优先级顺序分发消息，匹配静态命令
 - 插件注册的动态命令（is_dynamic=1）仅用于展示，不参与命令匹配
 - 系统级动态命令（dynamic_commands 表，关键词自动回复）在插件未命中时兜底匹配
+- 文本消息统一监听通道：插件命令未命中时广播 `message` 事件（内容监听型插件可用 ctx.on('message')）
 
 异步模型：
 - 后台刷新任务周期性（默认 5s）从 DB 构建纯内存路由表（插件序 + 预编译命令 + 关键词规则），
@@ -18,7 +19,7 @@ import time
 from typing import Callable, Optional
 
 from framework.log_broker import log_broker
-from framework.event import _extract_text
+from framework.event import _extract_text, _has_text_segment
 
 logger = logging.getLogger('zcbot')
 
@@ -77,14 +78,15 @@ class _PluginRoute:
 class _KeywordRule:
     """系统关键词自动回复规则（dynamic_commands 表，预编译后热路径复用）"""
 
-    __slots__ = ('id', 'keyword', 'response', 'match_type', 'rx', 'plugin_name')
+    __slots__ = ('id', 'keyword', 'response', 'match_type', 'rx', 'handler', 'plugin_name')
 
-    def __init__(self, id, keyword, response, match_type, rx, plugin_name):
+    def __init__(self, id, keyword, response, match_type, rx, handler, plugin_name):
         self.id = id
         self.keyword = keyword
         self.response = response
         self.match_type = match_type  # exact / prefix / contains / regex
         self.rx = rx                  # regex 类型的预编译正则，其他为 None
+        self.handler = handler        # 'plugin:func' 回调，命中后调用生成回复；空则用静态 response
         self.plugin_name = plugin_name
 
 
@@ -201,15 +203,22 @@ class MessageRouter:
             self._keyword_rules = keyword_rules
 
     def _load_keyword_rules(self) -> list:
-        """从 dynamic_commands 表加载并预编译关键词自动回复规则"""
+        """从 dynamic_commands 表加载并预编译关键词自动回复规则（兼容旧表无 handler 列）"""
         try:
             rows = self.db.query(
-                "SELECT id, keyword, response, match_type, plugin_name "
+                "SELECT id, keyword, response, match_type, handler, plugin_name "
                 "FROM dynamic_commands WHERE is_active = 1 ORDER BY id ASC"
             )
-        except Exception as e:
-            logger.error(f"加载关键词回复失败: {e}")
-            return []
+        except Exception:
+            # 旧表无 handler 列 → 回退基础查询，不报错
+            try:
+                rows = self.db.query(
+                    "SELECT id, keyword, response, match_type, plugin_name "
+                    "FROM dynamic_commands WHERE is_active = 1 ORDER BY id ASC"
+                )
+            except Exception as e:
+                logger.error(f"加载关键词回复失败: {e}")
+                return []
 
         rules = []
         for r in rows:
@@ -226,6 +235,7 @@ class MessageRouter:
                     response=r.get('response') or '',
                     match_type=mt,
                     rx=rx,
+                    handler=r.get('handler') or '',
                     plugin_name=r.get('plugin_name') or 'system',
                 ))
             except re.error as e:
@@ -285,12 +295,15 @@ class MessageRouter:
         if post_type != 'message':
             return
 
-        message = _extract_text(event.get('message', ''))
-        if not message:
-            # 无文本消息（纯分享卡片/图片/视频等）：不走命令匹配，
-            # 直接广播到事件总线，供插件通过 ctx.on('message.share') 等订阅处理
+        # 纯富媒体消息（无文本段：纯分享卡片/图片/视频等）：
+        # 不走命令匹配，直接广播 message.<类型> 事件（与 message 事件互不干扰）
+        if not _has_text_segment(event.get('message', '')):
             await self._broadcast_non_text(event, bot_name)
             return
+
+        message = _extract_text(event.get('message', ''))
+        if not message:
+            return  # 防御：存在文本段时提取结果必非空
 
         from framework.event import Event
         ev = Event(event, bot_name)
@@ -298,12 +311,6 @@ class MessageRouter:
 
         routes = self._routes
         plugin_order = self._plugin_order
-        if not plugin_order:
-            # 无可用插件时仍尝试系统关键词自动回复
-            if await self._try_keyword_reply(ev, message):
-                return
-            log_broker.log_system('WARN', f'无可用插件处理消息: "{message[:50]}"')
-            return
 
         logger.debug(
             f'路由消息: "{message[:80]}" → 插件队列: {plugin_order}')
@@ -337,13 +344,33 @@ class MessageRouter:
                 return
             logger.debug(f"消息由 [{plugin_name}] 处理，事件继续传播给下一插件")
 
-        # 没有任何插件命中 → 系统级关键词自动回复（dynamic_commands 表，动态命令）
-        # 插件已处理的场景不触发，避免插件回复 + 关键词回复双重应答
+        # ── 插件命令未命中 → 广播 message 事件（文本消息统一监听通道）──
         if not matched_any:
+            if await self._broadcast_message_event(ev, message):
+                return
+            if not plugin_order:
+                log_broker.log_system('WARN', f'无可用插件处理消息: "{message[:50]}"')
+
+        # ── 系统级关键词自动回复（dynamic_commands 表，动态命令）──
+        # 插件未命中时触发；插件命中但 ev.continue_route() 声明"允许继续"时同样触发
+        if not matched_any or ev.is_continue_route():
             if await self._try_keyword_reply(ev, message):
                 return
 
         log_broker.log_system('DEBUG', f'消息未匹配任何命令: "{message[:80]}"')
+
+    async def _broadcast_message_event(self, ev, message: str) -> bool:
+        """
+        广播 message 事件（文本消息统一监听通道）
+        内容监听型插件（关键词回复/违禁词/自动应答等）通过 ctx.on('message', handler) 订阅，
+        handler 返回 True 视为已处理（路由终止）
+        """
+        try:
+            result = await self.framework.event_bus.aemit('message', ev)
+            return result is True
+        except Exception as e:
+            logger.error(f"message 事件广播异常: {e}")
+            return False
 
     async def _try_keyword_reply(self, ev, message: str) -> bool:
         """尝试系统关键词自动回复（命中返回 True）"""
@@ -351,16 +378,54 @@ class MessageRouter:
         if rule is None:
             return False
         self._keyword_hit(rule.id)
+
+        # 优先 handler 回调生成回复内容（dynamic_commands.handler = 'plugin:func'），失败回退静态 response
+        reply = rule.response
+        if rule.handler:
+            try:
+                generated = await self._call_keyword_handler(rule, message)
+                if generated:
+                    reply = generated
+            except Exception as e:
+                logger.error(f"关键词 handler 调用失败 [{rule.handler}]: {e}")
+
         log_broker.log_system('INFO', f'关键词命中: "{rule.keyword}"（{rule.match_type}）', {
             'user_id': ev.user_id,
             'group_id': ev.group_id,
             'keyword': rule.keyword,
             'match_type': rule.match_type,
         })
+        if not reply:
+            return True  # 已匹配但无回复内容，避免重复匹配
         target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
         await self.framework.api_caller.acall(
-            'send_msg', **target, message=rule.response)
+            'send_msg', **target, message=reply)
         return True
+
+    async def _call_keyword_handler(self, rule, message: str):
+        """
+        调用 dynamic_commands.handler（格式 'plugin:func'）生成回复文本
+        签名：func(rule, message) → 回复文本或 None
+        """
+        spec = (rule.handler or '').strip()
+        if not spec or ':' not in spec:
+            return None
+        plugin_name, func_name = spec.split(':', 1)
+        plugin_name = plugin_name.strip()
+        func_name = func_name.strip()
+        if not plugin_name or not func_name:
+            return None
+        module = self.framework.plugin_loader.get_plugin_module(plugin_name)
+        if module is None:
+            return None
+        func = getattr(module, func_name, None)
+        if func is None or not callable(func):
+            return None
+        if asyncio.iscoroutinefunction(func):
+            result = await func(rule, message)
+        else:
+            result = await asyncio.to_thread(func, rule, message)
+        return result or None
 
     def _match_keyword(self, message: str) -> Optional[_KeywordRule]:
         """系统关键词自动回复匹配（动态命令，热路径纯内存）"""
