@@ -385,9 +385,17 @@ Views.pluginUpdate = async function (name) {
 
 /* ═══════════════ 命令管理 ═══════════════ */
 Views.commands = async function (view) {
-  const [res, dyn] = await Promise.all([api('/api/commands'), api('/api/commands/dynamic')]);
+  const [res, dyn, kw] = await Promise.all([
+    api('/api/commands'),
+    api('/api/commands/dynamic'),
+    api('/api/dynamic-commands'),
+  ]);
   const cmds = (res && res.data) || [];
   const dynCmds = (dyn && dyn.data) || [];
+  const kwRules = (kw && kw.data) || [];
+  Views._kwRules = kwRules;
+
+  const kwTypeLabel = { exact: '完全相等', prefix: '前缀', contains: '包含', regex: '正则' };
 
   view.innerHTML = `
     <div class="card">
@@ -409,8 +417,26 @@ Views.commands = async function (view) {
       </table></div>
     </div>
     <div class="card">
+      <div class="card-title">关键词回复 (${kwRules.length}) <button class="btn sm primary" onclick="Views.addKeyword()">+ 新增</button></div>
+      <div class="small muted mb">系统级动态命令：插件未命中时按关键词自动回复。匹配方式支持完全相等 / 前缀 / 包含 / 正则，回复内容支持 CQ 码。</div>
+      <div class="table-wrap"><table class="tbl">
+        <tr><th>关键词/正则</th><th>回复内容</th><th>匹配方式</th><th>命中</th><th>状态</th><th>操作</th></tr>
+        ${kwRules.map(k => `<tr>
+          <td class="mono">${escapeHtml(k.keyword)}</td>
+          <td class="small">${escapeHtml(k.response)}</td>
+          <td>${k.match_type === 'regex' ? '<span class="badge warn">正则</span>' : escapeHtml(kwTypeLabel[k.match_type] || k.match_type)}</td>
+          <td>${k.hit_count || 0}</td>
+          <td>${badgeHtml(!!k.is_active)}</td>
+          <td class="actions">
+            <button class="btn sm" onclick="Views.editKeyword(${k.id})">编辑</button>
+            <button class="btn sm ${k.is_active ? 'danger' : 'success'}" onclick="Views.toggleKeyword(${k.id}, ${k.is_active ? 0 : 1})">${k.is_active ? '禁用' : '启用'}</button>
+            <button class="btn sm danger" onclick="Views.deleteKeyword(${k.id})">删除</button>
+          </td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无关键词回复，点击右上角「+ 新增」添加</td></tr>'}
+      </table></div>
+    </div>
+    <div class="card">
       <div class="card-title">动态命令 (${dynCmds.length})</div>
-      <div class="small muted mb">动态命令由插件注册，仅作展示，不参与路由匹配。</div>
+      <div class="small muted mb">动态命令由插件注册（ctx.command(dynamic=True)），仅作展示，不参与路由匹配。</div>
       <div class="table-wrap"><table class="tbl">
         <tr><th>插件</th><th>命令</th><th>描述</th><th>命中</th></tr>
         ${dynCmds.map(c => `<tr>
@@ -453,6 +479,78 @@ Views.toggleCommand = async function (id, active) {
   const r = await api(`/api/commands/${id}/toggle`, { method: 'POST', body: JSON.stringify({ is_active: !!active }) });
   if (r && r.code === 0) { toast(r.msg, 'success'); Views.commands(document.getElementById('view')); }
   else toast((r && r.msg) || '操作失败', 'error');
+};
+
+/* ---- 关键词回复管理 ---- */
+Views._kwRules = [];
+
+Views.addKeyword = function () {
+  openModal(`
+    <div class="modal-head"><span>新增关键词回复</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label>关键词/正则</label><input class="input" id="kwKeyword" placeholder="如：你好 / 早 / ^早安.*$"></div>
+      <div class="form-row"><label>匹配方式</label>
+        <select class="select" id="kwType">
+          <option value="exact">完全相等</option>
+          <option value="prefix">前缀匹配</option>
+          <option value="contains">包含关键词</option>
+          <option value="regex">正则表达式</option>
+        </select>
+      </div>
+      <div class="form-row"><label>回复内容（支持CQ码）</label><textarea class="input" id="kwResponse" rows="3" placeholder="回复给发送者的内容"></textarea></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" onclick="Views.saveKeyword(0)">添加</button>
+    </div>`);
+};
+
+Views.editKeyword = function (id) {
+  const k = (Views._kwRules || []).find(x => x.id === id);
+  if (!k) { toast('未找到该规则', 'error'); return; }
+  openModal(`
+    <div class="modal-head"><span>编辑关键词回复 #${id}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label>关键词/正则</label><input class="input" id="kwKeyword" value="${escapeHtml(k.keyword)}"></div>
+      <div class="form-row"><label>匹配方式</label>
+        <select class="select" id="kwType">
+          <option value="exact" ${k.match_type === 'exact' ? 'selected' : ''}>完全相等</option>
+          <option value="prefix" ${k.match_type === 'prefix' ? 'selected' : ''}>前缀匹配</option>
+          <option value="contains" ${k.match_type === 'contains' ? 'selected' : ''}>包含关键词</option>
+          <option value="regex" ${k.match_type === 'regex' ? 'selected' : ''}>正则表达式</option>
+        </select>
+      </div>
+      <div class="form-row"><label>回复内容（支持CQ码）</label><textarea class="input" id="kwResponse" rows="3">${escapeHtml(k.response)}</textarea></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn primary" onclick="Views.saveKeyword(${id})">保存</button>
+    </div>`);
+};
+
+Views.saveKeyword = async function (id) {
+  const body = JSON.stringify({
+    keyword: document.getElementById('kwKeyword').value.trim(),
+    match_type: document.getElementById('kwType').value,
+    response: document.getElementById('kwResponse').value.trim(),
+  });
+  const url = id ? `/api/dynamic-commands/${id}` : '/api/dynamic-commands';
+  const r = await api(url, { method: id ? 'PUT' : 'POST', body });
+  if (r && r.code === 0) { toast(r.msg, 'success'); closeModal(); Views.commands(document.getElementById('view')); }
+  else toast((r && r.msg) || '保存失败', 'error');
+};
+
+Views.toggleKeyword = async function (id, active) {
+  const r = await api(`/api/dynamic-commands/${id}/toggle`, { method: 'POST', body: JSON.stringify({ is_active: !!active }) });
+  if (r && r.code === 0) { toast(r.msg, 'success'); Views.commands(document.getElementById('view')); }
+  else toast((r && r.msg) || '操作失败', 'error');
+};
+
+Views.deleteKeyword = async function (id) {
+  if (!await confirmDialog('确定删除该关键词回复规则吗？')) return;
+  const r = await api(`/api/dynamic-commands/${id}`, { method: 'DELETE' });
+  if (r && r.code === 0) { toast(r.msg, 'success'); Views.commands(document.getElementById('view')); }
+  else toast((r && r.msg) || '删除失败', 'error');
 };
 
 /* ═══════════════ 用户管理 ═══════════════ */

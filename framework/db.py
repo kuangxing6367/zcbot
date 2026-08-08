@@ -851,6 +851,9 @@ def _auto_create_tables(database):
     # 迁移：给 admin_users 表追加 token 列（token 认证）
     _migrate_admin_users_table(database)
 
+    # 迁移：dynamic_commands.match_type ENUM 增加 contains（更开放的匹配方式）
+    _migrate_dynamic_commands_table(database)
+
 
 def _migrate_commands_table(database):
     """迁移 commands 表添加 require_level 列"""
@@ -919,5 +922,34 @@ def _migrate_admin_users_table(database):
                     "COMMENT '令牌签发时间'"
                 )
             logger.info("数据库迁移: admin_users 表添加 token_created_at 列")
+    except Exception:
+        pass
+
+
+def _migrate_dynamic_commands_table(database):
+    """迁移 dynamic_commands 表：match_type ENUM 增加 contains（更开放的匹配方式）
+
+    SQLite 无需迁移（ENUM 已翻译为 TEXT，无取值约束）；
+    MySQL 旧库 ENUM 只有 exact/prefix/regex，需要 ALTER 加入 contains。
+    """
+    try:
+        if not database.table_exists('dynamic_commands'):
+            return
+        if database.db_type != 'mysql':
+            return
+        row = database.query_one(
+            "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'dynamic_commands' AND COLUMN_NAME = 'match_type'"
+        )
+        col_type = (row or {}).get('COLUMN_TYPE', '') or ''
+        if 'contains' in col_type:
+            return
+        database.execute(
+            "ALTER TABLE dynamic_commands MODIFY COLUMN match_type "
+            "ENUM('exact','prefix','contains','regex') DEFAULT 'exact' "
+            "COMMENT '匹配方式'"
+        )
+        logger.info("数据库迁移: dynamic_commands.match_type ENUM 增加 contains")
     except Exception:
         pass
