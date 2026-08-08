@@ -22,6 +22,7 @@
   - [仪表盘卡片](#仪表盘卡片)
   - [插件 WebUI](#插件-webui)
 - [Event 事件对象](#event-事件对象)
+- [系统级动态命令（关键词自动回复）](#系统级动态命令关键词自动回复)
 - [plugin.yaml 配置文件](#pluginyaml-配置文件)
 - [_conf_schema.json 配置 Schema](#_conf_schemajson-配置-schema)
 - [插件依赖声明](#插件依赖声明)
@@ -616,6 +617,37 @@ event.segments        # 原始消息段数组
 event.stop_event()    # 阻止后续插件收到此事件
 event.is_stopped()    # 是否已被停止
 ```
+
+---
+
+## 系统级动态命令（关键词自动回复）
+
+框架内置「关键词 → 自动回复」能力（数据存于 `dynamic_commands` 表），无需写插件即可实现常见自动应答。**在插件命令均未命中消息时**作为兜底触发，不会与插件回复冲突。
+
+### 匹配方式
+
+| match_type | 说明 | 示例 |
+| --- | --- | --- |
+| `exact` | 消息与关键词完全相等 | 关键词 `你好` 只回复消息 `你好` |
+| `prefix` | 消息以关键词开头 | 关键词 `/note` 回复 `记下了` |
+| `contains` | 消息包含关键词 | 关键词 `抽奖` 回复任意包含"抽奖"的消息 |
+| `regex` | 正则表达式匹配（`re.search`） | `^天气[:：]\d+` 回复天气查询 |
+
+### 管理方式
+
+**Web UI**：命令管理页 → 「关键词回复」卡片，支持新增 / 编辑 / 启停 / 删除，修改即时生效（无需重启）。
+
+**API**（均需登录态，写操作需超管）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/dynamic-commands` | 列表 |
+| POST | `/api/dynamic-commands` | 新增 `{keyword, response, match_type, plugin_name?}` |
+| PUT | `/api/dynamic-commands/<id>` | 更新 |
+| POST | `/api/dynamic-commands/<id>/toggle` | 启停 |
+| DELETE | `/api/dynamic-commands/<id>` | 删除 |
+
+> 回复内容支持 CQ 码（如 `[CQ:image,file=...]`）。关键词规则由后台任务周期性加载进内存（默认 5s），API/Web 修改后即时重建，命中计数批量落库。
 
 ---
 

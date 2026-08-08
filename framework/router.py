@@ -1,12 +1,13 @@
 """
 消息路由器（高性能版）
 按插件优先级顺序分发消息，匹配静态命令
-动态命令（is_dynamic=1）仅用于展示，不参与路由匹配
+- 插件注册的动态命令（is_dynamic=1）仅用于展示，不参与命令匹配
+- 系统级动态命令（dynamic_commands 表，关键词自动回复）在插件未命中时兜底匹配
 
 异步模型：
-- 后台刷新任务周期性（默认 5s）从 DB 构建纯内存路由表（插件序 + 预编译命令），
+- 后台刷新任务周期性（默认 5s）从 DB 构建纯内存路由表（插件序 + 预编译命令 + 关键词规则），
   路由热路径零 DB 查询、零线程切换（参考 AstrBot 内存路由思路）
-- 命令命中计数交给 framework.stats_writer 批量落库，不阻塞事件循环
+- 命令/关键词命中计数交给 framework.stats_writer 批量落库，不阻塞事件循环
 - handler 支持 async def（直接 await）和普通 def（转线程执行）
 """
 import asyncio
@@ -73,6 +74,20 @@ class _PluginRoute:
         self.commands = commands or []
 
 
+class _KeywordRule:
+    """系统关键词自动回复规则（dynamic_commands 表，预编译后热路径复用）"""
+
+    __slots__ = ('id', 'keyword', 'response', 'match_type', 'rx', 'plugin_name')
+
+    def __init__(self, id, keyword, response, match_type, rx, plugin_name):
+        self.id = id
+        self.keyword = keyword
+        self.response = response
+        self.match_type = match_type  # exact / prefix / contains / regex
+        self.rx = rx                  # regex 类型的预编译正则，其他为 None
+        self.plugin_name = plugin_name
+
+
 class MessageRouter:
     """消息路由分发器（纯内存路由表）"""
 
@@ -83,6 +98,7 @@ class MessageRouter:
         # ── 内存路由表（后台任务构建，热路径只读）──
         self._routes: dict = {}      # plugin_name -> _PluginRoute
         self._plugin_order: list = []  # 有序插件名列表
+        self._keyword_rules: list = []  # 系统关键词自动回复规则（dynamic_commands 表）
         self._routes_lock = threading.Lock()  # 兜底锁（保护快照交换）
         self._refresh_interval = 5.0  # 路由表刷新间隔（秒）
         self._refresh_task = None
@@ -176,9 +192,47 @@ class MessageRouter:
                 if name in by_plugin:
                     table[name].commands = by_plugin[name]
 
+        # 3. 加载系统关键词自动回复（dynamic_commands 表，插件未命中时兜底）
+        keyword_rules = self._load_keyword_rules()
+
         with self._routes_lock:
             self._routes = table
             self._plugin_order = order
+            self._keyword_rules = keyword_rules
+
+    def _load_keyword_rules(self) -> list:
+        """从 dynamic_commands 表加载并预编译关键词自动回复规则"""
+        try:
+            rows = self.db.query(
+                "SELECT id, keyword, response, match_type, plugin_name "
+                "FROM dynamic_commands WHERE is_active = 1 ORDER BY id ASC"
+            )
+        except Exception as e:
+            logger.error(f"加载关键词回复失败: {e}")
+            return []
+
+        rules = []
+        for r in rows:
+            try:
+                mt = (r.get('match_type') or 'exact').strip().lower()
+                if mt not in ('exact', 'prefix', 'contains', 'regex'):
+                    mt = 'exact'
+                rx = None
+                if mt == 'regex':
+                    rx = re.compile(r.get('keyword') or '')
+                rules.append(_KeywordRule(
+                    id=r['id'],
+                    keyword=r.get('keyword') or '',
+                    response=r.get('response') or '',
+                    match_type=mt,
+                    rx=rx,
+                    plugin_name=r.get('plugin_name') or 'system',
+                ))
+            except re.error as e:
+                logger.warning(f"关键词正则编译失败 [id={r.get('id')}]: {e}")
+            except Exception as e:
+                logger.error(f"关键词规则解析失败 [id={r.get('id')}]: {e}")
+        return rules
 
     def _compile_command(self, c: dict) -> Optional[_RouteCommand]:
         """预编译单条命令：正则编译 + 别名预解析"""
@@ -245,12 +299,16 @@ class MessageRouter:
         routes = self._routes
         plugin_order = self._plugin_order
         if not plugin_order:
+            # 无可用插件时仍尝试系统关键词自动回复
+            if await self._try_keyword_reply(ev, message):
+                return
             log_broker.log_system('WARN', f'无可用插件处理消息: "{message[:50]}"')
             return
 
         logger.debug(
             f'路由消息: "{message[:80]}" → 插件队列: {plugin_order}')
 
+        matched_any = False
         for plugin_name in plugin_order:
             entry = routes.get(plugin_name)
             if entry is None:
@@ -264,6 +322,7 @@ class MessageRouter:
             matched = await self._match_plugin_commands(entry, ev, message, plugin_name)
             if not matched:
                 continue
+            matched_any = True
             # 插件处理了消息，记录 info 日志
             log_broker.log_plugin(plugin_name, '处理消息', {
                 'user_id': ev.user_id,
@@ -278,7 +337,54 @@ class MessageRouter:
                 return
             logger.debug(f"消息由 [{plugin_name}] 处理，事件继续传播给下一插件")
 
+        # 没有任何插件命中 → 系统级关键词自动回复（dynamic_commands 表，动态命令）
+        # 插件已处理的场景不触发，避免插件回复 + 关键词回复双重应答
+        if not matched_any:
+            if await self._try_keyword_reply(ev, message):
+                return
+
         log_broker.log_system('DEBUG', f'消息未匹配任何命令: "{message[:80]}"')
+
+    async def _try_keyword_reply(self, ev, message: str) -> bool:
+        """尝试系统关键词自动回复（命中返回 True）"""
+        rule = self._match_keyword(message)
+        if rule is None:
+            return False
+        self._keyword_hit(rule.id)
+        log_broker.log_system('INFO', f'关键词命中: "{rule.keyword}"（{rule.match_type}）', {
+            'user_id': ev.user_id,
+            'group_id': ev.group_id,
+            'keyword': rule.keyword,
+            'match_type': rule.match_type,
+        })
+        target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
+        await self.framework.api_caller.acall(
+            'send_msg', **target, message=rule.response)
+        return True
+
+    def _match_keyword(self, message: str) -> Optional[_KeywordRule]:
+        """系统关键词自动回复匹配（动态命令，热路径纯内存）"""
+        for r in self._keyword_rules:
+            mt = r.match_type
+            if mt == 'exact':
+                if message == r.keyword:
+                    return r
+            elif mt == 'prefix':
+                if r.keyword and message.startswith(r.keyword):
+                    return r
+            elif mt == 'contains':
+                if r.keyword and r.keyword in message:
+                    return r
+            elif mt == 'regex':
+                if r.rx is not None and r.rx.search(message):
+                    return r
+        return None
+
+    def _keyword_hit(self, kw_id: int):
+        """记录关键词命中（交给 stats_writer 批量落库）"""
+        writer = getattr(self.framework, 'stats_writer', None)
+        if writer is not None:
+            writer.keyword_hit(kw_id)
 
     async def _broadcast_non_text(self, event: dict, bot_name: str = 'default'):
         """
