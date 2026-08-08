@@ -143,6 +143,7 @@ CREATE TABLE IF NOT EXISTS dynamic_commands (
     keyword         VARCHAR(200)    NOT NULL        COMMENT '触发关键词',
     response        TEXT            NOT NULL        COMMENT '回复内容（支持CQ码）',
     match_type      ENUM('exact','prefix','contains','regex')  DEFAULT 'exact'  COMMENT '匹配方式',
+    handler         VARCHAR(100)    DEFAULT ''      COMMENT 'handler回调 plugin:func',
     plugin_name     VARCHAR(50)     DEFAULT 'system' COMMENT '所属插件/system表示系统内置',
     is_active       TINYINT(1)      DEFAULT 1       COMMENT '启用/禁用',
     hit_count       INT             DEFAULT 0       COMMENT '命中次数',

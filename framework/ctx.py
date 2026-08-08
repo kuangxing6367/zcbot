@@ -428,6 +428,18 @@ class PluginContext:
         """插入并返回自增 ID"""
         return self._db.insert(sql, params)
 
+    def create_table(self, ddl: str):
+        """
+        插件建表统一入口（自动适配方言，无需判断数据库类型）
+        - SQLite：自动翻译 MySQL 风格 DDL（ENUM→TEXT、AUTO_INCREMENT→AUTOINCREMENT、INDEX 移除等）
+        - MySQL：自动将长列（TEXT / VARCHAR>191）索引改写为前缀索引 `col`(191)，避免错误 1170/1064
+        """
+        try:
+            self._db.execute(ddl)
+        except Exception as e:
+            logger.error(f"[{self._plugin_name}] 建表失败: {e}")
+            raise
+
     def db_connection(self):
         """
         获取一个数据库连接（高级用法）

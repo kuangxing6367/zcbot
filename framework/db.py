@@ -119,8 +119,92 @@ def _convert_placeholders(sql: str) -> str:
 
 
 def _translate_sql_for_mysql(sql: str) -> str:
-    """SQLite 方言 DDL → MySQL 兼容（防御：AUTOINCREMENT → AUTO_INCREMENT，避免 1064 语法错误）"""
-    return sql.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+    """SQLite 方言 DDL → MySQL 兼容（防御：AUTOINCREMENT → AUTO_INCREMENT；长列索引 → 前缀索引）"""
+    sql = sql.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+    return _mysql_prefix_indexes(sql)
+
+
+# 匹配 INDEX idx_name (col1, col2) / KEY idx_name (col)（普通索引；PRIMARY/UNIQUE/FULLTEXT 不处理）
+_RE_MYSQL_INDEX = re.compile(
+    r"^(INDEX|KEY)\s+(?:`?[A-Za-z0-9_]+`?\s+)?\(([^)]*)\)\s*$",
+    re.IGNORECASE)
+
+
+def _mysql_prefix_indexes(sql: str) -> str:
+    """
+    MySQL DDL 兼容：被索引的列若是 TEXT 或 VARCHAR 长度 > 191，
+    自动改写为前缀索引 `col`(191)，避免错误 1170（BLOB/TEXT column used in key specification）
+    与 MySQL 5.7+ 的 Specified key was too long。
+    仅处理 CREATE TABLE 语句；已有前缀（col(191)）的列不重复改写。
+    """
+    if not sql.lstrip().upper().startswith('CREATE TABLE'):
+        return sql
+
+    # 定位列定义区（最外层括号）
+    start = sql.find('(')
+    if start < 0:
+        return sql
+    depth = 0
+    in_str = False
+    quote = None
+    end = -1
+    for i in range(start, len(sql)):
+        c = sql[i]
+        if not in_str and c in ("'", '"'):
+            in_str, quote = True, c
+        elif in_str:
+            if c == quote:
+                in_str, quote = False, None
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
+        return sql
+    body = sql[start + 1:end]
+
+    # 解析列名 → 类型（跳过索引/约束行）
+    col_types = {}
+    for part in _split_top_level(body):
+        m = re.match(r"^\s*`?(\w+)`?\s+(\w+(?:\([^)]*\))?)", part, re.IGNORECASE)
+        if m and m.group(2).upper() not in ('INDEX', 'KEY', 'PRIMARY', 'UNIQUE',
+                                             'CONSTRAINT', 'FULLTEXT', 'SPATIAL', 'CHECK'):
+            col_types[m.group(1)] = m.group(2).upper()
+
+    def _need_prefix(col: str) -> bool:
+        t = col_types.get(col)
+        if not t:
+            return False
+        if t.startswith('TEXT') or t.startswith('LONGTEXT') or t.startswith('MEDIUMTEXT'):
+            return True
+        m = re.match(r'VARCHAR\((\d+)\)', t)
+        return bool(m) and int(m.group(1)) > 191
+
+    def _fix_index(part: str) -> str:
+        m = _RE_MYSQL_INDEX.match(part)
+        if not m:
+            return part
+        idx_open = part.find('(', m.end(1))
+        head = part[:idx_open + 1]
+        cols_text = part[idx_open + 1:part.rfind(')')]
+        fixed = []
+        for col in cols_text.split(','):
+            col = col.strip()
+            name = col.split('(')[0].strip().strip('`')
+            if '(' not in col and _need_prefix(name):
+                fixed.append(f"`{name}`(191)")
+            else:
+                fixed.append(col)
+        return head + ', '.join(fixed) + ')'
+
+    new_parts = [_fix_index(p) for p in _split_top_level(body)]
+    new_body = ', '.join(new_parts)
+    if new_body == body:
+        return sql
+    return sql[:start + 1] + new_body + sql[end:]
 
 
 def _is_ddl_or_dml(sql: str) -> bool:
@@ -854,6 +938,9 @@ def _auto_create_tables(database):
     # 迁移：dynamic_commands.match_type ENUM 增加 contains（更开放的匹配方式）
     _migrate_dynamic_commands_table(database)
 
+    # 迁移：dynamic_commands 表增加 handler 列（关键词 handler 回调）
+    _migrate_dynamic_commands_handler(database)
+
 
 def _migrate_commands_table(database):
     """迁移 commands 表添加 require_level 列"""
@@ -951,5 +1038,24 @@ def _migrate_dynamic_commands_table(database):
             "COMMENT '匹配方式'"
         )
         logger.info("数据库迁移: dynamic_commands.match_type ENUM 增加 contains")
+    except Exception:
+        pass
+
+
+def _migrate_dynamic_commands_handler(database):
+    """迁移 dynamic_commands 表：增加 handler 列（关键词 handler 回调 plugin:func）"""
+    try:
+        if not database.table_exists('dynamic_commands'):
+            return
+        if database.table_has_column('dynamic_commands', 'handler'):
+            return
+        if database.db_type == 'sqlite':
+            database.execute(
+                "ALTER TABLE dynamic_commands ADD COLUMN handler TEXT DEFAULT ''")
+        else:
+            database.execute(
+                "ALTER TABLE dynamic_commands ADD COLUMN handler VARCHAR(100) DEFAULT '' "
+                "COMMENT '关键词handler回调 plugin:func'")
+        logger.info("数据库迁移: dynamic_commands 表添加 handler 列")
     except Exception:
         pass
