@@ -106,6 +106,23 @@ def handle_hello(event, match):
     )
 ```
 
+除命令匹配外，插件还可通过 `ctx.on()` 订阅框架事件。**无文本的消息**（如纯分享卡片、纯图片）不参与命令匹配，框架会将其广播为 `message.share` / `message.media` 等事件，插件订阅即可处理：
+
+```python
+def register(ctx):
+    ctx.on("message.share", on_share)  # 订阅分享卡片事件
+
+def on_share(event):
+    info = event.share  # {'url': ..., 'title': ..., 'desc': ...}
+    ctx.send_msg(
+        user_id=event.user_id,
+        group_id=event.group_id if event.is_group else None,
+        message=f"收到分享：{info.get('title')}",
+    )
+```
+
+完整插件开发指南见 [docs/PLUGIN_DEV.md](./docs/PLUGIN_DEV.md)。
+
 ## 开源协议
 
 本项目采用 **MIT 许可证**（同时兼容 Apache 2.0 许可证），详见 [LICENSE](./LICENSE) 文件。

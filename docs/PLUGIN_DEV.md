@@ -410,6 +410,37 @@ def on_new_member(payload):
     ctx.send_msg(group_id=group_id, message=f"欢迎新成员 {user_id}")
 ```
 
+#### 非文本消息事件（分享卡片 / 图片等）
+
+**无文本的消息**（如纯分享卡片、纯图片、纯视频）不参与命令匹配（命令匹配需要文本），框架会在收到此类消息时将其**广播到事件总线**，插件通过 `ctx.on()` 订阅即可处理：
+
+| 事件名 | 触发条件 | 载荷 |
+| --- | --- | --- |
+| `message.share` | 消息含分享卡片段（`share`）且无文本 | Event 对象 |
+| `message.image` | 消息含图片段（`image`）且无文本 | Event 对象 |
+| `message.record` / `message.video` / `message.file` / `message.face` ... | 对应消息段且无文本 | Event 对象 |
+| `message.media` | 任意非文本消息段（通用兜底事件，总与上方事件一起触发） | Event 对象 |
+
+> 注意：
+> - 事件仅在消息**整体无文本**时触发；带文本的富媒体消息仍走正常命令匹配（可通过 `event.has_image` / `event.has_share` 等属性判断）。
+> - 载荷是 `Event` 对象（与命令 handler 的 `event` 同类型），**不是 dict**，可直接使用 `ev.has_share` / `ev.share` / `ev.segments` / `ev.user_id` 等属性和方法。
+> - 没有插件订阅时广播是零开销的（事件总线自动跳过）。
+
+```python
+def register(ctx):
+    # 订阅分享卡片事件
+    ctx.on("message.share", on_share)
+
+def on_share(ev):
+    """处理分享卡片（ev 是 Event 对象）"""
+    info = ev.share  # {'url': ..., 'title': ..., 'desc': ...}
+    ctx.send_msg(
+        user_id=ev.user_id,
+        group_id=ev.group_id if ev.is_group else None,
+        message=f"收到分享：{info.get('title')}\n{info.get('url')}",
+    )
+```
+
 ### 权限判断
 
 ```python
@@ -568,9 +599,11 @@ event.has_voice       # 包含语音
 event.has_video       # 包含视频
 event.has_file        # 包含文件
 event.has_face        # 包含表情
+event.has_share       # 包含分享卡片
 
 event.images          # 所有图片数据列表
 event.first_image     # 第一张图片数据（dict）
+event.share           # 分享卡片数据 dict（url/title/desc），无则 {}
 event.at_list         # 所有被 @ 的 QQ 号列表
 event.at_all          # 是否 @全体成员
 event.reply_id        # 回复的消息 ID（无则 None）
