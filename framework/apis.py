@@ -1733,6 +1733,158 @@ def create_web_app(framework) -> Flask:
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
+    # ---- 关键词自动回复管理（dynamic_commands 表，系统级动态命令）----
+
+    _KEYWORD_MATCH_TYPES = ('exact', 'prefix', 'contains', 'regex')
+
+    def _refresh_router_keywords():
+        """使 router 关键词规则表立即重建（增删改后调用）"""
+        try:
+            router = getattr(framework, 'router', None)
+            if router is not None:
+                router._invalidate_cache()
+        except Exception:
+            pass
+
+    def _validate_keyword_payload(data: dict, partial: bool = False) -> tuple:
+        """校验关键词回复参数，返回 (error_msg_or_None, cleaned_dict)"""
+        out = {}
+        if 'keyword' in data or not partial:
+            keyword = (data.get('keyword') or '').strip()
+            if not keyword:
+                return '触发关键词不能为空', None
+            if len(keyword) > 200:
+                return '触发关键词过长（最多 200 字符）', None
+            out['keyword'] = keyword
+        if 'response' in data or not partial:
+            response = (data.get('response') or '').strip()
+            if not response:
+                return '回复内容不能为空', None
+            out['response'] = response
+        if 'match_type' in data or not partial:
+            match_type = (data.get('match_type') or 'exact').strip().lower()
+            if match_type not in _KEYWORD_MATCH_TYPES:
+                return f"无效的匹配方式（允许: {'/'.join(_KEYWORD_MATCH_TYPES)}）", None
+            if match_type == 'regex':
+                try:
+                    re.compile(out.get('keyword', data.get('keyword') or ''))
+                except re.error as e:
+                    return f'正则表达式无效: {e}', None
+            out['match_type'] = match_type
+        if 'plugin_name' in data:
+            out['plugin_name'] = (data.get('plugin_name') or 'system').strip()[:50] or 'system'
+        if 'is_active' in data:
+            out['is_active'] = 1 if data.get('is_active') else 0
+        return None, out
+
+    @app.route('/api/dynamic-commands', methods=['GET'])
+    @require_auth
+    def list_keyword_replies():
+        """获取关键词自动回复列表（dynamic_commands 表）"""
+        try:
+            rows = db.query(
+                "SELECT id, keyword, response, match_type, plugin_name, "
+                "is_active, hit_count, created_at, updated_at "
+                "FROM dynamic_commands ORDER BY id DESC"
+            )
+            return jsonify({'code': 0, 'data': rows})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/dynamic-commands', methods=['POST'])
+    @require_auth
+    def create_keyword_reply():
+        """新增关键词自动回复规则"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        err, cleaned = _validate_keyword_payload(data)
+        if err:
+            return jsonify({'code': 400, 'msg': err}), 400
+        try:
+            kw_id = db.insert(
+                "INSERT INTO dynamic_commands "
+                "(keyword, response, match_type, plugin_name, is_active) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (cleaned['keyword'], cleaned['response'], cleaned['match_type'],
+                 cleaned.get('plugin_name', 'system'),
+                 cleaned.get('is_active', 1))
+            )
+            audit_log(admin['id'], admin['username'], 'create_keyword_reply',
+                      'dynamic_command', str(kw_id), cleaned)
+            _refresh_router_keywords()
+            return jsonify({'code': 0, 'msg': '关键词回复已添加', 'data': {'id': kw_id}})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/dynamic-commands/<int:kw_id>', methods=['PUT'])
+    @require_auth
+    def update_keyword_reply(kw_id):
+        """更新关键词自动回复规则"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        err, cleaned = _validate_keyword_payload(data, partial=True)
+        if err:
+            return jsonify({'code': 400, 'msg': err}), 400
+        if not cleaned:
+            return jsonify({'code': 400, 'msg': '没有需要更新的字段'}), 400
+        try:
+            row = db.query_one(
+                "SELECT id, keyword FROM dynamic_commands WHERE id = %s", (kw_id,))
+            if not row:
+                return jsonify({'code': 404, 'msg': '规则不存在'}), 404
+            sets = ", ".join(f"{k} = %s" for k in cleaned)
+            db.execute(
+                f"UPDATE dynamic_commands SET {sets} WHERE id = %s",
+                (*cleaned.values(), kw_id)
+            )
+            audit_log(admin['id'], admin['username'], 'update_keyword_reply',
+                      'dynamic_command', str(kw_id), cleaned)
+            _refresh_router_keywords()
+            return jsonify({'code': 0, 'msg': '关键词回复已更新'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/dynamic-commands/<int:kw_id>/toggle', methods=['POST'])
+    @require_auth
+    def toggle_keyword_reply(kw_id):
+        """启用/禁用关键词自动回复"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        is_active = 1 if data.get('is_active') else 0
+        try:
+            row = db.query_one(
+                "SELECT id, keyword FROM dynamic_commands WHERE id = %s", (kw_id,))
+            if not row:
+                return jsonify({'code': 404, 'msg': '规则不存在'}), 404
+            db.execute(
+                "UPDATE dynamic_commands SET is_active = %s WHERE id = %s",
+                (is_active, kw_id))
+            action = 'enable' if is_active else 'disable'
+            audit_log(admin['id'], admin['username'], f'{action}_keyword_reply',
+                      'dynamic_command', str(kw_id), {'keyword': row['keyword']})
+            _refresh_router_keywords()
+            return jsonify({'code': 0, 'msg': f'已{"启用" if is_active else "禁用"}'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/dynamic-commands/<int:kw_id>', methods=['DELETE'])
+    @require_auth
+    def delete_keyword_reply(kw_id):
+        """删除关键词自动回复规则"""
+        admin = request.admin
+        try:
+            row = db.query_one(
+                "SELECT id, keyword FROM dynamic_commands WHERE id = %s", (kw_id,))
+            if not row:
+                return jsonify({'code': 404, 'msg': '规则不存在'}), 404
+            db.execute("DELETE FROM dynamic_commands WHERE id = %s", (kw_id,))
+            audit_log(admin['id'], admin['username'], 'delete_keyword_reply',
+                      'dynamic_command', str(kw_id), {'keyword': row['keyword']})
+            _refresh_router_keywords()
+            return jsonify({'code': 0, 'msg': '已删除'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
     # ---- 插件配置读写 API（参考 AstrBot _conf_schema.json 配置系统）----
 
     @app.route('/api/plugins/<plugin_name>/config_schema', methods=['GET'])

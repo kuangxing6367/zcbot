@@ -43,6 +43,7 @@ class AsyncStatsWriter:
         self.flush_interval = flush_interval
         self._reg_queue = asyncio.Queue()   # 用户/群注册任务
         self._cmd_hits = {}                 # cmd_id -> count（主循环线程访问）
+        self._kw_hits = {}                  # dynamic_commands.id -> count
         self._task = None
 
     def start(self):
@@ -53,6 +54,10 @@ class AsyncStatsWriter:
     def command_hit(self, cmd_id: int):
         """记录命令命中（内存聚合）"""
         self._cmd_hits[cmd_id] = self._cmd_hits.get(cmd_id, 0) + 1
+
+    def keyword_hit(self, kw_id: int):
+        """记录关键词自动回复命中（内存聚合）"""
+        self._kw_hits[kw_id] = self._kw_hits.get(kw_id, 0) + 1
 
     def register_user(self, user_id: int, sender: dict, message_type: str, group_id: int = None):
         """排队用户/群自动注册（非阻塞）"""
@@ -91,6 +96,19 @@ class AsyncStatsWriter:
                     )
                 except Exception as e:
                     logger.error(f"命令命中计数写库失败 [{cmd_id}]: {e}")
+
+        # 1.5 关键词自动回复命中计数（dynamic_commands 表）
+        kwhits = self._kw_hits
+        self._kw_hits = {}
+        if kwhits:
+            for kw_id, cnt in kwhits.items():
+                try:
+                    self.db.execute(
+                        "UPDATE dynamic_commands SET hit_count = hit_count + %s WHERE id = %s",
+                        (cnt, kw_id)
+                    )
+                except Exception as e:
+                    logger.error(f"关键词命中计数写库失败 [{kw_id}]: {e}")
 
         # 2. 用户/群注册
         items = []
