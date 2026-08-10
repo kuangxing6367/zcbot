@@ -192,7 +192,7 @@ function renderNav(activeKey) {
   nav.querySelectorAll('.nav-item').forEach(el => {
     el.addEventListener('click', () => {
       const key = el.dataset.route;
-      if (key === 'plugin_webui') { location.hash = '#/plugin_webui'; }
+      if (key === 'plugin_webui') { location.hash = '#/plugin_webui?name=' + encodeURIComponent((_pluginWebUIs[0] || {}).plugin_name || ''); }
       else { location.hash = '#/' + key; }
       document.getElementById('sidebar').classList.remove('open');
     });
@@ -223,7 +223,7 @@ async function doLogout() {
 /* ─────────── 路由分发 ─────────── */
 async function route() {
   const hash = location.hash || '#/dashboard';
-  const key = hash.replace(/^#\//, '').split('/')[0] || 'dashboard';
+  const key = hash.replace(/^#\//, '').split('?')[0].split('/')[0] || 'dashboard';
 
   const current = ROUTES.find(r => r.key === key) || ROUTES[0];
   document.getElementById('pageTitle').textContent = current.title;
