@@ -325,25 +325,42 @@ def create_web_app(framework) -> Flask:
         },
     ]
 
+    _DEFAULT_GITHUB_PROXY = 'https://gh.jasonzeng.dev'
+
     def _github_proxy() -> str:
-        """读取配置的 GitHub 加速代理地址（config.yaml github_proxy，留空则走内置镜像回退）"""
+        """
+        读取配置的 GitHub 加速代理地址（config.yaml github_proxy）
+        未配置时默认使用 https://gh.jasonzeng.dev（优先加速），仍不可用则回退内置 ghproxy 镜像
+        """
         try:
-            return str(framework.config.get('github_proxy', '') or '').strip().rstrip('/')
+            proxy = str(framework.config.get('github_proxy', '') or '').strip().rstrip('/')
+            return proxy or _DEFAULT_GITHUB_PROXY
         except Exception:
-            return ''
+            return _DEFAULT_GITHUB_PROXY
 
     def _github_url_candidates(url: str) -> list:
         """
         生成候选下载地址（按优先级）：配置的加速代理 → 内置 ghproxy 镜像 → 直连 GitHub。
-        参考 AstrBot 的 GitHub 加速方案：代理前缀形式为 {host}/https://{原地址}
+        参考 AstrBot 的 GitHub 加速方案：代理前缀形式为 {host}/https://{原地址（去协议）}
+        修复：原地址已含 https://，直接拼接会得到 https://ghproxy.cn/https://https://...（双重协议）
         """
+        def _strip_scheme(u: str) -> str:
+            for p in ('https://', 'http://'):
+                if u.startswith(p):
+                    return u[len(p):]
+            return u
+
         candidates = []
         proxy = _github_proxy()
         if proxy:
-            candidates.append(f"{proxy}/https://{url}")
+            if proxy.endswith('/https://') or proxy.endswith('/http://'):
+                # 代理已带 /https:// 前缀，直接拼去协议后的地址
+                candidates.append(f"{proxy}{_strip_scheme(url)}")
+            else:
+                candidates.append(f"{proxy}/https://{_strip_scheme(url)}")
         for mirror in _MIRROR_MARKETS:
             mirror_host = mirror['url'].split('/')[2]
-            candidates.append(f"https://{mirror_host}/https://{url}")
+            candidates.append(f"https://{mirror_host}/https://{_strip_scheme(url)}")
         candidates.append(url)
         # 去重保序
         seen, out = set(), []

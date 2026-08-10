@@ -5,6 +5,17 @@
 
 ---
 
+## v0.0.1-alpha.1-build.23
+
+### 框架更新下载加速修复
+
+- fix(api): 修复 GitHub 加速镜像候选 URL 双重协议 bug——原地址已含 `https://` 直接拼接导致 `https://ghproxy.cn/https://https://github.com/...`，镜像永远无效；现自动去除协议后按 `{host}/https://{地址}` 拼接
+- feat(api): 默认加速代理改为 `https://gh.jasonzeng.dev`（优先使用，未配置 `github_proxy` 时生效），失败自动回退内置 ghproxy.net / ghproxy.cn 镜像 → 直连 GitHub
+
+> 影响范围：框架更新、插件市场下载、插件 GitHub 更新均走此候选链路。
+
+---
+
 ## v0.0.1-alpha.1-build.22
 
 ### 插件页面路由修复
