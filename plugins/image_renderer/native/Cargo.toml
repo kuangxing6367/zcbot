@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # abi3-py39: 稳定 ABI，一份扩展兼容 Python 3.9+（Windows .pyd / Linux .so 各编一份）
 pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 fontdue = "0.9"
 
 [profile.release]

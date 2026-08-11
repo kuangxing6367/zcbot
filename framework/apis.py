@@ -132,12 +132,52 @@ def create_web_app(framework) -> Flask:
         else:
             raise RuntimeError(f"依赖安装失败: {result.get('error')}")
 
+    # 预发布标签优先级（数字越小越早期）：alpha < beta < rc < stable
+    _PRE_RELEASE_PRIORITY = {
+        'alpha': 0,
+        'beta': 1,
+        'rc': 2,
+        'pre': 2, 'preview': 2,
+    }
+
     def _parse_version_tuple(v: str):
-        """版本字符串 → 可比较元组（提取所有数字段），如 0.0.1-alpha.1-build.5 → (0,0,1,1,5)"""
+        """版本字符串 → 可比较元组，支持语义化版本预发布标签比较
+
+        预发布优先级：alpha(0) < beta(1) < rc(2) < stable(3)
+
+        示例:
+          0.0.1-alpha.1-build.23 → (0, 0, 1, 0, 1, 23)
+          0.0.1-beta.0           → (0, 0, 1, 1, 0)
+          0.0.1                  → (0, 0, 1, 3)
+        """
         if not v:
             return None
-        nums = re.findall(r'\d+', v)
-        return tuple(int(n) for n in nums) if nums else None
+
+        # 拆分主版本号和预发布部分
+        # 格式: 0.0.1-alpha.1-build.23 或 0.0.1-beta.0 或 0.0.1
+        if '-' in v:
+            base, _, pre = v.partition('-')
+        else:
+            base, pre = v, ''
+
+        # 解析基础版本号
+        base_nums = re.findall(r'\d+', base)
+        if not base_nums:
+            return None
+        base_tuple = tuple(int(n) for n in base_nums)
+
+        # 解析预发布优先级：提取预发布部分的第一个英文单词作为标签
+        pre_priority = 3  # 无预发布标签 = stable，最高优先级
+        if pre:
+            m = re.match(r'^([a-zA-Z]+)', pre)
+            if m:
+                tag = m.group(1).lower()
+                pre_priority = _PRE_RELEASE_PRIORITY.get(tag, 3)
+
+        # 预发布部分的数字（如 alpha.1 中的 1, build.23 中的 23）
+        pre_nums = tuple(int(n) for n in re.findall(r'\d+', pre)) if pre else ()
+
+        return base_tuple + (pre_priority,) + pre_nums
 
     def _latest_release_tag(repo: str) -> str:
         """返回仓库版本号最高的 Release tag（含 pre-release）；无 Release 返回空串"""
@@ -341,7 +381,7 @@ def create_web_app(framework) -> Flask:
     def _github_url_candidates(url: str) -> list:
         """
         生成候选下载地址（按优先级）：配置的加速代理 → 内置 ghproxy 镜像 → 直连 GitHub。
-        参考 AstrBot 的 GitHub 加速方案：代理前缀形式为 {host}/https://{原地址（去协议）}
+        GitHub 加速方案：代理前缀形式为 {host}/https://{原地址（去协议）}
         修复：原地址已含 https://，直接拼接会得到 https://ghproxy.cn/https://https://...（双重协议）
         """
         def _strip_scheme(u: str) -> str:
@@ -1166,7 +1206,8 @@ def create_web_app(framework) -> Flask:
         """
         删除插件
         默认保留插件数据（plugins_dat/<插件名>/ 下的配置文件等）；
-        请求体携带 {"delete_data": true} 时一并删除插件数据目录。
+        请求体携带 {"delete_data": true} 时一并删除插件数据目录及 plugin.yaml 中
+        声明的 managed_tables 业务表。
         """
         admin = request.admin
 
@@ -1197,11 +1238,35 @@ def create_web_app(framework) -> Flask:
             db.execute("DELETE FROM tasks WHERE plugin_name = %s", (plugin_name,))
             db.execute("DELETE FROM plugin_configs WHERE plugin_name = %s", (plugin_name,))
 
+            # 删除插件声明管理的业务表（仅在 delete_data=true 时执行）
+            # 插件通过 plugin.yaml 的 managed_tables 字段声明自己创建的表
+            dropped_tables = []
+            if delete_data:
+                yaml_data = framework.plugin_loader.read_plugin_yaml(plugin_name)
+                managed_tables = yaml_data.get('managed_tables', []) if isinstance(yaml_data, dict) else []
+                if isinstance(managed_tables, str):
+                    managed_tables = [managed_tables]
+                for table_name in managed_tables:
+                    if not isinstance(table_name, str):
+                        continue
+                    # 严格校验表名：仅允许字母、数字、下划线，防 SQL 注入
+                    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', table_name):
+                        logger.warning(f"[{plugin_name}] 跳过非法表名: {table_name}")
+                        continue
+                    try:
+                        db.execute(f"DROP TABLE IF EXISTS {table_name}")
+                        dropped_tables.append(table_name)
+                        logger.info(f"[{plugin_name}] 已删除插件业务表: {table_name}")
+                    except Exception as e:
+                        logger.warning(f"[{plugin_name}] 删除表 {table_name} 失败: {e}")
+
             audit_log(admin['id'], admin['username'], 'delete_plugin', 'plugin', plugin_name,
-                      {'delete_data': delete_data}, 'success')
+                      {'delete_data': delete_data, 'dropped_tables': dropped_tables}, 'success')
             msg = f'插件 [{plugin_name}] 已删除'
             if not delete_data and os.path.isdir(dat_dir) and os.listdir(dat_dir):
                 msg += '（配置文件已保留在 plugins_dat，可手动清理）'
+            if dropped_tables:
+                msg += f'（已清理业务表: {", ".join(dropped_tables)}）'
             return jsonify({'code': 0, 'msg': msg})
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
@@ -1615,7 +1680,7 @@ def create_web_app(framework) -> Flask:
                 json.dump({'ts': time.time(), 'data': result}, f, ensure_ascii=False)
         except Exception:
             pass
-        # 网络全挂时回退缓存（参考 AstrBot：缓存 + 提示可能不是最新）
+        # 网络全挂时回退缓存（缓存 + 提示可能不是最新）
         if not all_plugins and os.path.isfile(cache_path):
             try:
                 with open(cache_path, 'r', encoding='utf-8') as f:
@@ -1910,7 +1975,7 @@ def create_web_app(framework) -> Flask:
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
-    # ---- 插件配置读写 API（参考 AstrBot _conf_schema.json 配置系统）----
+    # ---- 插件配置读写 API ----
 
     @app.route('/api/plugins/<plugin_name>/config_schema', methods=['GET'])
     @require_auth
@@ -2019,7 +2084,7 @@ def create_web_app(framework) -> Flask:
     @app.route('/api/commands/<int:cmd_id>/alias', methods=['PUT'])
     @require_auth
     def update_command_alias(cmd_id):
-        """更新静态命令的别名/描述/权限（参考 AstrBot CommandConfig）"""
+        """更新静态命令的别名/描述/权限"""
         admin = request.admin
         data = request.get_json(silent=True) or {}
         alias = data.get('alias', '').strip()
@@ -2075,7 +2140,7 @@ def create_web_app(framework) -> Flask:
     @app.route('/api/plugins/<plugin_name>/commands', methods=['GET'])
     @require_auth
     def get_plugin_commands(plugin_name):
-        """获取指定插件注册的所有命令（参考 AstrBot 插件详情组件展示）"""
+        """获取指定插件注册的所有命令"""
         if not plugin_name.replace('_', '').replace('-', '').isalnum():
             return jsonify({'code': 400, 'msg': '非法插件名'}), 400
 

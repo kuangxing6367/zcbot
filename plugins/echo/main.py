@@ -1,6 +1,6 @@
 """
 Echo 插件 - 原样返回用户文本消息
-从 AstrBot 迁移至 zgric_onebot11 新语法
+Echo 插件 - 原样返回用户文本消息
 """
 __plugin_meta__ = {
     "name": "Echo",

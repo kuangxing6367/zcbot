@@ -92,14 +92,14 @@ class PluginContext:
                 dynamic: bool = False, alias: str = None, description: str = None,
                 require_admin: bool = False, require_superuser: bool = False):
         """
-        注册一个命令（参考 AstrBot 命令系统设计）
+        注册一个命令
         :param pattern: 正则表达式或命令名（主匹配模式）
         :param handler: 处理函数 (event, match) -> None
         :param priority: 优先级，越小越优先
         :param dynamic: 是否为动态命令（dynamic=True 表示该命令在动态命令 tab 展示，仅标记用）
         :param alias: 命令别名，逗号分隔的字符串或列表（如 "/help,/h" 或 ["/help", "/h"]）
         :param description: 命令描述文本
-        :param require_admin: 需要管理员/群主/超管权限（参考 AstrBot PermissionType.ADMIN）
+        :param require_admin: 需要管理员/群主/超管权限
         :param require_superuser: 需要超级管理员权限（高于 require_admin）
         """
         if require_superuser:
@@ -132,7 +132,7 @@ class PluginContext:
             'require_level': 'super' if require_superuser else ('admin' if require_admin else ''),
         })
 
-    # ---- 插件配置读取（参考 AstrBot _conf_schema.json 配置系统）----
+    # ---- 插件配置读取 ----
 
     def get_config(self, key: str, default=None):
         """
