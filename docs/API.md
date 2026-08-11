@@ -305,7 +305,7 @@ fetch('/api/plugins', {
     "bots": ["bot_1"],
     "ws_port": 6830,
     "framework_name": "ZCBOT",
-    "framework_version": "1.0.0",
+    "framework_version": "0.0.1-beta.0",
     "github_repo": "https://github.com/kuangxing6367/zcbot"
   }
 }
@@ -1701,6 +1701,6 @@ while (true) {
 
 ## 相关文档
 
-- [插件开发文档](./PLUGIN_DEV.md) - 完整的插件开发指南
+- [插件开发文档](./INDEX.md) - 插件开发系列文档索引
 - [README](../README.md) - 项目总览
 - [OneBot 11 标准](https://github.com/botuniverse/onebot-11) - OneBot 协议规范

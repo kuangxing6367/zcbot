@@ -123,11 +123,11 @@ class Event:
         self._framework = None  # 由 router 注入
         self._role_cache = None  # 缓存 role 查询结果
 
-        # ----- 事件传播控制（参考 AstrBot PipelineScheduler）-----
+        # ----- 事件传播控制 -----
         self._stopped = False  # 是否停止传播
         self._continue_route = False  # 是否允许系统关键词回复继续尝试
 
-    # ===== 权限属性（参考 AstrBot PermissionTypeFilter + is_admin） =====
+    # ===== 权限属性 =====
 
     @property
     def sender_role(self) -> str:
@@ -137,7 +137,7 @@ class Event:
     @property
     def role(self) -> str:
         """
-        完整身份等级（参考 AstrBot 权限层级）：
+        完整身份等级：
         super（超管）> owner（群主）> admin（管理员）> member（成员）> blacklist（黑名单）
         首次查询后缓存结果，避免重复查库；底层权限查询带 60s TTL 内存缓存
         """
@@ -199,7 +199,7 @@ class Event:
     @property
     def is_admin(self) -> bool:
         """
-        判断用户是否具备管理权限（等价于 AstrBot 的 event.is_admin()）
+        判断用户是否具备管理权限（判断用户是否具备管理权限）
         超管 / 群主 / 群管理员均返回 True
         """
         return self.role in ('super', 'owner', 'admin')
@@ -214,12 +214,12 @@ class Event:
         """判断用户是否为群主"""
         return self.role == 'owner'
 
-    # ===== 事件传播控制（参考 AstrBot PipelineScheduler）=====
+    # ===== 事件传播控制 =====
 
     def stop_event(self) -> None:
         """
         停止事件继续传播到后续插件。
-        参考 AstrBot AstrMessageEvent.stop_event() / MessageEventResult.stop_event()
+        停止事件传播
         调用后，当前插件之后的插件将不再收到此事件。
         """
         self._stopped = True
@@ -227,7 +227,7 @@ class Event:
     def is_stopped(self) -> bool:
         """
         检查事件是否已被停止传播。
-        参考 AstrBot PipelineScheduler: 在 pipeline 的各阶段和 handler 循环中检查。
+        在 pipeline 的各阶段和 handler 循环中检查。
         """
         return self._stopped
 

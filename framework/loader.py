@@ -2,7 +2,7 @@
 插件加载器
 负责：发现插件目录、动态导入 main.py、调用 register(ctx)、1分钟心跳刷新
 同时支持读取 plugin.yaml 配置文件（GitHub 更新源、配置项、文档）
-支持读取 _conf_schema.json 配置 schema（参考 AstrBot 插件配置系统）
+支持读取 _conf_schema.json 配置 schema
 """
 import importlib
 import importlib.metadata

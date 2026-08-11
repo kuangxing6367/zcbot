@@ -1,11 +1,11 @@
 """
 帮助系统插件 - 查询所有已注册命令并生成图片帮助菜单
-从 AstrBot 迁移至 zgric_onebot11 新语法
+帮助系统插件
 
-原插件依赖 AstrBot 的 star_handlers_registry 获取命令，
+原插件依赖框架的命令注册系统获取命令，
 新框架中命令存储在 MySQL 的 commands 表，plugins 表存储插件元数据。
 
-本插件使用 Pillow + numpy 渲染图片帮助菜单，
+本插件使用 Pillow 渲染图片帮助菜单（纯 Python，无 numpy 依赖），
 图片保存到临时文件，通过 CQ 码 [CQ:image,file=file:///路径] 发送，
 发送完成后立即删除临时文件。
 
@@ -328,9 +328,9 @@ def handle_help(event, match):
         _plugin_dir = _os.path.dirname(_os.path.abspath(__file__))
         if _plugin_dir not in _sys.path:
             _sys.path.insert(0, _plugin_dir)
-        from draw import AstrBotHelpDrawer
+        from draw import ZcbotHelpDrawer
 
-        drawer = AstrBotHelpDrawer(drawer_config)
+        drawer = ZcbotHelpDrawer(drawer_config)
         image_bytes = drawer.draw_help_image(plugin_commands)
         # 释放 drawer（含 resized_logo 等资源）
         del drawer
@@ -340,7 +340,19 @@ def handle_help(event, match):
 
     # 发送图片或回退文本
     if image_bytes:
-        _send_image(event, image_bytes, ctx)
+        # 优先走 image_renderer 官方发送接口 _send_image(ctx, event, img_or_bytes)
+        # （官方接口内部自带异常兜底与错误提示，不抛异常），不可用时回退本地发送
+        sent = False
+        try:
+            import sys as _sys2
+            _img_mod = _sys2.modules.get("plugin_image_renderer")
+            if _img_mod is not None and hasattr(_img_mod, "_send_image"):
+                _img_mod._send_image(ctx, event, image_bytes)
+                sent = True
+        except Exception as _e:
+            ctx.log(f"image_renderer 统一发送失败，回退本地发送: {_e}", level="warning")
+        if not sent:
+            _send_image(event, image_bytes, ctx)
         # 释放图片字节缓冲
         del image_bytes
     else:

@@ -1,0 +1,18 @@
+# image_renderer 插件元信息与依赖声明
+name: 图片渲染器
+version: 1.1.0
+author: ZGRIC
+description: 通用图片渲染引擎（原生 Rust 扩展自动加载，缺失自动回退 PIL），提供卡片/文本绘制工具
+priority: 200
+
+# Python 依赖（框架启动时自动检查并安装缺失项）
+dependencies:
+  python:
+    - "Pillow>=10.0.0"
+
+# 原生扩展说明
+# 原生渲染引擎 zcbot_render（Rust + pyo3，abi3 稳定 ABI）按平台自动加载：
+#   Windows x86_64  -> native/bin/win64/zcbot_render.pyd
+#   Linux x86_64    -> native/bin/linux-x86_64/zcbot_render.so
+#   Linux aarch64   -> native/bin/linux-aarch64/zcbot_render.so
+# 其他架构或缺失二进制时自动回退 PIL（Pillow）渲染，功能一致。
