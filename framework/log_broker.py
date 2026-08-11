@@ -1,5 +1,5 @@
 """
-运行日志代理（参考 AstrBot LogBroker 设计）
+运行日志代理
 - 线程安全环形缓存
 - 捕获框架 logging 输出
 - 支持 SSE 订阅实时推送
@@ -155,7 +155,7 @@ class LogBroker:
 
 
 class FrameworkLogHandler(logging.Handler):
-    """将 Python logging 输出桥接到 LogBroker（参考 AstrBot LogQueueHandler）"""
+    """将 Python logging 输出桥接到 LogBroker"""
 
     # Python logging 级别 → LogBroker 级别映射
     LEVEL_MAP = {

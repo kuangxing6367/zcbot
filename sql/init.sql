@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 
 -- ============================================================
 -- 10. 插件配置表
--- 存储插件通过 _conf_schema.json 定义的配置项值（参考 AstrBot）
+-- 存储插件通过 _conf_schema.json 定义的配置项值
 -- 用户可在 Web UI 修改，插件通过 ctx.get_config() 读取
 -- ============================================================
 CREATE TABLE IF NOT EXISTS plugin_configs (
