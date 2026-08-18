@@ -8,8 +8,12 @@ import time
 # 权限查询 TTL 缓存（热路径性能：避免每个事件反复查库）
 # 用户：user_id -> (role, is_blacklist, ts) ；群成员：(`group_id`,`user_id`) -> (role, ts)
 _ROLE_CACHE_TTL = 60.0
+# 角色缓存上限：超过后清理过期条目，防止长期运行内存无限增长
+# （不活跃用户/群的条目永不刷新但一直驻留，属内存泄漏）
+_ROLE_CACHE_MAX = 5000
 _user_role_cache: dict = {}
 _group_role_cache: dict = {}
+_role_cache_checks = 0
 
 
 def invalidate_user_role_cache(user_id: int = None):
@@ -150,6 +154,21 @@ class Event:
             db = self._framework.db
             now = time.time()
             uid = self.user_id
+
+            # 惰性上限清理：每 256 次查询检查一次缓存规模，超限剔除过期条目
+            global _role_cache_checks
+            _role_cache_checks += 1
+            if _role_cache_checks % 256 == 0:
+                if len(_user_role_cache) > _ROLE_CACHE_MAX:
+                    _user_role_cache = {
+                        k: v for k, v in _user_role_cache.items()
+                        if now - v[2] <= _ROLE_CACHE_TTL
+                    }
+                if len(_group_role_cache) > _ROLE_CACHE_MAX:
+                    _group_role_cache = {
+                        k: v for k, v in _group_role_cache.items()
+                        if now - v[1] <= _ROLE_CACHE_TTL
+                    }
 
             # 用户级（super / blacklist）查询（60s TTL 内存缓存）
             u_entry = _user_role_cache.get(uid)

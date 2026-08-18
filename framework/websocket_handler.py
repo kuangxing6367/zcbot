@@ -26,6 +26,8 @@ _WS_MAJOR = _WS_VERSION[0] if _WS_VERSION else 0
 
 # 事件并发处理上限（超出后排队等待，防止消息洪峰打爆任务数）
 _MAX_CONCURRENT_EVENTS = 64
+# 排队任务上限：超过后丢弃新事件并告警（防止洪峰积压内存）
+_MAX_PENDING_EVENTS = 256
 
 
 def _get_request_path(ws, path=None):
@@ -63,6 +65,26 @@ def _get_request_headers(ws):
     except (AttributeError, Exception):
         pass
     return {}
+
+
+def _get_header_value(headers, name: str) -> str:
+    """大小写不敏感地从请求头取值（兼容 websockets 各版本的 headers 类型）"""
+    if not headers:
+        return ''
+    try:
+        v = headers.get(name) or headers.get(name.lower()) or headers.get(name.upper())
+        if v:
+            return str(v)
+    except Exception:
+        pass
+    lname = name.lower()
+    for k, val in headers.items():
+        try:
+            if str(k).lower() == lname:
+                return str(val)
+        except Exception:
+            continue
+    return ''
 
 
 def _extract_token(path, headers):
@@ -127,6 +149,8 @@ class WebSocketServer:
         self._running = True
         self._loop = asyncio.get_running_loop()
         self._dispatch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_EVENTS)
+        self._dispatch_pending = 0   # 排队中的事件任务数
+        self._dispatch_dropped = 0   # 因排队超限丢弃的事件数
         self._server_task = asyncio.create_task(self._serve(), name="ws-server")
         return self._server_task
 
@@ -205,9 +229,16 @@ class WebSocketServer:
                 return
 
         # ---- 分配 bot_name ----
+        # 优先使用 OneBot 客户端上报的 X-Self-ID（机器人 QQ 号）作为 bot_name：
+        # 多账号可读性好，且同一 QQ 断线重连时复用同名连接（不再 bot_1/bot_2 无限增长）
+        self_id_header = _get_header_value(headers, 'X-Self-ID')
+        if self_id_header:
+            bot_name = self_id_header
+        else:
+            with self._lock:
+                self._conn_counter += 1
+                bot_name = f"bot_{self._conn_counter}"
         with self._lock:
-            self._conn_counter += 1
-            bot_name = f"bot_{self._conn_counter}"
             self._connections[bot_name] = ws
 
         peer = ws.remote_address if hasattr(ws, 'remote_address') else 'unknown'
@@ -244,9 +275,19 @@ class WebSocketServer:
                     continue
 
                 # 判断是否为事件上报 — 有界并发派发，不阻塞事件循环
+                # 排队任务有上限（_MAX_PENDING_EVENTS），超限丢弃防内存积压
                 post_type = data.get("post_type")
                 if post_type:
-                    asyncio.create_task(self._dispatch(data, bot_name))
+                    if self._dispatch_pending >= _MAX_PENDING_EVENTS:
+                        if self._dispatch_dropped % 1000 == 0:
+                            logger.warning(
+                                f"[{bot_name}] 事件排队超过上限（{_MAX_PENDING_EVENTS}），"
+                                f"已丢弃 {self._dispatch_dropped} 条事件")
+                        self._dispatch_dropped += 1
+                        continue
+                    self._dispatch_pending += 1
+                    task = asyncio.create_task(self._dispatch(data, bot_name))
+                    task.add_done_callback(self._on_dispatch_done)
 
         except websockets.ConnectionClosed:
             pass
@@ -257,7 +298,9 @@ class WebSocketServer:
             log_broker.log_connection(bot_name, 'error', {'error': str(e)})
         finally:
             with self._lock:
-                self._connections.pop(bot_name, None)
+                # 仅当当前注册的仍是本连接时才移除（同名重连后旧连接断开不得误删新连接）
+                if self._connections.get(bot_name) is ws:
+                    self._connections.pop(bot_name, None)
             logger.info(f"[{bot_name}] OneBot 客户端已断开")
             log_broker.log_connection(bot_name, 'disconnect')
             try:
@@ -269,17 +312,23 @@ class WebSocketServer:
             except Exception as e:
                 logger.error(f"[{bot_name}] on_disconnect 回调异常: {e}")
 
+    def _on_dispatch_done(self, task):
+        """事件任务完成回调（递减排队计数；异常已在 _dispatch 内兜底）"""
+        self._dispatch_pending -= 1
+
     async def _dispatch(self, data: dict, bot_name: str):
         """有界并发处理一条事件（async handler 直接 await，sync handler 转线程）"""
-        async with self._dispatch_semaphore:
-            try:
+        try:
+            async with self._dispatch_semaphore:
                 cb = self.on_message_callback
                 if asyncio.iscoroutinefunction(cb):
                     await cb(data, bot_name)
                 else:
                     await asyncio.to_thread(cb, data, bot_name)
-            except Exception as e:
-                logger.error(f"[{bot_name}] 消息处理异常: {e}", exc_info=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[{bot_name}] 消息处理异常: {e}", exc_info=True)
 
     # ── 发送 ─────────────────────────────────────────────────────
 

@@ -93,3 +93,14 @@ Thumbs.db
 # 插件目录（不在源码范畴，已移出项目目录）
 # ============================================================
 ../zcbot_plugins/*.bak.*
+# 新增基础插件（v0.0.1-beta.1）
+!plugins/session_waiter/
+!plugins/session_waiter/**
+!plugins/message_guard/
+!plugins/message_guard/**
+!plugins/plugin_depgraph/
+!plugins/plugin_depgraph/**
+!plugins/ui_ext_demo/
+!plugins/ui_ext_demo/**
+plugins/*/__pycache__/
+plugins/*/__pycache__/**

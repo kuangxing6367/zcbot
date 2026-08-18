@@ -8,6 +8,7 @@ OneBot 11 API 调用器
               内部通过 run_coroutine_threadsafe 转发到主事件循环
 """
 import asyncio
+import contextvars
 import logging
 import threading
 import uuid
@@ -15,6 +16,12 @@ import os
 import yaml
 
 logger = logging.getLogger('zcbot')
+
+# 当前消息来源 OneBot 实例名的上下文变量（contextvars）
+# 由 router 在 handler 执行期间注入，替代插件级共享变量 module.ctx._current_bot，
+# 多 bot 并发消息互不干扰（async 协程与 asyncio.to_thread 均携带上下文快照）
+current_bot_var: contextvars.ContextVar = contextvars.ContextVar(
+    'zcbot_current_bot', default=None)
 
 # 缓存配置，避免每次调用都读文件
 _log_sent_message = None
@@ -153,7 +160,11 @@ class ApiCaller:
         self.on_message_sent = None  # 生命周期钩子: (bot_name, action, params, resp) -> None
 
     def register_connection(self, name: str) -> BotConnection:
-        """注册一个 OneBot 连接通道"""
+        """注册一个 OneBot 连接通道（自动清理已断开的僵尸连接，防注册表无限增长）"""
+        # 清理未连接的僵尸连接（断线重连生成新 bot_name 时避免 _connections 无限累积）
+        dead = [n for n, c in self._connections.items() if not c.connected]
+        for n in dead:
+            self._connections.pop(n, None)
         conn = BotConnection(name)
         conn._caller = self
         self._connections[name] = conn
@@ -161,15 +172,19 @@ class ApiCaller:
 
     def get_connection(self, name: str = None) -> BotConnection:
         """
-        获取指定连接，name=None 返回默认（第一个）连接
+        获取指定连接，name=None 返回默认连接（优先返回已连接的连接，
+        避免默认调用持续指向断线死连接）
         """
         if not self._connections:
             return None
 
-        if name is None or name not in self._connections:
-            # 返回第一个可用连接
-            return next(iter(self._connections.values()))
-        return self._connections.get(name)
+        if name is not None and name in self._connections:
+            return self._connections.get(name)
+        # 默认连接：优先已连接（在线）的连接
+        for conn in self._connections.values():
+            if conn.connected:
+                return conn
+        return next(iter(self._connections.values()))
 
     async def acall(self, action: str, bot: str = None, **params) -> dict:
         """异步调用 OneBot 11 API"""

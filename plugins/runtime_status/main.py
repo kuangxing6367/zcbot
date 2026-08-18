@@ -4,6 +4,7 @@
 配置项由 _conf_schema.json 定义，通过 ctx.get_config() 读取
 """
 import os
+import sys
 import psutil
 import platform
 import time
@@ -126,6 +127,48 @@ def _get_framework_info(ctx):
         return {'error': str(e)}
 
 
+def _render_status_image(fw, proc_mem, sys_info, show_cpu):
+    """用 image_renderer 渲染框架状态卡片图；失败返回 None"""
+    mod = sys.modules.get("plugin_image_renderer")
+    if mod is None or not hasattr(mod, "_get_native_or_pil_canvas"):
+        return None
+    fp = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'help', 'DouyinSansBold.otf')
+    font_path = fp if os.path.isfile(fp) else None
+    try:
+        W = 560
+        row_h = 30
+        rows = [
+            ("运行时间", fw.get('uptime', '-')),
+            ("进程内存", f"{proc_mem:.1f} MB"),
+        ]
+        if show_cpu and 'error' not in (sys_info or {}):
+            rows.append(("CPU 使用率", f"{sys_info['cpu_percent']}% ({sys_info['cpu_count']}核)"))
+        rows += [
+            ("OneBot 客户端", f"{fw.get('bot_count', 0)} 个在线"),
+            ("已加载插件", f"{fw.get('plugin_count', 0)} 个"),
+            ("注册命令", f"{fw.get('cmd_count', 0)} 条"),
+            ("动态命令", f"{fw.get('dyn_count', 0)} 条"),
+            ("用户数", f"{fw.get('user_count', 0)}"),
+            ("活跃群", f"{fw.get('group_count', 0)}"),
+            ("WebSocket", f":{fw.get('ws_port', '-')}"),
+            ("Web UI", f":{fw.get('web_port', '-')}"),
+        ]
+        H = 44 + len(rows) * row_h + 26
+        canvas = mod._get_native_or_pil_canvas(W, H, None, font_path)
+        canvas.rect(0, 0, W, H, radius=0, fill="#0f1420")
+        canvas.rect(0, 0, 6, H, radius=0, fill="#4a90d9")
+        canvas.text(24, 18, "📊 框架运行状态", font_size=22, color="#FFFFFF")
+        y = 58
+        for label, value in rows:
+            canvas.text(28, y, label, font_size=16, color="#9fb3cc")
+            canvas.text(W - 28, y, value, font_size=16, color="#7fd8a8", align="right")
+            y += row_h
+        return canvas.to_png()
+    except Exception as e:
+        ctx.log(f"[runtime_status] 状态图渲染失败: {e}", level="error")
+        return None
+
+
 def handle_status(event, match):
     """框架运行状态概览（根据 show_cpu 配置决定是否显示 CPU）"""
     fw = _get_framework_info(ctx)
@@ -146,6 +189,26 @@ def handle_status(event, match):
         proc_mem = 0
 
     show_cpu = _get_config(ctx, 'show_cpu', True)
+    sys_info = _get_system_info(ctx) if show_cpu else {}
+
+    # 优先渲染状态卡片图（image_renderer），失败回退文本
+    png = _render_status_image(fw, proc_mem, sys_info, show_cpu)
+    if png:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp.write(png)
+            path_str = tmp.name.replace("\\", "/")
+        try:
+            ctx.api("send_msg",
+                user_id=event.user_id,
+                group_id=event.group_id,
+                message=f"[CQ:image,file=file:///{path_str}]")
+            return
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
 
     lines = [
         " 框架运行状态",
@@ -153,10 +216,8 @@ def handle_status(event, match):
         f"运行时间: {fw['uptime']}",
         f"进程内存: {proc_mem:.1f} MB",
     ]
-    if show_cpu:
-        sys_info = _get_system_info(ctx)
-        if 'error' not in sys_info:
-            lines.append(f"CPU 使用率: {sys_info['cpu_percent']}% ({sys_info['cpu_count']}核)")
+    if show_cpu and 'error' not in sys_info:
+        lines.append(f"CPU 使用率: {sys_info['cpu_percent']}% ({sys_info['cpu_count']}核)")
     lines.extend([
         "━━━━━━━━━━━━━━━",
         f"OneBot 客户端: {fw['bot_count']} 个在线",
