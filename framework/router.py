@@ -602,9 +602,11 @@ class MessageRouter:
                 })
                 handler = getattr(module, cmd.handler_name, None)
                 if handler and callable(handler):
-                    # 注入当前事件的 bot 到 ctx，确保回复走正确的 OneBot 实例
-                    if hasattr(module, 'ctx'):
-                        module.ctx._current_bot = ev.bot_name
+                    # 注入当前事件的 bot 到上下文变量（contextvars），确保回复走正确的
+                    # OneBot 实例。协程创建与 asyncio.to_thread 均携带上下文快照，
+                    # 并发消息互不干扰（原 module.ctx 插件级共享变量多 bot 时会交错错发）
+                    from framework.api import current_bot_var
+                    _bot_token = current_bot_var.set(ev.bot_name)
                     try:
                         if asyncio.iscoroutinefunction(handler):
                             result = await handler(ev, match)
@@ -625,6 +627,8 @@ class MessageRouter:
                         except Exception as he:
                             logger.error(f"[{plugin_name}] on_error 钩子异常: {he}")
                         return True  # 视为已处理，避免半处理消息继续传播
+                    finally:
+                        current_bot_var.reset(_bot_token)
                     # handler 返回 False 表示"未实际处理，继续路由"
                     if result is False:
                         continue

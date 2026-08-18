@@ -23,11 +23,13 @@ class EventBus:
         self._lock = threading.Lock()
 
     def subscribe(self, event_name: str, plugin_name: str, handler: Callable):
-        """订阅事件"""
+        """订阅事件（同一插件同一 handler 重复订阅自动去重，防止心跳重注册后重复触发）"""
         with self._lock:
-            if event_name not in self._subscribers:
-                self._subscribers[event_name] = []
-            self._subscribers[event_name].append({
+            subs = self._subscribers.setdefault(event_name, [])
+            for s in subs:
+                if s['plugin_name'] == plugin_name and s['handler'] == handler:
+                    return  # 已订阅，去重
+            subs.append({
                 'plugin_name': plugin_name,
                 'handler': handler
             })

@@ -1,228 +1,225 @@
-# ZCBOT
+# ZCBOT 🤖
 
-基于 Python 的 OneBot v11 协议 QQ 机器人框架，支持插件化扩展。
+> **一个开箱即用的 QQ 机器人框架**——装上就能跑，会写 Python 就能写插件。
+> 基于 OneBot v11 协议，全异步，自带 Web 管理面板。
 
-**当前版本：v0.0.1-beta.0（公测版）**
+**当前版本：v0.0.1-beta.1**
 
-项目地址：https://github.com/kuangxing6367/zcbot
+📚 项目地址：https://github.com/kuangxing6367/zcbot
+💬 反馈交流：QQ 群 **1060129201**
 
-> 本项目代码由 AI 完成为主、人工辅助完成。如有 bug 或建议，欢迎加 QQ 群 **1060129201** 反馈。
+---
 
-## 特性
+## ✨ 它是什么？
 
-- 支持 OneBot v11 协议（反向 WebSocket 连接）
-- **全异步架构**：消息处理、API 调用、定时任务均不阻塞事件循环；插件 handler 支持 `async def`（旧同步插件自动兼容）
-- 插件化架构，热加载 / 热卸载，支持动态注册指令
-- 默认 SQLite 零配置开箱即用，可选 MySQL（自动翻译 MySQL 方言 SQL）
-- 内置统一 Web 管理面板（侧边导航 + 深色主题，覆盖仪表盘、插件、命令、用户、群组、任务、日志、设置）
-- 完善的权限体系（超级管理员、群管理、普通用户），登录防爆破
-- 插件依赖自动安装（基于全局环境，版本冲突自动跳过），支持手动创建插件虚拟环境（存放于插件数据目录）
-- 日志系统支持多级过滤、关键词搜索与 SSE 实时推送
-- 数据库自动重连：MySQL 连接断开（wait_timeout/服务重启/网络中断）后自动 ping 保活并重连，不再卡死
-- **MySQL 连接池**（DBUtils PooledDB）：连接数有上限且空闲回收（`pool_size`/`min_cached`/`max_cached` 可配），坏连接自动丢弃重建，池满时阻塞等待，杜绝连接无限增长
-- **系统级关键词自动回复**（动态命令）：无需写插件即可配置 关键词→自动回复，支持 完全相等/前缀/包含/正则 四种匹配方式，Web 管理面板可视化增删改启停，插件未命中时兜底触发
-- **双请求防破解认证系统**：蜜罐探针 + nonce 挑战机制，保护管理后台免受暴力破解
+ZCBOT 让你**用 Python 快速做一个 QQ 机器人**：
 
-## 快速开始
+- 群里发 `/echo 你好`，机器人回复"你好"
+- 接上大模型（LLM），@机器人 就能聊天
+- 写个插件，就能自定义任何功能（签到、查询、群管……）
 
-### 环境要求
+它已经把**最难的部分**都做好了：
 
-- Python 3.10+
-- OneBot v11 兼容客户端（如 Lagrange、NapCat、go-cqhttp 等）
+| 能力 | 说明 |
+| ---- | ---- |
+| 🚀 全异步 | 消息处理不卡顿，响应快 |
+| 🔌 插件化 | 一个插件 = 一个文件夹，写好即加载，支持热加载/热卸载 |
+| 🖥️ Web 管理面板 | 可视化管插件/命令/用户/群组/任务/日志 |
+| 🗄️ 数据库 | 默认 SQLite 零配置，可切换 MySQL（自动翻译方言 SQL） |
+| 🔐 安全 | 权限体系 + 登录防爆破 + 后台防破解 |
+| 🧩 开箱即用 | 自带 echo/help/状态/图片渲染 等常用插件 |
 
-### 安装
+---
+
+## 🚀 快速开始（5 步）
+
+> 全程约 5 分钟，跟着做就行。
+
+### 第 1 步：准备 Python
+
+需要 **Python 3.10+**。装好后在终端确认：
 
 ```bash
-# 克隆仓库
+python --version   # 看到 Python 3.10.x 或更高即可
+```
+
+### 第 2 步：获取代码
+
+```bash
 git clone https://github.com/kuangxing6367/zcbot.git
 cd zcbot
-
-# 安装依赖
 pip install -r requirements.txt
 ```
 
-> 框架启动时会自动检测并安装缺失依赖（走清华源 + 自动回退），首次部署无需手动处理。
+> 💡 依赖缺了不用慌，框架启动时会**自动补装**。
 
-### 配置
+### 第 3 步：配置（可选）
 
-编辑 `config.yaml`（首次启动会自动生成默认配置）：
+首次启动会自动生成 config.yaml。一般不用改，直接跑。想改的话：
 
 ```yaml
 database:
-  type: sqlite                    # sqlite（默认）或 mysql
-  path: data/zcbot.db
-
+  type: sqlite          # 默认 SQLite，零配置；想用 MySQL 改成 mysql + 填连接信息
 onebot:
-  listen_host: 0.0.0.0
-  listen_port: 6830
-  access_token: "your-token"
-
+  listen_port: 6830     # OneBot 客户端连这里
+  access_token: "自己设一个token"   # ⚠️ 务必设置，否则任何人都能接入
 web:
-  host: 127.0.0.1
+  host: 127.0.0.1       # Web 面板地址（本机访问）
   port: 8080
-
-plugin:
-  dir: plugins                    # 插件代码目录
 ```
 
-### 启动
+### 第 4 步：启动
 
 ```bash
 python main.py
 ```
 
-Web 管理面板访问 `http://localhost:8080`，默认账号 `admin`，默认密码 `admin123`。
+看到 `框架启动完成，等待消息...` 就成功了 🎉
 
-> 安全提示：首次部署请立即修改默认密码，并在 `config.yaml` 中设置 `onebot.access_token`（留空则任何客户端都能接入）。Web 面板如需公网访问，请改为监听 `0.0.0.0` 并注意防护。
+### 第 5 步：连接机器人 + 访问面板
 
-## 插件仓库
+1. **连接 OneBot 客户端**：用 NapCat / Lagrange / go-cqhttp 等，配**反向 WebSocket** 连到 `ws://你的地址:6830`，token 填上面设的。
+2. **Web 面板**：浏览器打开 `http://localhost:8080`，默认账号 `admin`，密码 `admin123`（⚠️ 上线前一定改掉！）
 
-框架内置插件位于 `plugins/` 目录，开箱即用。此外还有独立的插件仓库，提供更多功能插件：
+---
 
-**插件仓库地址**：`zgric_onebot11_plugins/plugins`
+## 🎯 写你的第一个插件（手把手）
 
-使用时将插件仓库目录配置到 `config.yaml`：
+> 目标：让机器人回复 `/你好` → "你也好呀！"
 
-```yaml
-plugin:
-  dir: ../zgric_onebot11_plugins/plugins   # 指向插件仓库
+### ① 建文件夹
+
+在 `plugins/` 下建一个文件夹，名字就是插件名（用英文）：
+
+```
+plugins/
+└── hello/          ← 新建这个文件夹
+    └── main.py     ← 插件入口文件
 ```
 
-或直接将需要的插件目录复制到框架的 `plugins/` 下。
+### ② 写代码
 
-### 内置插件一览
-
-| 插件 | 说明 |
-| ---- | ---- |
-| **echo** | 原样返回用户文本消息，无参数时返回 PONG |
-| **help** | 查询所有已注册命令，生成图片帮助菜单 |
-| **image_renderer** | 通用图片渲染引擎，Rust + pyo3 原生扩展优先，支持信息卡片和文字转图片 |
-| **restart_manager** | 框架重启管理，支持通过指令重启 |
-| **runtime_status** | 系统运行状态监控，仪表盘卡片展示 CPU/内存/磁盘 |
-
-### 插件仓库扩展插件
-
-| 插件 | 说明 |
-| ---- | ---- |
-| **file** | 文件处理插件 |
-| **llm_chat** | LLM 对话插件，支持多模型切换、函数调用、人格预设、对话统计 |
-| **llm_plugin_gen** | AI 驱动的插件开发助手，通过 LLM 编写和管理插件文件 |
-| **qqadmin** | QQ 群管理插件，提供群成员管理、禁言、踢人等功能 |
-
-## 原生扩展（image_renderer）
-
-图片渲染插件内置 Rust + pyo3 原生渲染引擎（`zcbot_render`），**按架构强制绑定**：
-
-| 平台 | 产物路径 |
-| ---- | ---- |
-| Windows x86_64 | `plugins/image_renderer/native/bin/win64/zcbot_render.pyd` |
-| Linux x86_64 | `plugins/image_renderer/native/bin/linux-x86_64/zcbot_render.so` |
-| Linux aarch64 | `plugins/image_renderer/native/bin/linux-aarch64/zcbot_render.so` |
-
-仅支持以上架构；在其他架构运行或找不到对应二进制时，插件**自动回退 PIL（Pillow）渲染**，功能一致。原生扩展为 abi3 稳定 ABI，兼容 Python 3.9+。
-
-## 插件开发
-
-插件存放在独立目录中，每个插件为一个包，入口文件为 `main.py`：
+在 `plugins/hello/main.py` 里粘贴：
 
 ```python
+# 插件元信息：告诉框架这个插件是干嘛的
 __plugin_meta__ = {
-    "name": "示例插件",
+    "name": "你好插件",
     "version": "1.0.0",
-    "author": "your-name",
-    "desc": "插件描述",
+    "author": "你的名字",
+    "desc": "回复 /你好",
     "priority": 50,
 }
 
 def register(ctx):
-    """注册插件指令（ctx 为本次注册上下文，仅此处作为参数传入）"""
-    ctx.command("/hello", handle_hello, description="打招呼")
+    """注册入口：告诉框架有哪些命令"""
+    ctx.command("/你好", handle_hi, description="打个招呼")
 
-def handle_hello(event, match):
-    # 注意：handler 内的 ctx 是框架注入到插件模块级的全局变量
-    #（register 被调用前由框架设置 module.ctx），可直接调用 ctx.api/send_msg 等
+def handle_hi(event, match):
+    """命令处理函数：收到 /你好 时执行"""
     ctx.send_msg(
         user_id=event.user_id,
         group_id=event.group_id if event.is_group else None,
-        message="你好！",
+        message="你也好呀！👋",
     )
 ```
 
-除命令匹配外，插件还可通过 `ctx.on()` 订阅框架事件。**无文本的消息**（如纯分享卡片、纯图片）不参与命令匹配，框架会将其广播为 `message.share` / `message.media` 等事件，插件订阅即可处理：
+### ③ 生效
+
+在 Web 面板「插件」页点「重载」，或重启框架。然后群里发 **`/你好`** → 机器人回 **`你也好呀！👋`** ✅
+
+### ④ 小练习（理解机制）
+
+试试把命令改成带参数：
 
 ```python
-def register(ctx):
-    ctx.on("message.share", on_share)  # 订阅分享卡片事件
-
-def on_share(event):
-    info = event.share  # {'url': ..., 'title': ..., 'desc': ...}
+def handle_hi(event, match):
+    arg = match.group(1).strip() if match else ""   # 命令后的内容
+    msg = f"你也好呀 {arg}！" if arg else "你也好呀！"
     ctx.send_msg(
         user_id=event.user_id,
         group_id=event.group_id if event.is_group else None,
-        message=f"收到分享：{info.get('title')}",
+        message=msg,
     )
 ```
 
-完整插件开发指南已拆分为多个独立文档，从 [docs/INDEX.md](./docs/INDEX.md) 入口开始阅读。
+发 `/你好 小明` → 回复 `你也好呀 小明！` 🎉
 
-## 文档
+---
 
-### 插件开发系列
+## 📖 插件还能干什么？
 
-| 文档 | 内容 |
+| 能力 | 代码示例 |
 | ---- | ---- |
-| [文档索引](./docs/INDEX.md) | 文档总览与推荐阅读路径 |
-| [快速入门](./docs/getting-started.md) | 最小可运行插件、异步支持、API 速查表 |
-| [插件目录结构](./docs/plugin-structure.md) | 代码/数据分离约定、元信息、生命周期 |
-| [API 参考](./docs/api-reference.md) | `ctx` 全部方法、`Event` 对象、OneBot 11 API |
-| [配置系统](./docs/configuration.md) | `plugin.yaml`、`_conf_schema.json`、依赖声明 |
-| [最佳实践](./docs/best-practices.md) | 错误处理、资源清理、性能与安全 |
-| [示例合集](./docs/examples.md) | 签到插件完整实现 |
+| 💬 发消息 | `ctx.send_msg(user_id=..., group_id=..., message="...")` |
+| 📷 发图片 | `ctx.send_msg(..., message="[CQ:image,file=file:///路径]")` |
+| ⏰ 定时任务 | `ctx.task("*/5 * * * *", my_job, description="每5分钟")` |
+| 🔔 订阅事件 | `ctx.on("message", on_msg)` |
+| 🗄️ 查数据库 | `ctx.db_query("SELECT * FROM users")` |
+| ⚙️ 读配置 | `ctx.get_config("key", default)` |
+| 🛠️ 调 API | `ctx.api("get_group_list")` 或 `ctx.onebot.send_group_msg(...)` |
+| 🎨 生成图片 | 接 `image_renderer` 画卡片/文字图 |
 
-### 其他
+> 📚 完整 API 看 `docs/api-reference.md`；更多示例看 `docs/examples.md`（含签到插件完整实现）。
 
-| 文档 | 内容 |
+---
+
+## 📦 内置插件
+
+| 插件 | 说明 |
 | ---- | ---- |
-| [Web API 接口文档](./docs/API.md) | Web UI 后端 HTTP API 完整定义 |
-| [更新日志](./CHANGELOG.md) | 版本变更记录 |
+| **echo** | `/echo 内容` 原样返回 |
+| **help** | `/help` 生成图片帮助菜单 |
+| **image_renderer** | 通用图片渲染引擎（Rust 原生优先，缺失回退 PIL） |
+| **restart_manager** | 框架重启管理 |
+| **runtime_status** | `/status` `/info` 运行状态（含图片版状态卡） |
 
-## 目录结构
+## 🧩 更多插件（插件仓库）
 
-```
-zcbot/
-├── main.py                  # 启动入口
-├── config.yaml              # 配置文件（首次启动自动生成）
-├── requirements.txt         # 核心依赖
-├── VERSION                  # 版本号
-├── framework/               # 框架核心
-│   ├── core.py              # 框架引擎（异步模型）
-│   ├── ctx.py               # 插件上下文 (PluginContext)
-│   ├── event.py             # 事件对象
-│   ├── loader.py            # 插件加载器
-│   ├── router.py            # 消息路由（内存路由表）
-│   ├── scheduler.py         # 定时任务调度器
-│   ├── event_bus.py          # 事件总线
-│   ├── apis.py               # Web API 服务端
-│   ├── onebot_api.py         # OneBot 11 标准 API 封装
-│   ├── websocket_handler.py  # WebSocket 服务端
-│   ├── db.py                 # 数据库适配层
-│   ├── config.py             # 配置加载
-│   ├── log_broker.py         # 日志代理
-│   └── dual_auth.py          # 双请求防破解认证
-├── plugins/                 # 插件代码目录
-├── data/                    # 运行时数据
-│   ├── logs/                # 日志文件
-│   ├── plugins_dat/         # 插件数据/配置（不被覆盖）
-│   └── zcbot.db             # SQLite 数据库（默认）
-├── sql/                     # 数据库初始化脚本
-├── web/                     # Web 管理面板前端
-└── docs/                    # 文档
+需要 LLM 对话、群管、签到等？克隆插件仓库，把 `config.yaml` 的 `plugin.dir` 指向它：
+
+```yaml
+plugin:
+  dir: ../zgric_onebot11_plugins/plugins
 ```
 
-## 开源协议
+仓库含：`llm_chat`（AI 对话，支持人格）、`qqadmin`（群管理）、`fun_score`（签到积分）、`minecraftconsole`（MC 控制台）等。
 
-本项目采用 **MIT + Apache 2.0 双开源协议**，你可任选其一适用，详见 [LICENSE](./LICENSE) 文件。
+---
 
-## 免责声明
+## ❓ 常见问题
 
-本框架仅提供插件运行环境，所有第三方插件由开发者独立维护。框架作者不对任何第三方插件的安全性、稳定性、合法性负责。使用第三方插件前请自行审查代码，风险自负。
+**Q: 面板打不开？**
+A: 确认 `web.host` 是 `127.0.0.1`（本机）或 `0.0.0.0`（局域网）。重启后仍打不开，看日志"端口被占用"（`ss -tlnp | grep 8080` 查残留进程）。
+
+**Q: 机器人不回复？**
+A: ① OneBot 客户端是否连上（面板/日志看"客户端已连接"）② `access_token` 是否匹配 ③ 消息是否是命令开头。
+
+**Q: 改插件代码没生效？**
+A: Web 面板插件页点「重载」，或重启框架。
+
+**Q: 忘了管理员密码？**
+A: 看 `data/logs/` 日志提示，或删 `data/zcbot.db` 重新初始化（会重置数据，慎用）。
+
+**Q: 内存涨了怎么办？**
+A: 框架会自动定期释放空闲内存；持续上涨可发 `/memdiag` 诊断。
+
+---
+
+## 📚 进阶文档
+
+- [文档索引](docs/INDEX.md)
+- [快速入门](docs/getting-started.md) — 手把手第一个插件
+- [插件目录结构](docs/plugin-structure.md) — 代码/数据分离约定
+- [API 参考](docs/api-reference.md) — ctx 全部方法
+- [配置系统](docs/configuration.md) — 插件配置项
+- [最佳实践](docs/best-practices.md)
+- [示例合集](docs/examples.md) — 签到插件完整实现
+
+---
+
+## 📜 开源协议
+
+MIT + Apache 2.0 双协议，任选其一适用。
+
+> 本项目代码由 AI 完成为主、人工辅助完成。用着顺手的话，给个 ⭐ 吧！

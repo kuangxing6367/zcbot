@@ -41,7 +41,9 @@ class AsyncStatsWriter:
         self.framework = framework
         self.db = framework.db
         self.flush_interval = flush_interval
-        self._reg_queue = asyncio.Queue()   # 用户/群注册任务
+        # 有界队列：消息洪峰时丢弃多余注册请求（内存有上限），丢弃计数定期上报
+        self._reg_queue = asyncio.Queue(maxsize=20000)   # 用户/群注册任务
+        self._dropped = 0
         self._cmd_hits = {}                 # cmd_id -> count（主循环线程访问）
         self._kw_hits = {}                  # dynamic_commands.id -> count
         self._task = None
@@ -60,8 +62,13 @@ class AsyncStatsWriter:
         self._kw_hits[kw_id] = self._kw_hits.get(kw_id, 0) + 1
 
     def register_user(self, user_id: int, sender: dict, message_type: str, group_id: int = None):
-        """排队用户/群自动注册（非阻塞）"""
-        self._reg_queue.put_nowait((user_id, dict(sender), message_type, group_id))
+        """排队用户/群自动注册（非阻塞，队列满时丢弃并计数）"""
+        try:
+            self._reg_queue.put_nowait((user_id, dict(sender), message_type, group_id))
+        except asyncio.QueueFull:
+            self._dropped += 1
+            if self._dropped % 1000 == 1:
+                logger.warning(f"用户注册队列已满，已丢弃 {self._dropped} 条注册请求（消息量过大）")
 
     async def _run(self):
         """后台循环：周期性 flush"""
@@ -231,6 +238,11 @@ class Framework:
 
         # 统计批量写库器（框架自身 DB 写入走队列，不阻塞事件循环）
         self.stats_writer = AsyncStatsWriter(self)
+
+        # 原始消息处理器注册表（按插件优先级排序，收到原始消息事件，可选择性接管）
+        self._raw_message_handlers = []
+        # 后台事件任务引用集（防止 fire-and-forget 任务被 GC 提前回收）
+        self._pending_tasks = set()
 
         # WebSocket 服务端（OneBot 客户端反向连接，运行在主事件循环）
         onebot_cfg = self.config.get('onebot', {})
@@ -488,12 +500,15 @@ class Framework:
     def _on_message_sent(self, bot_name: str, action: str, params: dict, resp: dict):
         """消息发送成功后的生命周期钩子（转发为 after_message_sent 事件）"""
         try:
-            self.loop.create_task(self.event_bus.aemit('after_message_sent', {
+            task = self.loop.create_task(self.event_bus.aemit('after_message_sent', {
                 'bot': bot_name,
                 'action': action,
                 'params': params,
                 'response': resp,
             }))
+            # 保存任务引用防止被 GC 提前回收（完成后自动移除）
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
         except Exception as e:
             logger.debug(f"after_message_sent 事件派发失败: {e}")
 
@@ -521,12 +536,21 @@ class Framework:
         """收到 WebSocket 消息事件（异步处理）"""
         post_type = data.get('post_type', '')
 
-        # 处理元事件（心跳包）
+        # 处理元事件（心跳包/生命周期）→ 广播给插件订阅
+        # 事件名：meta.heartbeat / meta.lifecycle（sub_type: enable/disable/connect）
+        # 插件可用 ctx.on("meta.heartbeat", handler) 感知机器人在线状态
         if post_type == 'meta_event':
+            meta_type = data.get('meta_event_type', 'unknown')
+            await self.event_bus.aemit(f'meta.{meta_type}', data)
             return
 
         # 处理消息事件 → 路由
         if post_type == 'message':
+            # 原始消息注入点：插件可选择性处理原始消息（完整消息段/未提取文本），
+            # 任一处理器返回 True 即接管，框架跳过该消息的后续全部处理
+            if await self._dispatch_raw_message_handlers(data, bot_name):
+                return
+
             from framework.event import _extract_text
             raw_message = _extract_text(data.get('message', ''))
             message_type = data.get('message_type', 'unknown')
@@ -559,6 +583,54 @@ class Framework:
         # 处理请求事件
         elif post_type == 'request':
             await self._handle_request(data, bot_name)
+
+    # ── 原始消息注入点（raw message hook）────────────────────────────
+
+    def register_raw_message_handler(self, plugin_name: str, handler, priority: int = 50):
+        """注册插件原始消息处理器（同插件同 handler 去重，按优先级升序）"""
+        for item in self._raw_message_handlers:
+            if item['plugin_name'] == plugin_name and item['handler'] == handler:
+                return
+        self._raw_message_handlers.append({
+            'plugin_name': plugin_name,
+            'priority': priority,
+            'handler': handler,
+        })
+        self._raw_message_handlers.sort(key=lambda x: x['priority'])
+
+    def unregister_raw_message_handlers(self, plugin_name: str):
+        """移除某插件的全部原始消息处理器（插件卸载时调用）"""
+        self._raw_message_handlers = [
+            item for item in self._raw_message_handlers
+            if item['plugin_name'] != plugin_name
+        ]
+
+    async def _dispatch_raw_message_handlers(self, data: dict, bot_name: str) -> bool:
+        """
+        按插件优先级分发原始消息事件（未提取纯文本、含全部消息段）
+        任一 handler 返回 True 表示"已接管"（框架跳过该消息的后续处理，选择性使用）；
+        返回 None/False 表示未处理，消息继续走正常流程。单个 handler 异常不影响其他。
+        """
+        if not self._raw_message_handlers:
+            return False
+        for item in list(self._raw_message_handlers):
+            handler = item['handler']
+            try:
+                if asyncio.iscoroutinefunction(handler):
+                    result = await handler(data, bot_name)
+                else:
+                    result = await asyncio.to_thread(handler, data, bot_name)
+                if result is True:
+                    log_broker.log_plugin(item['plugin_name'], '原始消息接管', {
+                        'bot': bot_name,
+                        'message_type': data.get('message_type', ''),
+                        'user_id': data.get('user_id', 0),
+                        'group_id': data.get('group_id'),
+                    })
+                    return True
+            except Exception as e:
+                logger.error(f"[{item['plugin_name']}] 原始消息处理器异常: {e}", exc_info=True)
+        return False
 
     async def _handle_notice(self, data: dict, bot_name: str = 'default'):
         """处理通知事件"""

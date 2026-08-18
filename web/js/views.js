@@ -68,9 +68,18 @@ Views.dashboard = async function (view) {
 };
 
 /* ═══════════════ 插件管理 ═══════════════ */
+let _pluginKeyword = localStorage.getItem('zcbot_plugin_search') || '';
+
+Views.pluginSearch = function () {
+  _pluginKeyword = (document.getElementById('pluginSearch')||{}).value ? document.getElementById('pluginSearch').value.trim() : '';
+  localStorage.setItem('zcbot_plugin_search', _pluginKeyword);
+  Views.plugins(document.getElementById('view'));
+};
+
 Views.plugins = async function (view) {
   const res = await api('/api/plugins');
-  const plugins = (res && res.data) || [];
+  let plugins = (res && res.data) || [];
+  if (_pluginKeyword) { const k=_pluginKeyword.toLowerCase(); plugins = plugins.filter(p => p.plugin_name.toLowerCase().includes(k) || (p.description||'').toLowerCase().includes(k)); }
 
   view.innerHTML = `
     <div class="flex between mb">
@@ -78,6 +87,7 @@ Views.plugins = async function (view) {
         <button class="btn" onclick="Views.plugins(document.getElementById('view'))">⟳ 刷新</button>
         <button class="btn primary" onclick="Views.uploadPluginModal()">⬆ 上传插件</button>
       </div>
+      <input class="input" id="pluginSearch" style="width:200px" placeholder="搜索插件名/描述"> <button class="btn" onclick="Views.pluginSearch()">搜索</button>
       <span class="muted small">共 ${plugins.length} 个插件</span>
     </div>
     <div class="grid cols-3" id="pluginGrid">
@@ -416,26 +426,20 @@ Views.commands = async function (view) {
           </td></tr>`).join('') || '<tr><td colspan="8" class="empty">暂无命令</td></tr>'}
       </table></div>
     </div>
-    <div class="card">
-      <div class="card-title">关键词回复 (${kwRules.length}) <button class="btn sm primary" onclick="Views.addKeyword()">+ 新增</button></div>
-      <div class="small muted mb">系统级动态命令：插件未命中时按关键词自动回复。匹配方式支持完全相等 / 前缀 / 包含 / 正则；回复内容支持 CQ 码；可配 handler（plugin:func）动态生成回复。</div>
+        <div class="card">
+      <div class="card-title">关键词回复 (${kwRules.length})</div>
+      <div class="small muted mb">由插件统一注册管理（如 keyword_api 的 /关键词api 规则）；此页只读，编辑请用对应插件命令。</div>
       <div class="table-wrap"><table class="tbl">
-        <tr><th>关键词/正则</th><th>回复内容</th><th>匹配方式</th><th>handler</th><th>命中</th><th>状态</th><th>操作</th></tr>
+        <tr><th>来源插件</th><th>关键词/正则</th><th>匹配方式</th><th>handler</th><th>命中</th><th>状态</th></tr>
         ${kwRules.map(k => `<tr>
+          <td class="small">${escapeHtml(k.plugin_name || 'system')}</td>
           <td class="mono">${escapeHtml(k.keyword)}</td>
-          <td class="small">${escapeHtml(k.response)}</td>
           <td>${k.match_type === 'regex' ? '<span class="badge warn">正则</span>' : escapeHtml(kwTypeLabel[k.match_type] || k.match_type)}</td>
           <td class="small">${k.handler ? `<span class="badge info">${escapeHtml(k.handler)}</span>` : '-'}</td>
           <td>${k.hit_count || 0}</td>
-          <td>${badgeHtml(!!k.is_active)}</td>
-          <td class="actions">
-            <button class="btn sm" onclick="Views.editKeyword(${k.id})">编辑</button>
-            <button class="btn sm ${k.is_active ? 'danger' : 'success'}" onclick="Views.toggleKeyword(${k.id}, ${k.is_active ? 0 : 1})">${k.is_active ? '禁用' : '启用'}</button>
-            <button class="btn sm danger" onclick="Views.deleteKeyword(${k.id})">删除</button>
-          </td></tr>`).join('') || '<tr><td colspan="7" class="empty">暂无关键词回复，点击右上角「+ 新增」添加</td></tr>'}
+          <td>${badgeHtml(!!k.is_active)}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无关键词回复</td></tr>'}   
       </table></div>
-    </div>
-    <div class="card">
+    </div><div class="card">
       <div class="card-title">动态命令 (${dynCmds.length})</div>
       <div class="small muted mb">动态命令由插件注册（ctx.command(dynamic=True)），仅作展示，不参与路由匹配。</div>
       <div class="table-wrap"><table class="tbl">
@@ -567,6 +571,13 @@ Views.users = async function (view) {
   const total = (res && res.total) || 0;
   const pages = Math.max(1, Math.ceil(total / 20));
 
+  // 插件扩展：动态列 + 详情面板
+  const extMeta = await loadUiExtMeta('users');
+  const extCols = extMeta.filter(e => e.type === 'column');
+  const hasPanel = extMeta.some(e => e.type === 'panel');
+  const extData = await loadUiExtData('users', data.map(u => u.user_id));
+  const colspan = 6 + extCols.length + (hasPanel ? 1 : 0);
+
   view.innerHTML = `
     <div class="card">
       <div class="card-title">
@@ -577,8 +588,17 @@ Views.users = async function (view) {
         </div>
       </div>
       <div class="table-wrap"><table class="tbl">
-        <tr><th>QQ号</th><th>昵称</th><th>角色</th><th>状态</th><th>最后活跃</th><th>操作</th></tr>
-        ${data.map(u => `<tr>
+        <tr><th>QQ号</th><th>昵称</th><th>角色</th><th>状态</th><th>最后活跃</th><th>操作</th>
+          ${extCols.map(e => `<th title="插件: ${escapeHtml(e.plugin)}">${escapeHtml(e.title)}</th>`).join('')}
+          ${hasPanel ? '<th></th>' : ''}
+        </tr>
+        ${data.map(u => {
+          const exts = extData[String(u.user_id)] || {};
+          const extTds = extCols.map(e => {
+            const d = exts[e.key];
+            return `<td class="small">${escapeHtml(d ? String(d.data) : '-')}</td>`;
+          }).join('');
+          return `<tr>
           <td class="mono">${u.user_id}</td>
           <td>${escapeHtml(u.nickname || '-')}</td>
           <td>${u.role === 'super' ? '<span class="badge warn">超管</span>' : '<span class="badge muted">普通</span>'}</td>
@@ -587,7 +607,11 @@ Views.users = async function (view) {
           <td class="actions">
             <button class="btn sm ${u.role === 'super' ? 'danger' : 'warn'}" onclick="Views.setUserRole(${u.user_id}, '${u.role === 'super' ? '' : 'super'}')">${u.role === 'super' ? '取消超管' : '设为超管'}</button>
             <button class="btn sm ${u.is_blacklist ? 'success' : 'danger'}" onclick="Views.toggleBlacklist(${u.user_id}, ${u.is_blacklist ? 0 : 1})">${u.is_blacklist ? '移出黑名单' : '拉黑'}</button>
-          </td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无用户（用户发消息后自动注册）</td></tr>'}
+          </td>
+          ${extTds}
+          ${hasPanel ? `<td><button class="btn sm" onclick="showUiExtDetail('users', ${u.user_id}, '${String(u.nickname || u.user_id).replace(/'/g, '')}')">详情</button></td>` : ''}
+          </tr>`;
+        }).join('') || `<tr><td colspan="${colspan}" class="empty">暂无用户（用户发消息后自动注册）</td></tr>`}
       </table></div>
       <div class="pager">
         <button class="btn sm" onclick="Views.userPage(${_userPage - 1})" ${_userPage <= 1 ? 'disabled' : ''}>上一页</button>
@@ -621,23 +645,83 @@ Views.toggleBlacklist = async function (uid, bl) {
   else toast((r && r.msg) || '操作失败', 'error');
 };
 
+/* ═══════════════ 群组/用户页插件扩展辅助 ═══════════════ */
+async function loadUiExtMeta(scope) {
+  try {
+    const res = await api(`/api/extensions/${scope}`);
+    return (res && res.data) || [];
+  } catch (e) { return []; }
+}
+
+async function loadUiExtData(scope, ids) {
+  if (!ids || !ids.length) return {};
+  try {
+    const res = await api(`/api/${scope}/extensions/data`, {
+      method: 'POST', body: JSON.stringify({ ids })
+    });
+    return (res && res.data) || {};
+  } catch (e) { return {}; }
+}
+
+async function showUiExtDetail(scope, id, name) {
+  try {
+    const res = await api(`/api/${scope}/${id}/extensions`);
+    const data = (res && res.data) || {};
+    const html = Object.values(data).filter(e => e && e.type === 'panel').map(e => {
+      const d = e.data;
+      if (d && typeof d === 'object' && !Array.isArray(d)) {
+        return `<div class="ext-panel">
+          <div class="ext-title">${escapeHtml(e.title)} <span class="muted small">· ${escapeHtml(e.plugin)}</span></div>
+          ${Object.entries(d).map(([k, v]) => `<div class="ext-row"><span class="muted">${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`).join('')}
+        </div>`;
+      }
+      return `<div class="ext-panel"><div class="ext-title">${escapeHtml(e.title)} <span class="muted small">· ${escapeHtml(e.plugin)}</span></div>
+        <div>${escapeHtml(d == null ? '-' : String(d))}</div></div>`;
+    }).join('') || '<div class="muted">该条目暂无插件扩展面板</div>';
+    openModal(`<div class="modal-head"><span>${escapeHtml(name)} 详情</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+      <div class="modal-body" style="max-height:60vh;overflow:auto">${html}</div>`);
+  } catch (e) {
+    toast('加载详情失败: ' + e.message, 'error');
+  }
+}
+
 /* ═══════════════ 群组管理 ═══════════════ */
 Views.groups = async function (view) {
   const res = await api('/api/groups');
   const groups = (res && res.data) || [];
 
+  // 插件扩展：动态列 + 详情面板
+  const extMeta = await loadUiExtMeta('groups');
+  const extCols = extMeta.filter(e => e.type === 'column');
+  const hasPanel = extMeta.some(e => e.type === 'panel');
+  const extData = await loadUiExtData('groups', groups.map(g => g.group_id));
+  const colspan = 6 + extCols.length + (hasPanel ? 1 : 0);
+
   view.innerHTML = `
     <div class="card">
       <div class="card-title">群组管理 (${groups.length}) <button class="btn sm" onclick="Views.groups(document.getElementById('view'))">⟳ 刷新</button></div>
       <div class="table-wrap"><table class="tbl">
-        <tr><th>群号</th><th>群名称</th><th>成员数</th><th>状态</th><th>入群时间</th><th>操作</th></tr>
-        ${groups.map(g => `<tr>
+        <tr><th>群号</th><th>群名称</th><th>成员数</th><th>状态</th><th>入群时间</th><th>操作</th>
+          ${extCols.map(e => `<th title="插件: ${escapeHtml(e.plugin)}">${escapeHtml(e.title)}</th>`).join('')}
+          ${hasPanel ? '<th></th>' : ''}
+        </tr>
+        ${groups.map(g => {
+          const exts = extData[String(g.group_id)] || {};
+          const extTds = extCols.map(e => {
+            const d = exts[e.key];
+            return `<td class="small">${escapeHtml(d ? String(d.data) : '-')}</td>`;
+          }).join('');
+          return `<tr>
           <td class="mono">${g.group_id}</td>
           <td>${escapeHtml(g.group_name || '-')}</td>
           <td>${g.member_count || 0}</td>
           <td>${g.is_blacklist ? '<span class="badge err">黑名单</span>' : g.is_active ? '<span class="badge ok">活跃</span>' : '<span class="badge muted">已退群</span>'}</td>
           <td class="small">${fmtTime(g.join_at)}</td>
-          <td><button class="btn sm ${g.is_blacklist ? 'success' : 'danger'}" onclick="Views.toggleGroupBlacklist(${g.group_id}, ${g.is_blacklist ? 0 : 1})">${g.is_blacklist ? '移出黑名单' : '拉黑'}</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">暂无群组</td></tr>'}
+          <td><button class="btn sm ${g.is_blacklist ? 'success' : 'danger'}" onclick="Views.toggleGroupBlacklist(${g.group_id}, ${g.is_blacklist ? 0 : 1})">${g.is_blacklist ? '移出黑名单' : '拉黑'}</button></td>
+          ${extTds}
+          ${hasPanel ? `<td><button class="btn sm" onclick="showUiExtDetail('groups', ${g.group_id}, '${String(g.group_name || g.group_id).replace(/'/g, '')}')">详情</button></td>` : ''}
+          </tr>`;
+        }).join('') || `<tr><td colspan="${colspan}" class="empty">暂无群组</td></tr>`}
       </table></div>
     </div>`;
 };
