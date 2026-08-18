@@ -24,6 +24,9 @@ import yaml
 
 logger = logging.getLogger('zcbot')
 
+# 仪表盘卡片执行线程池（共享，避免每次请求创建线程；慢卡片隔离在此池）
+_cards_executor = None
+
 # ── pip 安装工具（清华源 + 自动回退）──────────────────────────────
 
 # 镜像源列表（按优先级，第一个是清华源，后续是回退）
@@ -1111,6 +1114,23 @@ class PluginLoader:
         tasks = ctx._get_tasks()
         dashboard_cards = ctx._get_dashboard_cards()
 
+        # 注册原始消息处理器（收到原始消息事件，可选择性接管）
+        raw_handlers = ctx._get_raw_message_handlers()
+        if raw_handlers:
+            _priority = info.get('priority', 50)
+            for _h in raw_handlers:
+                self.framework.register_raw_message_handler(plugin_name, _h, _priority)
+
+        # 收集 WebUI 群组/用户管理页插件扩展
+        group_exts = ctx._get_group_extensions()
+        if group_exts:
+            with self._lock:
+                info['group_extensions'] = group_exts
+        user_exts = ctx._get_user_extensions()
+        if user_exts:
+            with self._lock:
+                info['user_extensions'] = user_exts
+
         # 写入 commands 表
         if commands:
             self._sync_commands(plugin_name, commands)
@@ -1398,6 +1418,12 @@ class PluginLoader:
         # 移除事件订阅
         self.framework.event_bus.unsubscribe_plugin(plugin_name)
 
+        # 移除原始消息处理器
+        try:
+            self.framework.unregister_raw_message_handlers(plugin_name)
+        except Exception as e:
+            logger.warning(f"[{plugin_name}] 清理原始消息处理器失败: {e}")
+
         # 清理 sys.modules：删除该插件目录下的所有模块（含短名模块，避免热重载污染）
         try:
             plugin_path = info.get('path') or os.path.join(self.plugins_dir, plugin_name)
@@ -1469,27 +1495,133 @@ class PluginLoader:
                 info['dashboard_cards'] = cards
 
     def get_dashboard_cards(self) -> list:
-        """获取所有仪表盘卡片（按优先级排序）"""
+        """
+        获取所有仪表盘卡片（按优先级排序）
+
+        每个卡片 handler 在独立线程池中执行并限时 2 秒：防止某个插件卡片的慢操作
+        （如内存统计、网络请求）占满 Web 线程池导致仪表盘卡死；超时的卡片
+        返回占位数据并记录告警（超时任务在后台继续跑，不阻塞 Web 线程）。
+        """
+        global _cards_executor
         result = []
         with self._lock:
+            items = []
             for name, info in self._loaded_plugins.items():
                 cards = info.get('dashboard_cards', [])
                 for card in cards:
-                    handler = card['handler']
-                    try:
-                        card_data = handler()
-                        if card_data:
-                            result.append({
-                                'plugin_name': name,
-                                'title': card.get('title', ''),
-                                'icon': card.get('icon'),
-                                'priority': card.get('priority', 50),
-                                'data': card_data,
-                            })
-                    except Exception as e:
-                        logger.error(f"[{name}] 仪表盘卡片异常: {e}")
+                    items.append((name, card))
+        if not items:
+            return result
+
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+        if _cards_executor is None:
+            _cards_executor = ThreadPoolExecutor(
+                max_workers=4, thread_name_prefix='zccards')
+        futures = {}
+        for name, card in items:
+            handler = card['handler']
+            fut = _cards_executor.submit(handler)
+            futures[fut] = (name, card)
+        for fut, (name, card) in futures.items():
+            try:
+                card_data = fut.result(timeout=2.0)
+            except FutureTimeout:
+                logger.warning(f"[{name}] 仪表盘卡片执行超时（>2s），已跳过: {card.get('title', '')}")
+                card_data = {"value": "⏳ 加载超时", "label": card.get('title', ''), "timeout": True}
+                fut.cancel()
+            except Exception as e:
+                logger.error(f"[{name}] 仪表盘卡片异常: {e}")
+                card_data = None
+            if card_data:
+                result.append({
+                    'plugin_name': name,
+                    'title': card.get('title', ''),
+                    'icon': card.get('icon'),
+                    'priority': card.get('priority', 50),
+                    'data': card_data,
+                })
         result.sort(key=lambda x: x['priority'])
         return result
+
+    # ==================================================================
+    #  WebUI 群组/用户管理页插件扩展
+    # ==================================================================
+
+    def get_ui_extensions(self, scope: str) -> list:
+        """
+        获取群组(scope='groups')或用户(scope='users')管理页的全部插件扩展元信息
+        返回: [{key, title, plugin, type}]
+        """
+        field = 'group_extensions' if scope == 'groups' else 'user_extensions'
+        result = []
+        with self._lock:
+            for name, info in self._loaded_plugins.items():
+                for ext in info.get(field, []):
+                    result.append({
+                        'key': ext['key'],
+                        'title': ext['title'],
+                        'plugin': name,
+                        'type': ext['type'],
+                    })
+        result.sort(key=lambda x: (x['plugin'], x['title']))
+        return result
+
+    def _get_ext_handler(self, scope: str, key: str):
+        """按 scope+key 找到扩展 handler（未找到返回 None）"""
+        field = 'group_extensions' if scope == 'groups' else 'user_extensions'
+        with self._lock:
+            for info in self._loaded_plugins.values():
+                for ext in info.get(field, []):
+                    if ext['key'] == key:
+                        return ext['handler']
+        return None
+
+    def call_ui_extensions(self, scope: str, target_id, keys=None) -> dict:
+        """
+        对单个群/用户调用扩展 handler（线程池 + 2 秒超时隔离，不卡 Web 线程）
+
+        :param scope: 'groups' | 'users'
+        :param target_id: group_id 或 user_id
+        :param keys: 要调用的扩展 key 列表（None=全部）
+        :return: {key: {type, data, plugin}}；超时/异常返回占位
+        """
+        global _cards_executor
+        field = 'group_extensions' if scope == 'groups' else 'user_extensions'
+        exts = []
+        with self._lock:
+            for name, info in self._loaded_plugins.items():
+                for ext in info.get(field, []):
+                    if keys is None or ext['key'] in keys:
+                        exts.append((name, ext))
+        if not exts:
+            return {}
+
+        from concurrent.futures import TimeoutError as FutureTimeout
+        if _cards_executor is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _cards_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix='zccards')
+        out = {}
+        futures = {}
+        for name, ext in exts:
+            handler = ext['handler']
+            fut = _cards_executor.submit(handler, target_id)
+            futures[fut] = (name, ext)
+        for fut, (name, ext) in futures.items():
+            try:
+                data = fut.result(timeout=2.0)
+            except FutureTimeout:
+                data = "⏳ 超时"
+                fut.cancel()
+            except Exception as e:
+                logger.error(f"[{name}] UI 扩展[{ext['key']}] 异常: {e}")
+                data = "-"
+            out[ext['key']] = {
+                'type': ext['type'],
+                'plugin': name,
+                'title': ext['title'],
+                'data': data,
+            }
+        return out
 
     # ==================================================================
     #  插件 WebUI 内嵌

@@ -203,7 +203,38 @@ def on_new_member(payload):
     ctx.send_msg(group_id=group_id, message=f"欢迎新成员 {user_id}")
 ```
 
+## 原始消息注入点（on_raw_message）
+
+注册后收到**原始消息事件**（完整 dict，含全部消息段，未提取纯文本），在框架命令匹配/关键词回复**之前**触发，供框架选择性使用：
+
+```python
+def register(ctx):
+    ctx.on_raw_message(handle_raw)  # 收到原始消息事件
+
+def handle_raw(raw_event, bot_name):
+    """返回 True  = 消息被接管，框架跳过对该消息的后续全部处理
+    返回 None/False = 未处理，消息继续走正常流程（命令匹配/关键词兜底等）
+    raw_event: OneBot 11 原始事件 dict（message 可能是消息段数组，含图片/at/回复等）
+    bot_name:  消息来源的 OneBot 实例名（多账号场景）
+    """
+    # 示例：监听纯图片消息（无文本，正常流程会被丢弃）
+    if raw_event.get("message_type") == "group" and not raw_event.get("message"):
+        ctx.send_msg(group_id=raw_event.get("group_id"), message="收到一张图片")
+        return True   # 接管，不再走命令匹配
+    return False      # 未处理，继续正常流程
+```
+
+特性：
+
+- 元事件也可订阅：`ctx.on("meta.heartbeat", ...)` / `ctx.on("meta.lifecycle", ...)`（机器人心跳/连接状态）
+- 支持 `async def`（直接 await）与普通 `def`（自动转线程执行）
+- 多个插件按插件 `priority` 升序依次触发
+- 单个处理器异常不影响其他处理器（仅记录日志）
+- 插件卸载/重载时处理器自动移除
+- 与 `ctx.on("message")` 的区别：`on_raw_message` 收到的是**未提取**的原始事件（含完整消息段），且触发时机在命令匹配之前，可完全接管消息
+
 ## 权限判断
+
 
 ```python
 def handle_ban(event, match):
@@ -362,3 +393,32 @@ event.segments        # 原始消息段数组
 event.stop_event()    # 阻止后续插件收到此事件
 event.is_stopped()    # 是否已被停止
 ```
+
+## 群组/用户管理页插件扩展（register_group_extension / register_user_extension）
+
+在 Web UI 的「群组管理」「用户管理」页添加插件自定义内容，支持两种类型：
+
+- `column`：表格新增一列（handler 返回字符串）
+- `panel`：行内「详情」弹窗新增面板（handler 返回 {label: value} 键值字典）
+
+```python
+def register(ctx):
+    # 群组管理页：加一列「群等级」
+    ctx.register_group_extension("level", "群等级", lambda gid: f"Lv.{gid % 9 + 1}", "column")
+
+    # 群组管理页：详情弹窗加面板
+    ctx.register_group_extension("stats", "群统计", lambda gid: {
+        "成员数": 120, "活跃度": "高",
+    }, "panel")
+
+    # 用户管理页同理
+    ctx.register_user_extension("score", "积分", lambda uid: get_score(uid), "column")
+```
+
+特性：
+
+- handler 签名：`handler(group_id)` / `handler(user_id)`，在独立线程执行并**限时 2 秒**（超时显示占位，不卡 Web 线程）
+- 单页批量加载（当前页所有条目一次请求），详情弹窗按需请求
+- 插件卸载/重载时扩展自动移除
+
+参考实现：plugins/ui_ext_demo/main.py（演示插件，可直接复制改造成自己的扩展）

@@ -18,6 +18,7 @@
 import importlib.util
 import logging
 import os
+import platform
 import sys
 import tempfile
 from datetime import datetime
@@ -35,6 +36,7 @@ __plugin_meta__ = {
 _FONT_DIR = os.path.dirname(os.path.abspath(__file__))
 # 字体候选：插件目录 / help 插件自带字体
 _FONT_CANDIDATES = [
+    os.path.join(_FONT_DIR, 'HarmonyOS_Sans_SC_Medium.ttf'),
     os.path.join(_FONT_DIR, 'HarmonyOS_Sans_SC_Regular.ttf'),
     os.path.join(_FONT_DIR, 'NotoSansCJK-Regular.ttc'),
     os.path.join(os.path.dirname(_FONT_DIR), 'help', 'DouyinSansBold.otf'),
@@ -51,10 +53,18 @@ def _load_native_renderer():
         subdirs = ['win64', 'win-amd64']
         names = ['zcbot_render.pyd', 'zcbot_render.abi3.pyd']
     elif sys.platform.startswith('linux'):
-        subdirs = ['linux-aarch64', 'linux64', 'linux-x86_64']
+        # 按本机架构优先排序，避免跨架构 .so 的无效尝试
+        arch = (platform.machine() or '').lower()
+        ordered = []
+        if 'x86_64' in arch or 'amd64' in arch:
+            ordered.append('linux-x86_64')
+        if 'aarch64' in arch or 'arm64' in arch:
+            ordered.append('linux-aarch64')
+        subdirs = ordered + ['linux-x86_64', 'linux64', 'linux-aarch64']
         names = ['zcbot_render.so', 'zcbot_render.abi3.so']
     else:
         return None
+    tried = []
     for sub in subdirs:
         for name in names:
             path = os.path.join(native_dir, sub, name)
@@ -67,7 +77,10 @@ def _load_native_renderer():
                 logger.info(f"[image_renderer] 原生渲染扩展已加载: {path}")
                 return mod
             except Exception as e:
-                logger.warning(f"[image_renderer] 原生扩展加载失败，回退 PIL: {path} - {e}")
+                # 架构不匹配等单次尝试失败属正常，仅记录 DEBUG，避免误导性 WARNING
+                tried.append(f"{path} ({e})")
+                logger.debug(f"[image_renderer] 原生扩展尝试失败: {path} - {e}")
+    logger.warning(f"[image_renderer] 原生扩展加载失败，回退 PIL: {'; '.join(tried) if tried else '未找到任何候选扩展文件'}")
     return None
 
 
@@ -88,7 +101,7 @@ def _get_font(size, bold=False):
     if key in _FONT_CACHE:
         return _FONT_CACHE[key]
     from PIL import ImageFont
-    font_names = ["DouyinSansBold.otf", "HarmonyOS_Sans_SC_Regular.ttf", "NotoSansCJK-Regular.ttc"]
+    font_names = ["HarmonyOS_Sans_SC_Medium.ttf", "HarmonyOS_Sans_SC_Regular.ttf", "DouyinSansBold.otf", "NotoSansCJK-Regular.ttc"]
     for fn in font_names:
         fp = os.path.join(_FONT_DIR, fn)
         if os.path.isfile(fp):
@@ -559,6 +572,101 @@ def _send_image(ctx, event, img_or_bytes):
 
 # ---------------------------------------------------------------- Canvas（原生优先，PIL 回退）
 
+
+def _font_ascent(font_path, size):
+    """PIL 度量字体 ascent（带缓存），用于原生 Canvas 文本顶部语义转换"""
+    key = ("ascent", font_path, int(size))
+    cached = _FONT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from PIL import ImageFont
+        f = ImageFont.truetype(font_path, int(size))
+        _FONT_CACHE[key] = f.getmetrics()[0]
+    except Exception:
+        # 度量失败按 CJK 常见 ascent 0.88em 估算，误差在可接受范围
+        _FONT_CACHE[key] = max(1, int(int(size) * 0.88))
+    return _FONT_CACHE[key]
+
+
+class _NativeCanvasProxy:
+    """
+    原生 Canvas 的 Python 包装：统一 text() 为「文本顶部」语义（与 PIL 版一致）
+
+    原生 zcbot_render.Canvas.text(x, y, ...) 的 y 是基线语义（内部 baseline = y + font_size），
+    而 PIL 版（_CanvasPIL / 原 help 插件）的 y 是文本顶部语义。中英文混排时：
+    - 中文全角字形 ymin≈-0.88em，恰好抵消偏移，看起来正常
+    - 英文（ymin≈-0.45~-0.72em，大小写差异大）明显下沉、高低不一 → "英文东倒西歪"
+
+    这里在 Python 层把 y 从「文本顶部」转换为原生基线坐标（baseline = y + ascent），
+    与原 pyd 行为兼容，无需重编译；其他方法（rect/circle/paste 等）原样透传。
+    """
+
+    def __init__(self, native_canvas, font_path):
+        self._c = native_canvas
+        self._font_path = font_path
+
+    def text(self, x, y, text, font_size=20, color=None, align="left", wrap_width=0):
+        """
+        文字统一走 PIL 渲染后 paste 到原生画布（顶部语义，与 _CanvasPIL 完全一致）。
+
+        背景：原生 zcbot_render（fontdue 0.9）的 draw_text 曾误用 ymin 符号
+        （baseline + ymin 应为 baseline - ymin），导致所有字形整体下移且各字符
+        下移量不同——中文方块字不明显，英文（ascender/descender 敏感）表现为
+        "东倒西歪"。native/src/lib.rs 已修正源码，待重新编译后可去掉本包装的
+        PIL 渲染（直接透传 self._c.text），并移除 _font_ascent 依赖。
+        """
+        from PIL import Image, ImageDraw, ImageFont
+        from io import BytesIO
+        size = int(font_size)
+        if size <= 0:
+            return self
+        c = _parse_color(color, (40, 40, 60, 255))
+        try:
+            font = ImageFont.truetype(self._font_path, size)
+        except Exception:
+            font = _get_font(size)
+        if font is None:
+            return self
+        line_h = max(1, round(size * 1.35))
+        # 换行逻辑与 _CanvasPIL.text 保持一致
+        lines = []
+        if wrap_width > 0:
+            avg = font.getlength("中")
+            chars = max(1, int(int(wrap_width) / max(1, avg)))
+            for para in str(text).split("\n"):
+                for i in range(0, len(para), chars):
+                    lines.append(para[i:i + chars])
+        else:
+            lines = str(text).split("\n")
+        lines = [ln for ln in lines if ln]
+        if not lines:
+            return self
+        lw = max(font.getlength(ln) for ln in lines)
+        cw = max(int(lw), int(wrap_width)) if wrap_width > 0 else int(lw)
+        ih = len(lines) * line_h
+        # 画布比文字大 8px（右侧/底部留白），文字 ink 从 (0, 0) 起画，
+        # paste 到 (x, y) 后与 _CanvasPIL.text 的锚点（ascender 顶 = y）逐像素一致
+        img = Image.new("RGBA", (cw + 8, max(1, ih) + 8), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        for i, ln in enumerate(lines):
+            lwi = font.getlength(ln)
+            if align == "center":
+                xx = 0 + (int(max(0, int(wrap_width) - int(lwi)) / 2) if wrap_width > 0 else (cw - int(lwi)) // 2)
+            elif align == "right":
+                xx = 0 + (max(0, int(wrap_width) - int(lwi)) if wrap_width > 0 else (cw - int(lwi)))
+            else:
+                xx = 0
+            d.text((xx, i * line_h), ln, font=font, fill=tuple(c))
+        buf = BytesIO()
+        img.save(buf, "PNG")
+        self._c.paste(buf.getvalue(), int(x), int(y))
+        return self
+
+    def __getattr__(self, name):
+        return getattr(self._c, name)
+
+
 class _CanvasPIL:
     """PIL 版链式 Canvas，接口与原生 Canvas 完全一致（回退用）"""
 
@@ -696,10 +804,11 @@ class _CanvasPIL:
 
 
 def _get_native_or_pil_canvas(width, height, bg_color=None, font_path=None):
-    """返回原生 Canvas 或 PIL 回退 Canvas"""
+    """返回原生 Canvas（顶部语义包装）或 PIL 回退 Canvas"""
     if _NATIVE is not None and hasattr(_NATIVE, "Canvas"):
         try:
-            return _NATIVE.Canvas(int(width), int(height), bg_color, font_path)
+            nc = _NATIVE.Canvas(int(width), int(height), bg_color, font_path)
+            return _NativeCanvasProxy(nc, font_path)
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 Canvas 创建失败，回退 PIL: {e}")
     return _CanvasPIL(width, height, bg_color, font_path)

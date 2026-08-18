@@ -891,13 +891,11 @@ def create_web_app(framework) -> Flask:
 
     # ---- 仪表盘 ----
 
-    @app.route('/api/dashboard', methods=['GET'])
-    @require_auth
-    def dashboard():
-        """仪表盘数据"""
-        data = {}
+    _dashboard_stats_cache = {'data': None, 't': 0}
 
-        # 插件统计
+    def _collect_dashboard_stats() -> dict:
+        """仪表盘统计（MySQL COUNT 可能全表扫描，调用方需缓存）"""
+        data = {}
         try:
             row = db.query_one("SELECT COUNT(*) as cnt FROM plugins WHERE is_active = 1")
             data['plugins_active'] = row['cnt'] if row else 0
@@ -907,7 +905,6 @@ def create_web_app(framework) -> Flask:
             data['plugins_active'] = 0
             data['plugins_total'] = 0
 
-        # 命令统计
         try:
             row = db.query_one("SELECT COUNT(*) as cnt FROM commands")
             data['commands_total'] = row['cnt'] if row else 0
@@ -917,7 +914,6 @@ def create_web_app(framework) -> Flask:
             data['commands_total'] = 0
             data['dynamic_commands'] = 0
 
-        # 用户/群统计
         try:
             row = db.query_one("SELECT COUNT(*) as cnt FROM users")
             data['users_total'] = row['cnt'] if row else 0
@@ -927,16 +923,30 @@ def create_web_app(framework) -> Flask:
             data['users_total'] = 0
             data['groups_active'] = 0
 
-        # OneBot 连接状态
-        data['bots'] = framework.ws_server.get_connected_bots()
-        data['ws_port'] = framework.config.get('onebot', {}).get('listen_port', 6830)
-
-        # 定时任务
         try:
             row = db.query_one("SELECT COUNT(*) as cnt FROM tasks WHERE is_active = 1")
             data['tasks_active'] = row['cnt'] if row else 0
         except Exception:
             data['tasks_active'] = 0
+        return data
+
+    @app.route('/api/dashboard', methods=['GET'])
+    @require_auth
+    def dashboard():
+        """仪表盘数据（统计部分 10s 缓存，避免 MySQL COUNT 全表扫描拖慢页面）"""
+        data = {}
+        now = time.time()
+        cached = _dashboard_stats_cache.get('data')
+        if cached is not None and (now - _dashboard_stats_cache['t']) < 10:
+            data.update(cached)
+        else:
+            data.update(_collect_dashboard_stats())
+            _dashboard_stats_cache['data'] = dict(data)
+            _dashboard_stats_cache['t'] = now
+
+        # OneBot 连接状态（实时）
+        data['bots'] = framework.ws_server.get_connected_bots()
+        data['ws_port'] = framework.config.get('onebot', {}).get('listen_port', 6830)
 
         # 框架信息
         data['framework_name'] = 'ZCBOT'
@@ -956,6 +966,72 @@ def create_web_app(framework) -> Flask:
             return jsonify({'code': 0, 'data': cards})
         except Exception as e:
             logger.error(f"获取仪表盘卡片失败: {e}")
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    # ---- WebUI 群组/用户管理页插件扩展 ----
+
+    @app.route('/api/extensions/groups', methods=['GET'])
+    @require_auth
+    def ui_ext_groups_meta():
+        """群组管理页插件扩展元信息"""
+        try:
+            return jsonify({'code': 0, 'data': framework.plugin_loader.get_ui_extensions('groups')})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/extensions/users', methods=['GET'])
+    @require_auth
+    def ui_ext_users_meta():
+        """用户管理页插件扩展元信息"""
+        try:
+            return jsonify({'code': 0, 'data': framework.plugin_loader.get_ui_extensions('users')})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/groups/extensions/data', methods=['POST'])
+    @require_auth
+    def ui_ext_groups_data():
+        """批量获取多个群的扩展数据（当前页渲染用）"""
+        try:
+            body = request.get_json(silent=True) or {}
+            ids = [int(x) for x in (body.get('ids') or []) if str(x).isdigit()]
+            out = {}
+            for gid in ids:
+                out[str(gid)] = framework.plugin_loader.call_ui_extensions('groups', gid)
+            return jsonify({'code': 0, 'data': out})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/users/extensions/data', methods=['POST'])
+    @require_auth
+    def ui_ext_users_data():
+        """批量获取多个用户的扩展数据（当前页渲染用）"""
+        try:
+            body = request.get_json(silent=True) or {}
+            ids = [int(x) for x in (body.get('ids') or []) if str(x).isdigit()]
+            out = {}
+            for uid in ids:
+                out[str(uid)] = framework.plugin_loader.call_ui_extensions('users', uid)
+            return jsonify({'code': 0, 'data': out})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/groups/<int:gid>/extensions', methods=['GET'])
+    @require_auth
+    def ui_ext_group_detail(gid):
+        """单个群的扩展详情（详情弹窗用，含 column+panel 全量）"""
+        try:
+            return jsonify({'code': 0, 'data': framework.plugin_loader.call_ui_extensions('groups', gid)})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/users/<int:uid>/extensions', methods=['GET'])
+    @require_auth
+    def ui_ext_user_detail(uid):
+        """单个用户的扩展详情（详情弹窗用）"""
+        try:
+            return jsonify({'code': 0, 'data': framework.plugin_loader.call_ui_extensions('users', uid)})
+        except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
     # ---- 群级插件开关 ----
@@ -3850,19 +3926,41 @@ class WebServer:
         logger.info(f"Web UI 已启动: http://{self.host}:{self.port}")
 
     def _run(self):
-        """运行 Web 服务器"""
+        """运行 Web 服务器（保存 server 句柄，供 stop() 真正停止并释放端口）"""
         try:
-            # 使用 waitress 或 werkzeug 开发服务器
+            # 使用 waitress（生产级）或 werkzeug 开发服务器
             try:
-                from waitress import serve as waitress_serve
-                waitress_serve(self.app, host=self.host, port=self.port, threads=8)
+                from waitress.server import create_server as waitress_create_server
+                self._server = waitress_create_server(
+                    self.app, host=self.host, port=self.port, threads=8)
+                self._server.run()
             except ImportError:
-                # 回退到 Flask 开发服务器
-                self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False)
+                from werkzeug.serving import make_server
+                self._server = make_server(self.host, self.port, self.app)
+                self._server.serve_forever()
         except Exception as e:
-            logger.error(f"Web UI 异常: {e}")
+            self._server = None
+            if getattr(e, 'errno', None) == 98 or 'Address already in use' in str(e):
+                logger.error(
+                    f"Web UI 启动失败: 端口 {self.port} 已被占用。"
+                    f"可能残留了旧实例，请先停止旧进程（如: ss -tlnp | grep {self.port}）")
+            else:
+                logger.error(f"Web UI 异常: {e}")
 
     def stop(self):
-        """停止 Web 服务器"""
+        """停止 Web 服务器（真正关闭监听，避免优雅停机后端口残留）"""
         self._running = False
+        srv = self._server
+        self._server = None
+        if srv is not None:
+            try:
+                if hasattr(srv, 'close'):
+                    srv.close()      # waitress WSGIServer
+                elif hasattr(srv, 'shutdown'):
+                    srv.shutdown()   # werkzeug
+            except Exception as e:
+                logger.warning(f"Web 服务器关闭异常: {e}")
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        self._thread = None
         logger.info("Web UI 已停止")

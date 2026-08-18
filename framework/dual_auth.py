@@ -29,6 +29,9 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger('zcbot')
 
+# nonce 缓存上限：超过后清理过期条目并剔除最老一半（防内存无限增长）
+_MAX_NONCE_CACHE = 10000
+
 # 迷惑性数据默认值：认证通过后返回，诱导攻击者误以为得手（实际不可用于真实后台）
 _DEFAULT_FAKE_DATA = {
     "token": "ZCBOT-DEADBEEF-FAKE-SESSION-TOKEN-PLEASE-DONOT-USE-IT",
@@ -184,10 +187,15 @@ class DualRequestAuthSystem:
         return "".join(secrets.choice(alphabet) for _ in range(self.nonce_len))
 
     def _cleanup_expired(self):
-        """清理过期 nonce（调用前需持有锁）"""
+        """清理过期 nonce（调用前需持有锁）；超上限时再剔除最老的一半，防内存无限增长"""
         now = time.time()
         for ip in [ip for ip, d in self._nonce_cache.items() if d["expires_at"] <= now]:
             self._nonce_cache.pop(ip, None)
+        if len(self._nonce_cache) > _MAX_NONCE_CACHE:
+            sorted_items = sorted(
+                self._nonce_cache.items(), key=lambda kv: kv[1]["expires_at"])
+            for ip, _ in sorted_items[:len(sorted_items) // 2]:
+                self._nonce_cache.pop(ip, None)
 
     # ------------------------------------------------------------------
     # 状态查询

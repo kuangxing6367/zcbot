@@ -323,7 +323,10 @@ pub(crate) fn draw_text(
                     continue;
                 }
                 let bx = cx + m.xmin + px;
-                let by = baseline_y + m.ymin + py;
+                // fontdue 的 ymin 语义：位图顶到基线的距离，y 轴向上为正（如 'A'@30px ymin≈+22）。
+                // 位图第 py 行（py=0 为字形顶）的屏幕 y = baseline - ymin + py。
+                // 注意：旧实现误用 +ymin 导致所有字形整体下移且各字符下移量不同（英文"东倒西歪"）。
+                let by = baseline_y - m.ymin + py;
                 if bx < 0 || by < 0 || bx >= width as i32 || by >= height as i32 {
                     continue;
                 }

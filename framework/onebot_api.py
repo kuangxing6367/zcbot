@@ -46,7 +46,7 @@ class OneBotAPI:
         return await self._caller.acall(action, bot=bot or self._default_bot, **params)
 
     # ====================================================================
-    #  1. 消息类 API（7 个）
+    #  1. 消息类 API（8 个，标准 7 个 + mark_msg_as_read 扩展）
     # ====================================================================
 
     def send_private_msg(self, user_id: int, message, auto_escape: bool = False, bot=None) -> dict:
@@ -95,6 +95,13 @@ class OneBotAPI:
     def get_forward_msg(self, message_id: str, bot=None) -> dict:
         """获取合并转发消息内容"""
         return self._call("get_forward_msg", bot=bot, message_id=message_id)
+
+    def send_like(self, user_id: int, times: int = 1, bot=None) -> dict:
+        """发送好友赞
+        :param user_id: 对方 QQ 号
+        :param times: 赞的次数，每个好友每天最多 10 次
+        """
+        return self._call("send_like", bot=bot, user_id=user_id, times=times)
 
     def mark_msg_as_read(self, message_id: int, bot=None) -> dict:
         """标记消息已读"""
