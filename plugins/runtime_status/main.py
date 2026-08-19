@@ -159,9 +159,34 @@ def _render_status_image(fw, proc_mem, sys_info, show_cpu):
         canvas.rect(0, 0, 6, H, radius=0, fill="#4a90d9")
         canvas.text(24, 18, "📊 框架运行状态", font_size=22, color="#FFFFFF")
         y = 58
+        right_margin = W - 28   # 数值右对齐的右边距（右边缘不超过此处）
+        label_right = 150       # 标签允许的最大右侧（预留给数值）
         for label, value in rows:
+            label = str(label)
+            value = str(value)
+            # 标签（左对齐，超过 label_right 截断）
+            try:
+                lw, _ = canvas.text_metrics(label, 16)
+            except Exception:
+                lw = len(label) * 8
+            if lw > label_right - 28:
+                label = label[:10] + "…"
             canvas.text(28, y, label, font_size=16, color="#9fb3cc")
-            canvas.text(W - 28, y, value, font_size=16, color="#7fd8a8", align="right")
+            # 数值：用 text_metrics 算宽度，左对齐放置使右边缘 = right_margin，超宽截断
+            try:
+                vw, _ = canvas.text_metrics(value, 16)
+            except Exception:
+                vw = len(value) * 8
+            max_vw = right_margin - label_right
+            if vw > max_vw:
+                while len(value) > 1 and vw > max_vw:
+                    value = value[:-1]
+                    try:
+                        vw, _ = canvas.text_metrics(value + "…", 16)
+                    except Exception:
+                        vw = len(value) * 8
+                value = value + "…"
+            canvas.text(right_margin - vw, y, value, font_size=16, color="#7fd8a8")
             y += row_h
         return canvas.to_png()
     except Exception as e:

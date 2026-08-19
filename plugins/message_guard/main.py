@@ -51,7 +51,8 @@ _rate_checks = 0
 
 def register(ctx):
     ctx.on_raw_message(_on_raw_message)
-    ctx.task("*/1 * * * *", _refresh_config, description="刷新消息守卫配置缓存")
+    # 配置读取自带 60s TTL 惰性刷新（_get_config），无需每分钟定时任务；
+    # 仅保留限流窗口清理（防内存增长）
     ctx.task("*/10 * * * *", _cleanup_rate_windows, description="清理限流窗口")
     ctx.log("[message_guard] 消息守卫已就绪（priority=2，配置 60s 生效）")
 
@@ -200,12 +201,14 @@ async def _on_raw_message(raw: dict, bot_name: str):
             if group_id not in cfg.get("whitelist_groups", []):
                 return True
 
-        # 3. 唤醒词：群聊中非 @机器人、非唤醒前缀的消息丢弃
-        if message_type == "group" and cfg.get("wake_enable", False):
-            if not _is_wake(raw, text, cfg.get("wake_prefixes", [])):
+        # 3. 唤醒词：仅当配置了唤醒前缀时才启用（空前缀 + 未@机器人不拦截，
+        #    避免误开 wake_private 且前缀为空导致私聊消息全部被丢弃）
+        wake_prefixes = cfg.get("wake_prefixes", [])
+        if wake_prefixes and message_type == "group" and cfg.get("wake_enable", False):
+            if not _is_wake(raw, text, wake_prefixes):
                 return True
-        elif message_type == "private" and cfg.get("wake_private", False):
-            if not _is_wake(raw, text, cfg.get("wake_prefixes", [])):
+        elif wake_prefixes and message_type == "private" and cfg.get("wake_private", False):
+            if not _is_wake(raw, text, wake_prefixes):
                 return True
 
         # 4. 限流（仅对"要响应"的消息计数）
