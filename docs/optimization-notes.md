@@ -1,7 +1,7 @@
 # ZCBOT 优化分析报告
 
 > 借鉴对象：AstrBot v4.x / NoneBot v1.9.1 / Koishi（master）
-> 分析对象：ZCBOT v0.0.1-beta.0（framework/ 全部模块 + web/ + plugins/）
+> 分析对象：ZCBOT v0.1.0-beta.0（framework/ 全部模块 + web/ + plugins/）
 > 基于源码精读，引用真实 file:line；五个并行子代理深读 + 主代理逐条验证
 
 ---

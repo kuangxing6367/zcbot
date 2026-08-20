@@ -1,0 +1,55 @@
+:root {
+  --sidebar-width: 220px;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--el-bg-color-page, #f5f7fa);
+  color: var(--el-text-color-primary);
+}
+
+.page-container { padding: 16px; }
+.mb { margin-bottom: 16px; }
+.mt { margin-top: 16px; }
+.mono { font-family: Consolas, Menlo, monospace; }
+.dim { color: var(--el-text-color-secondary); }
+.small { font-size: 12px; }
+
+.stat-value { font-size: 26px; font-weight: 700; line-height: 1.2; }
+.stat-label { font-size: 13px; color: var(--el-text-color-secondary); }
+
+.log-box {
+  background: #0f1420;
+  color: #c8d3f0;
+  font-family: Consolas, Menlo, monospace;
+  font-size: 12px;
+  border-radius: 8px;
+  padding: 12px;
+  height: calc(100vh - 240px);
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.7;
+}
+.log-line .lv-INFO { color: #7dd3fc; }
+.log-line .lv-WARN { color: #fbbf24; }
+.log-line .lv-ERROR { color: #f87171; }
+.log-line .lv-DEBUG { color: #94a3b8; }
+.log-line .lv-SYSTEM { color: #a78bfa; }
+.log-line .t { color: #64748b; }
+
+.dep-svg { max-width: 100%; height: auto; }
+.dep-svg .dep-node-text { font-size: 12px; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.dep-svg .dep-node-sub { font-size: 10px; fill: #5c6277; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.dep-svg .dep-edge { stroke: #2f3550; stroke-width: 1.5; fill: none; }
+.dep-svg .dep-edge-label { font-size: 10px; fill: #5c6277; text-anchor: middle; }
+
+.webui-frame {
+  width: 100%;
+  height: calc(100vh - 190px);
+  border: 1px solid var(--el-border-color);
+  border-radius: 8px;
+  background: #fff;
+}
