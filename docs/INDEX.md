@@ -22,9 +22,9 @@ ZCBOT v0.1.0-beta.2 文档总览，按阅读路径组织。
 
 | 文档 | 内容 |
 | ---- | ---- |
-| [AI 助手插件文档](../plugins/llm_plugin_gen/docs/INDEX.md) | 内置 `llm_plugin_gen` 插件的使用说明：AI 写插件、改需求、更新框架 |
+| [AI 助手插件文档](https://github.com/kuangxing6367/zcbot_plugins/blob/main/plugins/llm_plugin_gen/docs/INDEX.md) | 内置 `llm_plugin_gen` 插件的使用说明：AI 写插件、改需求、更新框架 |
 
-> 想让 AI 帮你写插件：在后台插件配置填好大模型信息，再按 [插件文档](../plugins/llm_plugin_gen/docs/INDEX.md) 使用即可。该功能由插件提供，非框架自带。
+> 想让 AI 帮你写插件：在后台插件配置填好大模型信息，再按 [插件文档](https://github.com/kuangxing6367/zcbot_plugins/blob/main/plugins/llm_plugin_gen/docs/INDEX.md) 使用即可。该功能由插件提供，非框架自带，插件位于 [官方插件仓库](https://github.com/kuangxing6367/zcbot_plugins/tree/main/plugins/llm_plugin_gen)。
 
 ## 其他文档
 
@@ -44,4 +44,4 @@ ZCBOT v0.1.0-beta.2 文档总览，按阅读路径组织。
 7. **最佳实践** → 写完对照自查清单检查
 8. **调试指南** → 插件出问题时按症状查
 
-> 不想写代码？装了 AI 助手插件（`llm_plugin_gen`）后，参考 [插件文档](../plugins/llm_plugin_gen/docs/INDEX.md) 让它帮你写。
+> 不想写代码？装了 AI 助手插件（`llm_plugin_gen`）后，参考 [插件文档](https://github.com/kuangxing6367/zcbot_plugins/blob/main/plugins/llm_plugin_gen/docs/INDEX.md) 让它帮你写。

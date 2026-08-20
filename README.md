@@ -159,11 +159,11 @@ Access Token 就是**一串密码**。为了防止随便什么人都能连上你
 
 让机器人变成"AI 聊天机器人"：在后台插件配置里填上大模型的地址和密钥，然后 @机器人 或发 `/chat` 就能聊天。支持长期记忆、人格设定、自动 @ 回复。
 
-### 3️⃣ 让 AI 帮你写插件（可选装）
+### 3️⃣ 想要 AI 帮你写插件？
 
 内置了 [AI 助手插件（llm_plugin_gen）](#五内置插件一览)，**想要什么功能，直接跟机器人聊天，它帮你把插件写好并装上**。全程不用你碰代码。
 
-> 该功能由插件 `llm_plugin_gen` 提供，不是框架自带能力。在后台插件配置里填好大模型信息后即可使用，详细用法见 [插件文档](plugins/llm_plugin_gen/docs/INDEX.md)。
+> 该功能由插件 `llm_plugin_gen` 提供，不是框架自带能力。该插件在官方插件仓库独立维护，从 [插件仓库](https://github.com/kuangxing6367/zcbot_plugins/tree/main/plugins/llm_plugin_gen) 获取，填好大模型信息后即可使用，详细用法见 [插件文档](https://github.com/kuangxing6367/zcbot_plugins/blob/main/plugins/llm_plugin_gen/docs/INDEX.md)。
 
 ---
 
@@ -189,7 +189,6 @@ Access Token 就是**一串密码**。为了防止随便什么人都能连上你
 | ---- | ---- |
 | **echo** | `/echo 内容` 原样返回，测试用 |
 | **help** | `/help` 生成图片帮助菜单 |
-| **llm_plugin_gen** | **AI 助手**（插件，可选）：用聊天的方式让 AI 写/改插件，还能检查/更新框架 |
 | **image_renderer** | 通用图片渲染引擎（生成卡片、文字图） |
 | **runtime_status** | `/status` `/info` 查看运行状态（带图片版状态卡） |
 | **restart_manager** | 框架重启管理 |
@@ -198,11 +197,11 @@ Access Token 就是**一串密码**。为了防止随便什么人都能连上你
 | **session_waiter** | 多轮会话基础设施（`wait_for_user`） |
 | **ui_ext_demo** | 网页后台扩展演示（列表 + 详情面板） |
 
-> 还想要 AI 对话、群管理、签到积分、视频解析这些功能？把 `config.yaml` 的 `plugin.dir` 指向官方插件源仓库（`zgric_onebot11_plugins`），就有 16+ 个现成插件可用：
+> 还想要 AI 对话、群管理、签到积分、视频解析这些功能？把 `config.yaml` 的 `plugin.dir` 指向官方插件源仓库（`kuangxing6367/zcbot_plugins`），就有 20+ 个现成插件可用：
 
 ```yaml
 plugin:
-  dir: ../zgric_onebot11_plugins/plugins
+  dir: ../zcbot_plugins/plugins
 ```
 
 ---
