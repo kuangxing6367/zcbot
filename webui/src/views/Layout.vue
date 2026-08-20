@@ -2,7 +2,8 @@
   <el-container class="layout">
     <el-aside :width="collapsed ? '64px' : '220px'" class="sidebar">
       <div class="brand">
-        <el-icon :size="24" color="#409eff"><Cpu /></el-icon>
+        <img v-show="!collapsed" src="/img/logo.png" alt="ZCBOT" class="brand-logo" />
+        <el-icon v-show="collapsed" :size="24" color="#6366f1"><Cpu /></el-icon>
         <span v-show="!collapsed" class="brand-name">ZCBOT</span>
       </div>
       <el-menu :default-active="activeKey" router :collapse="collapsed" class="nav-menu">
@@ -37,6 +38,12 @@
           <span class="page-title">{{ pageTitle }}</span>
         </div>
         <div class="topbar-right">
+          <el-button text circle @click="toggleTheme" title="切换亮暗主题" class="theme-btn">
+            <el-icon :size="18" :key="theme === 'dark' ? 'sun' : 'moon'">
+              <Sunny v-if="theme === 'light'" />
+              <Moon v-else />
+            </el-icon>
+          </el-button>
           <el-dropdown @command="onUserCommand">
             <span class="user-chip">
               <el-icon><UserFilled /></el-icon>
@@ -62,6 +69,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { session, api, clearToken } from '../api'
+import { theme, toggleTheme } from '../theme'
 
 const route = useRoute()
 const router = useRouter()
@@ -128,6 +136,7 @@ onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer) })
   border-bottom: 1px solid var(--el-border-color);
   font-weight: 700;
 }
+.brand-logo { height: 30px; width: 30px; object-fit: contain; }
 .nav-menu { border-right: none; flex: 1; overflow-y: auto; }
 .sidebar-foot { border-top: 1px solid var(--el-border-color); }
 .sb-version { text-align: center; color: var(--el-text-color-secondary); font-size: 12px; padding: 6px 0; }
@@ -141,6 +150,10 @@ onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer) })
 }
 .topbar-left { display: flex; align-items: center; gap: 8px; }
 .page-title { font-size: 16px; font-weight: 600; }
+.brand-name { font-size: 18px; font-weight: 800; letter-spacing: .02em;
+  background: var(--brand-gradient); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.theme-btn { transition: transform .3s ease, color .3s ease; }
+.theme-btn:hover { transform: rotate(20deg) scale(1.1); color: var(--el-color-primary); }
 .user-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; outline: none; }
 .main { padding: 0; background: var(--el-bg-color-page, #f5f7fa); overflow: auto; }
 </style>

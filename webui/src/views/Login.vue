@@ -2,7 +2,7 @@
   <div class="login-wrap">
     <div class="login-card">
       <div class="login-logo">
-        <el-icon :size="40" color="#409eff"><Cpu /></el-icon>
+        <img src="/img/logo.png" alt="ZCBOT" class="login-logo-img" />
       </div>
       <h1 class="login-title">ZCBOT 管理面板</h1>
       <div class="login-sub">OneBot QQ 机器人统一管理平台</div>
@@ -33,7 +33,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { User, Lock, Cpu } from '@element-plus/icons-vue'
+import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api, setToken, session } from '../api'
 
@@ -97,16 +97,21 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1f2b46 0%, #243253 40%, #1a2338 100%);
+  background: linear-gradient(135deg, #eef2ff 0%, #e0f2fe 50%, #f5f3ff 100%);
+}
+html.dark .login-wrap {
+  background: linear-gradient(135deg, #12152a 0%, #0b0d1a 50%, #131a30 100%);
 }
 .login-card {
   width: 380px;
   background: var(--el-bg-color);
   border-radius: 16px;
   padding: 40px 36px 28px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .35);
+  box-shadow: 0 20px 60px rgba(99, 102, 241, .12);
+  border: 1px solid var(--el-border-color);
 }
 .login-logo { text-align: center; margin-bottom: 8px; }
+.login-logo-img { width: 64px; height: 64px; object-fit: contain; }
 .login-title { text-align: center; font-size: 22px; margin: 0 0 4px; }
 .login-sub { text-align: center; color: var(--el-text-color-secondary); font-size: 13px; margin-bottom: 28px; }
 .login-btn { width: 100%; }

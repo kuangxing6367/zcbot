@@ -3887,6 +3887,11 @@ def create_web_app(framework) -> Flask:
         web_js = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web', 'js')
         return send_from_directory(web_js, filename)
 
+    @app.route('/img/<path:filename>')
+    def serve_img(filename):
+        web_img = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web', 'img')
+        return send_from_directory(web_img, filename)
+
     @app.route('/<page>.html')
     def serve_page(page):
         """提供 HTML 页面"""
