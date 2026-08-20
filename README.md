@@ -1,49 +1,52 @@
 # ZCBOT 🤖
 
-> **一个开箱即用的 QQ 机器人框架**——装上就能跑，会写 Python 就能写插件。
-> 基于 OneBot v11 协议，全异步，自带 Web 管理面板。
+> 一个开箱即用的 QQ 机器人框架。装上就能跑，**不会写代码也能用**——里面的 AI 助手能帮你写插件。
+> 基于 OneBot 11 协议，全异步，自带网页管理面板。
 
-**当前版本：v0.0.1-beta.1**
+**当前版本：v0.1.0-beta.0**
 
 📚 项目地址：https://github.com/kuangxing6367/zcbot
 💬 反馈交流：QQ 群 **1060129201**
 
 ---
 
-## ✨ 它是什么？
+## 一、它是干嘛的？（先说大白话）
 
-ZCBOT 让你**用 Python 快速做一个 QQ 机器人**：
+你有一个 QQ 号（一般是小号）。ZCBOT 能让这个 QQ 号变成**机器人**：
 
-- 群里发 `/echo 你好`，机器人回复"你好"
-- 接上大模型（LLM），@机器人 就能聊天
-- 写个插件，就能自定义任何功能（签到、查询、群管……）
+- 群里发 `/echo 你好`，机器人回"你好"
+- 接到大模型，**@机器人 就能和它聊天**
+- 让它**定时干点事**（每天早上报天气、整点发提醒……）
+- 想要新功能？**直接用聊天的方式让 AI 助手帮你写**，不用自己敲代码
 
-它已经把**最难的部分**都做好了：
-
-| 能力 | 说明 |
-| ---- | ---- |
-| 🚀 全异步 | 消息处理不卡顿，响应快 |
-| 🔌 插件化 | 一个插件 = 一个文件夹，写好即加载，支持热加载/热卸载 |
-| 🖥️ Web 管理面板 | 可视化管插件/命令/用户/群组/任务/日志 |
-| 🗄️ 数据库 | 默认 SQLite 零配置，可切换 MySQL（自动翻译方言 SQL） |
-| 🔐 安全 | 权限体系 + 登录防爆破 + 后台防破解 |
-| 🧩 开箱即用 | 自带 echo/help/状态/图片渲染 等常用插件 |
+它把最麻烦的部分（连 QQ、收消息、发消息、存数据、网页后台）全做好了，你只负责"想要什么"。
 
 ---
 
-## 🚀 快速开始（5 步）
+## 二、快速开始（跟着做，大约 5 分钟）
 
-> 全程约 5 分钟，跟着做就行。
+> 全程要敲的命令很少，复制粘贴就行。遇到不懂的词，点它旁边的 **「什么是 XX」** 展开看解释。
 
-### 第 1 步：准备 Python
+### 第 1 步：装 Python
 
-需要 **Python 3.10+**。装好后在终端确认：
+机器人是用 Python 写的，先装一个 Python 3.10 或更高版本。
+
+<details>
+<summary><b>什么是 Python？</b>（点我展开）</summary>
+
+Python 是一种编程语言，这个机器人就是用 Python 写的。你不需要会写 Python，只需要把它**当成一个"运行时"装好**，让机器人的代码能跑起来。
+
+装好后，在终端（命令提示符 / PowerShell）输入下面命令验证：
 
 ```bash
-python --version   # 看到 Python 3.10.x 或更高即可
+python --version
 ```
 
-### 第 2 步：获取代码
+看到 `Python 3.10.x` 或更高的数字就说明装好了。
+
+</details>
+
+### 第 2 步：下载代码 + 装依赖
 
 ```bash
 git clone https://github.com/kuangxing6367/zcbot.git
@@ -51,170 +54,192 @@ cd zcbot
 pip install -r requirements.txt
 ```
 
-> 💡 依赖缺了不用慌，框架启动时会**自动补装**。
+> 💡 依赖（就是机器人要用的零件）缺了不用慌，启动时框架会**自动补装**。
 
-### 第 3 步：配置（可选）
+<details>
+<summary><b>什么是 git / clone / pip？</b>（点我展开）</summary>
 
-首次启动会自动生成 config.yaml。一般不用改，直接跑。想改的话：
+- **git**：一个下载和管理代码的工具。`git clone` 就是把整个项目的代码**下载到你的电脑上**。
+- **pip**：Python 的"应用商店"。`pip install` 就是安装机器人在运行中需要的第三方小工具（叫"依赖"或"库"）。
+- 如果提示找不到 `git` 或 `pip`，就先去网上搜"git 安装"或"Python 安装"，装好再回来继续。
 
-```yaml
-database:
-  type: sqlite          # 默认 SQLite，零配置；想用 MySQL 改成 mysql + 填连接信息
-onebot:
-  listen_port: 6830     # OneBot 客户端连这里
-  access_token: "自己设一个token"   # ⚠️ 务必设置，否则任何人都能接入
-web:
-  host: 127.0.0.1       # Web 面板地址（本机访问）
-  port: 8080
-```
+</details>
 
-### 第 4 步：启动
+### 第 3 步：启动机器人
 
 ```bash
 python main.py
 ```
 
-看到 `框架启动完成，等待消息...` 就成功了 🎉
+看到下面这行字，就说明机器人本体已经跑起来了 🎉
 
-### 第 5 步：连接机器人 + 访问面板
+```
+框架启动完成，等待消息...
+```
 
-1. **连接 OneBot 客户端**：用 NapCat / Lagrange / go-cqhttp 等，配**反向 WebSocket** 连到 `ws://你的地址:6830`，token 填上面设的。
-2. **Web 面板**：浏览器打开 `http://localhost:8080`，默认账号 `admin`，密码 `admin123`（⚠️ 上线前一定改掉！）
+第一次启动会自动生成一个 `config.yaml` 配置文件，一般不用改。
+
+<details>
+<summary><b>什么是 config.yaml？</b>（点我展开）</summary>
+
+`config.yaml` 是机器人的"设置文件"，就像手机的设置 App。里面记录着端口号、数据库、密码等。第一次启动会自动生成，**默认就能用**。后面想改设置再打开它。
+
+</details>
+
+### 第 4 步：让机器人连上 QQ（最关键的 1 步）
+
+机器人本体跑起来之后，还**需要一个"桥"把它和 QQ 连起来**。这个桥叫 **OneBot 客户端**。
+
+1. 下载一个 OneBot 客户端，比如 **NapCat**、**Lagrange** 或 **go-cqhttp**
+2. 在客户端里设置**反向 WebSocket** 连接，填：
+
+| 设置项 | 填什么 |
+| ------ | ------ |
+| 连接地址 | `ws://127.0.0.1:6830` |
+| Access Token | 打开 `config.yaml`，把 `onebot.access_token` 的值抄过来 |
+
+3. 保存后，客户端会自己连上机器人。看到日志或面板里出现"客户端已连接"，就成功了！
+
+<details>
+<summary><b>什么是 OneBot 客户端？什么是反向 WebSocket（WS）？</b>（点我展开）</summary>
+
+QQ 官方不提供"把号变成机器人"的接口，所以社区做了 **OneBot 客户端** 这种软件：它能接管一个 QQ 号，然后把收到的消息**转发**给机器人程序。ZCBOT 就属于"机器人程序"这一端。
+
+- **WebSocket（WS）**：一种"随时保持通话"的网络连接方式。消息一有就立刻传，不用反复拨号。你可以把它理解成**电话连线**，而不是发短信（那种叫 HTTP，一问一答）。
+- **反向连接**：正常情况下是"客户端"找"服务器"（正向）。这里反过来了：**机器人是服务器**（它在 `6830` 端口等着），**客户端主动来连它**，所以叫"反向"。你只需要让客户端填对地址连过来就行，不用管正反向的术语。
+
+简单说：**机器人开好门（6830 端口），客户端自己走进来，QQ 消息就能互通了。**
+
+</details>
+
+<details>
+<summary><b>什么是 Access Token（令牌）？</b>（点我展开）</summary>
+
+Access Token 就是**一串密码**。为了防止随便什么人都能连上你的机器人、冒充它乱发消息，机器人和客户端之间约定一个密码，连上来之前先对一下，对不上就拒绝。
+
+所以：`config.yaml` 里写一个（改完要重启机器人），客户端里填同一个。**两个保持一致就行**。⚠️ 上线前一定要设一个自己的密码，别用默认的。
+
+</details>
+
+### 第 5 步：打开网页后台看看
+
+浏览器打开 `http://localhost:8080`，用默认账号登录：
+
+- 账号：`admin`
+- 密码：`admin123`
+
+<details>
+<summary><b>什么是网页后台（Web 面板）？</b>（点我展开）</summary>
+
+就是一个**网页版的管理页面**。你可以在浏览器里看机器人状态、管理插件、看日志、看有多少群和用户在用，不用对着终端敲命令。装完打开看看长什么样就明白了。
+
+⚠️ 上线前记得在后台**改掉默认密码**！
+
+</details>
 
 ---
 
-## 🎯 写你的第一个插件（手把手）
-
-> 目标：让机器人回复 `/你好` → "你也好呀！"
-
-### ① 建文件夹
-
-在 `plugins/` 下建一个文件夹，名字就是插件名（用英文）：
-
-```
-plugins/
-└── hello/          ← 新建这个文件夹
-    └── main.py     ← 插件入口文件
-```
-
-### ② 写代码
-
-在 `plugins/hello/main.py` 里粘贴：
-
-```python
-# 插件元信息：告诉框架这个插件是干嘛的
-__plugin_meta__ = {
-    "name": "你好插件",
-    "version": "1.0.0",
-    "author": "你的名字",
-    "desc": "回复 /你好",
-    "priority": 50,
-}
-
-def register(ctx):
-    """注册入口：告诉框架有哪些命令"""
-    ctx.command("/你好", handle_hi, description="打个招呼")
-
-def handle_hi(event, match):
-    """命令处理函数：收到 /你好 时执行"""
-    ctx.send_msg(
-        user_id=event.user_id,
-        group_id=event.group_id if event.is_group else None,
-        message="你也好呀！👋",
-    )
-```
-
-### ③ 生效
-
-在 Web 面板「插件」页点「重载」，或重启框架。然后群里发 **`/你好`** → 机器人回 **`你也好呀！👋`** ✅
-
-### ④ 小练习（理解机制）
-
-试试把命令改成带参数：
-
-```python
-def handle_hi(event, match):
-    arg = match.group(1).strip() if match else ""   # 命令后的内容
-    msg = f"你也好呀 {arg}！" if arg else "你也好呀！"
-    ctx.send_msg(
-        user_id=event.user_id,
-        group_id=event.group_id if event.is_group else None,
-        message=msg,
-    )
-```
-
-发 `/你好 小明` → 回复 `你也好呀 小明！` 🎉
+到这里，机器人已经能用了。下面是"怎么玩"。
 
 ---
 
-## 📖 插件还能干什么？
+## 三、常见玩法
 
-| 能力 | 代码示例 |
+### 1️⃣ 测试一下：让机器人回话
+
+在群里或私聊发：
+
+```
+/echo 你好
+```
+
+机器人会原样回你"你好"。
+
+### 2️⃣ 和机器人聊天（接上大模型）
+
+让机器人变成"AI 聊天机器人"：在后台插件配置里填上大模型的地址和密钥，然后 @机器人 或发 `/chat` 就能聊天。支持长期记忆、人格设定、自动 @ 回复。
+
+### 3️⃣ 让 AI 帮你写插件（可选装）
+
+内置了 [AI 助手插件（llm_plugin_gen）](#五内置插件一览)，**想要什么功能，直接跟机器人聊天，它帮你把插件写好并装上**。全程不用你碰代码。
+
+> 该功能由插件 `llm_plugin_gen` 提供，不是框架自带能力。在后台插件配置里填好大模型信息后即可使用，详细用法见 [插件文档](plugins/llm_plugin_gen/docs/INDEX.md)。
+
+---
+
+## 四、我要自己写插件怎么办？
+
+文档里专门有一篇**手把手教程**，从建文件夹开始带你写第一个插件，每个概念都有解释。
+
+> 📖 [插件开发详解：一个示例插件，逐行讲透每个语法](docs/plugin-tutorial.md)（推荐，讲得最细）
+> 📖 [快速入门](docs/getting-started.md)（精简版，10 分钟上手）
+
+简单说，一个插件就是一个文件夹，里面有：
+
+- `__plugin_meta__`：插件的"身份证"（名字、版本、简介）
+- `register(ctx)`：告诉机器人"我有哪些命令"
+
+写完把文件夹放进 `plugins/` 目录，在后台点"重载"就能用。**写好的插件也可以再让 AI 帮你改 bug、加功能。**
+
+---
+
+## 五、内置插件一览
+
+| 插件 | 作用 |
 | ---- | ---- |
-| 💬 发消息 | `ctx.send_msg(user_id=..., group_id=..., message="...")` |
-| 📷 发图片 | `ctx.send_msg(..., message="[CQ:image,file=file:///路径]")` |
-| ⏰ 定时任务 | `ctx.task("*/5 * * * *", my_job, description="每5分钟")` |
-| 🔔 订阅事件 | `ctx.on("message", on_msg)` |
-| 🗄️ 查数据库 | `ctx.db_query("SELECT * FROM users")` |
-| ⚙️ 读配置 | `ctx.get_config("key", default)` |
-| 🛠️ 调 API | `ctx.api("get_group_list")` 或 `ctx.onebot.send_group_msg(...)` |
-| 🎨 生成图片 | 接 `image_renderer` 画卡片/文字图 |
-
-> 📚 完整 API 看 `docs/api-reference.md`；更多示例看 `docs/examples.md`（含签到插件完整实现）。
-
----
-
-## 📦 内置插件
-
-| 插件 | 说明 |
-| ---- | ---- |
-| **echo** | `/echo 内容` 原样返回 |
+| **echo** | `/echo 内容` 原样返回，测试用 |
 | **help** | `/help` 生成图片帮助菜单 |
-| **image_renderer** | 通用图片渲染引擎（Rust 原生优先，缺失回退 PIL） |
+| **llm_plugin_gen** | **AI 助手**（插件，可选）：用聊天的方式让 AI 写/改插件，还能检查/更新框架 |
+| **image_renderer** | 通用图片渲染引擎（生成卡片、文字图） |
+| **runtime_status** | `/status` `/info` 查看运行状态（带图片版状态卡） |
 | **restart_manager** | 框架重启管理 |
-| **runtime_status** | `/status` `/info` 运行状态（含图片版状态卡） |
+| **message_guard** | 消息防护（防刷屏、限流、敏感词） |
+| **plugin_depgraph** | 插件依赖关系扫描 |
+| **session_waiter** | 多轮会话基础设施（`wait_for_user`） |
+| **ui_ext_demo** | 网页后台扩展演示（列表 + 详情面板） |
 
-## 🧩 更多插件（插件仓库）
-
-需要 LLM 对话、群管、签到等？克隆插件仓库，把 `config.yaml` 的 `plugin.dir` 指向它：
+> 还想要 AI 对话、群管理、签到积分、视频解析这些功能？把 `config.yaml` 的 `plugin.dir` 指向官方插件源仓库（`zgric_onebot11_plugins`），就有 16+ 个现成插件可用：
 
 ```yaml
 plugin:
   dir: ../zgric_onebot11_plugins/plugins
 ```
 
-仓库含：`llm_chat`（AI 对话，支持人格）、`qqadmin`（群管理）、`fun_score`（签到积分）、`minecraftconsole`（MC 控制台）等。
-
 ---
 
-## ❓ 常见问题
-
-**Q: 面板打不开？**
-A: 确认 `web.host` 是 `127.0.0.1`（本机）或 `0.0.0.0`（局域网）。重启后仍打不开，看日志"端口被占用"（`ss -tlnp | grep 8080` 查残留进程）。
+## 六、常见问题
 
 **Q: 机器人不回复？**
-A: ① OneBot 客户端是否连上（面板/日志看"客户端已连接"）② `access_token` 是否匹配 ③ 消息是否是命令开头。
+A: ① 看后台或日志，确认 OneBot 客户端是否"已连接"；② 确认 `access_token` 两边填得一致；③ 确认消息是命令开头（如 `/echo`）。
 
-**Q: 改插件代码没生效？**
-A: Web 面板插件页点「重载」，或重启框架。
+**Q: 网页后台打不开？**
+A: 确认 `web.host` 是 `127.0.0.1`（本机）或 `0.0.0.0`（局域网）。还是不行就重启机器人在看日志里有没有"端口被占用"。
+
+**Q: 改了插件代码没生效？**
+A: 到后台「插件」页点"重载"，或者重启机器人。
 
 **Q: 忘了管理员密码？**
-A: 看 `data/logs/` 日志提示，或删 `data/zcbot.db` 重新初始化（会重置数据，慎用）。
+A: 看 `data/logs/` 里的日志提示，或者删掉 `data/zcbot.db` 重新初始化（会重置所有数据，慎用！）。
 
-**Q: 内存涨了怎么办？**
-A: 框架会自动定期释放空闲内存；持续上涨可发 `/memdiag` 诊断。
+**Q: 内存一直涨？**
+A: 机器人会自动定期释放空闲内存。持续上涨发 `/memdiag` 诊断看看。
 
 ---
 
-## 📚 进阶文档
+## 七、进阶文档
 
-- [文档索引](docs/INDEX.md)
-- [快速入门](docs/getting-started.md) — 手把手第一个插件
-- [插件目录结构](docs/plugin-structure.md) — 代码/数据分离约定
-- [API 参考](docs/api-reference.md) — ctx 全部方法
-- [配置系统](docs/configuration.md) — 插件配置项
-- [最佳实践](docs/best-practices.md)
-- [示例合集](docs/examples.md) — 签到插件完整实现
+遇到看不懂的词，文档里都有解释。按下面的顺序读最顺：
+
+- [📚 文档索引](docs/INDEX.md) — 所有文档的总目录
+- [插件开发详解](docs/plugin-tutorial.md) — 完整示例插件，逐行讲透每个语法（新手推荐）
+- [快速入门](docs/getting-started.md) — 手把手写第一个插件
+- [插件目录结构](docs/plugin-structure.md) — 代码和数据怎么放
+- [API 参考](docs/api-reference.md) — 写插件时的全部接口
+- [配置系统](docs/configuration.md) — 插件的设置项怎么写
+- [示例合集](docs/examples.md) — 一个完整的签到插件源码
+- [调试指南](docs/debugging.md) — 插件出 bug 了？看日志、开 DEBUG、打断点、热重载
+- [最佳实践](docs/best-practices.md) — 写插件的好习惯 + 提交前自查清单
+- [已知问题](docs/KNOWN_ISSUES.md) — 框架已知的坑和修复进度（P0/P1/P2）
 
 ---
 

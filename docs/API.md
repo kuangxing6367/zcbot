@@ -305,7 +305,7 @@ fetch('/api/plugins', {
     "bots": ["bot_1"],
     "ws_port": 6830,
     "framework_name": "ZCBOT",
-    "framework_version": "0.0.1-beta.0",
+    "framework_version": "0.1.0-beta.0",
     "github_repo": "https://github.com/kuangxing6367/zcbot"
   }
 }
