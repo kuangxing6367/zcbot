@@ -156,7 +156,10 @@ class Event:
             uid = self.user_id
 
             # 惰性上限清理：每 256 次查询检查一次缓存规模，超限剔除过期条目
-            global _role_cache_checks
+            # 注意：必须声明这三个 global！本函数内会重新绑定 _user_role_cache /
+            # _group_role_cache（压缩清理时），不声明会被编译成局部变量，
+            # 导致下方任何读取都抛 UnboundLocalError，被 except 吞掉后全员降级 member。
+            global _role_cache_checks, _user_role_cache, _group_role_cache
             _role_cache_checks += 1
             if _role_cache_checks % 256 == 0:
                 if len(_user_role_cache) > _ROLE_CACHE_MAX:
