@@ -522,15 +522,34 @@ def create_web_app(framework) -> Flask:
         避免整仓 ZIP 下载。返回 (ok, msg)。
         """
         try:
-            # 获取仓库文件树（递归）
+            # 获取仓库文件树（递归）。api.github.com 直连可能被墙/限流，
+            # 通过 _github_url_candidates 生成代理/镜像候选逐个尝试。
             api_url = f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1"
             headers = {'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'zcbot'}
-            resp = requests.get(api_url, headers=headers, timeout=30)
-            if resp.status_code == 404:
-                return False, f'仓库或分支不存在: {repo}@{branch}'
-            if resp.status_code != 200:
-                return False, f'GitHub API 返回 HTTP {resp.status_code}'
-            tree = resp.json().get('tree', [])
+            tree = None
+            api_err = ''
+            for cand in _github_url_candidates(api_url):
+                try:
+                    resp = requests.get(cand, headers=headers, timeout=30)
+                    if resp.status_code == 404:
+                        return False, f'仓库或分支不存在: {repo}@{branch}'
+                    if resp.status_code != 200:
+                        api_err = f'HTTP {resp.status_code}'
+                        continue
+                    # 校验返回确实是 JSON（代理/镜像可能返回 HTML 错误页）
+                    try:
+                        tree = resp.json().get('tree', [])
+                    except ValueError:
+                        api_err = f'非 JSON 响应: {cand}'
+                        continue
+                    if tree:
+                        break
+                    api_err = f'空响应: {cand}'
+                except Exception as e:
+                    api_err = str(e)
+                    continue
+            if tree is None:
+                return False, f'GitHub API 获取文件树失败: {api_err or "所有候选均失败"}'
 
             sub = (sub_path or '/').lstrip('/').rstrip('/')
             files = []
@@ -597,6 +616,42 @@ def create_web_app(framework) -> Flask:
             repo = repo.replace('http://github.com/', '').rstrip('/')
         if not repo or '..' in repo:
             return False, '非法仓库地址'
+
+        # 方式零：优先下载"单个插件 zip"（由插件仓库 Actions 打包发布到 gh-pages/packages/）。
+        # 单文件、小体积，可走代理/镜像加速；失败则回退到文件树/整仓 ZIP。
+        plugin_zip = None
+        if sub_path:
+            sp = sub_path.lstrip('/').rstrip('/')
+            pkg_name = sp.split('/')[-1]
+            if pkg_name and not pkg_name.startswith('.'):
+                pkg_url = f"https://raw.githubusercontent.com/{repo}/gh-pages/packages/{pkg_name}.zip"
+                plugin_zip = _download_zip_file(_github_url_candidates(pkg_url))
+
+        if plugin_zip is not None:
+            try:
+                with zipfile.ZipFile(plugin_zip, 'r') as zf:
+                    names = zf.namelist()
+                    # 安全校验 + 解压（zip 根目录直接是插件文件）
+                    for name in names:
+                        if name.endswith('/'):
+                            continue
+                        if '..' in name or name.startswith('/') or '\\' in name:
+                            continue
+                        dest = os.path.join(target_dir, name)
+                        parent = os.path.dirname(dest)
+                        if parent:
+                            os.makedirs(parent, exist_ok=True)
+                        with open(dest, 'wb') as f:
+                            f.write(zf.read(name))
+                logger.info(f"已通过单插件 zip 安装 {pkg_name}（gh-pages/packages/{pkg_name}.zip）")
+                return True, ''
+            except Exception as e:
+                logger.warning(f"单插件 zip 解压失败，回退文件树: {e}")
+            finally:
+                try:
+                    os.unlink(plugin_zip)
+                except Exception:
+                    pass
 
         # 方式一：GitHub API 文件树 + raw 单文件下载（只拉插件目录，不下载整仓）
         ok, msg = _download_plugin_tree(repo, branch, sub_path, target_dir)
