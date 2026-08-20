@@ -21,6 +21,7 @@
 ### 修复
 
 - 插件管理页 `applyFilter` 未定义导致的崩溃（自 beta.2 起）。
+- **插件更新后 plugin.yaml 元信息被旧缓存遮挡**：`plugins_dat/<插件名>/plugin.yaml` 旧版永远不覆盖，导致插件新增的更新源（github.repo）、版本号、依赖声明等不生效。已修复：`plugin.yaml` 随插件更新，其他配置文件（`_conf_schema.json` 等）仍保护用户修改。
 
 ---
 
