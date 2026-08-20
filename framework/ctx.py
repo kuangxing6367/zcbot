@@ -615,6 +615,16 @@ class PluginContext:
             'order': order,
         })
 
+    def override_webui(self):
+        """
+        让本插件接管整个 Web 前端。
+
+        调用后，框架的根路由 `/` 与静态资源（/css /js /img 与各 *.html 页面）
+        全部改为从本插件的 web/ 目录服务，取代框架自带的默认前端。
+        插件被禁用/卸载/删除时自动回退框架默认前端。
+        """
+        return self._framework.plugin_loader.override_webui(self._plugin_name)
+
     # ---- 内部方法 ----
 
     def register_group_extension(self, key: str, title: str, handler: Callable,
