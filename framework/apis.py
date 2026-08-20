@@ -94,7 +94,7 @@ def create_web_app(framework) -> Flask:
     _refresh_windows = {}          # ip -> list[timestamp]（仅记录页面导航请求）
     _refresh_lock = threading.Lock()
     _REFRESH_WINDOW = 5            # 秒
-    _REFRESH_LIMIT = 2             # 窗口内触发阈值
+    _REFRESH_LIMIT = 5             # 窗口内触发阈值
 
     @app.before_request
     def _detect_rapid_reload():

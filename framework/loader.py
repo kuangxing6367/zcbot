@@ -722,7 +722,20 @@ class PluginLoader:
                 continue
             if self._is_config_file(name):
                 dest = os.path.join(dat_dir, name)
-                # 如果 plugins_dat 已有同名文件（用户之前修改过），不覆盖
+                # plugin.yaml 是插件元信息（版本/更新源/依赖声明），随插件更新：
+                # 始终用代码里的新版覆盖 plugins_dat 旧版，避免旧元信息遮挡新配置。
+                if name.lower() == 'plugin.yaml':
+                    if os.path.exists(dest):
+                        try:
+                            os.remove(dest)
+                            logger.debug(f"[{plugin_name}] 覆盖旧 plugin.yaml")
+                        except Exception as e:
+                            logger.warning(f"[{plugin_name}] 删除旧 plugin.yaml 失败: {e}")
+                    shutil.move(fpath, dest)
+                    logger.debug(f"[{plugin_name}] plugin.yaml 已更新")
+                    continue
+                # 其他配置文件（_conf_schema.json / README 等）：plugins_dat 已有同名文件
+                # 视为用户修改过，不覆盖
                 if not os.path.exists(dest):
                     shutil.move(fpath, dest)
                     logger.debug(f"[{plugin_name}] 配置文件已迁移: {name}")
