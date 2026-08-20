@@ -3877,25 +3877,29 @@ def create_web_app(framework) -> Flask:
 
     # ---- 前端静态文件 ----
 
+    def _web_root_dir():
+        """前端根目录：若插件接管了前端则返回插件 web/ 目录，否则返回框架默认 web/ 目录"""
+        override_path = framework.plugin_loader.get_override_webui_path()
+        if override_path:
+            return override_path
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web')
+
     @app.route('/css/<path:filename>')
     def serve_css(filename):
-        web_css = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web', 'css')
-        return send_from_directory(web_css, filename)
+        return send_from_directory(os.path.join(_web_root_dir(), 'css'), filename)
 
     @app.route('/js/<path:filename>')
     def serve_js(filename):
-        web_js = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web', 'js')
-        return send_from_directory(web_js, filename)
+        return send_from_directory(os.path.join(_web_root_dir(), 'js'), filename)
 
     @app.route('/img/<path:filename>')
     def serve_img(filename):
-        web_img = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web', 'img')
-        return send_from_directory(web_img, filename)
+        return send_from_directory(os.path.join(_web_root_dir(), 'img'), filename)
 
     @app.route('/<page>.html')
     def serve_page(page):
         """提供 HTML 页面"""
-        web_static = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web')
+        web_static = _web_root_dir()
         html_file = os.path.join(web_static, f'{page}.html')
         if os.path.isfile(html_file):
             return send_from_directory(web_static, f'{page}.html')
@@ -3904,7 +3908,17 @@ def create_web_app(framework) -> Flask:
     @app.route('/')
     def serve_index():
         """根路径返回 index.html"""
-        web_static = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web')
+        web_static = _web_root_dir()
+        return send_from_directory(web_static, 'index.html')
+
+    @app.route('/reset')
+    def serve_reset():
+        """前端恢复页：若插件接管了前端则返回其 reset.html；
+        无接管页时回退框架默认 web/reset.html（不存在则返回默认 index.html）。"""
+        web_static = _web_root_dir()
+        reset_file = os.path.join(web_static, 'reset.html')
+        if os.path.isfile(reset_file):
+            return send_from_directory(web_static, 'reset.html')
         return send_from_directory(web_static, 'index.html')
 
     return app
