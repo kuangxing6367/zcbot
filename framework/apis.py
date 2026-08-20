@@ -3915,11 +3915,19 @@ def create_web_app(framework) -> Flask:
     # ---- 前端静态文件 ----
 
     def _web_root_dir():
-        """前端根目录：若插件接管了前端则返回插件 web/ 目录，否则返回框架默认 web/ 目录"""
-        override_path = framework.plugin_loader.get_override_webui_path()
-        if override_path:
-            return override_path
+        """前端根目录（框架默认 web/ 目录）"""
         return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web')
+
+    def _override_entry_url() -> str:
+        """
+        返回接管前端的插件入口 URL。
+        插件接管时根路径 / redirect 到该 URL，由插件路由服务其模板网页。
+        无接管返回 None。
+        """
+        name = framework.plugin_loader.get_override_webui()
+        if not name:
+            return None
+        return f'/{name}/'
 
     @app.route('/css/<path:filename>')
     def serve_css(filename):
@@ -3944,9 +3952,12 @@ def create_web_app(framework) -> Flask:
 
     @app.route('/')
     def serve_index():
-        """根路径返回 index.html"""
-        web_static = _web_root_dir()
-        return send_from_directory(web_static, 'index.html')
+        """根路径：若插件接管了前端则 redirect 到插件入口，否则返回框架默认 index.html"""
+        entry = _override_entry_url()
+        if entry:
+            from flask import redirect
+            return redirect(entry, code=302)
+        return send_from_directory(_web_root_dir(), 'index.html')
 
     @app.route('/reset')
     def serve_reset():
