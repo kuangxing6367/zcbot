@@ -40,7 +40,6 @@
           <template #header><div class="card-head">框架操作</div></template>
           <div class="mb">
             <el-button @click="checkUpdate">检查框架更新</el-button>
-            <el-button @click="loadBackups">查看备份 / 回滚</el-button>
             <el-button type="danger" @click="restart">重启框架</el-button>
           </div>
           <div v-if="fwInfo">
@@ -49,18 +48,18 @@
               最新: <span class="mono">{{ fwInfo.latest_version }}</span>
               <div class="dim">{{ fwInfo.commit_message }} · {{ fwInfo.author || '' }} · {{ fwInfo.commit_date || '' }}</div>
             </div>
-            <el-button v-if="fwInfo.has_update === true" type="primary" size="small" @click="doFrameworkUpdate">立即更新框架</el-button>
-            <el-tag v-else-if="fwInfo.has_update === null || fwInfo.has_update === undefined" type="warning" size="small">本地版本未知</el-tag>
-            <el-tag v-else type="success" size="small">已是最新版本</el-tag>
-          </div>
-          <div v-if="backups.length" class="mt">
-            <div class="small mb">框架更新备份（{{ backups.length }}）:</div>
-            <div v-for="b in backups" :key="b.name" class="backup-row">
-              <span class="small mono">{{ b.name }} <span class="dim">({{ b.time }})</span></span>
-              <el-button size="small" type="danger" @click="rollback(b.name)">回滚</el-button>
+            <div class="mb">
+              <div class="small mb" style="color:var(--el-text-color-secondary)">目标版本</div>
+              <el-select v-model="targetVersion" placeholder="选择更新版本" style="width: 200px">
+                <el-option v-if="fwInfo.latest_version && fwInfo.latest_version !== '未知'" :label="`最新版 ${fwInfo.latest_version}`" :value="fwInfo.latest_version" />
+                <el-option
+                  v-for="v in (fwInfo.available_versions || []).filter(x => x.version !== fwInfo.latest_version)"
+                  :key="v.tag" :label="`v${v.version}`" :value="v.version" />
+              </el-select>
+              <el-button type="primary" size="small" style="margin-left:8px" @click="doFrameworkUpdate">更新到所选版本</el-button>
             </div>
           </div>
-          <div class="dim small mt">更新框架仅覆盖代码（framework/web/main.py 等），自动保留 plugins/、data/、config.yaml；旧代码备份到 data/backups/，更新后需重启生效。</div>
+          <div class="dim small mt">更新框架仅覆盖代码（framework/web/main.py 等），自动保留 plugins/、data/、config.yaml；更新后需重启生效。</div>
         </el-card>
       </el-col>
     </el-row>
@@ -144,7 +143,7 @@ const yamlCfg = ref({})
 const adminList = ref([])
 const pwd = ref({ old: '', new: '' })
 const fwInfo = ref(null)
-const backups = ref([])
+const targetVersion = ref('')
 const addVisible = ref(false)
 const admForm = ref({ username: '', password: '', role: 'admin' })
 
@@ -196,21 +195,15 @@ async function restart() {
 
 async function checkUpdate() {
   const r = await apiCall('/api/framework/check_update')
-  if (r) fwInfo.value = r.data
+  if (r) { fwInfo.value = r.data; targetVersion.value = (r.data && r.data.latest_version !== '未知') ? r.data.latest_version : '' }
 }
 async function doFrameworkUpdate() {
-  await ElMessageBox.confirm('确定更新框架吗？\n将覆盖 framework/web/main.py 等代码，自动保留插件与配置，更新后需重启生效。', '更新框架', { type: 'warning' })
-  const r = await apiCall('/api/framework/update', { method: 'POST' })
+  const ver = targetVersion.value
+  const desc = ver ? `将更新框架到版本 ${ver}` : '将更新框架到最新版本'
+  await ElMessageBox.confirm(`确定更新框架吗？\n${desc}\n将覆盖 framework/web/main.py 等代码，自动保留插件与配置，更新后需重启生效。`, '更新框架', { type: 'warning' })
+  const body = ver ? { version: ver } : {}
+  const r = await apiCall('/api/framework/update', { method: 'POST', body })
   if (r) { ElMessage.success(r.msg); checkUpdate() }
-}
-async function loadBackups() {
-  const r = await apiCall('/api/framework/backups')
-  if (r) backups.value = (r.data && r.data.backups) || []
-}
-async function rollback(name) {
-  await ElMessageBox.confirm(`确定回滚到 ${name} 吗？\n当前 framework 代码将被替换（旧代码留档 data/backups/current/），回滚后需重启生效。`, '回滚框架', { type: 'warning' })
-  const r = await apiCall('/api/framework/rollback', { method: 'POST', body: { backup: name } })
-  if (r) { ElMessage.success(r.msg); loadBackups() }
 }
 
 onMounted(load)
@@ -218,6 +211,5 @@ onMounted(load)
 
 <style scoped>
 .card-head { display: flex; align-items: center; justify-content: space-between; }
-.backup-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; }
 .ml { margin-left: 8px; }
 </style>
