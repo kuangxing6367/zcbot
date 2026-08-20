@@ -342,4 +342,4 @@ def handle_sign_in(event, match):
 - [API 参考](api-reference.md) — 全部 `ctx` 方法
 - [示例合集](examples.md) — 更完整的签到插件（含排行榜、连续签到、审计日志）
 - [最佳实践](best-practices.md) — 错误处理、异步、权限校验
-- 不想自己写？装了 AI 助手插件（`llm_plugin_gen`）后，可以让它代劳，见 [插件文档](../plugins/llm_plugin_gen/docs/INDEX.md)
+- 不想自己写？装了 AI 助手插件（`llm_plugin_gen`）后，可以让它代劳，见 [插件文档](https://github.com/kuangxing6367/zcbot_plugins/blob/main/plugins/llm_plugin_gen/docs/INDEX.md)
