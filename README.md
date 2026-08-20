@@ -204,6 +204,27 @@ plugin:
   dir: ../zcbot_plugins/plugins
 ```
 
+常用官方插件：
+
+| 插件 | 作用 | 怎么用 |
+| ---- | ---- | ---- |
+| **llm_chat** | 接入大模型，@机器人 或 `/chat` 就能聊天 | `/chat 你好`、@机器人 |
+| **llm_plugin_gen** | AI 帮你写插件，描述需求即可 | `/ai 帮我写个签到插件` |
+| **qqadmin** | 群管理全套（禁言、踢人、撤回、审批、违禁词、宵禁） | `禁言 @张三 10`、`设置禁词 广告` |
+| **fun_score** | 签到积分、排行榜 | `签到`、`我的积分`、`排行榜` |
+| **send_like** | 点赞、自动点赞 | `/赞我`、`/自动点赞` |
+| **video_parse** | 群里发视频链接自动解析成卡片 | 直接发链接，或 `/解析` |
+| **file** | 服务器文件管理 | `/文件列表`、`/发送文件 data/x` |
+| **hitokoto** | 随机一言 | `一言` |
+| **broadcast** | 消息批量广播 | 回复消息发 `广播` |
+| **custom_ui** | 接管网页后台，换个性化主题 | 后台模板管理页下载/切换 |
+| **minecraftconsole** | MC 服务器控制台 | `mc-command say 你好` |
+| **dbcj-mcstatus** | MC 服务器状态 | `/mc状态` |
+| **plugin_memmon** | 插件内存监控 | `/mem`、`/memdiag` |
+| **llm_blacklist** | LLM 对话黑名单 | `/插件拉黑 12345` |
+
+> 每个插件的完整命令列表和用法例子见 [📖 官方插件使用手册](docs/official-plugins.md)。
+
 ---
 
 ## 六、常见问题
@@ -236,6 +257,7 @@ A: 机器人会自动定期释放空闲内存。持续上涨发 `/memdiag` 诊�
 - [API 参考](docs/api-reference.md) — 写插件时的全部接口
 - [配置系统](docs/configuration.md) — 插件的设置项怎么写
 - [示例合集](docs/examples.md) — 一个完整的签到插件源码
+- [官方插件使用手册](docs/official-plugins.md) — 官方插件仓库每个插件的命令与用法例子
 - [调试指南](docs/debugging.md) — 插件出 bug 了？看日志、开 DEBUG、打断点、热重载
 - [最佳实践](docs/best-practices.md) — 写插件的好习惯 + 提交前自查清单
 - [已知问题](docs/KNOWN_ISSUES.md) — 框架已知的坑和修复进度（P0/P1/P2）
