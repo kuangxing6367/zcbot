@@ -3091,6 +3091,7 @@ def create_web_app(framework) -> Flask:
             # 不用 /releases/latest：它会跳过 pre-release，导致 alpha 版检测不到。
             # 从所有 Release 中取版本号最高的一个（而非发布时间最新，避免低版本覆盖）。
             release = None
+            all_releases = []
             try:
                 rresp = requests.get(
                     f"https://api.github.com/repos/{repo}/releases?per_page=30",
@@ -3107,6 +3108,12 @@ def create_web_app(framework) -> Flask:
                             tv = _parse_version_tuple(t[1:] if t.startswith('v') else t)
                             if tv is None:
                                 continue
+                            all_releases.append({
+                                'tag': t,
+                                'version': t[1:] if t.startswith('v') else t,
+                                'name': rel.get('name') or t,
+                                'published_at': rel.get('published_at', ''),
+                            })
                             if best_t is None or tv > best_t:
                                 best, best_t = rel, tv
                         release = best
@@ -3125,6 +3132,10 @@ def create_web_app(framework) -> Flask:
                 body = release.get('body') or ''
                 name = (release.get('name') or '').strip()
                 commit_msg = name or (body.split('\n')[0] if body else '') or f"Release {tag}"
+                # 可用版本列表（按版本号从高到低），供前端指定版本更新
+                all_releases.sort(
+                    key=lambda x: _parse_version_tuple(x['version']) or (0,),
+                    reverse=True)
                 return jsonify({
                     'code': 0,
                     'data': {
@@ -3138,6 +3149,7 @@ def create_web_app(framework) -> Flask:
                         'commit_date': release.get('published_at', ''),
                         'author': (release.get('author') or {}).get('login', ''),
                         'has_update': has_update,
+                        'available_versions': all_releases,
                     }
                 })
 
@@ -3181,26 +3193,34 @@ def create_web_app(framework) -> Flask:
     @require_auth
     def update_framework():
         """
-        从 GitHub 更新框架源码
+        从 GitHub 更新框架源码到指定版本（默认最新 Release）
         只覆盖框架代码（framework/web/sql/main.py 等），
         保留用户数据（plugins/、data/、config.yaml、*.db 等），
-        更新前自动备份 framework/ 到 data/backups/，更新后需重启生效。
+        更新后需重启生效。
+        请求体可选 version 指定目标版本号（如 1.0.0）。
         """
         admin = request.admin
         repo = 'kuangxing6367/zcbot'
         branch = 'main'
         root = _project_root()
+        req_version = (request.json or {}).get('version') or ''
 
         try:
-            # 优先下载最新 Release 对应 tag 的 ZIP（与 check_update 版本检测一致）；
-            # 仓库无 Release 时回退 main 分支 ZIP。
-            tag = _latest_release_tag(repo)
-            if tag:
+            # 指定版本 → 用对应 tag；否则用最新 Release tag；无 Release 回退 main 分支 ZIP
+            tag = ''
+            if req_version:
+                want = req_version[1:] if req_version.startswith('v') else req_version
+                tag = f'v{want}' if want and not want.startswith('v') else want
                 zip_url = f"https://github.com/{repo}/archive/refs/tags/{tag}.zip"
-                logger.info(f"正在下载框架更新（Release {tag}）: {zip_url}")
+                logger.info(f"正在下载框架更新（指定版本 {tag}）: {zip_url}")
             else:
-                zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
-                logger.info(f"仓库无 Release，回退下载分支 ZIP: {zip_url}")
+                tag = _latest_release_tag(repo)
+                if tag:
+                    zip_url = f"https://github.com/{repo}/archive/refs/tags/{tag}.zip"
+                    logger.info(f"正在下载框架更新（Release {tag}）: {zip_url}")
+                else:
+                    zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+                    logger.info(f"仓库无 Release，回退下载分支 ZIP: {zip_url}")
 
             # 代理 → 镜像 → 直连，逐个候选下载并校验 ZIP 有效性
             tmp_zip = _download_zip_file(_github_url_candidates(zip_url))
@@ -3216,14 +3236,6 @@ def create_web_app(framework) -> Flask:
                 # GitHub ZIP 内含一层 repo-tag/ 目录
                 entries = [e for e in os.listdir(tmp_dir) if os.path.isdir(os.path.join(tmp_dir, e))]
                 src_root = os.path.join(tmp_dir, entries[0]) if entries else tmp_dir
-
-                # 备份旧 framework 目录
-                backup_dir = os.path.join(root, 'data', 'backups')
-                os.makedirs(backup_dir, exist_ok=True)
-                fw_backup = os.path.join(backup_dir, f'framework.{int(time.time())}')
-                old_fw = os.path.join(root, 'framework')
-                if os.path.isdir(old_fw):
-                    shutil.copytree(old_fw, fw_backup)
 
                 # 覆盖白名单内的代码/配置文件
                 updated = []
@@ -3249,11 +3261,11 @@ def create_web_app(framework) -> Flask:
                     logger.warning(f"框架更新：依赖自动安装异常: {e}")
 
                 audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
-                          {'files': updated, 'backup': fw_backup}, 'success')
+                          {'files': updated, 'target': tag or branch}, 'success')
                 return jsonify({
                     'code': 0,
-                    'msg': f'框架已更新（{len(updated)} 项），请重启框架生效。\n已备份旧代码到 data/backups/',
-                    'data': {'updated': updated, 'backup': fw_backup},
+                    'msg': f'框架已更新到 {tag or "最新"}（{len(updated)} 项），请重启框架生效。',
+                    'data': {'updated': updated, 'target': tag or 'latest'},
                 })
             finally:
                 try:
@@ -3268,66 +3280,6 @@ def create_web_app(framework) -> Flask:
             audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
                       {}, 'failure', str(e))
             return jsonify({'code': 500, 'msg': f'更新失败: {e}'}), 500
-
-    # ── 框架备份列表 / 一键回滚 ──────────────────────────────────────
-
-    def _fw_backup_root() -> str:
-        return os.path.join(_project_root(), 'data', 'backups')
-
-    @app.route('/api/framework/backups', methods=['GET'])
-    @require_auth
-    def list_framework_backups():
-        """列出框架更新备份（framework.<时间戳> 目录）"""
-        backups = []
-        root = _fw_backup_root()
-        if os.path.isdir(root):
-            for name in sorted(os.listdir(root)):
-                if re.match(r'^framework\.\d+$', name) and os.path.isdir(os.path.join(root, name)):
-                    try:
-                        ts = int(name.split('.')[-1])
-                        backups.append({
-                            'name': name,
-                            'time': datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S'),
-                        })
-                    except (ValueError, OSError):
-                        backups.append({'name': name, 'time': '未知'})
-        return jsonify({'code': 0, 'data': {'backups': backups}})
-
-    @app.route('/api/framework/rollback', methods=['POST'])
-    @require_auth
-    def rollback_framework():
-        """一键回滚框架到指定备份（白名单校验备份名，防路径穿越）"""
-        admin = request.admin
-        name = (request.json or {}).get('backup', '')
-        if not re.match(r'^framework\.\d+$', name):
-            return jsonify({'code': 400, 'msg': '非法备份名'}), 400
-
-        root = _project_root()
-        src = os.path.join(_fw_backup_root(), name)
-        if not os.path.isdir(src):
-            return jsonify({'code': 404, 'msg': f'备份不存在: {name}'}), 404
-
-        try:
-            fw = os.path.join(root, 'framework')
-            # 当前代码先留档到 current，回滚误操作可找回
-            if os.path.isdir(fw):
-                keep = os.path.join(_fw_backup_root(), 'current')
-                if os.path.isdir(keep):
-                    shutil.rmtree(keep, ignore_errors=True)
-                shutil.copytree(fw, keep)
-                shutil.rmtree(fw, ignore_errors=True)
-            shutil.copytree(src, fw)
-            audit_log(admin['id'], admin['username'], 'rollback_framework', 'system', 'framework',
-                      {'backup': name, 'current_backed_to': 'current'}, 'success')
-            return jsonify({
-                'code': 0,
-                'msg': f'已回滚到 {name}，请重启框架生效。\n当前代码已备份到 data/backups/current/',
-            })
-        except Exception as e:
-            logger.error(f"回滚框架失败: {e}", exc_info=True)
-            audit_log(admin['id'], admin['username'], 'rollback_framework', 'system', 'framework',
-                      {'backup': name}, 'failure', str(e))
-            return jsonify({'code': 500, 'msg': f'回滚失败: {e}'}), 500
 
     @app.route('/api/restart', methods=['POST'])
     @require_auth
