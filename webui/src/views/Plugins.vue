@@ -186,6 +186,7 @@ const filtered = computed(() => {
   return plugins.value.filter(p =>
     p.plugin_name.toLowerCase().includes(k) || (p.description || '').toLowerCase().includes(k))
 })
+function applyFilter() { /* 过滤由 computed 自动完成 */ }
 
 const uploadVisible = ref(false)
 const uploading = ref(false)
