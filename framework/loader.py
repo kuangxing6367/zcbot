@@ -857,7 +857,7 @@ class PluginLoader:
                                 spec['default'] = d[1:-1]
                             elif d.startswith("'") and d.endswith("'"):
                                 spec['default'] = d[1:-1]
-                        spec['hint'] = f'自动发现（源码中 {fn} 调用 get_config）'
+                        spec['description'] = f'自动发现（源码中 {fn} 调用 get_config）'
                         schema_from_src[key] = spec
             if schema_from_src:
                 return schema_from_src
@@ -893,9 +893,8 @@ class PluginLoader:
                     val_type = 'string'
                 schema[key] = {
                     'type': val_type,
-                    'description': key,
+                    'description': f'当前值: {val}（由插件运行时配置自动生成）',
                     'default': val if not isinstance(val, (list, dict)) else None,
-                    'hint': f'由插件运行时配置自动生成（{plugin_name} 未提供 _conf_schema.json）',
                 }
             return schema
         except Exception as e:
