@@ -90,6 +90,43 @@ def create_web_app(framework) -> Flask:
             return None
         return jsonify({'code': 403, 'msg': '访问被拒绝'}), 403
 
+    # ---- 刷新过快检测（同一 IP 5 秒内刷新页面 ≥2 次 → 引导到 /reset）----
+    _refresh_windows = {}          # ip -> list[timestamp]（仅记录页面导航请求）
+    _refresh_lock = threading.Lock()
+    _REFRESH_WINDOW = 5            # 秒
+    _REFRESH_LIMIT = 2             # 窗口内触发阈值
+
+    @app.before_request
+    def _detect_rapid_reload():
+        """同一 IP 在 5 秒内刷新页面超过阈值时，重定向到 /reset 恢复页。
+        仅统计页面导航请求（GET /、路径以 .html 结尾、/reset），排除 /api/ 与静态资源，
+        以避开前端 JS 轮询造成的误判。"""
+        if request.method != 'GET':
+            return None
+        path = request.path or '/'
+        # 只统计 HTML 页面导航请求
+        is_page = (path == '/' or path.endswith('.html') or path == '/reset')
+        if not is_page or path.startswith('/api/'):
+            return None
+        ip = get_client_ip()
+        now = time.time()
+        with _refresh_lock:
+            ts = [t for t in _refresh_windows.get(ip, []) if now - t < _REFRESH_WINDOW]
+            ts.append(now)
+            _refresh_windows[ip] = ts
+            count = len(ts)
+            # 内存占用保护：定期清理过期项
+            if len(_refresh_windows) > 2048:
+                stale = [k for k, v in _refresh_windows.items() if not v or now - v[-1] >= 600]
+                for k in stale:
+                    _refresh_windows.pop(k, None)
+        # 命中阈值：本 IP 已在该窗口内刷新达到阈值，且当前不是 /reset 页面本身时重定向
+        if count >= _REFRESH_LIMIT and path != '/reset':
+            from flask import redirect
+            # 记录本次仍算一次，但页面重定向到恢复页
+            return redirect('/reset', code=302)
+        return None
+
     # ---- 工具函数 ----
 
     def _project_root() -> str:
