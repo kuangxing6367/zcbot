@@ -293,6 +293,7 @@ class PluginLoader:
         self.db = framework.db
         self._loaded_plugins: Dict[str, dict] = {}  # plugin_name -> {module, register_func, ...}
         self._lock = threading.Lock()
+        self._override_webui: str = None  # 接管整个前端的插件名（None 表示用框架默认前端）
         self._missing_deps: Dict[str, list] = {}   # plugin_name -> [缺失的包列表]
         self._conflict_deps: Dict[str, list] = {}  # plugin_name -> [{name, required, installed}, ...]
         self._isolated_plugins: set = set()         # plugin_name -> 已启用隔离环境的插件
@@ -1415,6 +1416,9 @@ class PluginLoader:
             self._conflict_deps.pop(plugin_name, None)
             self._isolated_plugins.discard(plugin_name)
 
+        # 若该插件接管了前端，卸载后回退框架默认前端
+        self.clear_override_webui(plugin_name)
+
         # 移除事件订阅
         self.framework.event_bus.unsubscribe_plugin(plugin_name)
 
@@ -1639,6 +1643,39 @@ class PluginLoader:
                 if not existing:
                     webui_info['plugin_name'] = plugin_name
                     webuis.append(webui_info)
+
+    def override_webui(self, plugin_name: str):
+        """
+        指定插件接管整个前端（根路由与静态资源从该插件 web/ 目录服务）。
+        插件禁用/卸载时自动回退框架默认前端。
+        """
+        with self._lock:
+            if plugin_name in self._loaded_plugins:
+                self._override_webui = plugin_name
+                return True
+            return False
+
+    def clear_override_webui(self, plugin_name: str = None):
+        """清除前端接管。plugin_name 为 None 时清除全部；否则仅在匹配时清除。"""
+        with self._lock:
+            if plugin_name is None or self._override_webui == plugin_name:
+                self._override_webui = None
+
+    def get_override_webui(self) -> str:
+        """获取当前接管前端的插件名（无则返回 None）"""
+        with self._lock:
+            return self._override_webui
+
+    def get_override_webui_path(self) -> str:
+        """获取接管前端的插件 web/ 目录（无接管或插件已卸载则返回 None）"""
+        name = self.get_override_webui()
+        if not name:
+            return None
+        path = self.get_plugin_webui_path(name)
+        if not path:
+            self.clear_override_webui(name)
+            return None
+        return path
 
     def get_plugin_webuis(self) -> list:
         """获取所有已注册的插件 WebUI 列表（按 order 排序）"""
