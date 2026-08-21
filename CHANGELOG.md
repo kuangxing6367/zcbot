@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.1.0-beta.0
+
+### 新增
+
+- **内存看门狗**：框架启动后每 30s 检查进程 RSS，超过 `memory.limit_mb`（默认 120MB）时自动触发清理——清空框架级角色缓存、统计聚合计数，并强制 `gc.collect()`；清理前后打印 RSS 变化。可通过 `config.yaml → memory.limit_mb / memory.check_interval` 自定义阈值与检查频率。
+
+---
+
 ## v1.0.1
 
 修复版，聚焦稳定性、内存与安全优化。
