@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
@@ -61,6 +62,8 @@ class PluginContext:
         self._group_extensions = []  # WebUI 群组管理页插件扩展
         self._user_extensions = []   # WebUI 用户管理页插件扩展
         self._logger = self._PluginLogger(plugin_name)
+        self._config_cache = {}      # key -> (value, timestamp) 插件配置 TTL 缓存
+        self._config_cache_ttl = 30  # 缓存有效期（秒），避免 async handler 同步查库阻塞事件循环
 
         # OneBot 11 标准 API 封装（全量 38 个方法）
         self.onebot = OneBotAPI(framework.api_caller)
@@ -152,12 +155,22 @@ class PluginContext:
 
     def get_config(self, key: str, default=None):
         """
-        读取插件配置项
+        读取插件配置项（带 TTL 缓存，避免 async handler 同步查库阻塞事件循环）
         配置值由 Web UI 通过 _conf_schema.json 定义并存储在 plugin_configs 表中
         :param key: 配置键名
         :param default: 默认值（配置不存在时返回）
         :return: 配置值
         """
+        cache_key = (self._plugin_name, key)
+        now = time.time()
+        # 命中缓存直接返回
+        cached = self._config_cache.get(cache_key)
+        if cached is not None:
+            value, ts = cached
+            if now - ts < self._config_cache_ttl:
+                return value
+            self._config_cache.pop(cache_key, None)
+        # 缓存未命中，查库
         try:
             row = self._db.query_one(
                 "SELECT config_value FROM plugin_configs WHERE plugin_name = %s AND config_key = %s",
@@ -165,14 +178,18 @@ class PluginContext:
             )
             if row:
                 value = row['config_value']
-                # 数据库值为 NULL 时返回 default
+                # 数据库值为 NULL 时返回 default 并缓存 None 标记
                 if value is None:
+                    self._config_cache[cache_key] = (default, now)
                     return default
                 # 尝试 JSON 解码（非字符串类型）
                 try:
-                    return json.loads(value)
+                    decoded = json.loads(value)
                 except (json.JSONDecodeError, TypeError):
-                    return value
+                    decoded = value
+                self._config_cache[cache_key] = (decoded, now)
+                return decoded
+            self._config_cache[cache_key] = (default, now)
             return default
         except Exception as e:
             logger.error(f"[{self._plugin_name}] 读取配置 {key} 失败: {e}")

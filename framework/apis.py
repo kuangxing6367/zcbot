@@ -42,6 +42,44 @@ def create_web_app(framework) -> Flask:
     db = framework.db
     plugins_dir = framework.plugin_loader.plugins_dir
 
+    # ---- 跨域支持（自定义网页 / 第三方面板跨源调用 API 用）----
+    # 默认反射请求方 Origin 放行任意来源（兼容带凭据的跨域）；
+    # 如需收紧，在 config.yaml 的 security.cors_allowed_origins 配置允许的来源列表
+    _cors_cfg = (
+        framework.config.get('security', {}).get('cors_allowed_origins')
+        or framework.config.get('web', {}).get('cors_allowed_origins')
+    )
+
+    def _resolve_cors_origin():
+        origin = request.headers.get('Origin')
+        if not origin:
+            return None
+        if _cors_cfg:
+            if isinstance(_cors_cfg, str):
+                allowed = [o.strip() for o in _cors_cfg.split(',') if o.strip()]
+            else:
+                allowed = [str(o).strip() for o in _cors_cfg]
+            return origin if origin in allowed else None
+        return origin
+
+    @app.after_request
+    def _cors_headers(resp):
+        origin = _resolve_cors_origin()
+        if not origin:
+            return resp
+        resp.headers['Access-Control-Allow-Origin'] = origin
+        resp.headers['Access-Control-Allow-Credentials'] = 'true'
+        resp.headers['Access-Control-Allow-Headers'] = \
+            'Content-Type, Authorization, X-Requested-With'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        resp.headers['Vary'] = 'Origin'
+        return resp
+
+    @app.before_request
+    def _cors_preflight():
+        if request.method == 'OPTIONS':
+            return ('', 204)
+
     # ---- 登录防爆破（内存限速：同一 IP 10 分钟内最多失败 5 次）----
     _login_failures = {}  # ip -> list[timestamp]
     _login_lock = threading.Lock()
@@ -697,8 +735,19 @@ def create_web_app(framework) -> Flask:
             except Exception:
                 pass
 
+    # 信任的反代 IP 列表（仅这些 IP 发来的 X-Forwarded-For 才被采信，默认空=全部用 remote_addr）
+    # 在 config.yaml 的 security.trusted_proxies 配置，例如 ["127.0.0.1", "10.0.0.1"]
+    _trusted_proxies = set(framework.config.get('security', {}).get('trusted_proxies', []))
+
     def get_client_ip():
-        return request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown')
+        remote = request.remote_addr or 'unknown'
+        if _trusted_proxies and remote in _trusted_proxies:
+            xff = request.headers.get('X-Forwarded-For', '')
+            if xff:
+                parts = [p.strip() for p in xff.split(',') if p.strip()]
+                if parts:
+                    return parts[0]  # 取最左（原始客户端 IP）
+        return remote
 
     def audit_log(admin_id, admin_name, action, target_type=None, target_name=None,
                   detail=None, result='success', error_message=None):
