@@ -42,8 +42,16 @@ _FONT_CANDIDATES = [
     os.path.join(os.path.dirname(_FONT_DIR), 'help', 'DouyinSansBold.otf'),
 ]
 
-# 模块级缓存，避免重复加载字体
+# 模块级缓存，避免重复加载字体（LRU 上限，防无限增长导致内存泄漏）
 _FONT_CACHE = {}
+_FONT_CACHE_MAX = 16  # 最多缓存 16 个不同字号的字体对象（8MB/个，上限约 128MB）
+
+def _font_cache_put(k, v):
+    """写入字体缓存，超限时淘汰最旧条目"""
+    _FONT_CACHE[k] = v
+    if len(_FONT_CACHE) > _FONT_CACHE_MAX:
+        oldest = next(iter(_FONT_CACHE))
+        del _FONT_CACHE[oldest]
 
 
 def _load_native_renderer():
@@ -107,13 +115,13 @@ def _get_font(size, bold=False):
         if os.path.isfile(fp):
             try:
                 f = ImageFont.truetype(fp, size)
-                _FONT_CACHE[key] = f
+                _font_cache_put(key, f)
                 return f
             except Exception:
                 continue
     try:
         f = ImageFont.load_default()
-        _FONT_CACHE[key] = f
+        _font_cache_put(key, f)
         return f
     except Exception:
         return None
@@ -582,10 +590,10 @@ def _font_ascent(font_path, size):
     try:
         from PIL import ImageFont
         f = ImageFont.truetype(font_path, int(size))
-        _FONT_CACHE[key] = f.getmetrics()[0]
+        _font_cache_put(key, f.getmetrics()[0])
     except Exception:
         # 度量失败按 CJK 常见 ascent 0.88em 估算，误差在可接受范围
-        _FONT_CACHE[key] = max(1, int(int(size) * 0.88))
+        _font_cache_put(key, max(1, int(int(size) * 0.88)))
     return _FONT_CACHE[key]
 
 
