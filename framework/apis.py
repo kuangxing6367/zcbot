@@ -1725,8 +1725,8 @@ def create_web_app(framework) -> Flask:
             return str(a) != str(b)
 
     def _load_market_registry() -> dict:
-        """加载官方插件市场 registry（默认源 + 镜像源兜底），返回 {'plugins': [...]}"""
-        sources = [_DEFAULT_MARKET] + _MIRROR_MARKETS
+        """加载官方插件市场 registry（默认源 + 镜像源 + 自定义源兜底），返回 {'plugins': [...]}"""
+        sources = [_DEFAULT_MARKET] + _MIRROR_MARKETS + _read_market_sources_custom()
         last_err = ''
         for src in sources:
             try:
@@ -1737,6 +1737,30 @@ def create_web_app(framework) -> Flask:
                 last_err = str(e)
         logger.warning(f"加载官方市场 registry 失败: {last_err}")
         return {'plugins': []}
+
+    def _persist_plugin_github_meta(plugin_name: str, repo: str, branch: str, sub_path: str) -> None:
+        """安装/更新第三方源插件后，把 github 源信息写回 plugins_dat/<name>/plugin.yaml 的 github 段，
+        使后续 check_plugin_update / update 能定位仓库（借鉴 AstrBot：安装即记录来源）"""
+        try:
+            dat_yaml = os.path.join(framework.plugin_loader.plugins_dat_dir, plugin_name, 'plugin.yaml')
+            data = {}
+            if os.path.isfile(dat_yaml):
+                with open(dat_yaml, 'r', encoding='utf-8') as f:
+                    data = yaml.safe_load(f) or {}
+            if not isinstance(data, dict):
+                data = {}
+            gh = data.get('github') or {}
+            if not isinstance(gh, dict):
+                gh = {}
+            gh.setdefault('repo', repo)
+            gh.setdefault('branch', branch or 'main')
+            gh.setdefault('path', sub_path or '/')
+            data['github'] = gh
+            os.makedirs(os.path.dirname(dat_yaml), exist_ok=True)
+            with open(dat_yaml, 'w', encoding='utf-8') as f:
+                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+        except Exception as e:
+            logger.warning(f"写回插件 github 元信息失败 {plugin_name}: {e}")
 
     @app.route('/api/plugins/<plugin_name>/update', methods=['POST'])
     @require_auth
@@ -1857,7 +1881,20 @@ def create_web_app(framework) -> Flask:
                     if not ok_src:
                         errors.append(f"{src.get('name', src.get('url', ''))}: 所有源均获取失败")
                 else:
-                    all_plugins.extend(_fetch_market_source(src))
+                    # 第三方自定义源：github 类地址同样走加速代理候选，普通 HTTP 源直连
+                    src_url = src.get('url', '')
+                    cands = _github_url_candidates(src_url) if 'github' in src_url else [src_url]
+                    ok_src = False
+                    for cand in cands:
+                        try:
+                            all_plugins.extend(_fetch_market_source(
+                                {'name': src.get('name', '自定义源'), 'url': cand}))
+                            ok_src = True
+                            break
+                        except Exception:
+                            continue
+                    if not ok_src:
+                        errors.append(f"{src.get('name', src_url)}: 所有源均获取失败")
             except Exception as e:
                 errors.append(f"{src.get('name', src.get('url', ''))}: {str(e)[:120]}")
 
@@ -1953,6 +1990,8 @@ def create_web_app(framework) -> Flask:
 
             if framework.plugin_loader.load_plugin(plugin_name):
                 framework.plugin_loader.register_commands(plugin_name)
+                # 记录插件来源（repo/branch/sub_path），供后续 check/update 定位仓库
+                _persist_plugin_github_meta(plugin_name, repo, branch, sub_path)
                 # 安装成功：清理 .bak 残留，避免被 discover() 当成插件加载
                 if backup_dir and os.path.isdir(backup_dir):
                     shutil.rmtree(backup_dir, ignore_errors=True)
