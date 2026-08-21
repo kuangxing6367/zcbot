@@ -169,37 +169,12 @@ ctx.send_msg / ctx.api → onebot_api → 上报发送
 
 ## 九、官方插件开发实例（引入部分官方插件文档）
 
-> 把散落在各插件目录的开发文档在此串联，作为「框架能力 → 真实实现」的参考。每个实例都指向其完整文档。
+> 官方插件的完整开发文档已整合到 [官方插件开发实例](official-plugins-dev.md)，消除散落在各插件目录的割裂。
+> 该篇给出「能力 → 实现步骤 → 代码示例」，可直接照做：
 
-### 9.1 custom_ui — 模板化接管 Web 面板
-
-**场景**：从 GitHub 拉取网页模板 zip，用户可下载/切换/激活，一键接管后台。
-
-**关键机制**（完整文档见 `plugins/custom_ui/docs/INDEX.md`）：
-- 模板 zip 结构：`index.html` + `css/` + `js/` + `img/`，解压到 `plugins_dat/custom_ui/templates/<name>/`。
-- 接管：`ctx.override_webui()` + 写 `override.txt`；根路由 `/` 重定向到 `/custom_ui/`。
-- 模板内可调框架 API（如 `/api/dashboard`、`/api/runtime/stats`、`/api/plugins`、`/api/runtime_logs`），需 `Authorization: Bearer <token>`。
-- 管理页 `manage.html` 通过 `/api/custom_ui/templates` 列远程模板、下载、切换激活。
-- **开发者这样做**：写一个原生 HTML+CSS+JS 的 `index.html`，调用上述 API 即可做一个现代化面板；打包成 zip 放进插件仓库 `webui/` 目录，市场里就能一键切换。
-
-### 9.2 image_renderer — 原生扩展（Rust .pyd/.so）
-
-**场景**：高性能图片渲染，按运行架构强制绑定原生扩展，缺失时自动回退 PIL。
-
-**关键机制**（完整文档见 `plugins/image_renderer/README.md` 与 `plugins/image_renderer/native/README.md`）：
-- 原生模块：`bin/win64/zcbot_render.pyd`（Windows）/ `bin/linux64/zcbot_render.so`（Linux）。
-- 插件 `import zcbot_render` 调用底层 Canvas API；加载失败自动回退纯 PIL 实现。
-- 编译：`native/` 下 Rust 工程，`cargo build --release` 产出 `.pyd/.so` 放入 `bin/<平台>/`。
-- **开发者这样做**：需要高性能/底层能力时，用 Rust/C 写扩展，Python 侧 `try/except ImportError` 回退，保证跨平台可用。
-
-### 9.3 复杂插件模式（llm_chat / broadcast）
-
-复杂插件通常组合多项能力：
-- **配置面板**：`_conf_schema.json` 暴露模型/密钥/人格等。
-- **数据库**：`ctx.create_table` 存长期记忆/上下文。
-- **WebUI 控制台**：`ctx.webui` 提供聊天/管理页；`ctx.dashboard_card` 在仪表盘挂卡片。
-- **定时/事件**：`ctx.task` 做清理，`ctx.on` 订阅消息做拦截。
-- 参考实现源码：`plugins/llm_chat/main.py`、`plugins/broadcast/main.py`。
+- **9.1 custom_ui — 模板化接管 Web 面板**：模板 zip 结构、URL 规则、模板内调用框架 API、打包发布、`override_webui` 接管机制、`/api/custom_ui/*` 全部接口、二次开发要点。
+- **9.2 image_renderer — 原生扩展（Rust + pyo3）**：架构绑定、`Canvas` 链式图元 API、图像处理函数、`render_list`/options、CI 与本地编译、自动回退 PIL 机制。
+- **9.3 复杂插件模式（llm_chat / broadcast）**：配置面板 + 数据库 + WebUI 控制台 + 定时/事件的组合骨架。
 
 ---
 
