@@ -1,5 +1,21 @@
 # 更新日志
 
+## v1.0.1
+
+修复版，聚焦稳定性、内存与安全优化。
+
+### 优化
+
+- **图片渲染字体缓存改为 LRU 上限**（`plugins/image_renderer`）：`_FONT_CACHE` 原来无上限，每增加一个字号就常驻约 8MB 字体对象，长期运行会无限增长导致内存泄漏；现在最多缓存 16 个字号（约 128MB 上限），超限自动淘汰最旧条目。
+- **`ctx.get_config` 加 30 秒 TTL 缓存**（`framework/ctx.py`）：原来每次读取插件配置都同步查库，async handler 里会阻塞事件循环；现在带短时缓存，命中即返回。
+
+### 修复
+
+- **`X-Forwarded-For` 直接信任（安全）**：`get_client_ip()` 原来无条件采信 `X-Forwarded-For`，攻击者可伪造 IP 绕过全局黑名单 / 登录限速，甚至配合双请求认证远程封禁任意 IP（DoS）。现改为仅当来源 IP 命中 `security.trusted_proxies` 白名单时才采信 `X-Forwarded-For`，默认全部使用 `remote_addr`。
+- **Web API 增加 CORS 支持**：自定义网页 / 第三方面板跨源调用 8081 API 时不再被浏览器 CORS 策略拦截；默认反射请求方 Origin（兼容带凭据的跨域），可通过 `security.cors_allowed_origins` 收紧为指定来源。
+
+---
+
 ## v1.0.0（正式版）
 
 首个正式版。相比于公测版，重点强化了 Web 前端的可扩展性、健壮性与个性化能力。
