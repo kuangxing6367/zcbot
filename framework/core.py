@@ -9,12 +9,15 @@
   避免每条消息同步写库阻塞事件循环
 """
 import asyncio
+import gc
 import logging
 import logging.handlers
 import os
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
+
+import psutil
 
 from framework.config import load_config
 from framework.db import init_db
@@ -265,6 +268,12 @@ class Framework:
         self._running = False
         self.loop = None  # 主事件循环，由 start() 设置
 
+        # 内存看门狗参数（超限自动清理缓存 + 强制 GC）
+        mem_cfg = self.config.get('memory', {})
+        self._memory_limit_mb = mem_cfg.get('limit_mb', 120)
+        self._memory_check_interval = mem_cfg.get('check_interval', 30)
+        self._memory_watchdog_task = None
+
         logger.info("框架核心引擎初始化完成")
 
     def _migrate_legacy_data_dirs(self):
@@ -403,6 +412,15 @@ class Framework:
         # 6. 启动插件注册心跳（异步任务）
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="heartbeat")
 
+        # 6.5 启动内存看门狗（超限自动清理缓存 + 强制 GC）
+        self._memory_watchdog_task = asyncio.create_task(
+            self._memory_watchdog_loop(), name="memory-watchdog"
+        )
+        logger.info(
+            f"内存看门狗已启动：限制 {self._memory_limit_mb}MB，"
+            f"检查间隔 {self._memory_check_interval}s"
+        )
+
         # 7. 启动 WebSocket 服务端（运行在主事件循环）
         self.ws_server.start_async()
 
@@ -439,6 +457,40 @@ class Framework:
                 break
             except Exception as e:
                 logger.error(f"插件注册心跳异常: {e}")
+
+    async def _memory_watchdog_loop(self):
+        """内存看门狗：周期检查 RSS，超限时清理框架级缓存并强制 GC"""
+        process = psutil.Process()
+        while self._running:
+            try:
+                await asyncio.sleep(self._memory_check_interval)
+                if not self._running:
+                    break
+                rss_mb = process.memory_info().rss / 1024 / 1024
+                if rss_mb > self._memory_limit_mb:
+                    logger.warning(
+                        f"[内存看门狗] RSS {rss_mb:.1f}MB 超过限制 {self._memory_limit_mb}MB，触发清理"
+                    )
+                    # 1. 清理框架级角色缓存
+                    from framework.event import _user_role_cache, _group_role_cache
+                    cache_before = len(_user_role_cache) + len(_group_role_cache)
+                    _user_role_cache.clear()
+                    _group_role_cache.clear()
+                    # 2. 清理 stats_writer 聚合计数（高频但不关键）
+                    if hasattr(self, 'stats_writer'):
+                        self.stats_writer._cmd_hits.clear()
+                        self.stats_writer._kw_hits.clear()
+                    # 3. 强制 GC 回收循环引用
+                    collected = gc.collect()
+                    after_rss = process.memory_info().rss / 1024 / 1024
+                    logger.info(
+                        f"[内存看门狗] 清理完成：缓存 {cache_before} 条，GC 回收 {collected} 对象，"
+                        f"RSS {rss_mb:.1f}→{after_rss:.1f}MB（节省 {rss_mb - after_rss:.1f}MB）"
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[内存看门狗] 异常: {e}")
 
     def _auto_heal_plugin_deps(self):
         """
@@ -697,6 +749,15 @@ class Framework:
             except (asyncio.CancelledError, Exception):
                 pass
             self._heartbeat_task = None
+
+        # 停止内存看门狗
+        if self._memory_watchdog_task:
+            self._memory_watchdog_task.cancel()
+            try:
+                await self._memory_watchdog_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._memory_watchdog_task = None
 
         # 停止 WebSocket 服务端
         try:
