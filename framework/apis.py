@@ -1623,7 +1623,7 @@ def create_web_app(framework) -> Flask:
     @app.route('/api/plugins/<plugin_name>/check_update', methods=['GET'])
     @require_auth
     def check_plugin_update(plugin_name):
-        """检查插件是否有 GitHub 更新"""
+        """检查插件是否有 GitHub 更新（基于版本号对比，借鉴 Koishi registry 版本机制）"""
         if not plugin_name.replace('_', '').replace('-', '').isalnum():
             return jsonify({'code': 400, 'msg': '非法插件名'}), 400
 
@@ -1631,36 +1631,56 @@ def create_web_app(framework) -> Flask:
             yaml_data = framework.plugin_loader.read_plugin_yaml(plugin_name)
             github = yaml_data.get('github', {})
             repo = github.get('repo', '')
-
-            if not repo:
-                return jsonify({'code': 400, 'msg': '该插件未配置 GitHub 更新源（plugin.yaml 中缺少 github.repo）'}), 400
-
             branch = github.get('branch', 'main')
 
-            # 规范化 repo 地址
-            if repo.startswith('https://github.com/'):
-                repo = repo.replace('https://github.com/', '').rstrip('/')
-            elif repo.startswith('http://github.com/'):
-                repo = repo.replace('http://github.com/', '').rstrip('/')
-
-            # 查询 GitHub API 获取最新 commit
-            api_url = f"https://api.github.com/repos/{repo}/commits/{branch}"
-            headers = {'Accept': 'application/vnd.github.v3+json'}
-            resp = requests.get(api_url, headers=headers, timeout=15)
-
-            if resp.status_code == 404:
-                return jsonify({'code': 404, 'msg': f'GitHub 仓库或分支不存在: {repo}@{branch}'}), 404
-            if resp.status_code != 200:
-                return jsonify({'code': 500, 'msg': f'GitHub API 返回 {resp.status_code}'}), 500
-
-            data = resp.json()
-            latest_sha = data.get('sha', '')[:7]
-            commit_msg = data.get('commit', {}).get('message', '').split('\n')[0]
-            commit_date = data.get('commit', {}).get('author', {}).get('date', '')
-            author = data.get('commit', {}).get('author', {}).get('name', '')
-
-            # 当前版本
+            # 当前本地版本（来自 plugin.yaml 或 __plugin_meta__）
             current_version = yaml_data.get('version', 'unknown')
+
+            # 从 registry.json 读取官方最新版本（优先），否则回退 GitHub commit
+            latest_version = None
+            latest_sha = ''
+            commit_msg = ''
+            commit_date = ''
+            author = ''
+            has_update = False
+
+            reg = _load_market_registry()
+            reg_entry = next((p for p in reg.get('plugins', []) if p['name'] == plugin_name), None)
+            if reg_entry and reg_entry.get('version'):
+                latest_version = reg_entry['version']
+                # 版本号对比（简单字符串/semver 比较）
+                has_update = _version_gt(latest_version, current_version)
+            else:
+                # registry 无该插件：回退到 GitHub commits API（带代理候选）
+                if not repo:
+                    return jsonify({'code': 400, 'msg': '该插件未在官方市场注册，且 plugin.yaml 缺少 github.repo'}), 400
+                if repo.startswith('https://github.com/'):
+                    repo = repo.replace('https://github.com/', '').rstrip('/')
+                elif repo.startswith('http://github.com/'):
+                    repo = repo.replace('http://github.com/', '').rstrip('/')
+                api_url = f"https://api.github.com/repos/{repo}/commits/{branch}"
+                headers = {'Accept': 'application/vnd.github.v3+json'}
+                last_err = ''
+                for cand in _github_url_candidates(api_url):
+                    try:
+                        resp = requests.get(cand, headers=headers, timeout=15)
+                        if resp.status_code == 200:
+                            try:
+                                data = resp.json()
+                            except ValueError:
+                                last_err = f'非 JSON 响应: {cand}'
+                                continue
+                            latest_sha = data.get('sha', '')[:7]
+                            commit_msg = data.get('commit', {}).get('message', '').split('\n')[0]
+                            commit_date = data.get('commit', {}).get('author', {}).get('date', '')
+                            author = data.get('commit', {}).get('author', {}).get('name', '')
+                            has_update = True
+                            break
+                        last_err = f'HTTP {resp.status_code}'
+                    except Exception as e:
+                        last_err = str(e)
+                if not latest_sha:
+                    return jsonify({'code': 500, 'msg': f'GitHub API 获取失败: {last_err}'}), 500
 
             return jsonify({
                 'code': 0,
@@ -1669,11 +1689,12 @@ def create_web_app(framework) -> Flask:
                     'repo': repo,
                     'branch': branch,
                     'current_version': current_version,
+                    'latest_version': latest_version or 'unknown',
                     'latest_commit': latest_sha,
                     'commit_message': commit_msg,
                     'commit_date': commit_date,
                     'author': author,
-                    'has_update': True,  # 简化：总是允许更新
+                    'has_update': has_update,
                 }
             })
         except requests.exceptions.Timeout:
@@ -1681,6 +1702,41 @@ def create_web_app(framework) -> Flask:
         except Exception as e:
             logger.error(f"检查更新失败: {e}")
             return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    def _version_gt(a, b):
+        """语义化版本比较：a > b 返回 True（无法解析时按字符串比较）"""
+
+        def _parse(v):
+            v = str(v).lstrip('vV^~>=< ').strip()
+            parts = re.split(r'[.\-+]', v)
+            out = []
+            for p in parts:
+                m = re.match(r'(\d+)', p)
+                out.append(int(m.group(1)) if m else 0)
+            return out
+
+        try:
+            pa, pb = _parse(a), _parse(b)
+            n = max(len(pa), len(pb))
+            pa += [0] * (n - len(pa))
+            pb += [0] * (n - len(pb))
+            return pa > pb
+        except Exception:
+            return str(a) != str(b)
+
+    def _load_market_registry() -> dict:
+        """加载官方插件市场 registry（默认源 + 镜像源兜底），返回 {'plugins': [...]}"""
+        sources = [_DEFAULT_MARKET] + _MIRROR_MARKETS
+        last_err = ''
+        for src in sources:
+            try:
+                plugins = _fetch_market_source(src)
+                if plugins:
+                    return {'plugins': plugins}
+            except Exception as e:
+                last_err = str(e)
+        logger.warning(f"加载官方市场 registry 失败: {last_err}")
+        return {'plugins': []}
 
     @app.route('/api/plugins/<plugin_name>/update', methods=['POST'])
     @require_auth
@@ -1720,43 +1776,10 @@ def create_web_app(framework) -> Flask:
                 shutil.move(target_dir, backup_dir)
 
             try:
-                ok_dl, dl_msg = _download_plugin_tree(repo, branch, sub_path, target_dir)
+                # 复用市场安装逻辑：优先单插件 zip（gh-pages/packages/<name>.zip），失败回退文件树/整仓
+                ok_dl, dl_msg = _download_and_extract_plugin(repo, branch, sub_path, target_dir)
                 if not ok_dl:
-                    # 回退：整仓 ZIP（代理 → 镜像 → 直连，逐个校验 ZIP 有效性）
-                    zip_url = f"https://github.com/{repo}/archive/refs/heads/{branch}.zip"
-                    logger.info(f"文件树方式失败（{dl_msg}），回退 ZIP")
-                    tmp_zip = _download_zip_file(_github_url_candidates(zip_url))
-                    if tmp_zip is None:
-                        raise RuntimeError(f'下载的 ZIP 文件无效（{dl_msg}）')
-                    try:
-                        with zipfile.ZipFile(tmp_zip, 'r') as zf:
-                            names = zf.namelist()
-                            prefix = names[0].split('/')[0] if names else ''
-                            for name in names:
-                                if name.endswith('/'):
-                                    continue
-                                if prefix and name.startswith(prefix + '/'):
-                                    rel_path = name[len(prefix) + 1:]
-                                else:
-                                    rel_path = name
-                                if not rel_path:
-                                    continue
-                                if sub_path and sub_path != '/':
-                                    sp = sub_path.lstrip('/')
-                                    if not rel_path.startswith(sp + '/') and rel_path != sp:
-                                        continue
-                                    rel_path = rel_path[len(sp) + 1:] if rel_path.startswith(sp + '/') else rel_path
-                                if not rel_path:
-                                    continue
-                                if '..' in rel_path or rel_path.startswith('/'):
-                                    continue
-                                dest = os.path.join(target_dir, rel_path)
-                                if os.path.dirname(dest):
-                                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                                with open(dest, 'wb') as f:
-                                    f.write(zf.read(name))
-                    finally:
-                        os.unlink(tmp_zip)
+                    raise RuntimeError(f'更新下载失败: {dl_msg}')
             except Exception as e:
                 # 下载失败：回滚备份
                 if backup_dir and os.path.isdir(backup_dir):
