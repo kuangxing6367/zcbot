@@ -734,15 +734,15 @@ class PluginLoader:
                     shutil.move(fpath, dest)
                     logger.debug(f"[{plugin_name}] plugin.yaml 已更新")
                     continue
-                # 其他配置文件（_conf_schema.json / README 等）：plugins_dat 已有同名文件
-                # 视为用户修改过，不覆盖
-                if not os.path.exists(dest):
-                    shutil.move(fpath, dest)
-                    logger.debug(f"[{plugin_name}] 配置文件已迁移: {name}")
-                else:
-                    # plugins_dat 已存在，删除 plugins 下的副本
-                    os.remove(fpath)
-                    logger.debug(f"[{plugin_name}] 配置文件已存在于 plugins_dat，跳过: {name}")
+                # 其他配置文件（_conf_schema.json / README 等）：随插件更新始终覆盖
+                # 保证 WebUI 能显示新版配置字段
+                if os.path.exists(dest):
+                    try:
+                        os.remove(dest)
+                    except Exception as e:
+                        logger.warning(f"[{plugin_name}] 删除旧 {name} 失败: {e}")
+                shutil.move(fpath, dest)
+                logger.debug(f"[{plugin_name}] 配置文件已更新: {name}")
 
     def migrate_legacy_configs(self):
         """
@@ -904,30 +904,46 @@ class PluginLoader:
     def init_plugin_configs(self, plugin_name: str):
         """
         根据 _conf_schema.json 初始化插件配置到 plugin_configs 表
-        仅在配置项不存在时插入默认值，不覆盖用户已修改的配置
+        - 新增字段：插入默认值
+        - 不再存在于 schema 的旧字段：删除
+        - 已有字段：保持用户已设的值不动
         """
         schema = self.read_config_schema(plugin_name)
         if not schema:
             return
 
-        for key, spec in schema.items():
-            if not isinstance(spec, dict):
-                continue
-            default = spec.get('default')
-            # 检查是否已存在
+        schema_keys = set(schema.keys())
+        try:
+            rows = self.db.query(
+                "SELECT config_key FROM plugin_configs WHERE plugin_name = %s",
+                (plugin_name,)
+            )
+            existing_keys = {r['config_key'] for r in (rows or [])}
+        except Exception as e:
+            logger.error(f"[{plugin_name}] 读取现有配置失败: {e}")
+            return
+
+        for key in existing_keys - schema_keys:
             try:
-                existing = self.db.query_one(
-                    "SELECT id FROM plugin_configs WHERE plugin_name = %s AND config_key = %s",
+                self.db.execute(
+                    "DELETE FROM plugin_configs WHERE plugin_name = %s AND config_key = %s",
                     (plugin_name, key)
                 )
-                if not existing:
-                    # 插入默认值
-                    config_value = json.dumps(default, ensure_ascii=False) if default is not None else 'null'
-                    self.db.execute(
-                        "INSERT INTO plugin_configs (plugin_name, config_key, config_value) "
-                        "VALUES (%s, %s, %s)",
-                        (plugin_name, key, config_value)
-                    )
+                logger.debug(f"[{plugin_name}] 已删除废弃配置: {key}")
+            except Exception as e:
+                logger.warning(f"[{plugin_name}] 删除废弃配置 {key} 失败: {e}")
+
+        for key, spec in schema.items():
+            if not isinstance(spec, dict) or key in existing_keys:
+                continue
+            default = spec.get('default')
+            cv = json.dumps(default, ensure_ascii=False) if default is not None else 'null'
+            try:
+                self.db.execute(
+                    "INSERT INTO plugin_configs (plugin_name, config_key, config_value) "
+                    "VALUES (%s, %s, %s)",
+                    (plugin_name, key, cv)
+                )
             except Exception as e:
                 logger.error(f"[{plugin_name}] 初始化配置 {key} 失败: {e}")
 

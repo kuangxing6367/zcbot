@@ -1312,7 +1312,17 @@ def create_web_app(framework) -> Flask:
                         return jsonify({'code': 400, 'msg': f'非法路径: {name}'}), 400
 
                 # 备份旧插件（如果存在）
+                backup_dir = None
                 if os.path.isdir(target_dir):
+                    # 先清理该插件的历史 .bak 目录
+                    for old in os.listdir(plugins_dir):
+                        if old.startswith(plugin_name + '.bak.'):
+                            old_path = os.path.join(plugins_dir, old)
+                            try:
+                                shutil.rmtree(old_path, ignore_errors=True)
+                                logger.debug(f"已清理旧备份: {old}")
+                            except Exception:
+                                pass
                     backup_dir = target_dir + f'.bak.{int(time.time())}'
                     shutil.move(target_dir, backup_dir)
 
@@ -1335,7 +1345,14 @@ def create_web_app(framework) -> Flask:
             framework.plugin_loader.split_installed_files(plugin_name)
 
             # 尝试加载插件
-            if framework.plugin_loader.load_plugin(plugin_name):
+            load_ok = framework.plugin_loader.load_plugin(plugin_name)
+            # 无论加载成功与否，清理 .bak（新文件已在 target_dir，旧目录不再需要）
+            if backup_dir and os.path.isdir(backup_dir):
+                try:
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                except Exception:
+                    pass
+            if load_ok:
                 framework.plugin_loader.register_commands(plugin_name)
                 dep_info = framework.plugin_loader.get_missing_deps(plugin_name)
                 msg = f'插件 [{plugin_name}] 上传并加载成功'
