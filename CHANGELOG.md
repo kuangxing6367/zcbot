@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.2.0-beta.1
+
+### 修复
+
+- **插件上传软链接校验回归**：v1.1.2 引入的 ZIP 符号链接检查使用了 `ZipInfo.is_symlink()`，但在本机 Python（zipfile 未提供该方法）下会抛 `AttributeError: 'ZipInfo' object has no attribute 'is_symlink'`，导致任何插件 ZIP 上传失败。已改为兼容写法：通过 `external_attr` 高 16 位 Unix 权限判断符号链接（`(external_attr >> 16) & 0xF000 == 0xA000`），所有 Python 版本均可正常工作。
+
+---
+
 ## v1.2.0-beta.0
 
 ### 新增
