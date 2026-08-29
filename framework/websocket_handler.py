@@ -151,6 +151,8 @@ class WebSocketServer:
         self._dispatch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_EVENTS)
         self._dispatch_pending = 0   # 排队中的事件任务数
         self._dispatch_dropped = 0   # 因排队超限丢弃的事件数
+        # 每个连接的事件派发链尾（保证同一连接事件按到达顺序串行处理，修复 A1 乱序）
+        self._conn_chains = {}
         self._server_task = asyncio.create_task(self._serve(), name="ws-server")
         return self._server_task
 
@@ -286,7 +288,12 @@ class WebSocketServer:
                         self._dispatch_dropped += 1
                         continue
                     self._dispatch_pending += 1
-                    task = asyncio.create_task(self._dispatch(data, bot_name))
+                    # 同一连接：先等待上一条事件处理完毕，再处理本条，保证顺序
+                    prev = self._conn_chains.get(bot_name)
+                    task = asyncio.create_task(
+                        self._dispatch_ordered(prev, data, bot_name)
+                    )
+                    self._conn_chains[bot_name] = task
                     task.add_done_callback(self._on_dispatch_done)
 
         except websockets.ConnectionClosed:
@@ -301,6 +308,8 @@ class WebSocketServer:
                 # 仅当当前注册的仍是本连接时才移除（同名重连后旧连接断开不得误删新连接）
                 if self._connections.get(bot_name) is ws:
                     self._connections.pop(bot_name, None)
+            # 清理该连接的事件派发链（避免旧 task 引用残留）
+            self._conn_chains.pop(bot_name, None)
             logger.info(f"[{bot_name}] OneBot 客户端已断开")
             log_broker.log_connection(bot_name, 'disconnect')
             try:
@@ -315,6 +324,18 @@ class WebSocketServer:
     def _on_dispatch_done(self, task):
         """事件任务完成回调（递减排队计数；异常已在 _dispatch 内兜底）"""
         self._dispatch_pending -= 1
+
+    async def _dispatch_ordered(self, prev, data: dict, bot_name: str):
+        """
+        带顺序保证的事件派发包装：同一连接的上一条事件未完成时，
+        先 await 上一条，再处理本条，从而保证同连接事件按到达顺序处理（修复 A1）。
+        """
+        if prev is not None and not prev.done():
+            try:
+                await prev
+            except Exception:
+                pass  # 前一条的异常已在 _dispatch 内记录，这里仅等待它结束
+        await self._dispatch(data, bot_name)
 
     async def _dispatch(self, data: dict, bot_name: str):
         """有界并发处理一条事件（async handler 直接 await，sync handler 转线程）"""
