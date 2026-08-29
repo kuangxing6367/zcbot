@@ -1315,7 +1315,8 @@ def create_web_app(framework) -> Flask:
                 for name in names:
                     try:
                         info = zf.getinfo(name)
-                        if info.is_symlink():
+                        # external_attr 高 16 位是 Unix 权限；0xA000 表示符号链接
+                        if (info.external_attr >> 16) & 0xF000 == 0xA000:
                             return jsonify(
                                 {'code': 400, 'msg': f'拒绝解压符号链接: {name}'}
                             ), 400
