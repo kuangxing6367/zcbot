@@ -1,0 +1,1061 @@
+"""
+数据库操作模块
+支持 SQLite（默认）和 MySQL（可选），自动适配。
+
+设计原则：
+- 默认使用 SQLite，零配置开箱即用
+- 配置文件中配置 database.type: mysql 时使用 MySQL
+- 自动处理 %s → ? 占位符转换（插件无需修改 SQL 语法）
+- 自动处理 DDL 语法差异（ENGINE=、COMMENT、AUTO_INCREMENT 等）
+- 自动处理 NOW() → datetime 参数转换
+"""
+import functools
+import json
+import logging
+import os
+import re
+import sqlite3
+import time
+from threading import local
+
+logger = logging.getLogger('zcbot')
+
+# MySQL 连接断开类错误码（触发自动重连）
+_MYSQL_RECONNECT_ERRORS = {2006, 2013, 2055, 1927, 1040}
+# 连接断开类错误关键字（用于兜底判断）
+_MYSQL_RECONNECT_KEYWORDS = (
+    'server has gone away',
+    'lost connection',
+    'connection is closed',
+    'broken pipe',
+    'connection reset by peer',
+)
+
+# ── SQL 适配器 ──────────────────────────────────────────────────────
+
+# 预编译正则，加速替换
+_RE_ENGINE = re.compile(r'\s+ENGINE\s*=\s*\S+', re.IGNORECASE)
+_RE_CHARSET = re.compile(r'\s+(DEFAULT\s+)?(CHARSET|CHARACTER\s+SET)\s*=\s*\S+', re.IGNORECASE)
+_RE_COLLATE = re.compile(r'\s+COLLATE\s*=\s*\S+', re.IGNORECASE)
+_RE_COLLATE_INLINE = re.compile(r'\s+COLLATE\s+\S+', re.IGNORECASE)
+# COMMENT 'xxx'：用非贪婪匹配引号内容，支持引号内含括号/分号等特殊字符
+_RE_COMMENT = re.compile(r"\s+COMMENT\s+'[^']*'", re.IGNORECASE)
+# COMMENT='xxx'（MySQL 表级/列级等号写法）
+_RE_COMMENT_EQ = re.compile(r"\s+COMMENT\s*=\s*'[^']*'", re.IGNORECASE)
+_RE_AUTO_INCREMENT = re.compile(r'\s*AUTO_INCREMENT\b', re.IGNORECASE)
+_RE_UNSIGNED = re.compile(r'\s+UNSIGNED\b', re.IGNORECASE)
+_RE_FOR_UPDATE = re.compile(r'\s+FOR\s+UPDATE\b', re.IGNORECASE)
+# ON UPDATE CURRENT_TIMESTAMP（SQLite 不支持）
+_RE_ON_UPDATE = re.compile(r'\s+ON\s+UPDATE\s+[^\s,)]+', re.IGNORECASE)
+_RE_AFTER = re.compile(r'\s+AFTER\s+\S+', re.IGNORECASE)
+_RE_ON_DUP_KEY = re.compile(
+    r'\s+ON\s+DUPLICATE\s+KEY\s+UPDATE\s+(.+?)(?=\s*;|\s*$)',
+    re.IGNORECASE | re.DOTALL
+)
+# ENUM('a','b',...)：支持嵌套引号和逗号，匹配到对应的右括号
+_RE_ENUM = re.compile(r'\bENUM\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)', re.IGNORECASE)
+
+
+def _strip_mysql_ddl_syntax(sql: str) -> str:
+    """
+    将 MySQL DDL 语法翻译为 SQLite 兼容语法
+    只做语法层面的清理，不做逻辑转换
+    """
+    sql = _RE_ENGINE.sub('', sql)
+    sql = _RE_CHARSET.sub('', sql)
+    sql = _RE_COLLATE.sub('', sql)
+    sql = _RE_COLLATE_INLINE.sub('', sql)
+    sql = _RE_COMMENT.sub('', sql)
+    sql = _RE_COMMENT_EQ.sub('', sql)
+    sql = _RE_AUTO_INCREMENT.sub('', sql)
+    sql = _RE_UNSIGNED.sub('', sql)
+    sql = _RE_FOR_UPDATE.sub('', sql)
+    sql = _RE_ON_UPDATE.sub('', sql)
+    sql = _RE_AFTER.sub('', sql)
+
+    # 数据类型转换
+    sql = re.sub(r'\bBIGINT\b', 'INTEGER', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bTINYINT\s*\(\d+\)', 'INTEGER', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bTINYINT\b', 'INTEGER', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bVARCHAR\s*\(\d+\)', 'TEXT', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bDATETIME\b', 'TEXT', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bTIMESTAMP\b', 'TEXT', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bINT\s*\(\d+\)', 'INTEGER', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'(?<!\w)INT(?!\s*\(\d+)(?!\w)', 'INTEGER', sql, flags=re.IGNORECASE)
+    # ENUM(...) → TEXT（支持嵌套括号）
+    sql = _RE_ENUM.sub('TEXT', sql)
+
+    # UNIQUE KEY uk_name (col) → UNIQUE(col)
+    sql = re.sub(
+        r'\bUNIQUE\s+KEY\s+\S+\s+\(([^)]+)\)',
+        r'UNIQUE(\1)',
+        sql, flags=re.IGNORECASE
+    )
+    # INDEX idx_name (col) → 删除（SQLite DDL 内不建索引）
+    sql = re.sub(
+        r',?\s*\bINDEX\s+\S+\s*\([^)]+\)',
+        '',
+        sql, flags=re.IGNORECASE
+    )
+    # KEY uk_name (col) → 删除
+    sql = re.sub(
+        r',?\s*\bKEY\s+\S+\s*\([^)]+\)',
+        '',
+        sql, flags=re.IGNORECASE
+    )
+
+    # 清理多余的逗号（在 ) 前面）
+    sql = re.sub(r',\s*\)', ')', sql)
+
+    # 清理多余空格
+    sql = re.sub(r'\s+', ' ', sql).strip()
+
+    return sql
+
+
+def _convert_placeholders(sql: str) -> str:
+    """将 %s 占位符转换为 ?（SQLite 用）"""
+    return sql.replace('%s', '?')
+
+
+def _translate_sql_for_mysql(sql: str) -> str:
+    """SQLite 方言 DDL → MySQL 兼容（防御：AUTOINCREMENT → AUTO_INCREMENT；长列索引 → 前缀索引）"""
+    sql = sql.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+    return _mysql_prefix_indexes(sql)
+
+
+# 匹配 INDEX idx_name (col1, col2) / KEY idx_name (col)（普通索引；PRIMARY/UNIQUE/FULLTEXT 不处理）
+_RE_MYSQL_INDEX = re.compile(
+    r"^(INDEX|KEY)\s+(?:`?[A-Za-z0-9_]+`?\s+)?\(([^)]*)\)\s*$",
+    re.IGNORECASE)
+
+
+def _mysql_prefix_indexes(sql: str) -> str:
+    """
+    MySQL DDL 兼容：被索引的列若是 TEXT 或 VARCHAR 长度 > 191，
+    自动改写为前缀索引 `col`(191)，避免错误 1170（BLOB/TEXT column used in key specification）
+    与 MySQL 5.7+ 的 Specified key was too long。
+    仅处理 CREATE TABLE 语句；已有前缀（col(191)）的列不重复改写。
+    """
+    if not sql.lstrip().upper().startswith('CREATE TABLE'):
+        return sql
+
+    # 定位列定义区（最外层括号）
+    start = sql.find('(')
+    if start < 0:
+        return sql
+    depth = 0
+    in_str = False
+    quote = None
+    end = -1
+    for i in range(start, len(sql)):
+        c = sql[i]
+        if not in_str and c in ("'", '"'):
+            in_str, quote = True, c
+        elif in_str:
+            if c == quote:
+                in_str, quote = False, None
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end < 0:
+        return sql
+    body = sql[start + 1:end]
+
+    # 解析列名 → 类型（跳过索引/约束行）
+    col_types = {}
+    for part in _split_top_level(body):
+        m = re.match(r"^\s*`?(\w+)`?\s+(\w+(?:\([^)]*\))?)", part, re.IGNORECASE)
+        if m and m.group(2).upper() not in ('INDEX', 'KEY', 'PRIMARY', 'UNIQUE',
+                                             'CONSTRAINT', 'FULLTEXT', 'SPATIAL', 'CHECK'):
+            col_types[m.group(1)] = m.group(2).upper()
+
+    def _need_prefix(col: str) -> bool:
+        t = col_types.get(col)
+        if not t:
+            return False
+        if t.startswith('TEXT') or t.startswith('LONGTEXT') or t.startswith('MEDIUMTEXT'):
+            return True
+        m = re.match(r'VARCHAR\((\d+)\)', t)
+        return bool(m) and int(m.group(1)) > 191
+
+    def _fix_index(part: str) -> str:
+        m = _RE_MYSQL_INDEX.match(part)
+        if not m:
+            return part
+        idx_open = part.find('(', m.end(1))
+        head = part[:idx_open + 1]
+        cols_text = part[idx_open + 1:part.rfind(')')]
+        fixed = []
+        for col in cols_text.split(','):
+            col = col.strip()
+            name = col.split('(')[0].strip().strip('`')
+            if '(' not in col and _need_prefix(name):
+                fixed.append(f"`{name}`(191)")
+            else:
+                fixed.append(col)
+        return head + ', '.join(fixed) + ')'
+
+    new_parts = [_fix_index(p) for p in _split_top_level(body)]
+    new_body = ', '.join(new_parts)
+    if new_body == body:
+        return sql
+    return sql[:start + 1] + new_body + sql[end:]
+
+
+def _is_ddl_or_dml(sql: str) -> bool:
+    """判断是否需要语法翻译（跳过前导注释行）DDL + INSERT/UPDATE/DELETE 都需要"""
+    for line in sql.strip().splitlines():
+        line = line.strip()
+        if not line or line.startswith('--'):
+            continue
+        return line.upper().startswith((
+            'CREATE', 'ALTER', 'DROP', 'INSERT', 'UPDATE', 'DELETE', 'REPLACE'
+        ))
+    return False
+
+
+def _split_top_level(text: str) -> list:
+    """
+    按顶层逗号分割（忽略括号内与字符串内的逗号）
+    用于解析 IF(cond, a, b) 的三个参数
+    """
+    parts = []
+    depth = 0
+    in_str = False
+    quote = None
+    cur = []
+    for c in text:
+        if not in_str and c in ("'", '"'):
+            in_str = True
+            quote = c
+            cur.append(c)
+            continue
+        if in_str:
+            cur.append(c)
+            if c == quote:
+                in_str = False
+            continue
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+        if c == ',' and depth == 0:
+            parts.append(''.join(cur).strip())
+            cur = []
+            continue
+        cur.append(c)
+    if cur:
+        parts.append(''.join(cur).strip())
+    return parts
+
+
+def _if_to_case(sql: str) -> str:
+    """
+    将 MySQL 的 IF(cond, a, b) 转换为 SQLite 兼容的 CASE WHEN cond THEN a ELSE b END
+    支持嵌套括号与字符串字面量，IFNULL 单独用正则处理
+    """
+    out = []
+    i = 0
+    n = len(sql)
+    in_str = False
+    quote = None
+    while i < n:
+        ch = sql[i]
+        if not in_str and ch in ("'", '"'):
+            in_str = True
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if in_str:
+            out.append(ch)
+            if ch == quote:
+                in_str = False
+            i += 1
+            continue
+        # 匹配单词边界后的 IF(
+        if (sql[i:i + 2].upper() == 'IF'
+                and (i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] == '_'))):
+            k = i + 2
+            while k < n and sql[k] in ' \t\n\r':
+                k += 1
+            if k < n and sql[k] == '(':
+                # 扫描到匹配的右括号
+                j = k + 1
+                depth = 1
+                s_in_str = False
+                s_quote = None
+                while j < n and depth > 0:
+                    c = sql[j]
+                    if not s_in_str and c in ("'", '"'):
+                        s_in_str = True
+                        s_quote = c
+                    elif s_in_str:
+                        if c == s_quote:
+                            s_in_str = False
+                    elif c == '(':
+                        depth += 1
+                    elif c == ')':
+                        depth -= 1
+                    j += 1
+                if depth == 0:
+                    body = sql[k + 1:j - 1]
+                    parts = _split_top_level(body)
+                    if len(parts) == 3:
+                        cond, a, b = parts
+                        out.append(f"CASE WHEN {cond} THEN {a} ELSE {b} END")
+                        i = j
+                        continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+
+def _translate_mysql_funcs(sql: str) -> str:
+    """
+    将 MySQL 专有函数转换为 SQLite 兼容语法：
+    - IF(cond, a, b) → CASE WHEN cond THEN a ELSE b END
+    - IFNULL(a, b)   → COALESCE(a, b)
+    - NOW()          → 由 execute/insert 的 _replace_now 处理
+    """
+    # IFNULL 参数简单，用正则即可
+    sql = re.sub(
+        r'\bIFNULL\s*\(\s*([^,()]+)\s*,\s*([^,()]+)\s*\)',
+        r'COALESCE(\1, \2)',
+        sql, flags=re.IGNORECASE
+    )
+    return _if_to_case(sql)
+
+
+def _translate_sql_for_sqlite(sql: str) -> str:
+    """
+    完整翻译 SQL 供 SQLite 使用：
+    1. DDL 语法清理
+    2. MySQL 专有函数（IF/IFNULL）→ SQLite 兼容
+    3. ON DUPLICATE KEY UPDATE → ON CONFLICT DO UPDATE
+    4. INSERT IGNORE → INSERT OR IGNORE
+    5. NOW() → 由调用方处理参数
+    6. %s → ?
+    所有需要翻译的 SQL（DDL/DML）都走这个函数，统一入口
+    """
+    needs_translate = _is_ddl_or_dml(sql)
+
+    if needs_translate:
+        sql = _strip_mysql_ddl_syntax(sql)
+
+        # MySQL 专有函数 → SQLite 兼容（IF / IFNULL）
+        sql = _translate_mysql_funcs(sql)
+
+        # ON DUPLICATE KEY UPDATE → ON CONFLICT DO UPDATE SET
+        if 'ON DUPLICATE KEY' in sql.upper() and 'INSERT' in sql.upper():
+            sql = _on_duplicate_to_sqlite(sql)
+
+        # INSERT IGNORE → INSERT OR IGNORE
+        sql = re.sub(r'\bINSERT\s+IGNORE\b', 'INSERT OR IGNORE', sql, flags=re.IGNORECASE)
+
+    # %s → ?（所有 SQL 都需要转）
+    sql = _convert_placeholders(sql)
+
+    return sql
+
+
+# ── 数据库引擎 ──────────────────────────────────────────────────────
+
+class Database:
+    """
+    数据库连接管理器
+    支持 SQLite（默认）和 MySQL（可选）
+    """
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.db_type = config.get('type', 'sqlite').lower()
+        self._local = local()
+        self._lock = __import__('threading').Lock()
+        # MySQL 连接保活/重连配置
+        self._ping_interval = float(config.get('ping_interval', 5.0))   # 空闲多久 ping 一次检测连接是否存活
+        self._connect_timeout = float(config.get('connect_timeout', 10))  # 建立连接超时（秒）
+        self._read_timeout = float(config.get('read_timeout', 30))     # 读超时（秒），避免断连后无限卡住
+        self._write_timeout = float(config.get('write_timeout', 30))   # 写超时（秒）
+        self._max_reconnect = int(config.get('max_reconnect', 3))      # 单次操作最大自动重连次数
+        # MySQL 连接池参数（DBUtils PooledDB，替代每线程一连接方案）
+        self._pool_max = int(config.get('pool_size', 10) or 10)           # 最大连接数
+        self._pool_min_cached = int(config.get('min_cached', 0) or 0)     # 最小空闲连接
+        self._pool_max_cached = int(config.get('max_cached', 0) or 0)     # 最大空闲连接
+        self._pool_wait_timeout = float(config.get('pool_wait_timeout', 30) or 30)  # 池满等待超时（秒）
+        if self._pool_max_cached <= 0:
+            # 未配置时默认与最大连接数一致（避免默认 0 导致空闲连接被全部回收、频繁新建）
+            self._pool_max_cached = self._pool_max
+        self._pool = None
+
+        if self.db_type == 'mysql':
+            self._init_mysql()
+        else:
+            # 启动警告：SQLite 模式下配置了 MySQL 字段，字段将被忽略
+            mysql_only = ['host', 'port', 'user', 'password']
+            configured = [k for k in mysql_only if config.get(k) not in (None, '')]
+            if configured:
+                logger.warning(
+                    f"检测到 database.type = sqlite，但配置了 MySQL 字段（{', '.join(configured)}），"
+                    f"这些字段将被忽略。如果要用 MySQL，请将 type 改为 mysql。"
+                )
+            self._init_sqlite()
+
+    def _init_sqlite(self):
+        """初始化 SQLite"""
+        db_path = self.config.get('path', 'data/zcbot.db')
+        # 确保目录存在
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+        self._db_path = db_path
+        logger.info(f"SQLite 数据库已初始化: {db_path}")
+
+    def _init_mysql(self):
+        """初始化 MySQL 连接池（检测到 MySQL 配置时，自动安装 pymysql/DBUtils）"""
+        try:
+            import pymysql
+            from pymysql.cursors import DictCursor
+            self._pymysql = pymysql
+            self._DictCursor = DictCursor
+            logger.info("MySQL 模式已启用")
+        except ImportError:
+            logger.warning("MySQL 模式需要 pymysql，正在自动安装...")
+            import subprocess
+            import sys
+            try:
+                result = subprocess.run(
+                    [sys.executable, '-m', 'pip', 'install', 'pymysql', 'DBUtils'],
+                    capture_output=True, text=True, timeout=120
+                )
+                if result.returncode == 0:
+                    logger.info("pymysql 安装成功，重新导入...")
+                    import pymysql
+                    from pymysql.cursors import DictCursor
+                    self._pymysql = pymysql
+                    self._DictCursor = DictCursor
+                else:
+                    logger.error(f"pymysql 自动安装失败: {result.stderr}")
+                    raise ImportError("pymysql 安装失败，请手动执行: pip install pymysql DBUtils")
+            except Exception as e:
+                logger.error(f"pymysql 自动安装异常: {e}")
+                raise ImportError(f"无法自动安装 pymysql: {e}")
+
+        # 创建 DBUtils 连接池（真正限制连接数：空闲回收、坏连接自动重建、池满阻塞）
+        try:
+            from dbutils.pooled_db import PooledDB
+        except ImportError:
+            logger.error("缺少 DBUtils，请手动执行: pip install DBUtils")
+            raise ImportError("缺少 DBUtils，请手动执行: pip install DBUtils")
+        self._pool = PooledDB(
+            creator=self._pymysql,
+            maxconnections=self._pool_max,          # 最大连接数（pool_size）
+            mincached=self._pool_min_cached,        # 启动即建的最小空闲连接（min_cached）
+            maxcached=self._pool_max_cached,        # 最大空闲连接，超过自动关闭释放（max_cached）
+            maxshared=0,
+            blocking=False,                         # 池满不无限等待，由 _get_conn_mysql 有界重试
+            setsession=[],
+            reset=True,                             # 借出时回滚残留事务
+            ping=1,                                 # 每次借出 ping 验证，坏连接自动丢弃重建
+            host=self.config.get('host', '127.0.0.1'),
+            port=int(self.config.get('port', 3306)),
+            user=self.config.get('user', 'root'),
+            password=self.config.get('password', ''),
+            database=self.config.get('database', 'zcbot'),
+            charset=self.config.get('charset', 'utf8mb4'),
+            cursorclass=self._DictCursor,
+            autocommit=True,
+            connect_timeout=self._connect_timeout,
+            read_timeout=self._read_timeout,
+            write_timeout=self._write_timeout,
+        )
+        logger.info(
+            f"MySQL 连接池已初始化: max={self._pool_max}, "
+            f"min_cached={self._pool_min_cached}, max_cached={self._pool_max_cached}"
+        )
+
+    def _get_conn_sqlite(self):
+        """获取 SQLite 连接（线程本地）"""
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(
+                self._db_path,
+                check_same_thread=False,
+                detect_types=sqlite3.PARSE_DECLTYPES
+            )
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn = conn
+        return conn
+
+    def _get_conn_mysql(self):
+        """
+        从连接池借出连接（PooledDB 自动处理：ping 保活、坏连接丢弃重建、
+        空闲连接按 maxcached 回收、连接数不超过 pool_size）。
+        池满时**有界等待**（pool_wait_timeout 秒），超时抛清晰错误而非无限阻塞——
+        避免个别连接未归还（如插件 get_connection 泄漏）把整个框架 DB 操作堵死。
+        归还方式：调用方在 finally 中 conn.close()（对池而言是"归还"而非真关闭）。
+        """
+        if self._pool is None:
+            raise RuntimeError("MySQL 连接池未初始化")
+        deadline = time.time() + self._pool_wait_timeout
+        last_err = None
+        while True:
+            try:
+                return self._pool.connection()
+            except Exception as e:
+                last_err = e
+                if time.time() >= deadline:
+                    logger.error(
+                        f"MySQL 连接池繁忙: {self._pool_max} 个连接全被占用超 "
+                        f"{self._pool_wait_timeout}s（{last_err}）。"
+                        f"请检查是否存在连接未归还（如 ctx.get_connection() 未 close）"
+                    )
+                    raise RuntimeError(
+                        f"MySQL 连接池繁忙（{self._pool_max} 个连接全被占用超 "
+                        f"{self._pool_wait_timeout}s），请检查连接泄漏"
+                    ) from None
+                time.sleep(0.05)
+
+    def _close_thread_conn(self):
+        """连接池接管后无需手动关闭连接（坏连接由 PooledDB 借出时 ping 检测并重建）"""
+        pass
+
+    def _mark_conn_used(self):
+        """记录连接最近使用时间（避免频繁 ping）"""
+        self._local.last_use = time.time()
+
+    @staticmethod
+    def _is_reconnect_error(exc: Exception) -> bool:
+        """判断异常是否为 MySQL 连接断开类错误（需要自动重连）"""
+        if exc is None:
+            return False
+        # 按错误码判断（pymysql 异常 args[0] 通常为错误码）
+        code = None
+        if isinstance(getattr(exc, 'args', None), (tuple, list)) and exc.args:
+            code = exc.args[0]
+        if isinstance(code, int) and code in _MYSQL_RECONNECT_ERRORS:
+            return True
+        # 按错误消息关键字兜底判断
+        msg = str(exc).lower()
+        return any(kw in msg for kw in _MYSQL_RECONNECT_KEYWORDS)
+
+    def _get_conn(self):
+        """获取连接"""
+        if self.db_type == 'mysql':
+            return self._get_conn_mysql()
+        return self._get_conn_sqlite()
+
+    def _get_cursor(self):
+        """获取游标"""
+        return self._get_conn().cursor()
+
+    def _run_with_reconnect(self, func, *args, **kwargs):
+        """
+        执行数据库操作，MySQL 连接断开时自动重连并重试（最多 _max_reconnect 次）。
+        重连前丢弃坏连接，避免每次操作都复用已失效的连接导致持续失败。
+        """
+        if self.db_type != 'mysql':
+            return func(*args, **kwargs)
+        for attempt in range(self._max_reconnect + 1):
+            try:
+                result = func(*args, **kwargs)
+                self._mark_conn_used()
+                return result
+            except Exception as e:
+                if not self._is_reconnect_error(e):
+                    raise
+                if attempt >= self._max_reconnect:
+                    logger.error(f"MySQL 连接断开且重连 {self._max_reconnect} 次后仍失败: {e}")
+                    raise
+                logger.warning(f"MySQL 连接断开（{e}），正在进行第 {attempt + 1} 次自动重连...")
+                self._close_thread_conn()
+                time.sleep(min(0.5 * (attempt + 1), 3))  # 递增退避，最多 3 秒
+
+    # ── 公开 API ──────────────────────────────────────────────────
+
+    def query(self, sql: str, params: tuple = None) -> list:
+        """查询多条记录，返回 list[dict]"""
+        def _do(sql, params):
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
+                self._exec(cursor, sql, params)
+                rows = cursor.fetchall()
+                if self.db_type == 'sqlite':
+                    return [dict(r) for r in rows]
+                return rows
+            finally:
+                cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
+        return self._run_with_reconnect(_do, sql, params)
+
+    def query_one(self, sql: str, params: tuple = None) -> dict:
+        """查询单条记录，返回 dict 或 None"""
+        def _do(sql, params):
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
+                self._exec(cursor, sql, params)
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                if self.db_type == 'sqlite':
+                    return dict(row)
+                return row
+            finally:
+                cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
+        return self._run_with_reconnect(_do, sql, params)
+
+    def _exec(self, cursor, sql: str, params=None):
+        """执行 sql，自动处理 params 为 None 的情况"""
+        if params is not None:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
+
+    def execute(self, sql: str, params: tuple = None) -> int:
+        """执行插入/更新/删除，返回受影响行数"""
+        def _do(sql, params):
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
+                    if 'NOW()' in sql.upper():
+                        sql, params = _replace_now(sql, params)
+                    sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
+                self._exec(cursor, sql, params)
+                conn.commit()
+                return cursor.rowcount
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
+        return self._run_with_reconnect(_do, sql, params)
+
+    def execute_many(self, sql: str, params_list: list) -> int:
+        """批量执行，返回受影响行数"""
+        def _do(sql, params_list):
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
+                    if 'NOW()' in sql.upper():
+                        new_sql, _ = _replace_now(sql, params_list[0] if params_list else None)
+                        new_params_list = []
+                        for p in params_list:
+                            _, now_p = _replace_now(sql, p)
+                            new_params_list.append(now_p)
+                        sql = new_sql
+                        params_list = new_params_list
+                    sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
+                cursor.executemany(sql, params_list)
+                conn.commit()
+                return cursor.rowcount
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
+        return self._run_with_reconnect(_do, sql, params_list)
+
+    def insert(self, sql: str, params: tuple = None) -> int:
+        """插入并返回自增 ID"""
+        def _do(sql, params):
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            try:
+                if self.db_type == 'sqlite':
+                    # 先处理 NOW()（基于 %s 占位符交错参数），再翻译 %s→? 等
+                    if 'NOW()' in sql.upper():
+                        sql, params = _replace_now(sql, params)
+                    sql = _translate_sql_for_sqlite(sql)
+                else:
+                    sql = _translate_sql_for_mysql(sql)
+                self._exec(cursor, sql, params)
+                conn.commit()
+                return cursor.lastrowid
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                cursor.close()
+                if self.db_type == 'mysql':
+                    conn.close()  # 归还连接池（而非真关闭）
+        return self._run_with_reconnect(_do, sql, params)
+
+    def get_connection(self):
+        """获取原始连接（高级用法）"""
+        return self._get_conn()
+
+    def table_exists(self, table_name: str) -> bool:
+        """检查表是否存在"""
+        if self.db_type == 'sqlite':
+            row = self.query_one(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table_name,)
+            )
+            return row is not None
+        else:
+            row = self.query_one(
+                "SHOW TABLES LIKE %s",
+                (table_name,)
+            )
+            return row is not None
+
+    def table_info(self, table_name: str) -> list:
+        """获取表结构信息"""
+        if self.db_type == 'sqlite':
+            return self.query(f"PRAGMA table_info({table_name})")
+        else:
+            return self.query(f"SHOW COLUMNS FROM {table_name}")
+
+    def table_has_column(self, table_name: str, column_name: str) -> bool:
+        """检查表是否有指定列"""
+        cols = self.table_info(table_name)
+        if self.db_type == 'sqlite':
+            return any(r['name'] == column_name for r in cols)
+        else:
+            return any(r['Field'] == column_name for r in cols)
+
+    @property
+    def pool_status(self) -> dict:
+        """获取连接池状态"""
+        if self.db_type == 'mysql' and self._pool is not None:
+            try:
+                checked_out = len(getattr(self._pool, '_usage', {}))
+                idle = len(getattr(self._pool, '_idle_cache', []))
+                return {
+                    'type': self.db_type,
+                    'max': self._pool_max,
+                    'min_cached': self._pool_min_cached,
+                    'max_cached': self._pool_max_cached,
+                    'checked_out': checked_out,
+                    'idle': idle,
+                    'total': checked_out + idle,
+                }
+            except Exception:
+                pass
+        return {
+            'type': self.db_type,
+            'path': getattr(self, '_db_path', None),
+        }
+
+    def close(self):
+        """关闭连接：MySQL 关闭整个连接池，SQLite 关闭当前线程连接"""
+        if self.db_type == 'mysql':
+            if self._pool is not None:
+                try:
+                    self._pool.close()
+                except Exception as e:
+                    logger.warning(f"关闭 MySQL 连接池失败: {e}")
+        else:
+            self._close_thread_conn()
+
+
+# ── SQL 辅助函数 ──────────────────────────────────────────────────
+
+def _on_duplicate_to_sqlite(sql: str) -> str:
+    """
+    将 MySQL 的 INSERT ... ON DUPLICATE KEY UPDATE 转换为
+    SQLite 的 INSERT ... ON CONFLICT(...) DO UPDATE SET ...
+    """
+    # 提取列名（ON DUPLICATE KEY 前的 INSERT 部分）
+    # 简化实现：直接替换为 INSERT OR REPLACE（更安全）
+    # 对于复杂场景，使用 ON CONFLICT
+    # 先尝试从 UNIQUE KEY 提取列名
+    # 简化：直接替换 ON DUPLICATE KEY UPDATE 为 ON CONFLICT DO UPDATE
+    m = _RE_ON_DUP_KEY.search(sql)
+    if not m:
+        return sql
+
+    update_clause = m.group(1)
+    # 将 VALUES(col) 替换为 EXCLUDED.col
+    update_clause = re.sub(r'VALUES\((\w+)\)', r'EXCLUDED.\1', update_clause)
+    # 替换为 SQLite 语法
+    sql = _RE_ON_DUP_KEY.sub(f' ON CONFLICT DO UPDATE SET {update_clause}', sql)
+
+    return sql
+
+
+def _replace_now(sql: str, params: tuple = None) -> tuple:
+    """
+    将 SQL 中的 NOW() 替换为 ?，并按位置插入当前时间参数。
+    SQLite 模式专用：NOW() 可能出现在语句中间（如 SET token_created_at = NOW(), ... WHERE id = %s），
+    必须按占位符出现顺序与原参数交错插入，否则参数错位。
+    """
+    import datetime
+    if 'NOW()' not in sql.upper():
+        return sql, params
+
+    now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 从左到右扫描：%s → 原参数，NOW() → 时间参数，交错生成
+    tokens = re.split(r'(%s|NOW\(\))', sql, flags=re.IGNORECASE)
+    new_sql_parts = []
+    new_params = []
+    param_iter = iter(params) if params else iter(())
+
+    for tok in tokens:
+        if not tok:
+            continue
+        if tok == '%s':
+            try:
+                new_params.append(next(param_iter))
+            except StopIteration:
+                new_params.append(None)
+            new_sql_parts.append('?')
+        elif tok.upper() == 'NOW()':
+            new_params.append(now_str)
+            new_sql_parts.append('?')
+        else:
+            new_sql_parts.append(tok)
+
+    return ''.join(new_sql_parts), tuple(new_params)
+
+
+# ── 全局单例 ──────────────────────────────────────────────────────
+
+db: Database = None
+
+
+def _parse_sqlite_type(config: dict) -> dict:
+    """
+    解析 SQLite 数据库配置
+    支持简写：database: path 或 database: {type: sqlite, path: xxx}
+    """
+    if isinstance(config, str):
+        return {'type': 'sqlite', 'path': config}
+    if isinstance(config, dict):
+        cfg = dict(config)
+        cfg.setdefault('type', 'sqlite')
+        if cfg['type'] == 'sqlite':
+            cfg.setdefault('path', 'data/zcbot.db')
+        return cfg
+    return {'type': 'sqlite', 'path': 'data/zcbot.db'}
+
+
+def init_db(config: dict):
+    """初始化数据库（全局单例）"""
+    global db
+
+    # 解析配置
+    db_config = _parse_sqlite_type(config)
+    db = Database(db_config)
+
+    # 自动检测并初始化数据库表（MySQL 5.5~8.0 / SQLite 全兼容）
+    from framework.init_db import auto_init_database
+    auto_init_database(db)
+
+    # 创建框架扩展表 + 迁移（兼容旧版升级）
+    _auto_create_tables(db)
+    return db
+
+
+def _auto_create_tables(database):
+    """自动创建框架所需的扩展表"""
+    # 列类型统一用 VARCHAR（SQLite 宽松类型同样兼容）：
+    # - TEXT 列不能作为 MySQL 索引键（缺 key length）
+    # - TEXT 列不能带 DEFAULT（MySQL 报错）
+    tables = {
+        'group_plugin_settings': """
+            CREATE TABLE IF NOT EXISTS group_plugin_settings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id    INTEGER NOT NULL,
+                plugin_name VARCHAR(64) NOT NULL,
+                enabled     INTEGER DEFAULT 1,
+                updated_at  VARCHAR(32),
+                UNIQUE(group_id, plugin_name)
+            )
+        """,
+        # IP 黑名单表（蜜罐自动拉黑 + 手动拉黑）
+        'ip_blacklist': """
+            CREATE TABLE IF NOT EXISTS ip_blacklist (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip          VARCHAR(64) NOT NULL,
+                reason      VARCHAR(255),
+                source      VARCHAR(32) DEFAULT 'manual',
+                expires_at  VARCHAR(32),
+                created_at  VARCHAR(32),
+                updated_at  VARCHAR(32),
+                UNIQUE(ip)
+            )
+        """,
+    }
+
+    # MySQL 模式下替换 AUTOINCREMENT → AUTO_INCREMENT
+    if database.db_type == 'mysql':
+        mysql_tables = {}
+        for name, ddl in tables.items():
+            ddl = ddl.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
+            mysql_tables[name] = ddl
+        tables = mysql_tables
+    for name, ddl in tables.items():
+        try:
+            database.execute(ddl)
+            logger.debug(f"自动建表: {name}")
+        except Exception as e:
+            logger.warning(f"自动建表失败 [{name}]: {e}")
+
+    # 迁移：给 commands 表追加 require_level 列
+    _migrate_commands_table(database)
+
+    # 迁移：给 users 表追加 role 列
+    _migrate_users_table(database)
+
+    # 迁移：给 admin_users 表追加 token 列（token 认证）
+    _migrate_admin_users_table(database)
+
+    # 迁移：dynamic_commands.match_type ENUM 增加 contains（更开放的匹配方式）
+    _migrate_dynamic_commands_table(database)
+
+    # 迁移：dynamic_commands 表增加 handler 列（关键词 handler 回调）
+    _migrate_dynamic_commands_handler(database)
+
+
+def _migrate_commands_table(database):
+    """迁移 commands 表添加 require_level 列"""
+    try:
+        if database.table_exists('commands') and \
+           not database.table_has_column('commands', 'require_level'):
+            if database.db_type == 'sqlite':
+                database.execute(
+                    "ALTER TABLE commands ADD COLUMN require_level TEXT DEFAULT ''"
+                )
+            else:
+                database.execute(
+                    "ALTER TABLE commands ADD COLUMN require_level VARCHAR(20) DEFAULT '' "
+                    "COMMENT '权限要求: admin=管理员/群主/超管, super=超管'"
+                )
+            logger.info("数据库迁移: commands 表添加 require_level 列")
+    except Exception:
+        pass
+
+
+def _migrate_users_table(database):
+    """迁移 users 表添加 role 列"""
+    try:
+        if database.table_exists('users') and \
+           not database.table_has_column('users', 'role'):
+            if database.db_type == 'sqlite':
+                database.execute(
+                    "ALTER TABLE users ADD COLUMN role TEXT DEFAULT ''"
+                )
+            else:
+                database.execute(
+                    "ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT '' "
+                    "COMMENT '权限角色: super=超级管理员, 空=普通用户'"
+                )
+            logger.info("数据库迁移: users 表添加 role 列")
+    except Exception:
+        pass
+
+
+def _migrate_admin_users_table(database):
+    """迁移 admin_users 表添加 token 和 token_created_at 列"""
+    try:
+        if not database.table_exists('admin_users'):
+            return
+
+        if not database.table_has_column('admin_users', 'token'):
+            if database.db_type == 'sqlite':
+                database.execute(
+                    "ALTER TABLE admin_users ADD COLUMN token TEXT DEFAULT NULL"
+                )
+            else:
+                database.execute(
+                    "ALTER TABLE admin_users ADD COLUMN token VARCHAR(2048) DEFAULT NULL "
+                    "COMMENT '登录令牌(2048位随机)'"
+                )
+            logger.info("数据库迁移: admin_users 表添加 token 列")
+
+        if not database.table_has_column('admin_users', 'token_created_at'):
+            if database.db_type == 'sqlite':
+                database.execute(
+                    "ALTER TABLE admin_users ADD COLUMN token_created_at TEXT DEFAULT NULL"
+                )
+            else:
+                database.execute(
+                    "ALTER TABLE admin_users ADD COLUMN token_created_at DATETIME DEFAULT NULL "
+                    "COMMENT '令牌签发时间'"
+                )
+            logger.info("数据库迁移: admin_users 表添加 token_created_at 列")
+    except Exception:
+        pass
+
+
+def _migrate_dynamic_commands_table(database):
+    """迁移 dynamic_commands 表：match_type ENUM 增加 contains（更开放的匹配方式）
+
+    SQLite 无需迁移（ENUM 已翻译为 TEXT，无取值约束）；
+    MySQL 旧库 ENUM 只有 exact/prefix/regex，需要 ALTER 加入 contains。
+    """
+    try:
+        if not database.table_exists('dynamic_commands'):
+            return
+        if database.db_type != 'mysql':
+            return
+        row = database.query_one(
+            "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'dynamic_commands' AND COLUMN_NAME = 'match_type'"
+        )
+        col_type = (row or {}).get('COLUMN_TYPE', '') or ''
+        if 'contains' in col_type:
+            return
+        database.execute(
+            "ALTER TABLE dynamic_commands MODIFY COLUMN match_type "
+            "ENUM('exact','prefix','contains','regex') DEFAULT 'exact' "
+            "COMMENT '匹配方式'"
+        )
+        logger.info("数据库迁移: dynamic_commands.match_type ENUM 增加 contains")
+    except Exception:
+        pass
+
+
+def _migrate_dynamic_commands_handler(database):
+    """迁移 dynamic_commands 表：增加 handler 列（关键词 handler 回调 plugin:func）"""
+    try:
+        if not database.table_exists('dynamic_commands'):
+            return
+        if database.table_has_column('dynamic_commands', 'handler'):
+            return
+        if database.db_type == 'sqlite':
+            database.execute(
+                "ALTER TABLE dynamic_commands ADD COLUMN handler TEXT DEFAULT ''")
+        else:
+            database.execute(
+                "ALTER TABLE dynamic_commands ADD COLUMN handler VARCHAR(100) DEFAULT '' "
+                "COMMENT '关键词handler回调 plugin:func'")
+        logger.info("数据库迁移: dynamic_commands 表添加 handler 列")
+    except Exception:
+        pass
