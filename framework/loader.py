@@ -1413,11 +1413,33 @@ class PluginLoader:
         except Exception:
             pass
 
+    def is_plugin_active_in_db(self, plugin_name: str) -> bool:
+        """
+        检查插件在数据库中是否处于「启用」状态
+        无记录视为启用（首次发现、尚未写入 plugins 表的插件默认启用）
+        """
+        try:
+            row = self.db.query_one(
+                "SELECT is_active FROM plugins WHERE plugin_name = %s", (plugin_name,)
+            )
+        except Exception:
+            return True
+        if row is None:
+            return True
+        return bool(row.get('is_active', 1))
+
     def load_all(self) -> list:
-        """加载所有已发现插件，返回成功列表"""
+        """加载所有已发现插件，返回成功列表
+
+        已在数据库中标记为禁用（is_active=0）的插件会被跳过，
+        避免「框架重启后仍然加载已禁用插件」的问题。
+        """
         discovered = self.discover()
         success = []
         for name in discovered:
+            if not self.is_plugin_active_in_db(name):
+                logger.info(f"[{name}] 插件已被禁用（is_active=0），跳过加载")
+                continue
             if self.load_plugin(name):
                 success.append(name)
         # 启动内存监控

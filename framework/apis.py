@@ -1311,6 +1311,17 @@ def create_web_app(framework) -> Flask:
                     if '..' in name or name.startswith('/'):
                         return jsonify({'code': 400, 'msg': f'非法路径: {name}'}), 400
 
+                # 拒绝符号链接（防止解压后通过软链逃逸出插件目录）
+                for name in names:
+                    try:
+                        info = zf.getinfo(name)
+                        if info.is_symlink():
+                            return jsonify(
+                                {'code': 400, 'msg': f'拒绝解压符号链接: {name}'}
+                            ), 400
+                    except KeyError:
+                        pass
+
                 # 备份旧插件（如果存在）
                 backup_dir = None
                 if os.path.isdir(target_dir):
