@@ -453,6 +453,8 @@ class Framework:
                 if not self._running:
                     break
                 await asyncio.to_thread(self.plugin_loader.heartbeat_register)
+                # 每分钟自检：清理不应存在的孤儿任务/命令（插件已删除时自动校正）
+                await asyncio.to_thread(self.plugin_loader.self_check_orphans)
             except asyncio.CancelledError:
                 break
             except Exception as e:
