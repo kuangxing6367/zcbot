@@ -1,0 +1,2 @@
+# 编译产物占位：放入 zcbot_render.pyd（Windows）或 zcbot_render.so（Linux）
+# 详见 ../README.md

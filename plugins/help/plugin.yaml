@@ -1,0 +1,12 @@
+# help 插件元信息与依赖声明
+name: 帮助系统
+version: 1.0.0
+author: tinker
+description: 查询所有已注册命令，生成图片帮助菜单
+priority: 100
+
+# Python 依赖（框架启动时自动检查并安装缺失项）
+dependencies:
+  python:
+    - "Pillow>=10.0.0"
+    - "numpy>=1.24.0"
