@@ -1,0 +1,63 @@
+{
+  "wake_enable": {
+    "description": "群聊唤醒词开关（仅 @机器人/唤醒前缀 才响应）",
+    "type": "boolean",
+    "default": false
+  },
+  "wake_prefixes": {
+    "description": "唤醒前缀（逗号分隔，如 /bot,bot,）",
+    "type": "string",
+    "default": "",
+    "hint": "消息以此开头才响应"
+  },
+  "wake_private": {
+    "description": "私聊是否也需要唤醒",
+    "type": "boolean",
+    "default": false
+  },
+  "whitelist_enable": {
+    "description": "群白名单开关",
+    "type": "boolean",
+    "default": false
+  },
+  "whitelist_groups": {
+    "description": "白名单群号（逗号分隔，不在名单的群不响应）",
+    "type": "string",
+    "default": ""
+  },
+  "blacklist_users": {
+    "description": "用户黑名单（逗号分隔 QQ 号，这些用户的消息不响应）",
+    "type": "string",
+    "default": ""
+  },
+  "rate_enable": {
+    "description": "限流开关",
+    "type": "boolean",
+    "default": false
+  },
+  "rate_count": {
+    "description": "窗口内允许的消息数",
+    "type": "number",
+    "default": 5
+  },
+  "rate_seconds": {
+    "description": "限流窗口秒数",
+    "type": "number",
+    "default": 10
+  },
+  "sensitive_enable": {
+    "description": "敏感词过滤开关",
+    "type": "boolean",
+    "default": false
+  },
+  "sensitive_words": {
+    "description": "敏感词列表（逗号分隔，包含即丢弃）",
+    "type": "string",
+    "default": ""
+  },
+  "exempt_admin": {
+    "description": "管理员/群主/超管豁免",
+    "type": "boolean",
+    "default": true
+  }
+}
