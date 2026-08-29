@@ -559,6 +559,17 @@ class MessageRouter:
                         break
 
             if match:
+                # ── 黑名单拦截（命中黑名单的用户直接拒绝执行命令，修复 A13）──
+                if ev.role == 'blacklist':
+                    self._stats_hit(cmd.id)
+                    log_broker.log_plugin(plugin_name, '黑名单拦截', {
+                        'handler': cmd.handler_name,
+                        'user_id': ev.user_id,
+                        'group_id': ev.group_id,
+                        'message': message[:80],
+                    })
+                    return True  # 拦截并终止传播，命令不执行
+
                 # ── 权限检查 ──
                 require = cmd.require_level  # 'admin' | 'super' | ''
                 if require == 'admin' and not ev.is_admin:

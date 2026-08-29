@@ -387,7 +387,7 @@ class Framework:
             with self.plugin_loader._lock:
                 healed_candidates = list(self.plugin_loader._missing_deps.keys())
             for plugin_name in healed_candidates:
-                if plugin_name not in loaded:
+                if plugin_name not in loaded and self.plugin_loader.is_plugin_active_in_db(plugin_name):
                     if self.plugin_loader.load_plugin(plugin_name):
                         loaded.append(plugin_name)
                         logger.info(f"[{plugin_name}] 依赖自愈后加载成功")
