@@ -1413,6 +1413,75 @@ class PluginLoader:
         except Exception:
             pass
 
+    def self_check_orphans(self):
+        """
+        周期性自检（默认随心跳每分钟执行一次）：清理不应存在的孤儿任务/命令。
+
+        判定规则：
+        - 数据库中 tasks / commands 表存在「插件代码目录已不存在（未被 discover）」的
+          条目时，视为孤儿，直接从库表删除（任务同时移除调度器注册）。
+        - 调度器中属于「当前未加载插件」的任务（无法执行），从调度器移除。
+
+        这样即使插件被手动删除、卸载异常或禁用流程未完全清理，也能自动校正，
+        避免「幽灵任务」继续触发。已禁用/已卸载插件在 unload 时已清过库表，
+        此处作为兜底，不会误删仍存在的插件数据。
+        """
+        try:
+            with self._lock:
+                loaded = set(self._loaded_plugins.keys())
+            discovered = set(self.discover())
+            if not discovered and not loaded:
+                return
+
+            # 1) 数据库孤儿清理：插件目录已不存在的 tasks / commands
+            #    表名来自固定白名单，非外部输入，可安全格式化
+            for tbl in ('tasks', 'commands'):
+                try:
+                    rows = self.db.query(
+                        f"SELECT DISTINCT plugin_name FROM {tbl}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[自检] 查询 {tbl} 失败: {e}")
+                    continue
+                for r in rows:
+                    pn = r.get('plugin_name')
+                    if not pn or pn in discovered:
+                        continue
+                    try:
+                        self.db.execute(
+                            f"DELETE FROM {tbl} WHERE plugin_name = %s", (pn,)
+                        )
+                        if tbl == 'tasks':
+                            self.framework.scheduler.remove_plugin_tasks(pn)
+                        logger.info(f"[自检] 清理孤儿 {tbl}: 插件 [{pn}] 已不存在")
+                    except Exception as e:
+                        logger.warning(f"[自检] 删除 {tbl} [{pn}] 失败: {e}")
+
+            # 2) 调度器孤儿清理：任务所属插件当前未加载，无法执行则移除
+            try:
+                scheduler = self.framework.scheduler
+                stale = [
+                    tid for tid, info in scheduler._plugin_tasks.items()
+                    if info.get('plugin_name') not in loaded
+                ]
+                for tid in stale:
+                    try:
+                        scheduler._scheduler.remove_job(tid)
+                        scheduler._plugin_tasks.pop(tid, None)
+                        logger.info(f"[自检] 移除调度器孤儿任务: {tid}")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"[自检] 调度器孤儿清理失败: {e}")
+
+            # 3) 路由表兜底刷新（孤儿命令删除后保证内存与 DB 对齐）
+            try:
+                self.framework.router._invalidate_cache()
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"[自检] 异常: {e}")
+
     def is_plugin_active_in_db(self, plugin_name: str) -> bool:
         """
         检查插件在数据库中是否处于「启用」状态
