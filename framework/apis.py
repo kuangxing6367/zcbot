@@ -772,28 +772,56 @@ def create_web_app(framework) -> Flask:
         return req.cookies.get('zcbot_token')
 
     def _verify_token(token):
-        """验证 token，返回 admin 字典或 None"""
-        if len(token) != 2048:
+        """验证 token，返回 admin 字典或 None。
+        同时支持两类令牌：
+          1) 用户会话 token（2048 字符，存于 admin_users，随登录/登出轮换）
+          2) 接口令牌 API Key（长度不固定，存于 api_tokens，长期有效，专供外部程序调用 REST API）
+        """
+        if not token:
             return None
-        row = db.query_one(
-            "SELECT id, username, role, is_active, token_created_at FROM admin_users WHERE token = %s",
-            (token,)
-        )
-        if not row or not row['is_active']:
-            return None
-        # 检查过期（SQLite 返回字符串，MySQL 返回 datetime，统一解析）
-        timeout = web_cfg.get('token_timeout') or web_cfg.get('session_timeout', 86400)
-        if row['token_created_at']:
-            created = row['token_created_at']
-            if isinstance(created, str):
+        # 1) 用户会话 token
+        if len(token) == 2048:
+            row = db.query_one(
+                "SELECT id, username, role, is_active, token_created_at FROM admin_users WHERE token = %s",
+                (token,)
+            )
+            if row and row['is_active']:
+                timeout = web_cfg.get('token_timeout') or web_cfg.get('session_timeout', 86400)
+                if row['token_created_at']:
+                    created = row['token_created_at']
+                    if isinstance(created, str):
+                        try:
+                            created = datetime.strptime(created, '%Y-%m-%d %H:%M:%S')
+                        except ValueError:
+                            return None
+                    expiry = created + timedelta(seconds=timeout)
+                    if datetime.now() > expiry:
+                        return None
+                return {'id': row['id'], 'username': row['username'], 'role': row['role']}
+        # 2) 接口令牌（API Key）：长度 >= 40，独立表，不随用户会话轮换
+        if len(token) >= 40:
+            row = db.query_one(
+                "SELECT id, name, role, is_active, expires_at, last_used_at FROM api_tokens WHERE token = %s",
+                (token,)
+            )
+            if row and row['is_active']:
+                # 绝对过期时间检查（unix 时间戳字符串）
+                if row['expires_at']:
+                    try:
+                        if time.time() > float(row['expires_at']):
+                            return None
+                    except (ValueError, TypeError):
+                        return None
+                # 尽力更新 last_used_at（不阻塞请求）
                 try:
-                    created = datetime.strptime(created, '%Y-%m-%d %H:%M:%S')
-                except ValueError:
-                    return None
-            expiry = created + timedelta(seconds=timeout)
-            if datetime.now() > expiry:
-                return None
-        return {'id': row['id'], 'username': row['username'], 'role': row['role']}
+                    db.execute(
+                        "UPDATE api_tokens SET last_used_at = %s WHERE id = %s",
+                        (str(int(time.time())), row['id'])
+                    )
+                except Exception:
+                    pass
+                return {'id': 'api:' + str(row['id']), 'username': 'api:' + row['name'], 'role': row['role']}
+        return None
 
     def _sync_token_cookie(resp, token: str):
         """将登录 token 同步到 HttpOnly Cookie（SameSite=Lax），供 iframe/页面直接导航场景兜底鉴权。
@@ -2398,6 +2426,7 @@ def create_web_app(framework) -> Flask:
         alias = data.get('alias', '').strip()
         description = data.get('description', '').strip()
         require_level = data.get('require_level', '').strip()
+        require_perm = (data.get('require_perm') or '').strip().lower()
 
         # 校验权限等级
         if require_level and require_level not in ('', 'admin', 'super'):
@@ -2408,15 +2437,25 @@ def create_web_app(framework) -> Flask:
             if not row:
                 return jsonify({'code': 404, 'msg': '命令不存在'}), 404
 
-            db.execute(
-                "UPDATE commands SET alias = %s, description = %s, require_level = %s WHERE id = %s",
-                (alias if alias else None, description if description else None,
-                 require_level, cmd_id)
-            )
+            try:
+                db.execute(
+                    "UPDATE commands SET alias = %s, description = %s, "
+                    "require_level = %s, require_perm = %s WHERE id = %s",
+                    (alias if alias else None, description if description else None,
+                     require_level, require_perm, cmd_id)
+                )
+            except Exception:
+                # 极老库无 require_perm 列 → 只用旧三列更新
+                db.execute(
+                    "UPDATE commands SET alias = %s, description = %s, require_level = %s WHERE id = %s",
+                    (alias if alias else None, description if description else None,
+                     require_level, cmd_id)
+                )
             audit_log(admin['id'], admin['username'], 'update_command_alias',
                       'command', str(cmd_id),
                       {'plugin': row['plugin_name'], 'handler': row['handler'],
-                       'alias': alias, 'description': description, 'require_level': require_level})
+                       'alias': alias, 'description': description,
+                       'require_level': require_level, 'require_perm': require_perm})
             return jsonify({'code': 0, 'msg': '命令已更新'})
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
@@ -4115,6 +4154,398 @@ def create_web_app(framework) -> Flask:
         if os.path.isfile(reset_file):
             return send_from_directory(web_static, 'reset.html')
         return send_from_directory(web_static, 'index.html')
+
+    # ============================================================
+    # 权限系统（LuckPerms 风格）管理接口
+    # ============================================================
+
+    def _perm_operator():
+        """当前操作者标识（用于审计）"""
+        admin = getattr(request, 'admin', None)
+        return (admin or {}).get('username', 'system')
+
+    @app.route('/api/perm/builtins', methods=['GET'])
+    @require_auth
+    def perm_builtins():
+        """内置角色组（只读，由框架代码虚拟注入，不入库）"""
+        from framework import perm as perm_mod
+        return jsonify({'code': 0, 'data': [
+            {'name': n, 'display_name': g['display_name'], 'weight': g['weight'],
+             'inherits': g['inherits'], 'node': g['node']}
+            for n, g in perm_mod.BUILTIN_GROUPS.items()
+        ], 'context_keys': list(perm_mod.CONTEXT_KEYS)})
+
+    @app.route('/api/perm/groups', methods=['GET'])
+    @require_auth
+    def perm_list_groups():
+        from framework import perm as perm_mod
+        try:
+            return jsonify({'code': 0, 'data': perm_mod.list_groups(db)})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/groups', methods=['POST'])
+    @require_auth
+    def perm_create_group():
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.create_group(
+                db, (data.get('name') or '').strip(),
+                display_name=data.get('display_name'),
+                weight=int(data.get('weight') or 0),
+                prefix=data.get('prefix'), suffix=data.get('suffix'),
+                is_default=1 if data.get('is_default') else 0,
+                operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '权限组已创建'})
+        except ValueError as e:
+            return jsonify({'code': 400, 'msg': str(e)}), 400
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/groups/<name>', methods=['PUT'])
+    @require_auth
+    def perm_update_group(name):
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.update_group(
+                db, name,
+                display_name=data.get('display_name'),
+                weight=None if data.get('weight') is None else int(data.get('weight')),
+                prefix=data.get('prefix'), suffix=data.get('suffix'),
+                is_default=None if data.get('is_default') is None else (1 if data.get('is_default') else 0),
+                operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '权限组已更新'})
+        except ValueError as e:
+            return jsonify({'code': 400, 'msg': str(e)}), 400
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/groups/<name>', methods=['DELETE'])
+    @require_auth
+    def perm_delete_group(name):
+        from framework import perm as perm_mod
+        try:
+            perm_mod.delete_group(db, name, operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '权限组已删除'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/groups/<name>/nodes', methods=['GET'])
+    @require_auth
+    def perm_group_nodes(name):
+        from framework import perm as perm_mod
+        try:
+            rows = db.query(
+                "SELECT id, node, value, context_key, context_val, expire_at, created_at "
+                "FROM perm_group_nodes WHERE group_name = %s ORDER BY id", (name,))
+            return jsonify({'code': 0, 'data': rows})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/groups/<name>/nodes', methods=['POST'])
+    @require_auth
+    def perm_set_group_node(name):
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.set_group_node(
+                db, name, (data.get('node') or '').strip(),
+                value=bool(data.get('value', True)),
+                ctx_key=data.get('context_key'), ctx_val=data.get('context_val'),
+                expire_at=data.get('expire_at'), operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '节点已保存'})
+        except ValueError as e:
+            return jsonify({'code': 400, 'msg': str(e)}), 400
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/groups/<name>/nodes', methods=['DELETE'])
+    @require_auth
+    def perm_unset_group_node(name):
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.unset_group_node(
+                db, name, (data.get('node') or '').strip(),
+                ctx_key=data.get('context_key'), ctx_val=data.get('context_val'),
+                operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '节点已删除'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/users/<int:user_id>', methods=['GET'])
+    @require_auth
+    def perm_user_detail(user_id):
+        """用户权限详情：直接节点 + 生效快照"""
+        from framework import perm as perm_mod
+        ctx = request.args.get('context')
+        context = {}
+        if ctx:
+            for part in ctx.split(';'):
+                if '=' in part:
+                    k, v = part.split('=', 1)
+                    context[k.strip()] = v.strip()
+        try:
+            snapshot = perm_mod.resolve(db, user_id, context or None).to_dict()
+            return jsonify({
+                'code': 0,
+                'data': {'raw_nodes': perm_mod.list_user_nodes(db, user_id),
+                         'snapshot': snapshot},
+            })
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/users/<int:user_id>/nodes', methods=['POST'])
+    @require_auth
+    def perm_set_user_node(user_id):
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.set_user_node(
+                db, user_id, (data.get('node') or '').strip(),
+                value=bool(data.get('value', True)),
+                ctx_key=data.get('context_key'), ctx_val=data.get('context_val'),
+                expire_at=data.get('expire_at'), operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '节点已保存'})
+        except ValueError as e:
+            return jsonify({'code': 400, 'msg': str(e)}), 400
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/users/<int:user_id>/nodes', methods=['DELETE'])
+    @require_auth
+    def perm_unset_user_node(user_id):
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.unset_user_node(
+                db, user_id, (data.get('node') or '').strip(),
+                ctx_key=data.get('context_key'), ctx_val=data.get('context_val'),
+                operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '节点已删除'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/users/<int:user_id>/groups', methods=['POST'])
+    @require_auth
+    def perm_add_user_group(user_id):
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.add_user_group(
+                db, user_id, (data.get('group') or '').strip(),
+                ctx_key=data.get('context_key'), ctx_val=data.get('context_val'),
+                expire_at=data.get('expire_at'), operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '已加入权限组'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/users/<int:user_id>/groups', methods=['DELETE'])
+    @require_auth
+    def perm_remove_user_group(user_id):
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.remove_user_group(
+                db, user_id, (data.get('group') or '').strip(),
+                ctx_key=data.get('context_key'), ctx_val=data.get('context_val'),
+                operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '已移出权限组'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/users/<int:user_id>/track', methods=['POST'])
+    @require_auth
+    def perm_track_step(user_id):
+        """升降级：body = {track, direction: promote|demote, context_key, context_val}"""
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        direction = (data.get('direction') or 'promote').strip().lower()
+        try:
+            fn = perm_mod.promote if direction != 'demote' else perm_mod.demote
+            r = fn(db, user_id, (data.get('track') or '').strip(),
+                   ctx_key=data.get('context_key'), ctx_val=data.get('context_val'),
+                   operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': f"{r['from'] or '(无)'} → {r['to']}", 'data': r})
+        except ValueError as e:
+            return jsonify({'code': 400, 'msg': str(e)}), 400
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/tracks', methods=['GET'])
+    @require_auth
+    def perm_list_tracks():
+        from framework import perm as perm_mod
+        try:
+            return jsonify({'code': 0, 'data': perm_mod.list_tracks(db)})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/tracks', methods=['POST'])
+    @require_auth
+    def perm_save_track():
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            perm_mod.save_track(db, (data.get('name') or '').strip(),
+                                data.get('groups_order') or '',
+                                display_name=data.get('display_name'),
+                                operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '轨道已保存'})
+        except ValueError as e:
+            return jsonify({'code': 400, 'msg': str(e)}), 400
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/tracks/<name>', methods=['DELETE'])
+    @require_auth
+    def perm_delete_track(name):
+        from framework import perm as perm_mod
+        try:
+            perm_mod.delete_track(db, name, operator=_perm_operator())
+            return jsonify({'code': 0, 'msg': '轨道已删除'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/check', methods=['POST'])
+    @require_auth
+    def perm_check():
+        """权限检查器：body = {user_id, node, context:{...}, role}"""
+        from framework import perm as perm_mod
+        data = request.get_json(silent=True) or {}
+        try:
+            uid = int(data.get('user_id') or 0)
+            node = (data.get('node') or '').strip()
+            if not uid or not node:
+                return jsonify({'code': 400, 'msg': 'user_id 与 node 必填'}), 400
+            context = data.get('context') or None
+            role = data.get('role') or None
+            pset = perm_mod.resolve(db, uid, context, role)
+            state = pset.check(node)
+            return jsonify({
+                'code': 0,
+                'data': {
+                    'node': node,
+                    'state': 'true' if state is True else ('false' if state is False else 'undefined'),
+                    'allowed': state is True,
+                    'groups': pset.groups,
+                    'primary_group': pset.primary_group,
+                },
+            })
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/audit', methods=['GET'])
+    @require_auth
+    def perm_audit_logs():
+        from framework import perm as perm_mod
+        try:
+            limit = int(request.args.get('limit') or 100)
+            data = perm_mod.list_audit(
+                db,
+                target_type=request.args.get('target_type'),
+                target=request.args.get('target'),
+                limit=min(limit, 500))
+            return jsonify({'code': 0, 'data': data})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/perm/cleanup', methods=['POST'])
+    @require_auth
+    def perm_cleanup():
+        """立即清理过期节点"""
+        from framework import perm as perm_mod
+        try:
+            n = perm_mod.cleanup_expired(db)
+            return jsonify({'code': 0, 'msg': f'已清理 {n} 条过期节点', 'data': {'removed': n}})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    # ---- 接口令牌（API Key）：与用户会话 token 解耦，专供外部程序调用 REST API ----
+    # 管理类接口要求超级管理员；令牌本身按自身 role 通过普通鉴权。
+
+    @app.route('/api/apikeys', methods=['GET'])
+    @require_super
+    def apikeys_list():
+        """列出全部接口令牌（不返回 raw token）"""
+        try:
+            rows = db.query(
+                "SELECT id, name, role, created_by, created_at, expires_at, "
+                "last_used_at, is_active FROM api_tokens ORDER BY id DESC"
+            )
+            items = []
+            now = int(time.time())
+            for r in rows:
+                expired = bool(r['expires_at']) and now > float(r['expires_at'])
+                items.append({
+                    'id': r['id'],
+                    'name': r['name'],
+                    'role': r['role'],
+                    'created_by': r['created_by'],
+                    'created_at': r['created_at'],
+                    'expires_at': r['expires_at'],
+                    'last_used_at': r['last_used_at'],
+                    'is_active': r['is_active'],
+                    'expired': expired,
+                })
+            return jsonify({'code': 0, 'data': items})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/apikeys', methods=['POST'])
+    @require_super
+    def apikeys_create():
+        """创建接口令牌（token 仅此一次返回，请妥善保存）"""
+        data = request.get_json(silent=True) or {}
+        name = (data.get('name') or '').strip()
+        if not name or len(name) > 100:
+            return jsonify({'code': 400, 'msg': '名称必填且不超过 100 字符'}), 400
+        role = (data.get('role') or request.admin.get('role') or 'admin')
+        if role not in ('admin', 'super'):
+            role = 'admin'
+        expires_in = data.get('expires_in')  # 秒；None / 0 = 永不过期
+        expires_at = None
+        if isinstance(expires_in, (int, float)) and expires_in > 0:
+            expires_at = str(int(time.time()) + int(expires_in))
+        token = secrets.token_hex(32)  # 64 字符，>=40 且 != 2048，避开会话 token 分支
+        now = str(int(time.time()))
+        try:
+            db.execute(
+                "INSERT INTO api_tokens (token, name, role, created_by, created_at, expires_at, is_active) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 1)",
+                (token, name, role, request.admin.get('username'), now, expires_at)
+            )
+            audit_log(request.admin['id'], request.admin['username'], 'apikey_create',
+                      'api_token', name, {'role': role, 'expires_at': expires_at})
+            return jsonify({
+                'code': 0,
+                'msg': '创建成功，token 仅显示一次',
+                'data': {
+                    'token': token,
+                    'name': name,
+                    'role': role,
+                    'expires_at': expires_at,
+                }
+            })
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
+
+    @app.route('/api/apikeys/<int:kid>/revoke', methods=['POST'])
+    @require_super
+    def apikeys_revoke(kid):
+        """吊销接口令牌（软删除：is_active=0）"""
+        try:
+            row = db.query_one("SELECT name FROM api_tokens WHERE id = %s", (kid,))
+            if not row:
+                return jsonify({'code': 404, 'msg': '令牌不存在'}), 404
+            db.execute("UPDATE api_tokens SET is_active = 0 WHERE id = %s", (kid,))
+            audit_log(request.admin['id'], request.admin['username'], 'apikey_revoke',
+                      'api_token', row['name'], {'id': kid})
+            return jsonify({'code': 0, 'msg': '已吊销'})
+        except Exception as e:
+            return jsonify({'code': 500, 'msg': str(e)}), 500
 
     return app
 

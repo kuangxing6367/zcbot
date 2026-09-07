@@ -13,6 +13,8 @@
         <el-menu-item index="/commands"><el-icon><ChatDotRound /></el-icon><span>命令管理</span></el-menu-item>
         <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
         <el-menu-item index="/groups"><el-icon><Avatar /></el-icon><span>群组管理</span></el-menu-item>
+        <el-menu-item index="/permissions"><el-icon><Key /></el-icon><span>权限管理</span></el-menu-item>
+        <el-menu-item index="/apikeys"><el-icon><Tickets /></el-icon><span>接口令牌</span></el-menu-item>
         <el-menu-item index="/tasks"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
         <el-menu-item index="/runtime"><el-icon><DataLine /></el-icon><span>运行状态</span></el-menu-item>
         <el-menu-item index="/connection"><el-icon><Connection /></el-icon><span>连接设置</span></el-menu-item>
@@ -77,7 +79,7 @@ const collapsed = ref(false)
 
 const titleMap = {
   dashboard: '仪表盘', marketplace: '插件市场', plugins: '插件管理', commands: '命令管理',
-  users: '用户管理', groups: '群组管理', tasks: '定时任务', runtime: '运行状态',
+  users: '用户管理', groups: '群组管理', permissions: '权限管理', apikeys: '接口令牌', tasks: '定时任务', runtime: '运行状态',
   connection: '连接设置', filebrowser: '文件浏览', logs: '日志中心', database: '数据库',
   plugin_webui: '插件页面', settings: '设置',
 }
