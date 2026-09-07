@@ -130,7 +130,12 @@ http://<host>:8080
 
 ## 认证机制
 
-ZCBOT 使用 **Bearer Token** 认证机制，token 为 2048 位随机 hex 字符串。
+ZCBOT 使用 **Bearer Token** 认证机制，兼容两类令牌：
+
+1. **登录会话 token**：2048 位随机 hex 字符串（`secrets.token_hex(1024)`），存于 `admin_users.token`；随登录签发、登出轮换，受 `config.yaml → web.token_timeout` 时效限制（默认 24h）。
+2. **接口令牌（API Key）**：64 位（`secrets.token_hex(32)`），存于 `api_tokens` 表；**不随登录轮换**、支持绝对过期与吊销，专供脚本/第三方服务长期调用。创建与吊销见下文《接口令牌（API Key）API》。
+
+`_verify_token` 自动识别：长度 2048 查 `admin_users`（会话语义），长度 ≥40 查 `api_tokens`（接口令牌语义）。
 
 ### 请求头
 
@@ -140,16 +145,10 @@ ZCBOT 使用 **Bearer Token** 认证机制，token 为 2048 位随机 hex 字符
 Authorization: Bearer <token>
 ```
 
-### Token 生成规则
-
-- 通过 `secrets.token_hex(1024)` 生成 2048 字符的随机 hex 字符串
-- 存储在 `admin_users` 表的 `token` 字段，签发时间存储在 `token_created_at` 字段
-- 默认有效期 24 小时（86400 秒），可在 `config.yaml` → `web.token_timeout` 修改
-
 ### Token 失效处理
 
 - 服务端返回 `401` 状态码时，前端应清除本地 token 并跳转登录页
-- Token 过期、被登出、被其他设备登录挤下线都会导致 401
+- 会话 token 过期、被登出、被其他设备登录挤下线都会导致 401；接口令牌仅在其被吊销或超过绝对过期时间后失效
 
 ### 前端示例
 
@@ -1676,10 +1675,9 @@ while (true) {
 ### 401 处理流程
 
 1. 请求未携带 `Authorization` 头 → 返回 401 `未提供认证令牌`
-2. Token 长度不为 2048 → 返回 401 `令牌无效或已过期`
-3. Token 在数据库中不存在 → 返回 401 `令牌无效或已过期`
-4. Token 已过期（超过 `token_timeout`）→ 返回 401 `令牌无效或已过期`
-5. 账号被禁用（`is_active = 0`）→ 返回 401 `令牌无效或已过期`
+2. 会话 token（2048）在 `admin_users` 不存在 / 已过期 / 账号被禁用 → 401 `令牌无效或已过期`
+3. 接口令牌（≥40）在 `api_tokens` 不存在 / 已吊销（`is_revoked=1`）/ 超过绝对过期时间 → 401 `令牌无效或已过期`
+4. token 既非 2048 会话、也不符合接口令牌长度（<40）→ 401 `令牌无效或已过期`
 
 **前端处理**：收到 401 后应清除 localStorage 中的 `zcbot_token` 并跳转到登录页。
 
@@ -1699,8 +1697,112 @@ while (true) {
 
 ---
 
+## 权限系统 API
+
+> 权限模型说明见 [权限系统（LuckPerms 风格）](./permission-system.md)。以下端点统一走通用鉴权（Bearer token），并需 **super** 角色（查询类由中间件统一校验）。响应使用本文件《通用约定》的 `{code, msg, data}` 信封。
+
+### GET /api/perm/builtins
+
+返回内置角色组定义（`__member/__admin/__owner/__super` 及其节点、权重、继承关系）。
+
+### GET /api/perm/groups
+
+列出全部权限组。
+
+```json
+{ "code": 0, "msg": "ok", "data": { "rows": [ { "name": "vip", "weight": 10, "prefix": "[VIP]", "is_default": false, "node_count": 3 } ] } }
+```
+
+### POST /api/perm/groups
+
+创建权限组。Body：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `name` | string | 组名（唯一，小写字母数字与 `_`） |
+| `weight` | int | 权重，越大优先级越高 |
+| `prefix` | string? | 聊天前缀（可选） |
+| `is_default` | bool | 是否默认组（新用户归属） |
+
+### PUT /api/perm/groups/{name}
+
+更新组（同上字段，均可选）。`DELETE /api/perm/groups/{name}` 删除组（内置组拒绝删除）。
+
+### 组节点
+
+- `GET /api/perm/groups/{name}/nodes` — 列出组节点
+- `POST /api/perm/groups/{name}/nodes` — 设置节点。Body：`{ "node": "myplugin.ban", "value": 1, "context": {"group":"123"} , "expire_at": 0 }`
+  - `context` 可省略（= 全局）；`expire_at` 为 unix 秒，0/省略 = 永久
+- `DELETE /api/perm/groups/{name}/nodes` — 删除节点。Body：`{ "node": "myplugin.ban", "context": {} }`
+
+### 用户
+
+- `GET /api/perm/users/{id}` — 用户权限快照（直接节点 + 生效组 + primary_group）
+- `POST /api/perm/users/{id}/nodes` — 授予节点（Body 同上）
+- `DELETE /api/perm/users/{id}/nodes` — 撤销节点
+- `POST /api/perm/users/{id}/groups` — 加入组。Body：`{ "group": "vip" }`
+- `DELETE /api/perm/users/{id}/groups` — 移出组
+- `POST /api/perm/users/{id}/track` — 沿轨道晋升/降级。Body：`{ "track": "default,vip,admin", "action": "promote|demote" }`
+
+### Tracks
+
+- `GET /api/perm/tracks` — 列出轨道
+- `POST /api/perm/tracks` — 创建轨道。Body：`{ "name": "pvp", "groups": ["default","vip","admin"] }`
+- `DELETE /api/perm/tracks/{name}` — 删除轨道
+
+### POST /api/perm/check
+
+实时校验某用户在指定上下文下对某节点的解析结果。Body：
+
+```json
+{ "user_id": 123456, "node": "myplugin.ban", "context": { "group": "888888", "msgtype": "group" } }
+```
+
+返回 `data: { "value": 0|1|null, "source": "user|group:name|builtin", "groups": [...] }`（`value`：1 授予 / 0 显式否决 / null 未定义）。
+
+### GET /api/perm/audit
+
+审计日志（分页 `?page=1&page_size=20`），记录全部权限变更（操作人、动作、对象、时间）。
+
+### POST /api/perm/cleanup
+
+手动触发过期节点清理（框架每小时自动执行一次，此端点用于立即执行）。
+
+---
+
+## 接口令牌（API Key）API
+
+> 背景：外部程序调用 REST API 若用登录会话 token（2048 字符、随登录轮换、受 `session_timeout` 限制）会过期。接口令牌独立存于 `api_tokens`，**不随登录轮换**，支持绝对过期与吊销。创建后 token 明文**仅返回一次**。管理接口需 super；令牌本身可调用任意通用鉴权接口。
+
+### GET /api/apikeys
+
+列出全部接口令牌（**不返回 token 明文**）。Body 字段：`name, role, created_by, expires_at, last_used_at, is_revoked, created_at`。
+
+### POST /api/apikeys
+
+创建令牌。Body：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `name` | string | 用途备注 |
+| `role` | string | `admin` / `super` |
+| `expires_in` | int? | 有效秒数，省略 = 永不过期 |
+
+响应 `data.token` 为 64 位明文 token，仅此一次返回：
+
+```json
+{ "code": 0, "msg": "ok", "data": { "id": 3, "name": "脚本A", "role": "admin", "token": "3f9c…(64位，仅此一次)", "expires_at": null } }
+```
+
+### POST /api/apikeys/{id}/revoke
+
+吊销令牌（软删除，立即生效）。
+
+---
+
 ## 相关文档
 
+- [权限系统（LuckPerms 风格）](./permission-system.md) - 权限模型概念与插件开发接口
 - [插件开发文档](./INDEX.md) - 插件开发系列文档索引
 - [README](../README.md) - 项目总览
 - [OneBot 11 标准](https://github.com/botuniverse/onebot-11) - OneBot 协议规范
