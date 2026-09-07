@@ -371,6 +371,9 @@ class Framework:
         # 1. 启动定时任务调度器（绑定主事件循环）
         self.scheduler.start(loop=self.loop)
 
+        # 1.2 注册框架内置任务：每小时清理过期的权限节点
+        self._register_builtin_jobs()
+
         # 1.5 确保 plugins_dat 目录存在，并迁移旧插件配置文件
         os.makedirs(self.plugin_loader.plugins_dat_dir, exist_ok=True)
         self.plugin_loader.migrate_legacy_configs()
@@ -431,6 +434,29 @@ class Framework:
         await self.event_bus.aemit('system.plugin.loaded', {'plugins': loaded})
 
         logger.info("框架启动完成，等待消息...")
+
+    def _register_builtin_jobs(self):
+        """注册框架内置定时任务（与插件任务互不干扰）"""
+        try:
+            from framework import perm as perm_mod
+
+            def _cleanup_expired_perms():
+                try:
+                    perm_mod.cleanup_expired(self.db)
+                except Exception as e:
+                    logger.warning(f"权限过期清理任务异常: {e}")
+
+            sched = getattr(self.scheduler, '_scheduler', None)
+            if sched is None:
+                return
+            sched.add_job(
+                _cleanup_expired_perms,
+                'cron', minute=17, id='builtin_perm_cleanup',
+                replace_existing=True, misfire_grace_time=600,
+            )
+            logger.debug("内置定时任务已注册: 权限过期清理（每小时第 17 分钟）")
+        except Exception as e:
+            logger.warning(f"注册内置定时任务失败: {e}")
 
     def _warn_insecure_config(self):
         """启动安全提示"""

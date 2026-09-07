@@ -96,10 +96,26 @@ const renameName = ref('')
 let renamePath = ''
 
 const crumbs = computed(() => {
-  const segs = path.value ? path.value.split(/[\\/]+/).filter(Boolean) : []
+  const p = path.value || ''
   const parts = [{ label: '根目录', path: '' }]
-  let acc = ''
-  segs.forEach(s => { acc = acc ? acc + '/' + s : s; parts.push({ label: s, path: acc }) })
+  if (!p) return parts
+  // 保留绝对路径前缀：类 Unix 的 "/" 或 Windows 盘符 "C:\"
+  // 否则会生成相对路径，点面包屑时后端按相对路径解析失败（无效的目录路径）
+  let prefix = ''
+  let rest = p
+  if (rest.startsWith('/')) {
+    prefix = '/'
+    rest = rest.slice(1)
+  } else {
+    const m = rest.match(/^[A-Za-z]:[\\/]/)
+    if (m) { prefix = m[0].replace(/\\/g, '/'); rest = rest.slice(m[0].length) }
+  }
+  const segs = rest.split(/[\\/]+/).filter(Boolean)
+  let acc = prefix
+  segs.forEach(s => {
+    acc = acc ? acc + '/' + s : s
+    parts.push({ label: s, path: acc })
+  })
   return parts
 })
 

@@ -109,7 +109,8 @@ class PluginContext:
 
     def command(self, pattern: str, handler: Callable, priority: int = 50,
                 dynamic: bool = False, alias: str = None, description: str = None,
-                require_admin: bool = False, require_superuser: bool = False):
+                require_admin: bool = False, require_superuser: bool = False,
+                require_perm: str = None):
         """
         注册一个命令
         :param pattern: 正则表达式或命令名（主匹配模式）
@@ -118,8 +119,11 @@ class PluginContext:
         :param dynamic: 是否为动态命令（dynamic=True 表示该命令在动态命令 tab 展示，仅标记用）
         :param alias: 命令别名，逗号分隔的字符串或列表（如 "/help,/h" 或 ["/help", "/h"]）
         :param description: 命令描述文本
-        :param require_admin: 需要管理员/群主/超管权限
+        :param require_admin: 需要管理员/群主/超管权限（旧的身份轴判定）
         :param require_superuser: 需要超级管理员权限（高于 require_admin）
+        :param require_perm: 需要的权限节点（新的权限组判定），如 'myplugin.ban'
+            与 require_admin/require_superuser 可并存：两者都填时要求同时满足。
+            需要「A 或 B」这类组合条件时，请在 handler 内自行调用 ev.has_perm() 判断。
         """
         if require_superuser:
             require_admin = False  # super 优先级更高
@@ -149,7 +153,34 @@ class PluginContext:
             'handler_name': handler.__name__,
             'is_dynamic': 1 if dynamic else 0,
             'require_level': 'super' if require_superuser else ('admin' if require_admin else ''),
+            'require_perm': (require_perm or '').strip().lower(),
         })
+
+    # ---- 权限组（LuckPerms 风格）----
+
+    def has_perm(self, user_id: int, node: str, context: dict = None,
+                 role: str = None) -> bool:
+        """
+        判断某用户是否拥有指定权限节点（未定义按拒绝处理）
+
+        :param user_id: QQ 号
+        :param node: 权限节点，如 'myplugin.ban'
+        :param context: 上下文 {'group': '123456', 'bot': 'main', 'msgtype': 'group'}
+        :param role: 框架身份（super/owner/admin/member），用于注入内置角色组
+        """
+        from framework import perm
+        return perm.has_perm(self._db, user_id, node, context, role)
+
+    def check_perm(self, user_id: int, node: str, context: dict = None,
+                   role: str = None):
+        """三态权限查询：True=授予 / False=显式否决 / None=未定义"""
+        from framework import perm
+        return perm.check_perm(self._db, user_id, node, context, role)
+
+    def user_groups(self, user_id: int, context: dict = None, role: str = None) -> list:
+        """用户的生效权限组（含继承展开，按 weight 降序）"""
+        from framework import perm
+        return perm.user_groups(self._db, user_id, context, role)
 
     # ---- 插件配置读取 ----
 

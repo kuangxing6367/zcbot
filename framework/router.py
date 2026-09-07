@@ -51,15 +51,16 @@ class SimpleMatch:
 class _RouteCommand:
     """预编译后的路由命令（构建一次，热路径直接复用）"""
 
-    __slots__ = ('id', 'pattern', 'handler_name', 'require_level',
+    __slots__ = ('id', 'pattern', 'handler_name', 'require_level', 'require_perm',
                  'rx', 'simple', 'aliases')
 
     def __init__(self, id, pattern, handler_name, require_level,
-                 rx, simple, aliases):
+                 rx, simple, aliases, require_perm=''):
         self.id = id
         self.pattern = pattern
         self.handler_name = handler_name
         self.require_level = require_level
+        self.require_perm = require_perm  # 权限节点要求（LuckPerms 风格），空=不限制
         self.rx = rx          # 编译后的正则，或 None
         self.simple = simple  # 简单前缀匹配 pattern，或 None
         self.aliases = aliases
@@ -173,17 +174,28 @@ class MessageRouter:
 
         if table:
             # 2. 一次性加载全部已启用命令（is_dynamic 仅展示，不路由）
+            base_where = (
+                "WHERE is_dynamic = 0 "
+                "AND (is_active = 1 OR (is_active = 0 AND alias IS NOT NULL AND alias != '')) "
+                "ORDER BY priority ASC, created_at ASC"
+            )
             try:
                 cmds = self.db.query(
                     "SELECT id, plugin_name, pattern, alias, handler, "
-                    "require_level, is_active FROM commands "
-                    "WHERE is_dynamic = 0 "
-                    "AND (is_active = 1 OR (is_active = 0 AND alias IS NOT NULL AND alias != '')) "
-                    "ORDER BY priority ASC, created_at ASC"
+                    "require_level, require_perm, is_active FROM commands " + base_where
                 )
-            except Exception as e:
-                logger.error(f"构建路由表失败（命令查询）: {e}")
-                cmds = []
+            except Exception:
+                # 极老库没有 require_perm 列 → 回退基础查询并补空值
+                try:
+                    cmds = self.db.query(
+                        "SELECT id, plugin_name, pattern, alias, handler, "
+                        "require_level, is_active FROM commands " + base_where
+                    )
+                    for _c in cmds:
+                        _c['require_perm'] = ''
+                except Exception as e:
+                    logger.error(f"构建路由表失败（命令查询）: {e}")
+                    cmds = []
 
             by_plugin = {}
             for c in cmds:
@@ -275,6 +287,7 @@ class MessageRouter:
                 rx=rx,
                 simple=simple,
                 aliases=aliases,
+                require_perm=(c.get('require_perm') or '').strip().lower(),
             )
         except Exception as e:
             logger.error(f"命令预编译失败 [{c.get('plugin_name')}]: {e}")
@@ -599,6 +612,27 @@ class MessageRouter:
                         'send_msg',
                         **target,
                         message=f'权限不足（需要超级管理员权限）'
+                    )
+                    return True
+
+                # ── 权限节点检查（LuckPerms 风格，与 require_level 并存）──
+                # require_perm 为空时完全不触发权限解析，普通消息零开销
+                perm_node = cmd.require_perm
+                if perm_node and not ev.has_perm(perm_node):
+                    self._stats_hit(cmd.id)
+                    log_broker.log_plugin(plugin_name, '权限不足', {
+                        'handler': cmd.handler_name,
+                        'user_id': ev.user_id,
+                        'group_id': ev.group_id,
+                        'node': perm_node,
+                        'role': ev.role,
+                        'message': message[:80],
+                    })
+                    target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
+                    await self.framework.api_caller.acall(
+                        'send_msg',
+                        **target,
+                        message=f'权限不足（需要权限节点: {perm_node}）'
                     )
                     return True
 
