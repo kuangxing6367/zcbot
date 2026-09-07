@@ -910,6 +910,87 @@ def _auto_create_tables(database):
                 UNIQUE(ip)
             )
         """,
+
+        # ── 权限系统（LuckPerms 风格）─────────────────────────────
+        # node = 'group.xxx' 表示继承/加入 xxx 组；context_* 为 NULL = 全局生效
+        # 时间字段统一用 VARCHAR(32) 存 unix 时间戳字符串（SQLite/MySQL 一致）
+        # 注意：SQLite 不支持 CREATE TABLE 内联 INDEX，索引由 _migrate_perm_tables 补建
+        'perm_groups': """
+            CREATE TABLE IF NOT EXISTS perm_groups (
+                name         VARCHAR(64)  NOT NULL PRIMARY KEY,
+                display_name VARCHAR(100) DEFAULT NULL,
+                weight       INTEGER      DEFAULT 0,
+                prefix       VARCHAR(64)  DEFAULT NULL,
+                suffix       VARCHAR(64)  DEFAULT NULL,
+                is_default   INTEGER      DEFAULT 0,
+                created_at   VARCHAR(32)  DEFAULT NULL
+            )
+        """,
+        'perm_group_nodes': """
+            CREATE TABLE IF NOT EXISTS perm_group_nodes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_name  VARCHAR(64)  NOT NULL,
+                node        VARCHAR(191) NOT NULL,
+                value       INTEGER      DEFAULT 1,
+                context_key VARCHAR(32)  DEFAULT NULL,
+                context_val VARCHAR(64)  DEFAULT NULL,
+                expire_at   VARCHAR(32)  DEFAULT NULL,
+                created_at  VARCHAR(32)  DEFAULT NULL
+            )
+        """,
+        'perm_user_nodes': """
+            CREATE TABLE IF NOT EXISTS perm_user_nodes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     BIGINT       NOT NULL,
+                node        VARCHAR(191) NOT NULL,
+                value       INTEGER      DEFAULT 1,
+                context_key VARCHAR(32)  DEFAULT NULL,
+                context_val VARCHAR(64)  DEFAULT NULL,
+                expire_at   VARCHAR(32)  DEFAULT NULL,
+                created_at  VARCHAR(32)  DEFAULT NULL
+            )
+        """,
+        'perm_tracks': """
+            CREATE TABLE IF NOT EXISTS perm_tracks (
+                name         VARCHAR(64)  NOT NULL PRIMARY KEY,
+                display_name VARCHAR(100) DEFAULT NULL,
+                groups_order VARCHAR(500) NOT NULL,
+                created_at   VARCHAR(32)  DEFAULT NULL
+            )
+        """,
+        'perm_audit': """
+            CREATE TABLE IF NOT EXISTS perm_audit (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                operator    VARCHAR(100) DEFAULT NULL,
+                action      VARCHAR(32)  DEFAULT NULL,
+                target_type VARCHAR(16)  DEFAULT NULL,
+                target      VARCHAR(100) DEFAULT NULL,
+                node        VARCHAR(191) DEFAULT NULL,
+                value       INTEGER      DEFAULT NULL,
+                context     VARCHAR(120) DEFAULT NULL,
+                detail      VARCHAR(500) DEFAULT NULL,
+                created_at  VARCHAR(32)  DEFAULT NULL
+            )
+        """,
+
+        # ── 接口令牌（API Key）──────────────────────────────────
+        # 与用户会话 token 解耦：不随登录/登出轮换，可长期有效，专供外部程序调 REST API
+        # token 长度不固定（>=40 字符），故不放进 _verify_token 的 2048 长度校验分支
+        # expires_at / last_used_at / created_at 统一存 unix 时间戳字符串（SQLite/MySQL 一致）
+        'api_tokens': """
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                token        VARCHAR(512) NOT NULL,
+                name         VARCHAR(100) NOT NULL,
+                role         VARCHAR(20)  DEFAULT 'admin',
+                created_by   VARCHAR(100) DEFAULT NULL,
+                created_at   VARCHAR(32)  DEFAULT NULL,
+                expires_at   VARCHAR(32)  DEFAULT NULL,
+                last_used_at VARCHAR(32)  DEFAULT NULL,
+                is_active    INTEGER      DEFAULT 1,
+                UNIQUE(token)
+            )
+        """,
     }
 
     # MySQL 模式下替换 AUTOINCREMENT → AUTO_INCREMENT
@@ -932,6 +1013,9 @@ def _auto_create_tables(database):
     # 迁移：给 users 表追加 role 列
     _migrate_users_table(database)
 
+    # 迁移：给 commands 表追加 require_perm 列（权限组节点要求）
+    _migrate_commands_require_perm(database)
+
     # 迁移：给 admin_users 表追加 token 列（token 认证）
     _migrate_admin_users_table(database)
 
@@ -940,6 +1024,9 @@ def _auto_create_tables(database):
 
     # 迁移：dynamic_commands 表增加 handler 列（关键词 handler 回调）
     _migrate_dynamic_commands_handler(database)
+
+    # 迁移：权限系统表补索引 + 播种默认组（表本体已在上方 tables 字典建好）
+    _migrate_perm_tables(database)
 
 
 def _migrate_commands_table(database):
@@ -957,6 +1044,25 @@ def _migrate_commands_table(database):
                     "COMMENT '权限要求: admin=管理员/群主/超管, super=超管'"
                 )
             logger.info("数据库迁移: commands 表添加 require_level 列")
+    except Exception:
+        pass
+
+
+def _migrate_commands_require_perm(database):
+    """迁移 commands 表添加 require_perm 列（权限节点要求，与 require_level 并存）"""
+    try:
+        if database.table_exists('commands') and \
+           not database.table_has_column('commands', 'require_perm'):
+            if database.db_type == 'sqlite':
+                database.execute(
+                    "ALTER TABLE commands ADD COLUMN require_perm TEXT DEFAULT ''"
+                )
+            else:
+                database.execute(
+                    "ALTER TABLE commands ADD COLUMN require_perm VARCHAR(255) DEFAULT '' "
+                    "COMMENT '权限节点要求(LuckPerms风格), 空=不限制'"
+                )
+            logger.info("数据库迁移: commands 表添加 require_perm 列")
     except Exception:
         pass
 
@@ -1038,6 +1144,47 @@ def _migrate_dynamic_commands_table(database):
             "COMMENT '匹配方式'"
         )
         logger.info("数据库迁移: dynamic_commands.match_type ENUM 增加 contains")
+    except Exception:
+        pass
+
+
+def _migrate_perm_tables(database):
+    """权限系统（perm_*）建表后处理：补索引 + 播种默认组
+
+    表本体由 _auto_create_tables 创建，这里补两件事：
+    1. 索引：SQLite 不支持 CREATE TABLE 内联 INDEX，只能单独建；
+       MySQL 由 sql/init.sql 建（重复执行会报错，故静默忽略）
+    2. 默认组 default：全员自动拥有，weight 最低。用先查后插保证幂等
+       （INSERT IGNORE 在两库语义不同，不采用）
+    """
+    index_ddls = (
+        "CREATE INDEX IF NOT EXISTS idx_pun_user ON perm_user_nodes (user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_pun_node ON perm_user_nodes (node)",
+        "CREATE INDEX IF NOT EXISTS idx_pgn_group ON perm_group_nodes (group_name)",
+        "CREATE INDEX IF NOT EXISTS idx_pgn_node ON perm_group_nodes (node)",
+        "CREATE INDEX IF NOT EXISTS idx_pg_weight ON perm_groups (weight)",
+        "CREATE INDEX IF NOT EXISTS idx_pa_target ON perm_audit (target_type, target)",
+        "CREATE INDEX IF NOT EXISTS idx_pa_created ON perm_audit (created_at)",
+    )
+    for ddl in index_ddls:
+        try:
+            database.execute(ddl)
+        except Exception:
+            pass
+
+    try:
+        if not database.table_exists('perm_groups'):
+            return
+        row = database.query_one(
+            "SELECT name FROM perm_groups WHERE name = %s", ('default',))
+        if not row:
+            database.execute(
+                "INSERT INTO perm_groups "
+                "(name, display_name, weight, prefix, suffix, is_default, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                ('default', '默认组', 0, None, None, 1, str(int(time.time())))
+            )
+            logger.info("数据库迁移: 播种默认权限组 default")
     except Exception:
         pass
 

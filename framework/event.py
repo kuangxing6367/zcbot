@@ -126,6 +126,7 @@ class Event:
         # ----- 权限信息（延迟加载，在调用属性时按需查询） -----
         self._framework = None  # 由 router 注入
         self._role_cache = None  # 缓存 role 查询结果
+        self._perm_cache = None  # 缓存权限组解析结果（PermissionSet）
 
         # ----- 事件传播控制 -----
         self._stopped = False  # 是否停止传播
@@ -235,6 +236,66 @@ class Event:
     def is_group_owner(self) -> bool:
         """判断用户是否为群主"""
         return self.role == 'owner'
+
+    @property
+    def is_group_admin(self) -> bool:
+        """判断用户是否为群管理员（不含群主，群主请用 is_group_owner）"""
+        return self.role == 'admin'
+
+    @property
+    def is_blacklisted(self) -> bool:
+        """判断用户是否在黑名单中（注意：超管即使被拉黑，role 仍为 super）"""
+        return self.role == 'blacklist'
+
+    # ===== 权限组（LuckPerms 风格，与 role 身份轴平行）=====
+    # 这一套完全独立于 Event.role：role 仍是单一字符串，权限组在其之外平行存在。
+    # 只有真正调用下面这些属性/方法时才会解析，普通消息零开销。
+
+    def _perm_set(self):
+        """获取（并缓存）完整权限快照"""
+        if self._perm_cache is not None:
+            return self._perm_cache
+        from framework import perm
+        try:
+            db = getattr(self._framework, 'db', None)
+            ctx = perm.context_from_event(self)
+            if db is None:
+                self._perm_cache = perm.PermissionSet(self.user_id, ctx, ['default'], {}, {})
+            else:
+                self._perm_cache = perm.resolve(db, self.user_id, ctx, self.role)
+        except Exception:
+            self._perm_cache = perm.PermissionSet(self.user_id, {}, ['default'], {}, {})
+        return self._perm_cache
+
+    def has_perm(self, node: str) -> bool:
+        """
+        判断是否拥有某个权限节点（未定义按拒绝处理）
+
+        :param node: 权限节点，如 'myplugin.ban'、'zcbot.role.admin'
+        支持通配符：'chat.*' 匹配 'chat.ban'；'*' 匹配一切
+        """
+        return self._perm_set().has(node)
+
+    def check_perm(self, node: str):
+        """
+        三态权限查询：True=授予 / False=显式否决 / None=未定义
+        """
+        return self._perm_set().check(node)
+
+    @property
+    def perms(self):
+        """完整权限快照对象（PermissionSet），可用 .groups / .nodes / .primary_group"""
+        return self._perm_set()
+
+    @property
+    def perm_groups(self) -> list:
+        """生效的权限组列表（含继承展开，按 weight 降序）"""
+        return list(self._perm_set().groups)
+
+    @property
+    def primary_group(self) -> str:
+        """权重最高的非内置权限组"""
+        return self._perm_set().primary_group
 
     # ===== 事件传播控制 =====
 

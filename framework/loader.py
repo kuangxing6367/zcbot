@@ -1309,19 +1309,13 @@ class PluginLoader:
 
             # INSERT ... ON DUPLICATE KEY UPDATE 保持 ID 不变
             if commands:
-                sql = (
-                    "INSERT INTO commands (plugin_name, pattern, alias, description, "
-                    "priority, handler, is_dynamic, require_level, is_active) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "pattern = VALUES(pattern), "
-                    "alias = VALUES(alias), "
-                    "description = VALUES(description), "
-                    "priority = VALUES(priority), "
-                    "is_dynamic = VALUES(is_dynamic), "
-                    "require_level = VALUES(require_level), "
-                    "is_active = VALUES(is_active)"
-                )
+                # require_perm 列由 db 迁移添加；极老库可能没有，失败则回退到不含该列的写法
+                base_cols = ("plugin_name, pattern, alias, description, "
+                             "priority, handler, is_dynamic, require_level, is_active")
+                base_upd = ("pattern = VALUES(pattern), alias = VALUES(alias), "
+                            "description = VALUES(description), priority = VALUES(priority), "
+                            "is_dynamic = VALUES(is_dynamic), require_level = VALUES(require_level), "
+                            "is_active = VALUES(is_active)")
                 params = []
                 for c in commands:
                     handler_name = c['handler_name']
@@ -1335,9 +1329,37 @@ class PluginLoader:
                         c['priority'], handler_name, c.get('is_dynamic', 0),
                         c.get('require_level', ''), final_active
                     ))
+
+                if self._commands_has_require_perm():
+                    sql = (
+                        f"INSERT INTO commands ({base_cols}, require_perm) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                        f"ON DUPLICATE KEY UPDATE {base_upd}, "
+                        "require_perm = VALUES(require_perm)"
+                    )
+                    params = [p + ((c.get('require_perm') or ''),)
+                              for p, c in zip(params, commands)]
+                else:
+                    sql = (
+                        f"INSERT INTO commands ({base_cols}) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                        f"ON DUPLICATE KEY UPDATE {base_upd}"
+                    )
                 self.db.execute_many(sql, params)
         except Exception as e:
             logger.error(f"[{plugin_name}] 同步命令失败: {e}")
+
+    def _commands_has_require_perm(self) -> bool:
+        """commands 表是否已有 require_perm 列（兼容未执行迁移的极老库）"""
+        cached = getattr(self, '_cmd_has_perm_col', None)
+        if cached is not None:
+            return cached
+        try:
+            has = self.db.table_has_column('commands', 'require_perm')
+        except Exception:
+            has = False
+        self._cmd_has_perm_col = has
+        return has
 
     def _sync_tasks(self, plugin_name: str, tasks: list):
         """同步定时任务到数据库和调度器"""

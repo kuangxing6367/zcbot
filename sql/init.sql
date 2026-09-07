@@ -280,8 +280,125 @@ CREATE TABLE IF NOT EXISTS ip_blacklist (
 
 
 -- ============================================================
+-- 权限组表（LuckPerms 风格权限系统）
+-- 模型：节点 node + 组 group + 继承(group.xxx 节点) + 上下文 context + 临时 expire_at + 否决 value=0
+-- 说明：
+--   1. 内置角色组（super/owner/admin/member）由框架代码虚拟注入，不入库，防止误删
+--   2. 时间字段统一存 unix 时间戳字符串，保证 SQLite / MySQL 行为一致
+--   3. node 定长 191 是 utf8mb4 下 767 字节索引上限的安全值（191*4=764）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS perm_groups (
+    name            VARCHAR(64)     NOT NULL        COMMENT '组名（唯一标识，建议小写字母数字下划线）',
+    display_name    VARCHAR(100)    DEFAULT NULL    COMMENT '显示名',
+    weight          INT             DEFAULT 0       COMMENT '权重（越大越优先，决定 primary group）',
+    prefix          VARCHAR(64)     DEFAULT NULL    COMMENT '前缀（可用于群头衔展示）',
+    suffix          VARCHAR(64)     DEFAULT NULL    COMMENT '后缀',
+    is_default      TINYINT(1)      DEFAULT 0       COMMENT '是否为默认组（全员自动拥有）',
+    created_at      VARCHAR(32)     DEFAULT NULL    COMMENT '创建时间（unix 时间戳）',
+    PRIMARY KEY (name),
+    INDEX idx_weight (weight),
+    INDEX idx_default (is_default)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='权限组表';
+
+
+-- ============================================================
+-- 权限组节点表
+-- node = 'group.xxx' 表示该组继承 xxx 组（LuckPerms v5 做法：继承与权限统一用节点表达）
+-- context_key / context_val 为 NULL 时表示该节点全局生效
+-- ============================================================
+CREATE TABLE IF NOT EXISTS perm_group_nodes (
+    id              INT             AUTO_INCREMENT  PRIMARY KEY,
+    group_name      VARCHAR(64)     NOT NULL        COMMENT '组名',
+    node            VARCHAR(191)    NOT NULL        COMMENT '权限节点（group.xxx = 继承 xxx 组）',
+    value           TINYINT(1)      DEFAULT 1       COMMENT '1=授予, 0=显式否决',
+    context_key     VARCHAR(32)     DEFAULT NULL    COMMENT '上下文键: group/bot/msgtype，NULL=全局',
+    context_val     VARCHAR(64)     DEFAULT NULL    COMMENT '上下文值（群号 / 实例名 / group|private）',
+    expire_at       VARCHAR(32)     DEFAULT NULL    COMMENT '过期时间（unix 时间戳），NULL=永久',
+    created_at      VARCHAR(32)     DEFAULT NULL    COMMENT '创建时间（unix 时间戳）',
+    INDEX idx_group (group_name),
+    INDEX idx_node (node)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='权限组节点表';
+
+
+-- ============================================================
+-- 用户节点表（含用户→组的归属关系）
+-- node = 'group.xxx' 表示该用户加入 xxx 组（同样不单独建关系表）
+-- 用户直接节点优先级高于所属组的节点
+-- ============================================================
+CREATE TABLE IF NOT EXISTS perm_user_nodes (
+    id              INT             AUTO_INCREMENT  PRIMARY KEY,
+    user_id         BIGINT          NOT NULL        COMMENT 'QQ号',
+    node            VARCHAR(191)    NOT NULL        COMMENT '权限节点（group.xxx = 加入 xxx 组）',
+    value           TINYINT(1)      DEFAULT 1       COMMENT '1=授予, 0=显式否决',
+    context_key     VARCHAR(32)     DEFAULT NULL    COMMENT '上下文键: group/bot/msgtype，NULL=全局',
+    context_val     VARCHAR(64)     DEFAULT NULL    COMMENT '上下文值',
+    expire_at       VARCHAR(32)     DEFAULT NULL    COMMENT '过期时间（unix 时间戳），NULL=永久',
+    created_at      VARCHAR(32)     DEFAULT NULL    COMMENT '创建时间（unix 时间戳）',
+    INDEX idx_user (user_id),
+    INDEX idx_node (node)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='用户权限节点表';
+
+
+-- ============================================================
+-- 升降级轨道表（Tracks）
+-- groups_order 从左到右为晋升方向，promote=向右一格，demote=向左一格
+-- ============================================================
+CREATE TABLE IF NOT EXISTS perm_tracks (
+    name            VARCHAR(64)     NOT NULL        COMMENT '轨道名（唯一标识）',
+    display_name    VARCHAR(100)    DEFAULT NULL    COMMENT '显示名',
+    groups_order    VARCHAR(500)    NOT NULL        COMMENT '组名列表（逗号分隔，左→右为晋升方向）',
+    created_at      VARCHAR(32)     DEFAULT NULL    COMMENT '创建时间（unix 时间戳）',
+    PRIMARY KEY (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='权限升降级轨道表';
+
+
+-- ============================================================
+-- 权限审计表（谁在何时给谁授了什么权）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS perm_audit (
+    id              INT             AUTO_INCREMENT  PRIMARY KEY,
+    operator        VARCHAR(100)    DEFAULT NULL    COMMENT '操作者（Web账号 / QQ号 / system）',
+    action          VARCHAR(32)     DEFAULT NULL    COMMENT '动作: set/unset/addgroup/removegroup/promote/demote/creategroup/deletegroup',
+    target_type     VARCHAR(16)     DEFAULT NULL    COMMENT '目标类型: user/group/track',
+    target          VARCHAR(100)    DEFAULT NULL    COMMENT '目标标识（QQ号 / 组名 / 轨道名）',
+    node            VARCHAR(191)    DEFAULT NULL    COMMENT '权限节点',
+    value           TINYINT(1)      DEFAULT NULL    COMMENT '1=授予, 0=否决',
+    context         VARCHAR(120)    DEFAULT NULL    COMMENT '上下文 key=val',
+    detail          VARCHAR(500)    DEFAULT NULL    COMMENT '备注',
+    created_at      VARCHAR(32)     DEFAULT NULL    COMMENT '操作时间（unix 时间戳）',
+    INDEX idx_target (target_type, target),
+    INDEX idx_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='权限变更审计表';
+
+-- 接口令牌表（API Key）：与用户会话 token 解耦，供外部程序调用 REST API
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id              INT             AUTO_INCREMENT  PRIMARY KEY,
+    token           VARCHAR(512)    NOT NULL        COMMENT '令牌（外部程序持有，仅创建时返回一次）',
+    name            VARCHAR(100)    NOT NULL        COMMENT '令牌名称（便于辨识用途）',
+    role            VARCHAR(20)     DEFAULT 'admin' COMMENT '作用身份: admin / super',
+    created_by      VARCHAR(100)    DEFAULT NULL    COMMENT '创建者（Web账号）',
+    created_at      VARCHAR(32)     DEFAULT NULL    COMMENT '创建时间（unix 时间戳）',
+    expires_at      VARCHAR(32)     DEFAULT NULL    COMMENT '过期时间（unix 时间戳），NULL=永不过期',
+    last_used_at    VARCHAR(32)     DEFAULT NULL    COMMENT '最近调用时间（unix 时间戳）',
+    is_active       TINYINT(1)      DEFAULT 1       COMMENT '1=有效, 0=已吊销',
+    UNIQUE KEY uk_token (token),
+    INDEX idx_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='接口令牌表';
+
+
+-- ============================================================
 -- 插入默认数据
 -- ============================================================
+
+-- 默认权限组（所有人自动拥有，weight 最低）
+INSERT IGNORE INTO perm_groups (name, display_name, weight, is_default, created_at)
+    VALUES ('default', '默认组', 0, 1, UNIX_TIMESTAMP());
 
 -- 默认管理员账号（密码需要在首次启动时强制修改）
 -- 默认密码: admin123 （生产环境务必修改）
