@@ -28,6 +28,13 @@
         </div>
         <el-empty v-if="!logs.length" description="暂无日志" :image-size="50" />
       </div>
+      <div class="terminal-bar">
+        <el-input v-model="terminalCmd" placeholder="输入终端命令（如 help、status）" @keyup.enter="execTerminal" clearable style="flex:1" />
+        <el-button @click="execTerminal" :loading="terminalLoading">执行</el-button>
+      </div>
+      <div v-if="terminalResult" class="terminal-result">
+        <pre>{{ terminalResult }}</pre>
+      </div>
     </el-card>
   </div>
 </template>
@@ -43,6 +50,9 @@ const level = ref('')
 const keyword = ref('')
 const autoScroll = ref(true)
 const logBoxRef = ref(null)
+const terminalCmd = ref('')
+const terminalResult = ref('')
+const terminalLoading = ref(false)
 let lastSeq = 0
 let timer = null
 
@@ -92,6 +102,23 @@ async function poll() {
   if (r.latest_seq) lastSeq = r.latest_seq
 }
 
+async function execTerminal() {
+  if (!terminalCmd.value.trim()) return
+  terminalLoading.value = true
+  terminalResult.value = ''
+  try {
+    const r = await api('/api/terminal/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: terminalCmd.value.trim() })
+    })
+    terminalResult.value = r.output || JSON.stringify(r, null, 2)
+  } catch (e) {
+    terminalResult.value = '执行失败: ' + (e.message || e)
+  }
+  terminalLoading.value = false
+}
+
 async function clearLogs() {
   await ElMessageBox.confirm('确定清空日志缓存吗？', '提示', { type: 'warning' })
   const r = await apiCall('/api/runtime_logs/clear', { method: 'POST' })
@@ -107,4 +134,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 
 <style scoped>
 .log-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.terminal-bar { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.terminal-result { margin-top: 8px; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; max-height: 300px; overflow: auto; }
+.terminal-result pre { margin: 0; white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 13px; }
 </style>
