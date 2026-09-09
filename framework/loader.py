@@ -1487,17 +1487,20 @@ class PluginLoader:
             # 2) 调度器孤儿清理：任务所属插件当前未加载，无法执行则移除
             try:
                 scheduler = self.framework.scheduler
-                stale = [
-                    tid for tid, info in scheduler._plugin_tasks.items()
-                    if info.get('plugin_name') not in loaded
-                ]
-                for tid in stale:
-                    try:
-                        scheduler._scheduler.remove_job(tid)
-                        scheduler._plugin_tasks.pop(tid, None)
-                        logger.info(f"[自检] 移除调度器孤儿任务: {tid}")
-                    except Exception:
-                        pass
+                if scheduler is None:
+                    pass
+                else:
+                    stale = [
+                        tid for tid, info in scheduler._plugin_tasks.items()
+                        if info.get('plugin_name') not in loaded
+                    ]
+                    for tid in stale:
+                        try:
+                            scheduler._scheduler.remove_job(tid)
+                            scheduler._plugin_tasks.pop(tid, None)
+                            logger.info(f"[自检] 移除调度器孤儿任务: {tid}")
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning(f"[自检] 调度器孤儿清理失败: {e}")
 
