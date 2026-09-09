@@ -396,9 +396,11 @@ class OneBotWebSocketServer:
 
         try:
             async for raw_message in ws:
+                logger.debug(f"[{bot_name}] 收到原始数据 {len(raw_message)} 字节: {str(raw_message)[:300]}")
                 try:
                     data = json.loads(raw_message)
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"[{bot_name}] JSON 解析失败: {e}")
                     continue
 
                 if "echo" in data:
