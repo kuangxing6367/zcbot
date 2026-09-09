@@ -28,13 +28,33 @@
         </div>
         <el-empty v-if="!logs.length" description="暂无日志" :image-size="50" />
       </div>
+      <!-- 终端命令输入 -->
+      <div class="terminal-bar">
+        <el-input
+          v-model="cmdInput"
+          placeholder="输入终端命令 (如 update, status, plugins, help...)"
+          @keyup.enter="execCmd"
+          :disabled="cmdRunning"
+          clearable
+        >
+          <template #prefix>
+            <span style="color:var(--el-color-success);font-weight:bold">$</span>
+          </template>
+          <template #append>
+            <el-button @click="execCmd" :loading="cmdRunning" type="primary">执行</el-button>
+          </template>
+        </el-input>
+        <div v-if="cmdOutput" class="cmd-output">
+          <pre>{{ cmdOutput }}</pre>
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import { api, apiCall } from '../api'
 
 const logs = ref([])
@@ -45,6 +65,10 @@ const autoScroll = ref(true)
 const logBoxRef = ref(null)
 let lastSeq = 0
 let timer = null
+
+const cmdInput = ref('')
+const cmdOutput = ref('')
+const cmdRunning = ref(false)
 
 function fmtLogTime(t) {
   const d = new Date(t * 1000)
@@ -98,6 +122,28 @@ async function clearLogs() {
   if (r) { loadLogs() }
 }
 
+async function execCmd() {
+  const cmd = cmdInput.value.trim()
+  if (!cmd) return
+  cmdRunning.value = true
+  cmdOutput.value = ''
+  try {
+    const r = await apiCall('/api/terminal/exec', {
+      method: 'POST',
+      body: JSON.stringify({ command: cmd })
+    })
+    if (r && r.code === 0) {
+      cmdOutput.value = r.data?.output || '(无输出)'
+    } else {
+      cmdOutput.value = r?.msg || '执行失败'
+    }
+  } catch (e) {
+    cmdOutput.value = '请求失败: ' + e.message
+  } finally {
+    cmdRunning.value = false
+  }
+}
+
 onMounted(async () => {
   await loadLogs()
   timer = setInterval(poll, 2000)
@@ -107,4 +153,19 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 
 <style scoped>
 .log-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.terminal-bar { margin-top: 12px; border-top: 1px solid var(--el-border-color-lighter); padding-top: 12px; }
+.cmd-output {
+  margin-top: 8px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 13px;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.cmd-output pre { margin: 0; }
 </style>
