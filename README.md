@@ -1,16 +1,46 @@
 # ZCBOT 🤖
 
 > 一个开箱即用的 QQ 机器人框架。装上就能跑，**不会写代码也能用**——里面的 AI 助手能帮你写插件。
-> 基于 OneBot 11 协议，全异步，自带网页管理面板。
+> 插件化架构：核心极简，所有功能按需加载。
 
-**当前版本：v1.2.0-beta.1**
+**当前版本：v1.3.0-beta.0**
 
 📚 项目地址：https://github.com/kuangxing6367/zcbot
 💬 反馈交流：QQ 群 **1060129201**
 
 ---
 
-## 一、它是干嘛的？（先说大白话）
+## 一、架构总览
+
+```
+┌─────────────────────────────────────────────────┐
+│            Core Framework（极简壳）               │
+│  • 插件加载器  • 事件总线  • 消息路由  • ctx     │
+└──────────────────────┬──────────────────────────┘
+                       │ 加载
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ onebot_adapter│ │ webui       │ │ session      │
+│ (可选)       │ │ (可选)       │ │ (可选)       │
+└──────────────┘ └──────────────┘ └──────────────┘
+                       │
+                       ▼
+                ┌──────────────┐
+                │ plugins/     │
+                │ 用户插件      │
+                └──────────────┘
+```
+
+**核心理念**：框架 = 壳 + 官方插件集 + 用户插件
+
+- **核心壳**：极简的插件加载器和事件总线，不实现任何具体功能
+- **官方插件**：框架开发者提供的基础能力（OneBot适配、WebUI、会话、调度……）
+- **用户插件**：用户自己的业务逻辑
+
+---
+
+## 二、它是干嘛的？（先说大白话）
 
 你有一个 QQ 号（一般是小号）。ZCBOT 能让这个 QQ 号变成**机器人**：
 
@@ -20,6 +50,55 @@
 - 想要新功能？**直接用聊天的方式让 AI 助手帮你写**，不用自己敲代码
 
 它把最麻烦的部分（连 QQ、收消息、发消息、存数据、网页后台）全做好了，你只负责"想要什么"。
+
+---
+
+## 三、官方插件（可选加载）
+
+在 `config.yaml` 中控制：
+
+```yaml
+core_plugins:
+  onebot_adapter: true    # OneBot 11 协议适配器
+  webui: true             # Web 管理后台
+  session: true           # 多轮会话管理器
+  scheduler: true         # 定时任务调度器
+```
+
+| 官方插件 | 功能 | 默认 |
+|---------|------|------|
+| `onebot_adapter` | OneBot 11 WebSocket 连接 + API 调用 | 启用 |
+| `webui` | Web 管理面板 + REST API | 启用 |
+| `session` | 内置多轮会话（`ctx.wait_for()`） | 启用 |
+| `scheduler` | APScheduler 定时任务 | 启用 |
+
+**不需要 QQ 功能？** 设 `core_plugins.onebot_adapter: false`，整个 WS 长连接不加载。
+
+**不需要 WebUI？** 设 `core_plugins.webui: false`，Flask 服务不启动。
+
+---
+
+## 四、多轮会话（内置）
+
+```python
+async def handle_survey(event, match):
+    # 简单用法：等待用户回复
+    name = await ctx.wait_for(event, prompt="你叫什么名字？", timeout=60)
+    if name is None:
+        await ctx.asend_msg(..., message="超时了")
+        return
+    
+    age = await ctx.wait_for(event, prompt="年龄？", timeout=60)
+    await ctx.asend_msg(..., message=f"{name}, {age}岁")
+
+# 高级用法：会话对象
+async def handle_quiz(event, match):
+    async with ctx.create_session(event, timeout=120) as sess:
+        q1 = await sess.ask("1+1=?")
+        sess.data['q1'] = q1
+        q2 = await sess.ask("2+2=?")
+        sess.data['q2'] = q2
+```
 
 ---
 
@@ -181,8 +260,8 @@ Access Token 就是**一串密码**。为了防止随便什么人都能连上你
 
 文档里专门有一篇**手把手教程**，从建文件夹开始带你写第一个插件，每个概念都有解释。
 
-> 📖 [插件开发详解：一个示例插件，逐行讲透每个语法](docs/plugin-tutorial.md)（推荐，讲得最细）
-> 📖 [快速入门](docs/getting-started.md)（精简版，10 分钟上手）
+> 📖 [编写插件](docs/guide/writing-plugins.md)（推荐，从零开始）
+> 📖 [开始使用](docs/guide/getting-started.md)（精简版）
 
 简单说，一个插件就是一个文件夹，里面有：
 
@@ -252,7 +331,7 @@ plugin:
 | **plugin_memmon** | 插件内存监控 | `/mem`、`/memdiag` |
 | **llm_blacklist** | LLM 对话黑名单 | `/插件拉黑 12345` |
 
-> 每个插件的完整命令列表和用法例子见 [📖 官方插件使用手册](docs/official-plugins.md)。
+> 每个插件的完整命令列表和用法例子见 [📖 官方插件使用手册](https://github.com/kuangxing6367/zcbot_plugins)。
 
 ---
 
@@ -361,7 +440,7 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
      http://127.0.0.1:8081/api/perm/groups
 ```
 
-> 注意：Web 后台页面走 `web.port`（默认 8080），而 REST API 走 **8081** 端口（见 `docs/API.md`）。
+> 注意：Web 后台页面走 `web.port`（默认 8080），而 REST API 走 **8081** 端口。
 
 ---
 
@@ -465,7 +544,7 @@ def ban(ev): ...
 | `GET /api/perm/audit` | 审计日志 |
 | `POST /api/perm/cleanup` | 手动触发过期节点清理 |
 
-> 完整请求/响应字段见 [📖 Web API 接口文档](docs/API.md)。
+> 完整请求/响应字段见 [📖 API 参考](docs/api/ctx.md)。
 
 ### 9.5 前端构建
 
@@ -487,18 +566,18 @@ npm run build        # 产物输出到 ../web/
 
 遇到看不懂的词，文档里都有解释。按下面的顺序读最顺：
 
-- [📚 文档索引](docs/INDEX.md) — 所有文档的总目录
-- [插件开发详解](docs/plugin-tutorial.md) — 完整示例插件，逐行讲透每个语法（新手推荐）
-- [快速入门](docs/getting-started.md) — 手把手写第一个插件
-- [插件目录结构](docs/plugin-structure.md) — 代码和数据怎么放
-- [API 参考](docs/api-reference.md) — 写插件时的全部接口
-- [配置系统](docs/configuration.md) — 插件的设置项怎么写
-- [示例合集](docs/examples.md) — 一个完整的签到插件源码
-- [官方插件使用手册](docs/official-plugins.md) — 官方插件仓库每个插件的命令与用法例子
-- [Web API 接口文档](docs/API.md) — 后台后端 HTTP API 完整定义
-- [调试指南](docs/debugging.md) — 插件出 bug 了？看日志、开 DEBUG、打断点、热重载
-- [最佳实践](docs/best-practices.md) — 写插件的好习惯 + 提交前自查清单
-- [已知问题](docs/KNOWN_ISSUES.md) — 框架已知的坑和修复进度（P0/P1/P2）
+- [📚 文档索引](docs/guide/README.md) — 所有文档的总目录
+- [编写插件](docs/guide/writing-plugins.md) — 从零开始写第一个插件
+- [开始使用](docs/guide/getting-started.md) — 快速上手
+- [配置系统](docs/guide/configuration.md) — 插件的设置项怎么写
+- [多轮会话](docs/guide/session.md) — 交互式对话
+- [API 参考](docs/api/ctx.md) — ctx 全部方法
+- [架构详解](docs/advanced/architecture.md) — 消息处理流程
+- [权限系统](docs/advanced/permission.md) — LuckPerms 风格权限
+- [定时任务](docs/advanced/scheduler.md) — cron/interval 定时
+- [数据库](docs/advanced/database.md) — SQLite/MySQL
+- [部署](docs/advanced/deployment.md) — 生产环境部署
+- [常见问题](docs/faq.md) — 常见坑和解决方案
 
 ---
 

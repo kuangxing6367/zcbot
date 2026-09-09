@@ -2,13 +2,13 @@
 框架核心引擎
 组装所有模块，启动生命周期（异步模型）
 
-异步架构：
-- 主事件循环驱动 WebSocket 服务端 / 定时任务 / 心跳 / 统计写库
-- 消息处理全异步：async handler 直接 await，sync handler 转线程执行
-- 框架自身的 DB 写入（用户注册、命中计数）由 AsyncStatsWriter 批量落库，
-  避免每条消息同步写库阻塞事件循环
+插件化架构：
+- 核心壳：插件加载器 + 事件总线 + 消息路由 + ctx + 数据库
+- 官方插件：OneBot适配、WebUI、会话管理、定时调度（config 开关控制）
+- 用户插件：业务逻辑
 """
 import asyncio
+import importlib
 import gc
 import logging
 import logging.handlers
@@ -21,14 +21,11 @@ import psutil
 
 from framework.config import load_config
 from framework.db import init_db
-from framework.api import ApiCaller
-from framework.websocket_handler import WebSocketServer
 from framework.loader import PluginLoader
-from framework.scheduler import TaskScheduler
 from framework.router import MessageRouter
 from framework.event_bus import EventBus
-from framework.apis import WebServer
 from framework.log_broker import log_broker, FrameworkLogHandler
+from framework.protocol import ServiceRegistry
 
 logger = logging.getLogger('zcbot')
 
@@ -209,19 +206,17 @@ class Framework:
         # 初始化各个模块
         logger.info("正在初始化框架核心引擎...")
 
-        # 数据库
+        # 服务注册表（官方插件注册自身为核心能力）
+        self.services = ServiceRegistry()
+
+        # 数据库（保留在核心，因为太基础）
         self.db = init_db(self.config['database'])
 
-        # 数据库专用线程池：DB 操作与默认线程池（sync handler / 定时任务）隔离，
-        # 避免某次 DB 阻塞（如连接池繁忙）把整个框架的线程池占满导致消息停摆
+        # 数据库专用线程池
         self._db_executor = ThreadPoolExecutor(
             max_workers=max(8, min(32, (os.cpu_count() or 4) * 2)),
             thread_name_prefix='zcdb',
         )
-
-        # API 调用器
-        self.api_caller = ApiCaller()
-        self.api_caller.on_message_sent = self._on_message_sent
 
         # 事件总线
         self.event_bus = EventBus()
@@ -229,52 +224,52 @@ class Framework:
         # 消息路由器
         self.router = MessageRouter(self)
 
-        # 插件加载器（plugins/ 存代码，plugins_dat/ 存配置）
+        # 插件加载器（支持 core_plugins/ + plugins/）
         self.plugin_loader = PluginLoader(
             self._get_plugins_dir(),
             self,
             self._get_plugins_dat_dir()
         )
 
-        # 定时任务调度器
-        self.scheduler = TaskScheduler(self)
-
-        # 统计批量写库器（框架自身 DB 写入走队列，不阻塞事件循环）
+        # 统计批量写库器
         self.stats_writer = AsyncStatsWriter(self)
 
-        # 原始消息处理器注册表（按插件优先级排序，收到原始消息事件，可选择性接管）
+        # 原始消息处理器注册表
         self._raw_message_handlers = []
-        # 后台事件任务引用集（防止 fire-and-forget 任务被 GC 提前回收）
+        # 后台事件任务引用集
         self._pending_tasks = set()
-
-        # WebSocket 服务端（OneBot 客户端反向连接，运行在主事件循环）
-        onebot_cfg = self.config.get('onebot', {})
-        self.ws_server = WebSocketServer(
-            host=onebot_cfg.get('listen_host', '0.0.0.0'),
-            port=onebot_cfg.get('listen_port', 6830),
-            access_token=onebot_cfg.get('access_token', ''),
-            on_connect_callback=self._on_bot_connect,
-            on_disconnect_callback=self._on_bot_disconnect,
-            on_message_callback=self._on_ws_message,
-            api_caller=self.api_caller,
-        )
-
-        # Web UI 服务器
-        self.web_server = WebServer(self)
 
         # 心跳参数
         self._heartbeat_interval = self.config['plugin'].get('heartbeat_interval', 60)
         self._heartbeat_task = None
         self._running = False
-        self.loop = None  # 主事件循环，由 start() 设置
+        self.loop = None
 
-        # 内存看门狗参数（超限自动清理缓存 + 强制 GC）
+        # 内存看门狗参数
         mem_cfg = self.config.get('memory', {})
         self._memory_limit_mb = mem_cfg.get('limit_mb', 120)
         self._memory_check_interval = mem_cfg.get('check_interval', 30)
         self._memory_watchdog_task = None
 
         logger.info("框架核心引擎初始化完成")
+
+    # ── 服务别名（兼容旧代码，指向 service registry）──
+
+    @property
+    def api_caller(self):
+        return self.services.get('api_caller')
+
+    @property
+    def ws_server(self):
+        return self.services.get('ws_server')
+
+    @property
+    def scheduler(self):
+        return self.services.get('scheduler')
+
+    @property
+    def web_server(self):
+        return self.services.get('web_server')
 
     def _migrate_legacy_data_dirs(self):
         """
@@ -362,30 +357,25 @@ class Framework:
         self._running = True
 
         logger.info("=" * 50)
-        logger.info("ZCBOT OneBot QQ机器人框架 启动中...")
+        logger.info("ZCBOT 框架 启动中...")
         logger.info("=" * 50)
 
-        # 安全提示：Web/WS 暴露公网但 token 为空时给出警告
+        # 安全提示
         self._warn_insecure_config()
 
-        # 1. 启动定时任务调度器（绑定主事件循环）
-        self.scheduler.start(loop=self.loop)
+        # 1. 加载官方插件（core_plugins/）— 必须最先加载，提供基础服务
+        self._load_core_plugins()
 
-        # 1.2 注册框架内置任务：每小时清理过期的权限节点
-        self._register_builtin_jobs()
-
-        # 1.5 确保 plugins_dat 目录存在，并迁移旧插件配置文件
+        # 2. 确保 plugins_dat 目录存在
         os.makedirs(self.plugin_loader.plugins_dat_dir, exist_ok=True)
         self.plugin_loader.migrate_legacy_configs()
 
-        # 2. 加载插件（启动阶段，允许同步阻塞）
+        # 3. 加载用户插件（plugins/）
         loaded = self.plugin_loader.load_all()
-        logger.info(f"已加载 {len(loaded)} 个插件: {loaded}")
+        logger.info(f"已加载 {len(loaded)} 个用户插件: {loaded}")
 
-        # 2.5 插件依赖自愈
+        # 3.5 插件依赖自愈
         self._auto_heal_plugin_deps()
-
-        # 自愈后可能有插件从「加载失败」转为「可加载」，再尝试一次
         if hasattr(self.plugin_loader, '_missing_deps'):
             with self.plugin_loader._lock:
                 healed_candidates = list(self.plugin_loader._missing_deps.keys())
@@ -393,47 +383,79 @@ class Framework:
                 if plugin_name not in loaded and self.plugin_loader.is_plugin_active_in_db(plugin_name):
                     if self.plugin_loader.load_plugin(plugin_name):
                         loaded.append(plugin_name)
-                        logger.info(f"[{plugin_name}] 依赖自愈后加载成功")
-            if len(loaded) > 0:
+            if loaded:
                 logger.info(f"自愈后共加载 {len(loaded)} 个插件: {loaded}")
 
-        # 3. 对每个已加载的插件执行 register
+        # 4. 对每个已加载的插件执行 register
         for plugin_name in loaded:
             self.plugin_loader.register_commands(plugin_name)
 
-        # 4. 启动路由表后台刷新（构建纯内存路由表，热路径零 DB）
+        # 5. 启动路由表后台刷新
         self.router.start(self.loop)
-        # 预热路由表：首次构建是阻塞的，确保服务端启动后即可路由
         try:
             await asyncio.to_thread(self.router._rebuild_routes)
         except Exception as e:
             logger.error(f"路由表预热失败: {e}")
 
-        # 5. 启动统计批量写库器
+        # 6. 启动统计批量写库器
         self.stats_writer.start()
 
-        # 6. 启动插件注册心跳（异步任务）
+        # 7. 启动心跳
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="heartbeat")
 
-        # 6.5 启动内存看门狗（超限自动清理缓存 + 强制 GC）
+        # 8. 启动内存看门狗
         self._memory_watchdog_task = asyncio.create_task(
             self._memory_watchdog_loop(), name="memory-watchdog"
         )
-        logger.info(
-            f"内存看门狗已启动：限制 {self._memory_limit_mb}MB，"
-            f"检查间隔 {self._memory_check_interval}s"
-        )
-
-        # 7. 启动 WebSocket 服务端（运行在主事件循环）
-        self.ws_server.start_async()
-
-        # 8. 启动 Web UI（独立线程）
-        self.web_server.start()
 
         # 9. 触发系统事件
         await self.event_bus.aemit('system.plugin.loaded', {'plugins': loaded})
 
         logger.info("框架启动完成，等待消息...")
+
+    def _load_core_plugins(self):
+        """加载官方插件（core_plugins/ 目录）"""
+        core_plugins_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), 'core_plugins')
+        if not os.path.isdir(core_plugins_dir):
+            logger.warning(f"core_plugins 目录不存在: {core_plugins_dir}")
+            return
+
+        core_cfg = self.config.get('core_plugins', {})
+
+        for name in os.listdir(core_plugins_dir):
+            if name.startswith('_'):
+                continue
+            plugin_dir = os.path.join(core_plugins_dir, name)
+            main_file = os.path.join(plugin_dir, 'main.py')
+            if not os.path.isfile(main_file):
+                continue
+
+            # 检查配置开关（默认启用）
+            enabled = core_cfg.get(name, True)
+            if enabled is False:
+                logger.info(f"官方插件 [{name}] 已禁用 (core_plugins.{name}: false)")
+                continue
+
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"core_plugin_{name}", main_file)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[f"core_plugin_{name}"] = module
+                spec.loader.exec_module(module)
+
+                # 调用 register(ctx)
+                from framework.ctx import PluginContext
+                ctx = PluginContext(f"core:{name}", self)
+                module.ctx = ctx
+
+                if hasattr(module, 'register'):
+                    module.register(ctx)
+                    logger.info(f"官方插件 [{name}] 已加载")
+                else:
+                    logger.warning(f"官方插件 [{name}] 无 register 函数")
+            except Exception as e:
+                logger.error(f"官方插件 [{name}] 加载失败: {e}", exc_info=True)
 
     def _register_builtin_jobs(self):
         """注册框架内置定时任务（与插件任务互不干扰）"""
@@ -591,6 +613,51 @@ class Framework:
             task.add_done_callback(self._pending_tasks.discard)
         except Exception as e:
             logger.debug(f"after_message_sent 事件派发失败: {e}")
+
+    async def dispatch_event(self, event: dict):
+        """
+        协议适配器入口：将转换后的内部事件分发到框架
+        适配器（如 onebot_adapter）调用此方法，框架处理路由/事件总线
+        """
+        event_type = event.get('type', '')
+        bot_name = event.get('bot_name', 'default')
+
+        # 元事件 → 广播
+        if event_type == 'meta_event':
+            meta_type = event.get('sub_type', 'unknown')
+            await self.event_bus.aemit(f'meta.{meta_type}', event)
+            return
+
+        # 消息事件 → 路由
+        if event_type == 'message':
+            if await self._dispatch_raw_message_handlers(event, bot_name):
+                return
+
+            from framework.event import _extract_text
+            raw_message = _extract_text(event.get('message', ''))
+            message_type = event.get('message_type', 'unknown')
+            user_id = event.get('user_id', 0)
+            group_id = event.get('group_id')
+            sender = event.get('sender', {})
+
+            log_raw = self.config.get('log', {}).get('log_raw_message', True)
+            if log_raw:
+                log_broker.log_message(bot_name, message_type, user_id, group_id,
+                                       raw_message, event.get('message_id'))
+            else:
+                source = f"群{group_id}" if group_id else f"私聊{user_id}"
+                log_broker.log('message', 'INFO',
+                               f"[{bot_name}] {message_type} {source}: (原始内容未记录)",
+                               {'bot': bot_name, 'message_type': message_type,
+                                'user_id': user_id, 'group_id': group_id})
+
+            self.stats_writer.register_user(user_id, sender, message_type, group_id)
+            await self.router.route(event, bot_name)
+
+        elif event_type == 'notice':
+            await self._handle_notice(event, bot_name)
+        elif event_type == 'request':
+            await self._handle_request(event, bot_name)
 
     def _on_bot_connect(self, bot_name: str, ws):
         """OneBot 客户端连接时的回调"""
@@ -757,7 +824,7 @@ class Framework:
         logger.info("正在停止框架...")
         self._running = False
 
-        # 停止统计批量写库器（最后一次落库）
+        # 停止统计批量写库器
         try:
             await self.stats_writer.stop()
         except Exception as e:
@@ -787,23 +854,28 @@ class Framework:
                 pass
             self._memory_watchdog_task = None
 
-        # 停止 WebSocket 服务端
-        try:
-            await self.ws_server.stop_async()
-        except Exception as e:
-            logger.warning(f"WebSocket 服务端停止异常: {e}")
-
-        # 停止 Web UI
-        self.web_server.stop()
-
-        # 停止调度器
-        self.scheduler.stop()
+        # 停止官方插件（通过服务注册表）
+        for name in ('ws_server', 'web_server', 'scheduler'):
+            svc = self.services.get(name)
+            if svc is not None:
+                try:
+                    if asyncio.iscoroutinefunction(svc.stop):
+                        await svc.stop()
+                    else:
+                        svc.stop()
+                except Exception as e:
+                    logger.warning(f"服务 [{name}] 停止异常: {e}")
 
         # 关闭数据库专用线程池
         try:
             self._db_executor.shutdown(wait=False)
         except Exception as e:
             logger.warning(f"数据库线程池关闭异常: {e}")
+
+        # 触发系统事件
+        await self.event_bus.aemit('system.plugin.unloaded', {})
+
+        logger.info("框架已停止")
 
         # 触发系统事件
         await self.event_bus.aemit('system.plugin.unloaded', {})
