@@ -198,7 +198,7 @@ def register_builtins(fw):
             return
         
         # 检查是否是核心插件
-        core_plugins = ['onebot_adapter', 'webui', 'session', 'scheduler']
+        core_plugins = ['onebot_adapter', 'webui', 'session', 'scheduler', 'http_api']
         if plugin_name in core_plugins:
             # 更新配置
             import yaml
@@ -231,7 +231,7 @@ def register_builtins(fw):
             return
         
         # 检查是否是核心插件
-        core_plugins = ['onebot_adapter', 'webui', 'session', 'scheduler']
+        core_plugins = ['onebot_adapter', 'webui', 'session', 'scheduler', 'http_api']
         if plugin_name in core_plugins:
             # 更新配置
             import yaml

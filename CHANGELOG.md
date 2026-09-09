@@ -1,5 +1,22 @@
 # 更新日志
 
+## v1.3.0
+
+### 新增
+
+- **HTTP API 插件**：新增 `core_plugins.http_api` 官方插件（默认关闭）
+  - 提供 RESTful HTTP 接口，支持外部程序通过 HTTP 调用框架能力
+  - 支持接口：status, plugins, users, groups, sendmsg, kick, ban, unban, broadcast, reload, db/query, db/execute
+  - 配置 `core_plugins.http_api: true` 启用，默认监听 `127.0.0.1:1145`
+  - 支持 token 认证，未配置时自动生成
+
+### 优化
+
+- 终端交互命令：enable/disable 支持 http_api 插件
+- 终端 status 命令：显示 OneBot 客户端连接数和版本
+
+---
+
 ## v1.3.0-beta.0-alpha.0
 
 ### 重大特性
