@@ -3271,8 +3271,8 @@ def create_web_app(framework) -> Flask:
 
     # 框架源码更新白名单：只覆盖这些代码/配置文件，用户数据一律跳过
     _FW_UPDATE_INCLUDE = {
-        'framework', 'web', 'sql', 'main.py', 'requirements.txt',
-        'start.sh', '.gitignore', 'README.md', 'LICENSE', 'VERSION',
+        'framework', 'core_plugins', 'web', 'webui', 'sql', 'main.py', 'requirements.txt',
+        'start.sh', '.gitignore', 'README.md', 'LICENSE', 'VERSION', 'CHANGELOG.md',
     }
 
     def _get_framework_local_commit() -> str:
