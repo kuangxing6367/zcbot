@@ -98,7 +98,7 @@ class TerminalInput:
                     asyncio.run_coroutine_threadsafe(
                         self._execute_command(line.strip()),
                         self.framework.loop
-                    )
+                    ).result(timeout=30)
             except EOFError:
                 break
             except KeyboardInterrupt:
@@ -654,11 +654,16 @@ def register_builtins(fw):
     def cmd_exit(args):
         """退出框架"""
         print("正在停止框架...")
+        import os
         loop = fw.loop
         if loop and loop.is_running():
-            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(fw.stop()))
+            async def _stop():
+                await fw.stop()
+                os._exit(0)
+            asyncio.ensure_future(_stop())
         else:
             asyncio.run(fw.stop())
+            os._exit(0)
     
     # 注册内置命令
     terminal_commands.register("help", cmd_help, "显示帮助", ["h", "?"])

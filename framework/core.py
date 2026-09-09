@@ -264,11 +264,11 @@ class Framework:
     def _format_uptime(self):
         """格式化运行时间"""
         import time
-        uptime = time.time() - self._start_time if hasattr(self, '_start_time') else 0
-        days = int(uptime // 86400)
-        hours = int((uptime % 86400) // 3600)
-        mins = int((uptime % 3600) // 60)
-        secs = int(uptime % 60)
+        seconds = time.time() - self._start_time if hasattr(self, '_start_time') else 0
+        days = int(seconds // 86400)
+        hours = int((seconds % 86400) // 3600)
+        mins = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
         parts = []
         if days > 0:
             parts.append(f"{days}天")
@@ -276,7 +276,8 @@ class Framework:
             parts.append(f"{hours}小时")
         if mins > 0:
             parts.append(f"{mins}分钟")
-        parts.append(f"{secs}秒")
+        if secs > 0 or not parts:
+            parts.append(f"{secs}秒")
         return "".join(parts)
 
     # ── 服务别名（兼容旧代码，指向 service registry）──
