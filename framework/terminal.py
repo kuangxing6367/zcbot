@@ -660,7 +660,7 @@ def register_builtins(fw):
             async def _stop():
                 await fw.stop()
                 os._exit(0)
-            asyncio.ensure_future(_stop())
+            asyncio.run_coroutine_threadsafe(_stop(), loop)
         else:
             asyncio.run(fw.stop())
             os._exit(0)
