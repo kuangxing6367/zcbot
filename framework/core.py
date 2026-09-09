@@ -26,6 +26,7 @@ from framework.router import MessageRouter
 from framework.event_bus import EventBus
 from framework.log_broker import log_broker, FrameworkLogHandler
 from framework.protocol import ServiceRegistry
+from framework.terminal import TerminalInput, terminal_commands, register_builtins
 
 logger = logging.getLogger('zcbot')
 
@@ -231,6 +232,9 @@ class Framework:
             self._get_plugins_dat_dir()
         )
 
+        # 终端交互
+        self.terminal = TerminalInput(self)
+
         # 统计批量写库器
         self.stats_writer = AsyncStatsWriter(self)
 
@@ -252,6 +256,24 @@ class Framework:
         self._memory_watchdog_task = None
 
         logger.info("框架核心引擎初始化完成")
+
+    def _format_uptime(self):
+        """格式化运行时间"""
+        import time
+        uptime = time.time() - self._start_time if hasattr(self, '_start_time') else 0
+        days = int(uptime // 86400)
+        hours = int((uptime % 86400) // 3600)
+        mins = int((uptime % 3600) // 60)
+        secs = int(uptime % 60)
+        parts = []
+        if days > 0:
+            parts.append(f"{days}天")
+        if hours > 0:
+            parts.append(f"{hours}小时")
+        if mins > 0:
+            parts.append(f"{mins}分钟")
+        parts.append(f"{secs}秒")
+        return "".join(parts)
 
     # ── 服务别名（兼容旧代码，指向 service registry）──
 
@@ -410,6 +432,10 @@ class Framework:
 
         # 9. 触发系统事件
         await self.event_bus.aemit('system.plugin.loaded', {'plugins': loaded})
+
+        # 10. 启动终端交互
+        register_builtins(self)
+        self.terminal.start()
 
         logger.info("框架启动完成，等待消息...")
 
@@ -823,6 +849,9 @@ class Framework:
         """停止框架（异步）"""
         logger.info("正在停止框架...")
         self._running = False
+
+        # 停止终端交互
+        self.terminal.stop()
 
         # 停止统计批量写库器
         try:
