@@ -65,8 +65,19 @@ class PluginContext:
         self._config_cache = {}      # key -> (value, timestamp) 插件配置 TTL 缓存
         self._config_cache_ttl = 30  # 缓存有效期（秒），避免 async handler 同步查库阻塞事件循环
 
-        # OneBot 11 标准 API 封装（全量 38 个方法）
-        self.onebot = OneBotAPI(framework.api_caller)
+    @property
+    def onebot(self):
+        """OneBot 11 API 封装（从服务注册表获取，兼容旧插件）"""
+        api = self._framework.services.get('onebot_api')
+        if api is None:
+            # 兼容：如果 onebot_adapter 未加载，尝试从 api_caller 创建
+            caller = self._framework.services.get('api_caller')
+            if caller is not None:
+                from framework.onebot_api import OneBotAPI
+                api = OneBotAPI(caller)
+            else:
+                raise RuntimeError("无可用协议适配器（请启用 core_plugins.onebot_adapter）")
+        return api
 
     @property
     def logger(self):
@@ -297,26 +308,24 @@ class PluginContext:
 
     def api(self, action: str, bot: str = None, **params):
         """
-        调用 OneBot 11 API（同步桥接，自动兼容旧插件）
+        调用协议 API（同步桥接）
         推荐 async handler 使用 aapi()，避免阻塞事件循环
-        :param action: OneBot 11 标准动作名，如 send_msg, set_group_ban 等
-        :param bot: 指定 OneBot 实例名称（None=默认实例）
-        :param params: 对应动作的参数
         """
         if bot is None:
             bot = getattr(self, '_current_bot', None)
-        return self._framework.api_caller.call(action, bot=bot, **params)
+        caller = self._framework.services.get('api_caller')
+        if caller is None:
+            raise RuntimeError("无可用协议适配器")
+        return caller.call(action, bot=bot, **params)
 
     async def aapi(self, action: str, bot: str = None, **params):
-        """
-        异步调用 OneBot 11 API（不阻塞事件循环）
-        :param action: OneBot 11 标准动作名，如 send_msg, set_group_ban 等
-        :param bot: 指定 OneBot 实例名称（None=默认实例）
-        :param params: 对应动作的参数
-        """
+        """异步调用协议 API"""
         if bot is None:
             bot = getattr(self, '_current_bot', None)
-        return await self._framework.api_caller.acall(action, bot=bot, **params)
+        caller = self._framework.services.get('api_caller')
+        if caller is None:
+            raise RuntimeError("无可用协议适配器")
+        return await caller.acall(action, bot=bot, **params)
 
     # ---- 最常用 API 快捷方法（省得每次都拼 params）----
 
@@ -729,3 +738,33 @@ class PluginContext:
 
     def _get_dashboard_cards(self) -> list:
         return self._dashboard_cards
+
+    # ---- 多轮会话（官方插件 session 提供）----
+
+    async def wait_for(self, event, prompt=None, timeout=60, handler=None):
+        """
+        等待用户下一条消息（多轮会话）
+        :param event: 当前事件对象
+        :param prompt: 可选提示消息（自动发送）
+        :param timeout: 超时秒数
+        :param handler: 可选过滤 handler(raw_event) -> bool
+        :return: 消息 dict 或 None（超时）
+        """
+        mgr = self._framework.services.get('session_manager')
+        if mgr is None:
+            raise RuntimeError("会话管理器未加载（请启用 core_plugins.session）")
+        return await mgr.wait_for(self, event, prompt, timeout, handler)
+
+    def create_session(self, event, timeout=60):
+        """
+        创建会话对象（支持 async with）
+        用法：
+            async with ctx.create_session(event, timeout=120) as sess:
+                name = await sess.ask("你叫什么名字？")
+                age = await sess.ask("年龄？")
+                sess.data['name'] = name
+        """
+        mgr = self._framework.services.get('session_manager')
+        if mgr is None:
+            raise RuntimeError("会话管理器未加载（请启用 core_plugins.session）")
+        return mgr.session_context(self, event, timeout)

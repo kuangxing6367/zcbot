@@ -1,5 +1,40 @@
 # 更新日志
 
+## v1.3.0-beta.0
+
+### 重大特性
+
+- **插件化架构重构**：框架核心极简化，所有具体功能改为「官方插件」按需加载：
+  - 核心壳：插件加载器 + 事件总线 + 消息路由 + ctx + 数据库
+  - 官方插件（`core_plugins/`）：OneBot适配、WebUI、会话管理、定时调度
+  - 用户插件（`plugins/`）：业务逻辑
+
+- **OneBot 11 适配器可选**：OneBot 协议处理从框架核心脱离，作为官方插件 `core_plugins.onebot_adapter`
+  - 配置 `core_plugins.onebot_adapter: false` 可完全禁用
+  - 不加载时 WebSocket 服务不启动，内存占用大幅降低
+
+- **WebUI 可选**：Web 管理后台作为官方插件 `core_plugins.webui`
+  - 配置 `core_plugins.webui: false` 可完全禁用
+  - 关闭后所有 API 返回友好提示，插件调用 `ctx.webui()` 不报错
+
+- **内置多轮会话能力**：新增 `core_plugins.session` 官方插件
+  - `ctx.wait_for(event, prompt, timeout)` — 等待用户下一条消息
+  - `ctx.create_session(event, timeout)` — 创建会话对象（支持 async with）
+  - 会话对象支持 `sess.ask(prompt)` 发送提示并等待回复
+  - 会话期间消息不走命令匹配，超时自动清理
+
+- **服务注册表**：`framework/protocol.py` 定义服务接口，官方插件注册自身为核心能力
+  - 核心框架通过 `services.get()` 获取服务，不直接 import 官方插件代码
+  - 插件通过 `ctx.api()` / `ctx.onebot` 等调用服务，完全兼容旧代码
+
+### 配置变更
+
+- `config.yaml` 新增 `core_plugins` 段：控制官方插件启停
+- `config.yaml` 新增 `onebot.enabled` / `web.enabled`：独立开关
+- 默认所有官方插件启用，向后兼容
+
+---
+
 ## v1.2.0-beta.1
 
 ### 修复
