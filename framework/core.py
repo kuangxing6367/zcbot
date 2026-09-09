@@ -486,10 +486,13 @@ class Framework:
 
                     # 存入 plugin_loader，使调度器能通过 get_plugin_module 获取模块
                     with self.plugin_loader._lock:
+                        meta = getattr(module, '__plugin_meta__', {})
                         self.plugin_loader._loaded_plugins[name] = {
                             'module': module,
                             'path': plugin_dir,
-                            'meta': getattr(module, '__plugin_meta__', {}),
+                            'meta': meta,
+                            'priority': meta.get('priority', 50),
+                            'yaml': {},
                         }
                 else:
                     logger.warning(f"官方插件 [{name}] 无 register 函数")
