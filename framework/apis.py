@@ -3271,8 +3271,8 @@ def create_web_app(framework) -> Flask:
 
     # 框架源码更新白名单：只覆盖这些代码/配置文件，用户数据一律跳过
     _FW_UPDATE_INCLUDE = {
-        'framework', 'web', 'sql', 'main.py', 'requirements.txt',
-        'start.sh', '.gitignore', 'README.md', 'LICENSE', 'VERSION',
+        'framework', 'core_plugins', 'web', 'webui', 'sql', 'main.py', 'requirements.txt',
+        'start.sh', '.gitignore', 'README.md', 'LICENSE', 'VERSION', 'CHANGELOG.md',
     }
 
     def _get_framework_local_commit() -> str:
@@ -3545,6 +3545,40 @@ def create_web_app(framework) -> Flask:
 
         threading.Thread(target=_do_restart, daemon=False).start()
         return jsonify({'code': 0, 'msg': '框架正在重启...'})
+
+    @app.route('/api/terminal/exec', methods=['POST'])
+    @require_auth
+    def terminal_exec():
+        """执行终端命令并返回输出"""
+        admin = request.admin
+        data = request.json or {}
+        command = (data.get('command') or '').strip()
+        if not command:
+            return jsonify({'code': 400, 'msg': '命令不能为空'})
+
+        import io
+        import contextlib
+        from framework.terminal import terminal_commands
+
+        # 查找命令处理器
+        cmd_name = command.split()[0].lower()
+        handler = terminal_commands.get(cmd_name)
+        if handler is None:
+            return jsonify({'code': 404, 'msg': f'未知命令: {cmd_name}，输入 help 查看可用命令'})
+
+        args = command[len(cmd_name):].strip()
+
+        # 捕获 stdout
+        output_buffer = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output_buffer):
+                handler(args)
+        except Exception as e:
+            output_buffer.write(f"\n执行异常: {e}")
+
+        output = output_buffer.getvalue()
+        audit_log(admin['id'], admin['username'], 'terminal_exec', 'system', 'terminal', {'command': command})
+        return jsonify({'code': 0, 'data': {'output': output, 'command': command}})
 
     # ---- 插件 WebUI 内嵌 ----
 

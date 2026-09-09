@@ -264,7 +264,7 @@ def get_online_count():
 
 ```python
 def register(ctx):
-    ctx.webui(title="我的面板", entry="index.html", icon="⚙️")
+    ctx.webui(title="我的面板", entry="index.html", icon="⚙️", order=10)
 ```
 
 ### ctx.override_webui()
@@ -272,6 +272,22 @@ def register(ctx):
 ```python
 ctx.override_webui()  # 接管整个 Web 前端
 ```
+
+### Flask 路由注册
+
+**重要：Flask `add_url_rule()` 只能在首次请求前调用。** 心跳重载时再注册会报错。
+
+正确做法——在 `register(ctx)` 中直接注册：
+
+```python
+def register(ctx):
+    app = ctx._framework.web_server.app
+    if app:
+        app.add_url_rule("/api/my/data", endpoint="my_data",
+                         view_func=my_handler, methods=["GET"])
+```
+
+错误做法——在心跳/定时任务中注册（会抛 `add_url_rule` 异常）。
 
 ## 数据库操作
 

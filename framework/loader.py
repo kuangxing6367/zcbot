@@ -1404,14 +1404,19 @@ class PluginLoader:
 
     def heartbeat_register(self):
         """
-        心跳检查：仅对文件发生变化的插件重新 register(ctx)（增量注册）
-        避免定时全量重建定时任务/命令带来的副作用与 DB 写放大
+        心跳检查：仅对用户插件（plugins/ 目录）中文件发生变化的插件重新 register(ctx)
+        核心插件（core_plugins/）已在启动时注册，不参与心跳
         """
         with self._lock:
             plugin_names = list(self._loaded_plugins.keys())
 
         changed = []
         for name in plugin_names:
+            info = self._loaded_plugins.get(name, {})
+            plugin_path = info.get('path', '')
+            # 只处理用户插件目录下的插件
+            if not plugin_path.startswith(self.plugins_dir):
+                continue
             snap = self._snapshot_mtime(name)
             if snap == self._plugin_mtimes.get(name):
                 continue
