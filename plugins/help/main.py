@@ -321,8 +321,8 @@ def handle_help(event, match):
     # 尝试生成图片
     image_bytes = None
     try:
-        # 框架用 importlib.util 加载插件，相对导入不可用
-        # 将插件目录加入 sys.path 后用绝对导入
+        # 框架加载插件时已把插件目录加入 sys.path，短名绝对导入可直接使用；
+        # 新代码也可以直接写相对导入：from .draw import ZcbotHelpDrawer
         import sys as _sys
         import os as _os
         _plugin_dir = _os.path.dirname(_os.path.abspath(__file__))
