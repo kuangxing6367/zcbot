@@ -219,14 +219,23 @@ def register(ctx):
     # 注册原始消息拦截（priority=0，最先执行）
     fw.register_raw_message_handler('session_manager', _manager.on_raw_message, priority=0)
 
-    # 注册定时清理任务
-    fw.scheduler.add_plugin_task({
-        'plugin_name': 'session_manager',
-        'cron_expression': '*/5 * * * *',
-        'handler': '_cleanup_task',
-        'handler_name': '_cleanup_task',
-        'description': '清理过期会话',
-    })
+    # 注册定时清理任务（延迟注册，确保调度器已加载）
+    def _register_cleanup_task():
+        scheduler = fw.services.get('scheduler')
+        if scheduler:
+            scheduler.add_plugin_task({
+                'plugin_name': 'session_manager',
+                'cron_expression': '*/5 * * * *',
+                'handler': '_cleanup_task',
+                'handler_name': '_cleanup_task',
+                'description': '清理过期会话',
+            })
+        else:
+            ctx.log("调度器未加载，跳过清理任务注册", level="warning")
+    
+    # 延迟 2 秒注册，确保调度器已启动
+    import threading
+    threading.Timer(2.0, _register_cleanup_task).start()
 
     ctx.log("会话管理器已就绪")
 
