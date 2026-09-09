@@ -255,6 +255,10 @@ class Framework:
         self._memory_check_interval = mem_cfg.get('check_interval', 30)
         self._memory_watchdog_task = None
 
+        # 启动时间
+        import time
+        self._start_time = time.time()
+
         logger.info("框架核心引擎初始化完成")
 
     def _format_uptime(self):
