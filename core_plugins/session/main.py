@@ -224,7 +224,7 @@ def register(ctx):
         scheduler = fw.services.get('scheduler')
         if scheduler:
             scheduler.add_plugin_task({
-                'plugin_name': 'session_manager',
+                'plugin_name': 'session',
                 'cron_expression': '*/5 * * * *',
                 'handler': '_cleanup_task',
                 'handler_name': '_cleanup_task',
