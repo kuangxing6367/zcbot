@@ -1,6 +1,6 @@
 # 更新日志
 
-## v1.3.0-beta.0
+## v1.3.0-beta.0-alpha.0
 
 ### 重大特性
 
@@ -26,6 +26,11 @@
 - **服务注册表**：`framework/protocol.py` 定义服务接口，官方插件注册自身为核心能力
   - 核心框架通过 `services.get()` 获取服务，不直接 import 官方插件代码
   - 插件通过 `ctx.api()` / `ctx.onebot` 等调用服务，完全兼容旧代码
+
+- **终端交互**：新增 `framework/terminal.py` 终端交互模块
+  - 支持终端命令: help, status, plugins, send, recv, reload, users, groups, exit
+  - 支持模拟接收消息: `recv <user_id> <消息内容>`
+  - 支持发送消息: `send <user_id> <消息>` 或 `send g:<group_id> <消息>`
 
 ### 配置变更
 
