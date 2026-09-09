@@ -407,14 +407,18 @@ class OneBotWebSocketServer:
 
                 post_type = data.get("post_type")
                 if post_type:
+                    logger.debug(f"[{bot_name}] 收到事件 post_type={post_type} sub_type={data.get(f'{post_type}_type','')}")
                     if self._dispatch_pending >= _MAX_PENDING_EVENTS:
                         self._dispatch_dropped += 1
+                        logger.warning(f"[{bot_name}] 事件丢弃 pending={self._dispatch_pending} dropped={self._dispatch_dropped}")
                         continue
                     self._dispatch_pending += 1
                     prev = self._conn_chains.get(bot_name)
                     task = asyncio.create_task(self._dispatch_ordered(prev, data, bot_name))
                     self._conn_chains[bot_name] = task
                     task.add_done_callback(lambda t: setattr(self, '_dispatch_pending', self._dispatch_pending - 1))
+                else:
+                    logger.debug(f"[{bot_name}] 收到无 post_type 的消息: {str(data)[:200]}")
 
         except websockets.ConnectionClosed:
             pass
