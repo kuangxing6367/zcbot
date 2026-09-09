@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from typing import Dict, Optional
 
 import psutil
@@ -997,24 +998,64 @@ class PluginLoader:
             sys.path.insert(0, site_pkg)
         return True
 
+    def _ensure_plugin_package(self, plugin_name: str, plugin_path: str):
+        """
+        创建插件的「合成包」模块 plugin_<插件名> 并返回。
+
+        框架不把插件目录作为常规包安装，而是用 importlib 按文件路径加载，
+        这个模块身兼两职：
+        1. main.py 的执行载体 —— 保持 sys.modules['plugin_<插件名>'] 指向插件主模块
+           这一既有约定（跨插件可用 sys.modules.get('plugin_xxx') 访问主模块）；
+        2. 相对导入的父包 —— 通过设置 __package__ 与 __path__，让导入系统把它识别为包，
+           main.py 及子模块中的相对导入（from .xxx import Y / from . import xxx）
+           就能沿着 __path__（即插件目录）解析到本插件自己的模块。
+
+        必须在预加载任何子模块之前创建：否则子模块执行相对导入时会找不到父包。
+        """
+        pkg_name = f"plugin_{plugin_name}"
+        main_file = os.path.join(plugin_path, 'main.py')
+        module = types.ModuleType(pkg_name)
+        module.__name__ = pkg_name
+        # 包的 __package__ 指向自身；main.py 里的 from .xxx 以它为父包
+        module.__package__ = pkg_name
+        # 关键：__path__ 让导入系统把该模块当作包，按插件目录查找子模块
+        module.__path__ = [plugin_path]
+        module.__file__ = main_file
+        sys.modules[pkg_name] = module
+        return module
+
     def _load_plugin_submodule(self, plugin_name: str, mod_name: str, file_path: str):
         """
-        加载插件的一个顶层子模块，全名带插件前缀（plugin_<插件名>_<模块名>）
-        并将短名注册到 sys.modules，保证插件 main.py 的绝对导入（import api / from ban_word import X）
-        命中本插件自己的模块，避免多个插件的同名模块互相污染。
+        加载插件的一个顶层子模块（.py 文件，或包目录的 __init__.py），
+        并在 sys.modules 中为「同一个模块对象」注册三个名字：
+
+        1. plugin_<插件名>.<模块名> —— 规范的点分层级名，挂在合成包下，
+           插件内相对导入（from .mod import X / from . import mod）解析到它；
+        2. plugin_<插件名>_<模块名> —— 旧版下划线唯一名（向后兼容，
+           同时保证多个插件存在同名子模块时互不冲突）；
+        3. <模块名> —— 短名，兼容 main.py 的绝对导入（import mod / from mod import X）。
+
+        调用前必须已通过 _ensure_plugin_package() 创建父包 plugin_<插件名>。
         """
-        full_name = f"plugin_{plugin_name}_{mod_name}"
+        pkg_name = f"plugin_{plugin_name}"
+        dotted_name = f"{pkg_name}.{mod_name}"
+        legacy_name = f"{pkg_name}_{mod_name}"
         try:
-            spec = importlib.util.spec_from_file_location(full_name, file_path)
+            spec = importlib.util.spec_from_file_location(dotted_name, file_path)
             if spec is None or spec.loader is None:
                 return
             module = importlib.util.module_from_spec(spec)
-            sys.modules[full_name] = module
+            # 先登记再执行：模块执行期间触发的导入即可命中本插件自身
+            sys.modules[dotted_name] = module
+            sys.modules[legacy_name] = module
             spec.loader.exec_module(module)
-            # 短名覆盖：main.py 的 'import api' / 'from ban_word import X' 在导入时绑定，
+            # 短名覆盖：main.py 的 'import mod' / 'from mod import X' 在导入时绑定，
             # 后续其他插件覆盖短名不影响本插件已绑定的引用
             sys.modules[mod_name] = module
         except Exception as e:
+            # 回滚半初始化登记，避免挡住原生导入机制沿 __path__ 的兜底解析
+            sys.modules.pop(dotted_name, None)
+            sys.modules.pop(legacy_name, None)
             logger.warning(f"[{plugin_name}] 子模块 {mod_name} 预加载失败（回退到全局查找）: {e}")
 
     def _preload_plugin_submodules(self, plugin_name: str, plugin_path: str):
@@ -1022,6 +1063,9 @@ class PluginLoader:
         预加载插件目录下的顶层子模块（.py 文件与包目录），实现同名模块短名隔离。
         解决多个插件存在同名模块（如 ban_word.py / db.py / core/）时，
         后加载插件从 sys.modules 命中其他插件模块导致的 ImportError。
+
+        即使此处遗漏或预加载失败，合成包的 __path__ 仍会让 Python 原生导入机制
+        按插件目录兜底解析，因此本方法只负责「提前、正确地登记」。
         """
         try:
             entries = os.listdir(plugin_path)
@@ -1044,6 +1088,25 @@ class PluginLoader:
             self._load_plugin_submodule(plugin_name, mod_name, fpath)
         for mod_name, fpath in pkg_dirs:
             self._load_plugin_submodule(plugin_name, mod_name, fpath)
+
+    def _purge_plugin_modules(self, plugin_name: str, plugin_path: str = None):
+        """
+        从 sys.modules 移除属于某插件目录的全部模块。
+        点分层级名 / 下划线唯一名 / 短名指向同一模块对象（__file__ 相同），
+        按 __file__ 前缀扫描即可一次清净；最后兜底移除合成包主模块。
+        卸载、加载失败回滚、重试前清理共用此方法。
+        """
+        plugin_path = plugin_path or os.path.join(self.plugins_dir, plugin_name)
+        try:
+            abs_plugin = os.path.abspath(plugin_path)
+            for mod_name in list(sys.modules):
+                mod = sys.modules.get(mod_name)
+                mod_file = getattr(mod, '__file__', '') or ''
+                if mod_file and os.path.abspath(mod_file).startswith(abs_plugin + os.sep):
+                    sys.modules.pop(mod_name, None)
+            sys.modules.pop(f"plugin_{plugin_name}", None)
+        except Exception as e:
+            logger.debug(f"[{plugin_name}] 清理 sys.modules 异常: {e}")
 
     def load_plugin(self, plugin_name: str) -> bool:
         """加载单个插件，返回是否成功"""
@@ -1078,33 +1141,45 @@ class PluginLoader:
         )
 
         # ====== 动态导入 main.py（带重试）======
+        main_path = os.path.join(plugin_path, 'main.py')
         for attempt in range(2):  # 最多重试1次
             try:
-                # 预加载插件顶层子模块（同名模块短名隔离，避免多插件互相污染 sys.modules）
+                # 第二次尝试前清掉首次残留的半初始化模块，保证重试幂等
+                if attempt == 1:
+                    self._purge_plugin_modules(plugin_name, plugin_path)
+
+                # 1) 先建合成包 plugin_<插件名>（含 __package__/__path__）：
+                #    它既是 main.py 的执行载体，也是插件相对导入的父包
+                module = self._ensure_plugin_package(plugin_name, plugin_path)
+
+                # 2) 预加载顶层子模块（点分层级名 + 下划线唯一名 + 短名，同名模块互不污染）
                 self._preload_plugin_submodules(plugin_name, plugin_path)
 
+                # 3) main.py 直接执行进合成包模块（不能再 module_from_spec，
+                #    否则刚设置的 __package__/__path__ 会重置为普通顶层模块，相对导入又会失效）
                 spec = importlib.util.spec_from_file_location(
                     f"plugin_{plugin_name}",
-                    os.path.join(plugin_path, 'main.py')
+                    main_path
                 )
                 if spec is None or spec.loader is None:
                     logger.error(f"[{plugin_name}] 导入失败: spec 为空")
+                    self._purge_plugin_modules(plugin_name, plugin_path)
                     return False
 
-                module = importlib.util.module_from_spec(spec)
-                # 注册到 sys.modules（import 机制要求；与卸载清理 loader.py 的
-                # sys.modules.pop(f"plugin_{plugin_name}") 对应）
-                sys.modules[spec.name] = module
+                module.__spec__ = spec
+                module.__loader__ = spec.loader
                 spec.loader.exec_module(module)
 
                 # 检查 register 函数
                 if not hasattr(module, 'register'):
                     logger.error(f"[{plugin_name}] 缺少 register(ctx) 函数")
+                    self._purge_plugin_modules(plugin_name, plugin_path)
                     return False
 
                 register_func = getattr(module, 'register')
                 if not callable(register_func):
                     logger.error(f"[{plugin_name}] register 不可调用")
+                    self._purge_plugin_modules(plugin_name, plugin_path)
                     return False
 
                 # 读取元数据
@@ -1161,6 +1236,8 @@ class PluginLoader:
                         f"  请检查: pip install {' '.join(dep_result.get('missing', []))}\n"
                         f"  或在 Web UI 插件管理页查看详情"
                     )
+                    # 回滚 sys.modules 中残留的合成包与子模块
+                    self._purge_plugin_modules(plugin_name, plugin_path)
                     # 更新 DB 状态为 error
                     try:
                         self.db.execute(
@@ -1173,6 +1250,8 @@ class PluginLoader:
 
             except Exception as e:
                 logger.error(f"[{plugin_name}] 加载失败: {e}", exc_info=True)
+                # 回滚 sys.modules 中残留的合成包与子模块
+                self._purge_plugin_modules(plugin_name, plugin_path)
                 # 更新 DB 状态为 error
                 try:
                     self.db.execute(
@@ -1487,17 +1566,20 @@ class PluginLoader:
             # 2) 调度器孤儿清理：任务所属插件当前未加载，无法执行则移除
             try:
                 scheduler = self.framework.scheduler
-                stale = [
-                    tid for tid, info in scheduler._plugin_tasks.items()
-                    if info.get('plugin_name') not in loaded
-                ]
-                for tid in stale:
-                    try:
-                        scheduler._scheduler.remove_job(tid)
-                        scheduler._plugin_tasks.pop(tid, None)
-                        logger.info(f"[自检] 移除调度器孤儿任务: {tid}")
-                    except Exception:
-                        pass
+                if scheduler is None:
+                    pass
+                else:
+                    stale = [
+                        tid for tid, info in scheduler._plugin_tasks.items()
+                        if info.get('plugin_name') not in loaded
+                    ]
+                    for tid in stale:
+                        try:
+                            scheduler._scheduler.remove_job(tid)
+                            scheduler._plugin_tasks.pop(tid, None)
+                            logger.info(f"[自检] 移除调度器孤儿任务: {tid}")
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.warning(f"[自检] 调度器孤儿清理失败: {e}")
 
@@ -1664,18 +1746,10 @@ class PluginLoader:
         except Exception as e:
             logger.warning(f"[{plugin_name}] 清理原始消息处理器失败: {e}")
 
-        # 清理 sys.modules：删除该插件目录下的所有模块（含短名模块，避免热重载污染）
-        try:
-            plugin_path = info.get('path') or os.path.join(self.plugins_dir, plugin_name)
-            abs_plugin = os.path.abspath(plugin_path)
-            for mod_name in list(sys.modules):
-                mod = sys.modules.get(mod_name)
-                mod_file = getattr(mod, '__file__', '') or ''
-                if mod_file and os.path.abspath(mod_file).startswith(abs_plugin + os.sep):
-                    sys.modules.pop(mod_name, None)
-            sys.modules.pop(f"plugin_{plugin_name}", None)
-        except Exception as e:
-            logger.debug(f"[{plugin_name}] 清理 sys.modules 异常: {e}")
+        # 清理 sys.modules：删除该插件目录下的所有模块（点分层级名/下划线别名/短名
+        # 指向同一模块对象，按 __file__ 一次清净，避免热重载污染）
+        self._purge_plugin_modules(
+            plugin_name, info.get('path') or os.path.join(self.plugins_dir, plugin_name))
 
         # 清理 sys.path：移除该插件的目录（避免路径污染其他插件）
         try:
