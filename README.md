@@ -82,6 +82,7 @@ core_plugins:
 | `session` | 内置多轮会话（`ctx.wait_for()`） | 启用 |
 | `scheduler` | APScheduler 定时任务 | 启用 |
 | `http_api` | 独立 HTTP API 服务（供外部程序调用） | 关闭 |
+| `image_renderer` | 图片渲染引擎（Rust 原生扩展 + PIL 回退） | 启用 |
 
 **不需要 QQ 功能？** 设 `core_plugins.onebot_adapter: false`，整个 WS 长连接不加载。
 
