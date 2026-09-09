@@ -304,7 +304,7 @@ class MessageRouter:
         2. 每个插件内按 commands.priority 匹配命令
         3. 未命中 → 记录未匹配日志
         """
-        post_type = event.get('post_type')
+        post_type = event.get('post_type') or event.get('type')
         if post_type != 'message':
             return
 
