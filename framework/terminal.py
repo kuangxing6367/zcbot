@@ -148,15 +148,28 @@ def register_builtins(fw):
             except Exception:
                 pass
             
+            # 统计信息
+            try:
+                user_count = fw.db.query_one("SELECT COUNT(*) as cnt FROM users")['cnt']
+                group_count = fw.db.query_one("SELECT COUNT(*) as cnt FROM groups_info WHERE is_active=1")['cnt']
+                cmd_count = fw.db.query_one("SELECT COUNT(*) as cnt FROM commands")['cnt']
+            except Exception:
+                user_count = group_count = cmd_count = 0
+            
             print("=" * 50)
             print("ZCBOT 框架状态")
             print("=" * 50)
+            print(f"  版本: {open('VERSION').read().strip() if __import__('os').path.exists('VERSION') else '未知'}")
+            print(f"  运行时间: {uptime}")
             print(f"  进程内存: {mem:.1f} MB")
             print(f"  已连接客户端: {len(bots)} 个")
             if bots:
                 for b in bots:
                     print(f"    - {b}")
             print(f"  已加载插件: {len(fw.plugin_loader.get_loaded_plugins())} 个")
+            print(f"  注册命令: {cmd_count} 条")
+            print(f"  用户数: {user_count}")
+            print(f"  群数: {group_count}")
             print("=" * 50)
         except Exception as e:
             print(f"获取状态失败: {e}")
@@ -165,15 +178,156 @@ def register_builtins(fw):
         """列出已加载插件"""
         plugins = fw.plugin_loader.get_loaded_plugins()
         print(f"已加载插件 ({len(plugins)} 个):")
-        print("-" * 40)
+        print("-" * 50)
         for name, info in plugins.items():
             meta = info.get('meta', {})
             version = meta.get('version', '?')
             desc = meta.get('desc', '')
-            print(f"  {name} v{version}")
+            source = "官方" if name.startswith('core:') else "用户"
+            print(f"  {name} v{version} [{source}]")
             if desc:
                 print(f"    {desc}")
-        print("-" * 40)
+        print("-" * 50)
+    
+    def cmd_enable(args):
+        """启用插件: enable <插件名>"""
+        plugin_name = args.strip()
+        if not plugin_name:
+            print("用法: enable <插件名>")
+            print("示例: enable onebot_adapter")
+            return
+        
+        # 检查是否是核心插件
+        core_plugins = ['onebot_adapter', 'webui', 'session', 'scheduler']
+        if plugin_name in core_plugins:
+            # 更新配置
+            import yaml
+            config_path = fw.config_path
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f) or {}
+                if 'core_plugins' not in config:
+                    config['core_plugins'] = {}
+                config['core_plugins'][plugin_name] = True
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+                print(f"已启用核心插件 [{plugin_name}]，重启后生效")
+            except Exception as e:
+                print(f"启用失败: {e}")
+        else:
+            # 用户插件
+            try:
+                fw.plugin_loader.enable_plugin(plugin_name)
+                print(f"已启用插件 [{plugin_name}]")
+            except Exception as e:
+                print(f"启用失败: {e}")
+    
+    def cmd_disable(args):
+        """禁用插件: disable <插件名>"""
+        plugin_name = args.strip()
+        if not plugin_name:
+            print("用法: disable <插件名>")
+            print("示例: disable onebot_adapter")
+            return
+        
+        # 检查是否是核心插件
+        core_plugins = ['onebot_adapter', 'webui', 'session', 'scheduler']
+        if plugin_name in core_plugins:
+            # 更新配置
+            import yaml
+            config_path = fw.config_path
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f) or {}
+                if 'core_plugins' not in config:
+                    config['core_plugins'] = {}
+                config['core_plugins'][plugin_name] = False
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+                print(f"已禁用核心插件 [{plugin_name}]，重启后生效")
+            except Exception as e:
+                print(f"禁用失败: {e}")
+        else:
+            # 用户插件
+            try:
+                fw.plugin_loader.disable_plugin(plugin_name)
+                print(f"已禁用插件 [{plugin_name}]")
+            except Exception as e:
+                print(f"禁用失败: {e}")
+    
+    def cmd_config(args):
+        """查看/修改配置: config [key] [value]"""
+        parts = args.split(maxsplit=1)
+        if not parts:
+            # 显示所有配置
+            print("当前配置:")
+            print("-" * 50)
+            import yaml
+            with open(fw.config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            for section, values in config.items():
+                if isinstance(values, dict):
+                    print(f"  {section}:")
+                    for k, v in values.items():
+                        print(f"    {k}: {v}")
+                else:
+                    print(f"  {section}: {values}")
+            print("-" * 50)
+            return
+        
+        key = parts[0]
+        if len(parts) == 1:
+            # 查看单个配置
+            import yaml
+            with open(fw.config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            # 支持点号分隔的路径
+            keys = key.split('.')
+            value = config
+            for k in keys:
+                if isinstance(value, dict):
+                    value = value.get(k)
+                else:
+                    value = None
+                    break
+            if value is not None:
+                print(f"{key} = {value}")
+            else:
+                print(f"配置项 {key} 不存在")
+        else:
+            # 修改配置
+            value = parts[1]
+            import yaml
+            config_path = fw.config_path
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f) or {}
+                # 支持点号分隔的路径
+                keys = key.split('.')
+                target = config
+                for k in keys[:-1]:
+                    if k not in target:
+                        target[k] = {}
+                    target = target[k]
+                # 尝试转换类型
+                if value.lower() == 'true':
+                    value = True
+                elif value.lower() == 'false':
+                    value = False
+                else:
+                    try:
+                        value = int(value)
+                    except ValueError:
+                        try:
+                            value = float(value)
+                        except ValueError:
+                            pass
+                target[keys[-1]] = value
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+                print(f"已设置 {key} = {value}")
+            except Exception as e:
+                print(f"设置失败: {e}")
     
     def cmd_send(args):
         """发送消息: send <user_id> <消息> 或 send g:<group_id> <消息>"""
@@ -204,7 +358,6 @@ def register_builtins(fw):
                 print("错误: OneBot 适配器未加载")
                 return
             
-            import asyncio
             async def _send():
                 if group_id:
                     await api_caller.send_group_msg(group_id=group_id, message=message)
@@ -221,23 +374,36 @@ def register_builtins(fw):
             print(f"发送失败: {e}")
     
     def cmd_recv(args):
-        """模拟接收消息: recv <user_id> <消息内容>"""
+        """模拟接收消息: recv <user_id> <消息内容> 或 recv g:<group_id> <user_id> <消息>"""
         try:
-            parts = args.split(maxsplit=1)
+            parts = args.split()
             if len(parts) < 2:
                 print("用法: recv <user_id> <消息内容>")
+                print("      recv g:<group_id> <user_id> <消息>")
                 print("示例: recv 123456 /help")
+                print("      recv g:654321 123456 大家好")
                 return
             
-            user_id = int(parts[0])
-            message = parts[1]
+            if parts[0].startswith('g:'):
+                # 群消息
+                group_id = int(parts[0][2:])
+                user_id = int(parts[1])
+                message = ' '.join(parts[2:])
+                message_type = 'group'
+            else:
+                # 私聊消息
+                group_id = None
+                user_id = int(parts[0])
+                message = ' '.join(parts[1:])
+                message_type = 'private'
             
             # 构造模拟事件
             mock_event = {
                 'post_type': 'message',
-                'message_type': 'private',
-                'sub_type': 'friend',
+                'message_type': message_type,
+                'sub_type': 'friend' if message_type == 'private' else 'normal',
                 'user_id': user_id,
+                'group_id': group_id,
                 'message': message,
                 'raw_message': message,
                 'message_id': 123456789,
@@ -251,12 +417,11 @@ def register_builtins(fw):
                 'bot_name': 'terminal',
             }
             
-            import asyncio
             asyncio.ensure_future(fw.dispatch_event(mock_event))
-            print(f"已模拟接收消息: user={user_id}, msg={message}")
+            print(f"已模拟接收消息: {message_type} user={user_id}, msg={message}")
             
         except ValueError:
-            print("错误: user_id 必须是数字")
+            print("错误: user_id/group_id 必须是数字")
         except Exception as e:
             print(f"模拟失败: {e}")
     
@@ -277,10 +442,11 @@ def register_builtins(fw):
             print(f"重载失败: {e}")
     
     def cmd_users(args):
-        """查看用户列表"""
+        """查看用户列表: users [数量]"""
         try:
-            rows = fw.db.query("SELECT user_id, nickname, last_active_at FROM users ORDER BY last_active_at DESC LIMIT 20")
-            print(f"最近活跃用户 (前20):")
+            limit = int(args.strip()) if args.strip() else 20
+            rows = fw.db.query(f"SELECT user_id, nickname, last_active_at FROM users ORDER BY last_active_at DESC LIMIT {limit}")
+            print(f"最近活跃用户 (前{limit}):")
             print("-" * 50)
             for row in rows:
                 uid = row['user_id']
@@ -305,19 +471,212 @@ def register_builtins(fw):
         except Exception as e:
             print(f"查询失败: {e}")
     
+    def cmd_ban(args):
+        """禁言/封禁: ban <user_id> [分钟] 或 ban g:<group_id> <user_id> [分钟]"""
+        try:
+            parts = args.split()
+            if not parts:
+                print("用法: ban <user_id> [分钟]")
+                print("      ban g:<group_id> <user_id> [分钟]")
+                print("示例: ban 123456 60 (禁言1小时)")
+                print("      ban g:654321 123456 10 (群内禁言10分钟)")
+                return
+            
+            if parts[0].startswith('g:'):
+                group_id = int(parts[0][2:])
+                user_id = int(parts[1])
+                duration = int(parts[2]) * 60 if len(parts) > 2 else 600  # 默认10分钟
+            else:
+                group_id = None
+                user_id = int(parts[0])
+                duration = int(parts[1]) * 60 if len(parts) > 1 else 600
+            
+            api_caller = fw.services.get('api_caller')
+            if api_caller is None:
+                print("错误: OneBot 适配器未加载")
+                return
+            
+            async def _ban():
+                if group_id:
+                    await api_caller.set_group_ban(group_id=group_id, user_id=user_id, duration=duration)
+                    print(f"已禁言用户 {user_id} {duration//60} 分钟")
+                else:
+                    # 私聊封禁（标记到数据库）
+                    fw.db.execute("UPDATE users SET is_banned=1 WHERE user_id=%s", (user_id,))
+                    print(f"已封禁用户 {user_id}")
+            
+            asyncio.ensure_future(_ban())
+            
+        except ValueError:
+            print("错误: 参数格式错误")
+        except Exception as e:
+            print(f"操作失败: {e}")
+    
+    def cmd_unban(args):
+        """解封/解禁: unban <user_id> 或 unban g:<group_id> <user_id>"""
+        try:
+            parts = args.split()
+            if not parts:
+                print("用法: unban <user_id>")
+                print("      unban g:<group_id> <user_id>")
+                return
+            
+            if parts[0].startswith('g:'):
+                group_id = int(parts[0][2:])
+                user_id = int(parts[1])
+            else:
+                group_id = None
+                user_id = int(parts[0])
+            
+            api_caller = fw.services.get('api_caller')
+            if api_caller is None:
+                print("错误: OneBot 适配器未加载")
+                return
+            
+            async def _unban():
+                if group_id:
+                    await api_caller.set_group_ban(group_id=group_id, user_id=user_id, duration=0)
+                    print(f"已解除用户 {user_id} 的禁言")
+                else:
+                    fw.db.execute("UPDATE users SET is_banned=0 WHERE user_id=%s", (user_id,))
+                    print(f"已解封用户 {user_id}")
+            
+            asyncio.ensure_future(_unban())
+            
+        except ValueError:
+            print("错误: 参数格式错误")
+        except Exception as e:
+            print(f"操作失败: {e}")
+    
+    def cmd_kick(args):
+        """踢出群成员: kick <group_id> <user_id>"""
+        try:
+            parts = args.split()
+            if len(parts) < 2:
+                print("用法: kick <group_id> <user_id>")
+                print("示例: kick 654321 123456")
+                return
+            
+            group_id = int(parts[0])
+            user_id = int(parts[1])
+            
+            api_caller = fw.services.get('api_caller')
+            if api_caller is None:
+                print("错误: OneBot 适配器未加载")
+                return
+            
+            async def _kick():
+                await api_caller.set_group_kick(group_id=group_id, user_id=user_id)
+                print(f"已踢出用户 {user_id}")
+            
+            asyncio.ensure_future(_kick())
+            
+        except ValueError:
+            print("错误: group_id/user_id 必须是数字")
+        except Exception as e:
+            print(f"操作失败: {e}")
+    
+    def cmd_broadcast(args):
+        """广播消息: broadcast <消息>"""
+        if not args.strip():
+            print("用法: broadcast <消息>")
+            print("示例: broadcast 系统维护通知")
+            return
+        
+        message = args.strip()
+        api_caller = fw.services.get('api_caller')
+        if api_caller is None:
+            print("错误: OneBot 适配器未加载")
+            return
+        
+        try:
+            rows = fw.db.query("SELECT group_id FROM groups_info WHERE is_active=1")
+            group_ids = [row['group_id'] for row in rows]
+            
+            async def _broadcast():
+                success = 0
+                for gid in group_ids:
+                    try:
+                        await api_caller.send_group_msg(group_id=gid, message=message)
+                        success += 1
+                    except Exception:
+                        pass
+                print(f"广播完成: 成功 {success}/{len(group_ids)} 个群")
+            
+            asyncio.ensure_future(_broadcast())
+            
+        except Exception as e:
+            print(f"广播失败: {e}")
+    
+    def cmd_tasks(args):
+        """查看定时任务"""
+        try:
+            scheduler = fw.services.get('scheduler')
+            if scheduler is None:
+                print("错误: 调度器未加载")
+                return
+            
+            jobs = scheduler.get_jobs()
+            print(f"定时任务 ({len(jobs)} 个):")
+            print("-" * 60)
+            for job in jobs:
+                print(f"  {job.id}")
+                print(f"    下次运行: {job.next_run_time}")
+                print(f"    触发器: {job.trigger}")
+            print("-" * 60)
+        except Exception as e:
+            print(f"查询失败: {e}")
+    
+    def cmd_log(args):
+        """查看日志: log [行数]"""
+        try:
+            lines = int(args.strip()) if args.strip() else 30
+            log_file = fw.config.get('log', {}).get('file', 'data/logs/zcbot.log')
+            if __import__('os').path.exists(log_file):
+                with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    all_lines = f.readlines()
+                    recent = all_lines[-lines:]
+                    print(f"最近 {len(recent)} 行日志:")
+                    print("-" * 60)
+                    for line in recent:
+                        print(line.rstrip())
+                    print("-" * 60)
+            else:
+                print("日志文件不存在")
+        except Exception as e:
+            print(f"读取日志失败: {e}")
+    
+    def cmd_clear(args):
+        """清屏"""
+        import os
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
     def cmd_exit(args):
         """退出框架"""
         print("正在停止框架...")
-        import asyncio
-        asyncio.ensure_future(fw.stop())
+        loop = fw.loop
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(fw.stop()))
+        else:
+            asyncio.run(fw.stop())
     
     # 注册内置命令
     terminal_commands.register("help", cmd_help, "显示帮助", ["h", "?"])
     terminal_commands.register("status", cmd_status, "查看框架状态", ["st"])
     terminal_commands.register("plugins", cmd_plugins, "列出已加载插件", ["pl"])
-    terminal_commands.register("send", cmd_send, "发送消息: send <user_id/group_id> <消息>")
+    terminal_commands.register("enable", cmd_enable, "启用插件: enable <插件名>")
+    terminal_commands.register("disable", cmd_disable, "禁用插件: disable <插件名>")
+    terminal_commands.register("config", cmd_config, "查看/修改配置: config [key] [value]")
+    terminal_commands.register("send", cmd_send, "发送消息: send <user_id> <消息>")
     terminal_commands.register("recv", cmd_recv, "模拟接收消息: recv <user_id> <消息>")
     terminal_commands.register("reload", cmd_reload, "重载插件: reload [插件名]")
     terminal_commands.register("users", cmd_users, "查看用户列表")
     terminal_commands.register("groups", cmd_groups, "查看群列表")
+    terminal_commands.register("ban", cmd_ban, "禁言/封禁: ban <user_id> [分钟]")
+    terminal_commands.register("unban", cmd_unban, "解封/解禁: unban <user_id>")
+    terminal_commands.register("kick", cmd_kick, "踢出群成员: kick <group_id> <user_id>")
+    terminal_commands.register("broadcast", cmd_broadcast, "广播消息: broadcast <消息>")
+    terminal_commands.register("tasks", cmd_tasks, "查看定时任务")
+    terminal_commands.register("log", cmd_log, "查看日志: log [行数]")
+    terminal_commands.register("clear", cmd_clear, "清屏", ["cls"])
     terminal_commands.register("exit", cmd_exit, "退出框架", ["quit", "q"])
