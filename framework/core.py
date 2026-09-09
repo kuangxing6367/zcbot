@@ -483,6 +483,14 @@ class Framework:
                 if hasattr(module, 'register'):
                     module.register(ctx)
                     logger.info(f"官方插件 [{name}] 已加载")
+
+                    # 存入 plugin_loader，使调度器能通过 get_plugin_module 获取模块
+                    with self.plugin_loader._lock:
+                        self.plugin_loader._loaded_plugins[name] = {
+                            'module': module,
+                            'path': plugin_dir,
+                            'meta': getattr(module, '__plugin_meta__', {}),
+                        }
                 else:
                     logger.warning(f"官方插件 [{name}] 无 register 函数")
             except Exception as e:
