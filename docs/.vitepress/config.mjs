@@ -71,7 +71,8 @@ export default defineConfig({
             { text: '数据库', link: '/advanced/database' },
             { text: '权限系统', link: '/advanced/permission' },
             { text: '定时任务', link: '/advanced/scheduler' },
-            { text: '部署上线', link: '/advanced/deployment' }
+            { text: '部署上线', link: '/advanced/deployment' },
+            { text: '双核心架构（实验）', link: '/advanced/dual-core' }
           ]
         }
       ]

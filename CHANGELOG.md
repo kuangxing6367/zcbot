@@ -26,7 +26,13 @@
 
 # 开发中（Unreleased）
 
-暂无。
+## 双核心架构（core/host 双进程，实验版）
+
+- 把一次启动拆成「核心进程 + 宿主进程」两个进程，经标准库 IPC（回环 TCP + authkey）通信，零第三方依赖。
+- `config.yaml` 暴露 `dual_process` 开关（`enabled` / `core_plugins` / `max_restarts` / `restart_interval`），默认关闭、行为不变。
+- 官方插件按 `__plugin_meta__['process']` 标记自动分派：`onebot_adapter` / `http_inject` / `http_api` / `webui` 留在核心进程，其余与用户插件在宿主进程加载。
+- 新增开发文档 `docs/advanced/dual-core.md`，README 增加「十二、双核心实验版」章节。
+- 新增 `tests/test_dual_core.py`：插件归属解析、IPC 协议往返、远程数据库约束；实测双进程可正常拉起（核心 spawn 宿主、IPC 握手成功、RemoteDatabase 代理生效）。
 
 ---
 
