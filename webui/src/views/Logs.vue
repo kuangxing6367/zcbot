@@ -28,33 +28,20 @@
         </div>
         <el-empty v-if="!logs.length" description="暂无日志" :image-size="50" />
       </div>
-      <!-- 终端命令输入 -->
       <div class="terminal-bar">
-        <el-input
-          v-model="cmdInput"
-          placeholder="输入终端命令 (如 update, status, plugins, help...)"
-          @keyup.enter="execCmd"
-          :disabled="cmdRunning"
-          clearable
-        >
-          <template #prefix>
-            <span style="color:var(--el-color-success);font-weight:bold">$</span>
-          </template>
-          <template #append>
-            <el-button @click="execCmd" :loading="cmdRunning" type="primary">执行</el-button>
-          </template>
-        </el-input>
-        <div v-if="cmdOutput" class="cmd-output">
-          <pre>{{ cmdOutput }}</pre>
-        </div>
+        <el-input v-model="terminalCmd" placeholder="输入终端命令（如 help、status）" @keyup.enter="execTerminal" clearable style="flex:1" />
+        <el-button @click="execTerminal" :loading="terminalLoading">执行</el-button>
+      </div>
+      <div v-if="terminalResult" class="terminal-result">
+        <pre>{{ terminalResult }}</pre>
       </div>
     </el-card>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { ElMessageBox, ElMessage } from 'element-plus'
+import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { api, apiCall } from '../api'
 
 const logs = ref([])
@@ -63,12 +50,11 @@ const level = ref('')
 const keyword = ref('')
 const autoScroll = ref(true)
 const logBoxRef = ref(null)
+const terminalCmd = ref('')
+const terminalResult = ref('')
+const terminalLoading = ref(false)
 let lastSeq = 0
 let timer = null
-
-const cmdInput = ref('')
-const cmdOutput = ref('')
-const cmdRunning = ref(false)
 
 function fmtLogTime(t) {
   const d = new Date(t * 1000)
@@ -116,32 +102,27 @@ async function poll() {
   if (r.latest_seq) lastSeq = r.latest_seq
 }
 
+async function execTerminal() {
+  if (!terminalCmd.value.trim()) return
+  terminalLoading.value = true
+  terminalResult.value = ''
+  try {
+    const r = await api('/api/terminal/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: terminalCmd.value.trim() })
+    })
+    terminalResult.value = r.output || JSON.stringify(r, null, 2)
+  } catch (e) {
+    terminalResult.value = '执行失败: ' + (e.message || e)
+  }
+  terminalLoading.value = false
+}
+
 async function clearLogs() {
   await ElMessageBox.confirm('确定清空日志缓存吗？', '提示', { type: 'warning' })
   const r = await apiCall('/api/runtime_logs/clear', { method: 'POST' })
   if (r) { loadLogs() }
-}
-
-async function execCmd() {
-  const cmd = cmdInput.value.trim()
-  if (!cmd) return
-  cmdRunning.value = true
-  cmdOutput.value = ''
-  try {
-    const r = await apiCall('/api/terminal/exec', {
-      method: 'POST',
-      body: JSON.stringify({ command: cmd })
-    })
-    if (r && r.code === 0) {
-      cmdOutput.value = r.data?.output || '(无输出)'
-    } else {
-      cmdOutput.value = r?.msg || '执行失败'
-    }
-  } catch (e) {
-    cmdOutput.value = '请求失败: ' + e.message
-  } finally {
-    cmdRunning.value = false
-  }
 }
 
 onMounted(async () => {
@@ -153,19 +134,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 
 <style scoped>
 .log-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.terminal-bar { margin-top: 12px; border-top: 1px solid var(--el-border-color-lighter); padding-top: 12px; }
-.cmd-output {
-  margin-top: 8px;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 10px 12px;
-  border-radius: 6px;
-  font-family: 'Consolas', 'Courier New', monospace;
-  font-size: 13px;
-  max-height: 300px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.cmd-output pre { margin: 0; }
+.terminal-bar { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.terminal-result { margin-top: 8px; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; max-height: 300px; overflow: auto; }
+.terminal-result pre { margin: 0; white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 13px; }
 </style>
