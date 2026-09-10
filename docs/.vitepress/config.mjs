@@ -11,6 +11,11 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
 
+  // README.md 在 GitHub 上作为目录入口更好读，但站点需要 index.html
+  rewrites: {
+    'guide/README.md': 'guide/index.md'
+  },
+
   head: [
     ['meta', { name: 'theme-color', content: '#3c8772' }]
   ],
