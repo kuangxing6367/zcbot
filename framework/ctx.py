@@ -175,7 +175,7 @@ class PluginContext:
         """
         判断某用户是否拥有指定权限节点（未定义按拒绝处理）
 
-        :param user_id: QQ 号
+        :param user_id: 用户 ID
         :param node: 权限节点，如 'myplugin.ban'
         :param context: 上下文 {'group': '123456', 'bot': 'main', 'msgtype': 'group'}
         :param role: 框架身份（super/owner/admin/member），用于注入内置角色组

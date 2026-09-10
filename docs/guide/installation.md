@@ -7,7 +7,7 @@
 - Python 3.10 或更高版本（开发验证环境为 3.10–3.14）；
 - 操作系统：Windows / Linux / macOS；
 - 一个 OneBot 11 协议端（如 [NapCat](https://github.com/NapNeko/NapCatQQ)、Lagrange），
-  用于真正连接 QQ；ZCBOT 框架本身协议无关，OneBot 反向 WebSocket 服务端由内置官方插件 `onebot_adapter` 提供。
+  用于真正接入平台；ZCBOT 框架本身协议无关，OneBot 反向 WebSocket 服务端由内置官方插件 `onebot_adapter` 提供。
 
 ## 下载代码
 

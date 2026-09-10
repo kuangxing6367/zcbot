@@ -97,7 +97,7 @@ class Event:
         self.post_type = raw.get('post_type', '')     # message / notice / request / meta_event
         self.message_type = raw.get('message_type', '')  # group / private
         self.sub_type = raw.get('sub_type', '')          # 子类型
-        self.self_id = raw.get('self_id', 0)             # 机器人QQ号
+        self.self_id = raw.get('self_id', 0)             # 机器人用户 ID
 
         # 消息内容（提取纯文本用于命令匹配）
         self.message = _extract_text(raw.get('message', ''))
@@ -420,7 +420,7 @@ class Event:
 
     @property
     def at_list(self) -> list:
-        """获取所有被 @ 的 QQ 号列表"""
+        """获取所有被 @ 的用户 ID 列表"""
         result = []
         for s in self.segments:
             if s.get('type') == 'at':

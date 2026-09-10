@@ -1,1 +1,1 @@
-# ZCBOT OneBot QQ机器人框架
+# ZCBOT 插件化服务宿主
