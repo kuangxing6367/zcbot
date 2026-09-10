@@ -159,4 +159,12 @@ chk("清理掉 1 条过期记录", n >= 1, True)
 
 print(f"\n{'=' * 46}\n通过 {ok} / 失败 {fail}\n{'=' * 46}")
 db.close()
+# 清理本次临时库（含 SQLite 的 -wal/-shm 旁车文件），避免每次跑测试都残留一个 .db
+for _suf in ('', '-wal', '-shm'):
+    _p = DB_PATH + _suf
+    try:
+        if os.path.exists(_p):
+            os.remove(_p)
+    except OSError:
+        pass
 sys.exit(1 if fail else 0)

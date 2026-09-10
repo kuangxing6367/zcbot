@@ -79,6 +79,7 @@ plugins/office_assistant/word_renderer_js/node_modules/
 # ============================================================
 .vscode/
 .idea/
+.trae/
 *.swp
 *.swo
 *~

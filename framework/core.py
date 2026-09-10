@@ -8,6 +8,7 @@
 - 用户插件：业务逻辑
 """
 import asyncio
+import ast
 import importlib
 import gc
 import logging
@@ -17,15 +18,13 @@ import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-import psutil
-
 from framework.config import load_config
 from framework.db import init_db
 from framework.loader import PluginLoader
 from framework.router import MessageRouter
 from framework.event_bus import EventBus
 from framework.log_broker import log_broker, FrameworkLogHandler
-from framework.protocol import ServiceRegistry
+from framework.protocol import ServiceRegistry, ProtocolAdapter
 from framework.terminal import TerminalInput, terminal_commands, register_builtins
 
 logger = logging.getLogger('zcbot')
@@ -193,7 +192,11 @@ class AsyncStatsWriter:
 class Framework:
     """框架核心引擎"""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, role: str = 'standard', ipc_client=None):
+        # 运行角色：standard=单进程（默认）/ core=双进程核心 / host=双进程宿主
+        # ipc_client：宿主模式下注入的 IPC 客户端（供 RemoteDatabase 使用）
+        self._role = role
+        self._ipc_client = ipc_client
         # 记录实际使用的配置文件路径（供 Web API 读写 config.yaml 使用）
         if config_path is None:
             config_path = os.path.join(
@@ -210,8 +213,13 @@ class Framework:
         # 服务注册表（官方插件注册自身为核心能力）
         self.services = ServiceRegistry()
 
-        # 数据库（保留在核心，因为太基础）
-        self.db = init_db(self.config['database'])
+        # 数据库：宿主模式下用 RemoteDatabase（经 IPC RPC 到核心进程执行）；否则真实数据库
+        if role == 'host' and ipc_client is not None:
+            from framework.ipc.remote_db import RemoteDatabase
+            self.db = RemoteDatabase(ipc_client)
+            logger.info("数据库已切换为 RemoteDatabase（双进程宿主模式，RPC 到核心）")
+        else:
+            self.db = init_db(self.config['database'])
 
         # 数据库专用线程池
         self._db_executor = ThreadPoolExecutor(
@@ -438,9 +446,10 @@ class Framework:
         # 9. 触发系统事件
         await self.event_bus.aemit('system.plugin.loaded', {'plugins': loaded})
 
-        # 10. 启动终端交互
-        register_builtins(self)
-        self.terminal.start()
+        # 10. 启动终端交互（宿主子进程无交互 stdin，跳过）
+        if getattr(self, '_role', 'standard') != 'host':
+            register_builtins(self)
+            self.terminal.start()
 
         logger.info("框架启动完成，等待消息...")
 
@@ -454,6 +463,18 @@ class Framework:
 
         core_cfg = self.config.get('core_plugins', {})
 
+        # 双进程角色过滤（按插件 __plugin_meta__['process'] 自动分派，不再硬编码名单）：
+        #  - process='core'：协议/Web 基础设施，只在核心进程与单进程加载，宿主进程排除
+        #  - 其余（插件侧能力）：单进程与宿主进程加载，纯核心进程排除
+        # 仍兼容 dual_process.core_plugins 显式名单覆盖（配置了就以配置为准）。
+        dual = self.config.get('dual_process', {})
+        _explicit_core = dual.get('core_plugins')
+        if isinstance(_explicit_core, list) and _explicit_core:
+            _explicit_core = set(_explicit_core)
+        else:
+            _explicit_core = None
+        _role = getattr(self, '_role', 'standard')
+
         for name in os.listdir(core_plugins_dir):
             if name.startswith('_'):
                 continue
@@ -461,6 +482,14 @@ class Framework:
             main_file = os.path.join(plugin_dir, 'main.py')
             if not os.path.isfile(main_file):
                 continue
+
+            # 双进程角色分派（单进程 standard 不过滤，全部加载）
+            if _role in ('core', 'host'):
+                _core_side = self._core_plugin_is_core_side(name, main_file, _explicit_core)
+                if _role == 'core' and not _core_side:
+                    continue
+                if _role == 'host' and _core_side:
+                    continue
 
             # 检查配置开关（默认启用）
             enabled = core_cfg.get(name, True)
@@ -499,6 +528,33 @@ class Framework:
             except Exception as e:
                 logger.error(f"官方插件 [{name}] 加载失败: {e}", exc_info=True)
 
+    @staticmethod
+    def _read_plugin_process_tag(main_file: str):
+        """不执行插件，静态解析 __plugin_meta__ 里的 process 进程归属标记。
+        解析失败返回 None（按插件侧能力处理）。"""
+        try:
+            with open(main_file, 'r', encoding='utf-8') as f:
+                tree = ast.parse(f.read(), filename=main_file)
+        except Exception:
+            return None
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == '__plugin_meta__':
+                        try:
+                            meta = ast.literal_eval(node.value)
+                        except Exception:
+                            return None
+                        if isinstance(meta, dict):
+                            return meta.get('process')
+        return None
+
+    def _core_plugin_is_core_side(self, name: str, main_file: str, explicit_core) -> bool:
+        """判断官方插件是否属于核心进程侧（协议/Web 基础设施）"""
+        if explicit_core is not None:
+            return name in explicit_core
+        return self._read_plugin_process_tag(main_file) == 'core'
+
     def _register_builtin_jobs(self):
         """注册框架内置定时任务（与插件任务互不干扰）"""
         try:
@@ -523,16 +579,13 @@ class Framework:
             logger.warning(f"注册内置定时任务失败: {e}")
 
     def _warn_insecure_config(self):
-        """启动安全提示"""
+        """启动安全提示（协议中立；各接入端自身的令牌提示由适配器注册时给出）"""
         web_cfg = self.config.get('web', {})
-        onebot_cfg = self.config.get('onebot', {})
         web_host = web_cfg.get('host', '0.0.0.0')
-        token = onebot_cfg.get('access_token', '')
-        if web_host in ('0.0.0.0', '::') and not token:
+        if web_host in ('0.0.0.0', '::'):
             logger.warning(
-                "⚠ 安全提示: Web 面板监听 0.0.0.0 且 OneBot access_token 为空，"
-                "公网部署存在被接管风险。请设置 config.yaml → onebot.access_token，"
-                "并将 web.host 改为 127.0.0.1。"
+                "⚠ 安全提示: Web 面板监听 0.0.0.0，公网部署请确认已设置访问凭据，"
+                "并按需将 web.host 改为 127.0.0.1。"
             )
 
     async def _heartbeat_loop(self):
@@ -552,6 +605,7 @@ class Framework:
 
     async def _memory_watchdog_loop(self):
         """内存看门狗：周期检查 RSS，超限时清理框架级缓存并强制 GC"""
+        import psutil  # 延迟导入：psutil 导入较慢，仅在启用看门狗时加载
         process = psutil.Process()
         while self._running:
             try:
@@ -656,6 +710,46 @@ class Framework:
         except Exception as e:
             logger.debug(f"after_message_sent 事件派发失败: {e}")
 
+    async def reply_text(self, target, text: str):
+        """
+        协议中立的"框架自动回复一条文本"统一入口（权限不足提示、关键词回复等）。
+        - target 可以是内部 Event 对象或归一化事件 dict；
+        - 优先调用当前接入端实现的 ProtocolAdapter.send_text（协议翻译在适配器内）；
+        - 向后兼容：仅注册 api_caller、未覆写 send_text 的旧接入端，退回通用 send_msg。
+        """
+        def _g(key):
+            if isinstance(target, dict):
+                return target.get(key)
+            return getattr(target, key, None)
+
+        group_id = _g('group_id')
+        user_id = _g('user_id')
+        is_group = _g('is_group')
+        if is_group is None:
+            is_group = bool(group_id)
+        source = _g('bot_name')
+
+        adapter = self.services.get('protocol_adapter')
+        # 仅当接入端确实覆写了 send_text（而非基类 unsupported 默认）时走适配器
+        if adapter is not None and type(adapter).send_text is not ProtocolAdapter.send_text:
+            try:
+                return await adapter.send_text(
+                    text,
+                    group_id=group_id if is_group else None,
+                    user_id=None if is_group else user_id,
+                    source=source,
+                )
+            except Exception as e:
+                logger.warning(f"接入端 send_text 失败，回退通用调用: {e}")
+
+        # 向后兼容：未实现中立 send_text 的旧接入端
+        caller = self.services.get('api_caller')
+        if caller is None:
+            logger.debug("无可用接入端，框架自动回复被跳过")
+            return None
+        tgt = {'group_id': group_id} if is_group else {'user_id': user_id}
+        return await caller.acall('send_msg', **tgt, message=text)
+
     async def dispatch_event(self, event: dict):
         """
         协议适配器入口：将转换后的内部事件分发到框架
@@ -700,80 +794,6 @@ class Framework:
             await self._handle_notice(event, bot_name)
         elif event_type == 'request':
             await self._handle_request(event, bot_name)
-
-    def _on_bot_connect(self, bot_name: str, ws):
-        """OneBot 客户端连接时的回调"""
-        # 注册 BotConnection
-        conn = self.api_caller.register_connection(bot_name)
-        conn.set_ws(ws)
-        conn.set_ws_server(self.ws_server)
-        peer = getattr(ws, 'remote_address', 'unknown')
-        logger.info(f"OneBot 客户端已注册: [{bot_name}]")
-        log_broker.log_connection(bot_name, 'connect', {'peer': str(peer)})
-        log_broker.log_system('INFO', f'OneBot 客户端 [{bot_name}] 已连接')
-
-    def _on_bot_disconnect(self, bot_name: str):
-        """OneBot 客户端断开时的回调"""
-        conn = self.api_caller.get_connection(bot_name)
-        if conn:
-            conn.set_ws(None)
-        logger.info(f"OneBot 客户端已离线: [{bot_name}]")
-        log_broker.log_connection(bot_name, 'disconnect')
-        log_broker.log_system('WARN', f'OneBot 客户端 [{bot_name}] 已离线')
-
-    async def _on_ws_message(self, data: dict, bot_name: str = 'default'):
-        """收到 WebSocket 消息事件（异步处理）"""
-        post_type = data.get('post_type', '')
-
-        # 处理元事件（心跳包/生命周期）→ 广播给插件订阅
-        # 事件名：meta.heartbeat / meta.lifecycle（sub_type: enable/disable/connect）
-        # 插件可用 ctx.on("meta.heartbeat", handler) 感知机器人在线状态
-        if post_type == 'meta_event':
-            meta_type = data.get('meta_event_type', 'unknown')
-            await self.event_bus.aemit(f'meta.{meta_type}', data)
-            return
-
-        # 处理消息事件 → 路由
-        if post_type == 'message':
-            # 原始消息注入点：插件可选择性处理原始消息（完整消息段/未提取文本），
-            # 任一处理器返回 True 即接管，框架跳过该消息的后续全部处理
-            if await self._dispatch_raw_message_handlers(data, bot_name):
-                return
-
-            from framework.event import _extract_text
-            raw_message = _extract_text(data.get('message', ''))
-            message_type = data.get('message_type', 'unknown')
-            user_id = data.get('user_id', 0)
-            group_id = data.get('group_id')
-            message_id = data.get('message_id')
-            sender = data.get('sender', {})
-
-            # 根据配置决定是否记录原始消息内容
-            log_raw = self.config.get('log', {}).get('log_raw_message', True)
-            if log_raw:
-                log_broker.log_message(bot_name, message_type, user_id, group_id,
-                                       raw_message, message_id)
-            else:
-                source = f"群{group_id}" if group_id else f"私聊{user_id}"
-                log_broker.log('message', 'INFO',
-                               f"[{bot_name}] {message_type} {source}: (原始内容未记录)",
-                               {'bot': bot_name, 'message_type': message_type,
-                                'user_id': user_id, 'group_id': group_id})
-
-            # 自动注册/更新用户信息（批量写库，不阻塞事件循环）
-            self.stats_writer.register_user(user_id, sender, message_type, group_id)
-
-            await self.router.route(data, bot_name)
-
-        # 处理通知事件
-        elif post_type == 'notice':
-            await self._handle_notice(data, bot_name)
-
-        # 处理请求事件
-        elif post_type == 'request':
-            await self._handle_request(data, bot_name)
-
-    # ── 原始消息注入点（raw message hook）────────────────────────────
 
     def register_raw_message_handler(self, plugin_name: str, handler, priority: int = 50):
         """注册插件原始消息处理器（同插件同 handler 去重，按优先级升序）"""
@@ -916,11 +936,6 @@ class Framework:
             self._db_executor.shutdown(wait=False)
         except Exception as e:
             logger.warning(f"数据库线程池关闭异常: {e}")
-
-        # 触发系统事件
-        await self.event_bus.aemit('system.plugin.unloaded', {})
-
-        logger.info("框架已停止")
 
         # 触发系统事件
         await self.event_bus.aemit('system.plugin.unloaded', {})

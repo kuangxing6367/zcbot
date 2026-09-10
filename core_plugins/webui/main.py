@@ -15,6 +15,7 @@ __plugin_meta__ = {
     "desc": "Web 管理面板 + REST API",
     "priority": 0,
     "official": True,
+    "process": "core",
 }
 
 _web_server = None

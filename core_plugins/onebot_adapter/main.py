@@ -1,8 +1,14 @@
 """
 OneBot 11 协议适配器（官方插件）
 将 OneBot WS 事件转换为框架内部格式，提供 API 调用能力
+
+本模块是 OneBot 协议专属实现，框架核心（framework/）不包含任何 OneBot 代码：
+- WebSocket 接入 / 连接管理 / API 调用通道都在本插件内；
+- 标准动作封装见同目录 onebot_api.py；
+- 通过 framework.protocol.ProtocolAdapter 抽象与 ServiceRegistry 接入框架。
 """
 import asyncio
+import importlib.util
 import json
 import logging
 import os
@@ -26,7 +32,21 @@ __plugin_meta__ = {
     "desc": "OneBot 11 协议适配：WebSocket 连接 + API 调用",
     "priority": 0,
     "official": True,
+    # 双进程归属：协议接入基础设施，只在「核心进程」与单进程加载，宿主进程排除
+    "process": "core",
 }
+
+# 同目录加载标准动作封装（core 插件以合成模块名装载，不能用常规相对导入）
+def _load_sibling_onebot_api():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'onebot_api.py')
+    spec = importlib.util.spec_from_file_location(
+        'core_plugin_onebot_adapter_api', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.OneBotAPI
+
+
+OneBotAPI = _load_sibling_onebot_api()
 
 # websockets 版本兼容
 _WS_VERSION = tuple(int(p) for p in websockets.__version__.split('.')[:2])
@@ -36,6 +56,13 @@ _MAX_CONCURRENT_EVENTS = 64
 _MAX_PENDING_EVENTS = 256
 
 _SENT_ACTIONS = ('send_msg', 'send_group_msg', 'send_private_msg')
+
+# 是否记录发送到 OneBot11 的消息内容（register 时从框架配置填充，缺省 True）
+_log_sent_message = None
+
+
+def _should_log_sent_message() -> bool:
+    return True if _log_sent_message is None else _log_sent_message
 
 
 # ── 内部事件格式 ────────────────────────────────────────────────
@@ -164,7 +191,6 @@ class BotConnection:
                 return {"status": "failed", "retcode": -1, "msg": "发送失败"}
 
             if action in _SENT_ACTIONS:
-                from framework.apis import _should_log_sent_message
                 if _should_log_sent_message():
                     msg = params.get('message', '')
                     target = f"群{params.get('group_id')}" if 'group_id' in params else f"私聊{params.get('user_id')}"
@@ -243,53 +269,6 @@ class ApiCaller:
 
     def all_connections(self) -> dict:
         return self._connections
-
-
-# ── OneBot 11 API 封装 ───────────────────────────────────────
-
-class OneBotAPI:
-    """OneBot 11 标准 API 快捷方法"""
-
-    def __init__(self, api_caller: ApiCaller):
-        self._caller = api_caller
-
-    def __getattr__(self, action: str):
-        def _method(**kwargs):
-            bot = kwargs.pop('bot', None)
-            return self._caller.call(action, bot=bot, **kwargs)
-        return _method
-
-    async def acall(self, action: str, **kwargs):
-        bot = kwargs.pop('bot', None)
-        return await self._caller.acall(action, bot=bot, **kwargs)
-
-    def send_msg(self, user_id=None, group_id=None, message=None, auto_escape=False, bot=None):
-        if group_id:
-            return self._caller.call('send_group_msg', group_id=group_id, message=message,
-                                     auto_escape=auto_escape, bot=bot)
-        return self._caller.call('send_private_msg', user_id=user_id, message=message,
-                                 auto_escape=auto_escape, bot=bot)
-
-    def set_group_ban(self, group_id, user_id, duration=600, bot=None):
-        return self._caller.call('set_group_ban', group_id=group_id, user_id=user_id,
-                                 duration=duration, bot=bot)
-
-    def set_group_kick(self, group_id, user_id, reject_add_request=False, bot=None):
-        return self._caller.call('set_group_kick', group_id=group_id, user_id=user_id,
-                                 reject_add_request=reject_add_request, bot=bot)
-
-    def set_group_whole_ban(self, group_id, enable=True, bot=None):
-        return self._caller.call('set_group_whole_ban', group_id=group_id, enable=enable, bot=bot)
-
-    def set_group_card(self, group_id, user_id, card='', bot=None):
-        return self._caller.call('set_group_card', group_id=group_id, user_id=user_id,
-                                 card=card, bot=bot)
-
-    def get_group_member_list(self, group_id, bot=None):
-        return self._caller.call('get_group_member_list', group_id=group_id, bot=bot)
-
-    def get_group_member_info(self, group_id, user_id, bot=None):
-        return self._caller.call('get_group_member_info', group_id=group_id, user_id=user_id, bot=bot)
 
 
 # ── WebSocket 服务端 ──────────────────────────────────────────
@@ -510,6 +489,15 @@ class OneBotAdapter(ProtocolAdapter):
     async def call_api(self, action: str, bot: str = None, **params) -> dict:
         return await self.api_caller.acall(action, bot=bot, **params)
 
+    async def send_text(self, text: str, *, user_id=None, group_id=None,
+                        source: str = None) -> dict:
+        """协议中立文本发送：翻译成 OneBot 的群/私聊动作"""
+        if group_id:
+            return await self.api_caller.acall(
+                'send_group_msg', group_id=group_id, message=text, bot=source)
+        return await self.api_caller.acall(
+            'send_private_msg', user_id=user_id, message=text, bot=source)
+
     def get_connected_bots(self) -> list:
         return self.ws_server.get_connected_bots()
 
@@ -543,7 +531,7 @@ _adapter_instance = None
 
 def register(ctx):
     """注册 OneBot 适配器为官方插件"""
-    global _adapter_instance
+    global _adapter_instance, _log_sent_message
     fw = ctx._framework
 
     # 检查配置是否启用
@@ -552,6 +540,9 @@ def register(ctx):
         ctx.log("OneBot 适配器已禁用 (onebot.enabled: false)")
         return
 
+    # 日志开关：是否记录发送到 OneBot11 的消息内容
+    _log_sent_message = fw.config.get('log', {}).get('log_sent_message', True)
+
     _adapter_instance = OneBotAdapter(fw)
 
     # 注册为协议适配器服务
@@ -559,6 +550,14 @@ def register(ctx):
     fw.services.register('api_caller', _adapter_instance.api_caller)
     fw.services.register('onebot_api', _adapter_instance._onebot_api)
     fw.services.register('ws_server', _adapter_instance.ws_server)
+
+    # OneBot 专属安全提示（框架核心不再假设具体协议，故由本适配器自行提示）
+    web_host = fw.config.get('web', {}).get('host', '0.0.0.0')
+    if web_host in ('0.0.0.0', '::') and not onebot_cfg.get('access_token', ''):
+        logger.warning(
+            "⚠ 安全提示: Web 面板监听 0.0.0.0 且 OneBot access_token 为空，"
+            "公网部署存在被接管风险。请设置 onebot.access_token，并将 web.host 改为 127.0.0.1。"
+        )
 
     # 启动 WebSocket 服务
     _adapter_instance.start()

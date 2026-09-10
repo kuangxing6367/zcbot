@@ -20,6 +20,7 @@ __plugin_meta__ = {
     "desc": "RESTful HTTP 接口，支持外部程序通过 HTTP 调用框架能力",
     "priority": 0,
     "official": True,
+    "process": "core",
 }
 
 
@@ -27,6 +28,7 @@ class ApiHandler(BaseHTTPRequestHandler):
     """HTTP 请求处理器"""
     framework = None
     token = ""
+    allow_db = False
 
     def log_message(self, format, *args):
         """禁用默认日志"""
@@ -114,8 +116,14 @@ class ApiHandler(BaseHTTPRequestHandler):
         elif path == 'reload':
             self._handle_reload()
         elif path == 'db/query':
+            if not self.allow_db:
+                self._send_json(403, {'ok': False, 'error': '数据库网关未开启（http_api.allow_db 默认 false）'})
+                return
             self._handle_db_query(body)
         elif path == 'db/execute':
+            if not self.allow_db:
+                self._send_json(403, {'ok': False, 'error': '数据库网关未开启（http_api.allow_db 默认 false）'})
+                return
             self._handle_db_execute(body)
         else:
             self._send_json(404, {'ok': False, 'error': f'未知路径: {path}'})
@@ -391,18 +399,19 @@ class ApiHandler(BaseHTTPRequestHandler):
 class HttpApiServer:
     """HTTP API 服务"""
 
-    def __init__(self, framework, host, port, token):
+    def __init__(self, framework, host, port, token, allow_db=False):
         self.framework = framework
         self.host = host
         self.port = port
         self.token = token
+        self.allow_db = allow_db
         self._server = None
         self._thread = None
 
     def start(self):
         ApiHandler.framework = self.framework
         ApiHandler.token = self.token
-
+        ApiHandler.allow_db = self.allow_db
         self._server = HTTPServer((self.host, self.port), ApiHandler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="http-api")
         self._thread.start()
@@ -428,6 +437,7 @@ def register(ctx):
     host = http_cfg.get('host', '127.0.0.1')
     port = http_cfg.get('port', 1145)
     token = http_cfg.get('token', '')
+    allow_db = http_cfg.get('allow_db', False)
 
     if not token:
         import secrets
@@ -436,11 +446,12 @@ def register(ctx):
         ctx.log(f"请在 config.yaml 中设置 http_api.token 以固定令牌")
 
     try:
-        _server = HttpApiServer(fw, host, port, token)
+        _server = HttpApiServer(fw, host, port, token, allow_db)
         _server.start()
         fw.services.register('http_api', _server)
         ctx.log(f"HTTP API 已启动: http://{host}:{port}")
         ctx.log(f"Token: {token}")
+        ctx.log(f"数据库网关(db/query, db/execute): {'已开启' if allow_db else '已关闭 (http_api.allow_db 默认 false)'}")
     except Exception as e:
         ctx.log(f"HTTP API 启动失败: {e}", level="error")
 

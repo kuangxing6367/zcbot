@@ -1,278 +1,314 @@
-# 更新日志
+# 更新日志（CHANGELOG）
 
-## v1.3.0
+本文件记录 ZCBOT 每一个版本的变化，**按代际（发展阶段）组织、版本内按时间倒序**。
+版本事实以 GitHub [Releases](https://github.com/kuangxing6367/zcbot/releases) 与 Git Tag 为准，
+日期取 Tag 创建日期（UTC+8）；未发布的在研变化放在最顶部「开发中」一节。
+
+版本号遵循语义化版本：`主版本.次版本.修订号`，`-alpha/-beta` 为预发布，`build.N` 为 Alpha 期的持续构建号。
+
+---
+
+## 代际主线（一句话看懂 ZCBOT 的演进）
+
+| 代际 | 版本区间 | 时间 | 这一代在解决什么 |
+|------|----------|------|------------------|
+| **第一代 · 诞生** | v0.0.1-alpha（build.4–23） | 2026-08-04 ~ 08-10 | 从 0 搭出「基于 OneBot v11 的异步 QQ 机器人框架」：反向 WS、插件热加载、Web 面板、双方言数据库，并用连续 build 快速夯实稳定性 |
+| **第二代 · 公测与界面现代化** | v0.0.1-beta、v0.1.0-beta | 2026-08-11 ~ 08-20 | 公测首发、补齐基础插件；Web 管理后台从原生 HTML/JS 全量重写为 Vue 3 + Element Plus |
+| **第三代 · 正式版与健壮性** | v1.0.x、v1.1.x | 2026-08-20 ~ 08-30 | 发布首个正式版，前端可被插件接管；集中修复内存/性能/安全，引入内存看门狗与插件管理修复 |
+| **第四代 · 权限与治理** | v1.2.0-beta | 2026-08-30 ~ 09-08 | 引入 LuckPerms 风格权限引擎与接口令牌（API Key），插件孤儿任务自检，框架开始具备"可治理的多用户后台"骨架 |
+| **第五代 · 通用插件化服务宿主** | v1.3.x | 2026-09-09 起 | 官方能力全部下沉为 `core_plugins`，框架回归"极简壳"；补齐终端、相对导入、可靠热重载；**v1.3.5 起框架核心零 OneBot 实现，OneBot 11 退为可插拔的默认接入端** |
+
+> 主线叙事：ZCBOT 起步于「OneBot v11 的 QQ 机器人框架」，但插件化、权限、持久化、Web 后台这些骨架从一开始就是通用的。
+> 第五代（v1.3.x）把这条路线收口——**框架 = 极简内核 + 官方插件集（core_plugins）+ 用户插件（plugins）**，
+> 换一个 `ProtocolAdapter` 就能接入 HTTP Webhook、定时事件或任意其它 IM，QQ 只是默认接入端，不再是身份。
+
+---
+
+# 开发中（Unreleased）
+
+暂无。
+
+---
+
+# 第五代 · 通用插件化服务宿主（v1.3.x）
+
+## v1.3.5（2026-09-10）
+
+> 说明：本版本在研阶段以 v1.3.4 记录，发布时统一并入 v1.3.5（版本号由 v1.3.3 直接跳至 v1.3.5）。
+
+> 主题：**官方插件配置中心 + 协议层彻底解耦，框架核心不再包含任何 OneBot 实现**。
+> 全程保持前后向兼容：老插件的 `ctx.onebot` / `send_msg` / `ban` / `kick`、`bot=` 关键字、
+> 事件结构、服务名、`fw.config.get('onebot')` 等公开用法全部不变。
 
 ### 新增
+- **官方插件配置中心 `core_plugins.yaml`**：独立文件集中管理全部官方插件的 `enabled` 开关与配置项；
+  启动时自动扫描 `core_plugins/` 目录——新装补块、卸载删块、自动回写，并合并进主配置，
+  插件既有的 `fw.config.get('onebot')` 读取方式不变。`config.yaml` 中失效的旧 `core_plugins` 段已清理。
+- **`framework/runtime.py` 运行时上下文**：新增协议无关的 `current_source_var`（当前事件来源），
+  并保留 `current_bot_var` 别名以兼容旧代码。
+- **协议接入抽象增强**（`framework/protocol.py`）：`ProtocolAdapter` 基类提供统一的
+  `call/acall/send_text` 默认实现，以及协议无关的 `ActionProxy` 与 `ServiceRegistry`，
+  自定义接入端只需实现最小契约即可获得 `ctx.api()` 与框架中立回复能力。
+- **中立回复通道 `reply_text`**：路由层不再硬编码 OneBot `send_msg`，改走"当前接入端 → 通用回复"，
+  IPC 适配器同样补齐 `send_text`。
+- **基于插件元信息的进程分派**：官方插件通过 `__plugin_meta__['process']`（`core`/`host`）静态标记
+  由 AST 静态分析自动分派到双进程，取代原先硬编码的 `_core_whitelist` 白名单；
+  `dual_process.core_plugins` 显式名单仍可覆盖。
 
-- **HTTP API 插件**：新增 `core_plugins.http_api` 官方插件（默认关闭）
-  - 提供 RESTful HTTP 接口，支持外部程序通过 HTTP 调用框架能力
-  - 支持接口：status, plugins, users, groups, sendmsg, kick, ban, unban, broadcast, reload, db/query, db/execute
-  - 配置 `core_plugins.http_api: true` 启用，默认监听 `127.0.0.1:1145`
-  - 支持 token 认证，未配置时自动生成
+### 变更 / 重构
+- **OneBot 实现整体迁出框架内核**：删除 `framework/onebot_api.py`、`framework/onebot_caller.py`、
+  `framework/websocket_handler.py`；38 个 OneBot 动作迁入 `core_plugins/onebot_adapter/onebot_api.py`，
+  `onebot_adapter/main.py` 自包含反向 WS 连接、事件归一化与 ApiCaller，并实现 `send_text`。
+- **`ctx.onebot` 变为纯服务查找**：优先取 `onebot_api` 服务，缺失时以协议无关 `ActionProxy` 兜底，
+  连接入端都没有才抛错；`ctx.api/aapi` 走通用 `api_caller`，不再与某个协议绑定。
+- 终端命令的硬编码插件名单改为目录扫描，并修复原本调用不存在方法的 send/ban/kick/broadcast。
+- 6 个官方插件补齐 `process` 标记：`onebot_adapter/http_inject/http_api/webui = core`，
+  `session/scheduler = host`。
+
+### 兼容性
+- 所有既有公开 API、服务名、配置键、事件结构保持不变；老业务插件**零改动**即可运行。
+- 关闭 `onebot_adapter` 后，框架可作为纯定时 / HTTP Webhook / 其它接入端的通用宿主运行。
+
+### 测试
+- `compileall` 全量编译通过；`tests/test_plugin_imports.py` 31/31、`tests/test_perm.py` 43/43；
+- 23 项解耦专项冒烟、三角色加载矩阵与旧白名单逐插件等价核对全部通过；
+- 真实冷启动验证：Web 后台（8080）、反向 WS（6830）握手与事件注入正常，优雅停机退出码 0。
+
+### 文档 / 风格
+- 全项目文档去除 emoji：README 与 6 篇 docs 统一改为文字标记（必填 / 推荐 / 兼容、提示 / 注意、正确与错误示例），表格与列表结构不变。
+- 版本来源统一：`VERSION` 文件是唯一版本出处（WebUI、`/api/version`、终端 `version`、`http_api` 元数据均读它），本次发布 v1.3.5。
+
+## v1.3.3（2026-09-10）
+
+> 主题：彻底修掉"完全热重载后仍跑旧代码"的字节码缓存问题。
+
+### 修复
+- CPython 默认按「源码整数秒 mtime + 文件大小」校验 `.pyc`，同一秒内把模块改成相同字节数时会误判字节码有效、复用旧代码。
+- 新增 `_PluginSourceLoader`：主模块与顶层子模块每次加载都现场从 `.py` 源码编译，且不写 `__pycache__`，从根上绕开字节码缓存，同秒、同尺寸改写也能立即生效。
+- 保留 `_clear_plugin_bytecode_cache()`：建包前清掉本插件各层 `__pycache__` 并 `invalidate_caches()`，覆盖由原生导入机制懒加载的深层嵌套包。
+- 卸载/重载的 `sys.modules` 清理（`_purge_plugin_modules`）经压测确认无残留、不误伤其他同名插件。
+
+### 测试 / 文档
+- `test_plugin_imports.py` 新增「同秒同尺寸快速重载」回归，共 31 项全过；新增卸载/重载压测（双插件同名模块交错卸载、反复重载、运行时懒加载嵌套包）全部通过。
+- `docs/advanced/loader.md` 增补「为什么插件不使用 `__pycache__`」并扩充"改了代码不生效"FAQ。
+
+## v1.3.2（2026-09-10）
+
+> 主题：插件支持 Python 原生相对导入，文档体系全面扩写。
+
+### 新增 / 修复
+- 插件加载支持原生相对导入（`from .xxx import Y` / `from . import xxx`），不再报 `attempted relative import with no known parent package`。
+- 主模块 `plugin_<名>` 同时充当带 `__package__/__path__` 的合成包，作为插件内部相对导入的父包。
+- 子模块规范名改为点分层级 `plugin_<名>.<模块>`，并保留旧下划线唯一名与短名别名（指向同一模块对象），旧的短名绝对导入写法完全兼容；多插件同名模块零冲突。
+- 新增统一的 `_purge_plugin_modules`，卸载、重试与各失败路径都会回滚 `sys.modules`，避免半初始化模块残留；合入调度器为 None 时的守卫，避免空指针。
+
+### 文档 / 测试
+- 新增《插件加载与模块机制》（`docs/advanced/loader.md`）：合成包、三层模块名、相对/绝对导入规则、热重载与卸载清理、排错 FAQ。
+- 全面扩写编写插件、ctx、Event、架构、数据库、定时任务、权限、会话、配置、部署等 16 篇文档，并订正与代码不符的旧描述。
+- 新增 `tests/test_plugin_imports.py`（29 项断言全过）。
+
+## v1.3.1（2026-09-09）
+
+### 新增
+- 独立 HTTP API 插件 `core_plugins/http_api`（**默认关闭**，默认 `127.0.0.1:1145`，共享 token 认证）。
+- 终端新增 `update` 命令，支持框架一键更新。
+- WebUI 日志页新增终端命令输入框与 `/api/terminal/exec` 接口。
+
+### 修复
+- 路由表 `post_type/type` 字段名不匹配导致消息丢失。
+- 更新白名单补充 `core_plugins/webui`；心跳跳过核心插件。
+- `session` 定时任务 handler 找不到；`core_plugins` 缺 `priority` 字段导致路由表刷新 KeyError。
+
+## v1.3.0（2026-09-09）
+
+> 主题：**插件化架构重构**——把协议接入、WebUI、会话、调度等官方能力从内核拆为 `core_plugins`，框架回归"壳 + 插件"；同期落地终端交互。
+> （内部经历过 `v1.3.0-beta.0`、`v1.3.0-beta.0-alpha.0` 两个未单独外发的里程碑。）
+
+### 新增
+- 官方能力插件化：`onebot_adapter`（反向 WS 接入）、`webui`、`session`、`scheduler` 等以 `core_plugins` 形式加载、可在配置中开关。
+- 框架终端交互（`terminal`）：可在控制台执行命令；修复 `exit` 不退出进程、`_start_time` 未定义、uptime 显示等问题。
+
+### 重构
+- 内核按"加载器 / 路由 / 事件 / 上下文 / 协议适配"重新分层，为后续协议解耦（v1.3.5）打基础。
+
+---
+
+# 第四代 · 权限与治理（v1.2.0-beta）
+
+## v1.2.0-beta.1（2026-09-08，预发布）—— 权限系统 + 接口令牌
+
+### 新增
+- **LuckPerms 风格权限系统**（`framework/perm.py`）：权限节点模型、三态判定、通配 `*`、显式否决、组继承 `group.*`、上下文隔离（group/bot/msgtype）、临时权限（expire_at）、Tracks 晋升轨道、审计日志、60s 缓存。
+- 内置角色组 `__member <- __admin <- __owner <- __super`（映射 `zcbot.role.*`）。
+- `Event`/`ctx` 新增 `has_perm / check_perm / perms / perm_groups / primary_group`；`command(require_perm=)` 与既有 `require_level` 双轨并存。
+- **接口令牌 API Key**：`api_tokens` 表 + `/api/apikeys` 创建/吊销（需超管，token 仅明文返回一次）；鉴权兼容 2048 位会话 token 与 ≥40 位 API Key。
+- Web 后台新增「权限管理」（5 标签页）与「接口令牌」页；框架定时清理过期权限节点。
+
+### 修复 / 文档
+- 修复 FileBrowser 面包屑丢失前导 `/` 导致相对路径 400。
+- 补权限系统开发文档与 API 文档的权限/接口令牌章节。
+
+## v1.2.0-beta.0（2026-08-30，预发布）—— 插件孤儿任务自检
+
+### 新增
+- **插件孤儿任务自动自检校正**：`PluginLoader.self_check_orphans()` 随心跳（默认每分钟，受 `plugin.heartbeat_interval` 控制）执行——
+  - 清理 `asks/commands` 表中代码目录已不存在的孤儿条目（任务同时移出调度器）；
+  - 移除调度器中属于"当前未加载插件"的任务；
+  - 清理后令路由缓存失效，保证内存与数据库对齐。
+- 基线包含 v1.1.2 全部修复（重启加载禁用插件、ZIP 上传符号链接、A1 事件顺序、A13 黑名单拦截）。
+
+---
+
+# 第三代 · 正式版与健壮性（v1.0.x / v1.1.x）
+
+## v1.1.2（2026-08-30）
+
+### 修复
+- 修复重启后仍加载已禁用插件等一批已知问题（含 ZIP 上传符号链接校验、A1 事件顺序、A13 黑名单拦截，详见 v1.2.0-beta.0 基线说明）。
+
+## v1.1.1（2026-08-22）—— 插件管理修复
+
+### 修复
+- **插件上传不再残留 `.bak` 目录**：原先每次上传都把旧目录备份为 `.bak.{时间戳}` 且从不清理，反复上传会堆积、Windows 上难删除；现上传前清理历史 `.bak`，上传后立即删除当前 `.bak`。
+- **插件更新后配置项正确同步**：`_conf_schema.json` 旧逻辑在 `plugins_dat` 已有时不覆盖，导致升级后新增/修改的配置项不显示；现随 `plugin.yaml` 始终覆盖，并自动删除废弃 key、补全新字段默认值、保留用户已改值。
+- 清理遗留：删除已被 `webui/` 完全替代的 `web_legacy/` 目录。
+
+## v1.1.0-beta.0（2026-08-22，预发布）—— 内存看门狗
+
+### 新增
+- 进程 RSS 看门狗：每 30s 检查进程内存，超过 `memory.limit_mb`（默认 120MB）时清空框架级角色缓存、统计聚合计数并强制 `gc.collect()`，打印清理前后 RSS；阈值/频率可在 `config.yaml → memory` 调整。
+
+## v1.0.1（2026-08-22）—— 稳定性 / 内存 / 安全
 
 ### 优化
+- 图片渲染字体缓存改为 LRU 上限，修复无限增长的内存泄漏（约 8MB/字号）。
+- `ctx.get_config` 增加 30s TTL 缓存，async handler 不再每次同步查库阻塞事件循环。
 
-- 终端交互命令：enable/disable 支持 http_api 插件
-- 终端 status 命令：显示 OneBot 客户端连接数和版本
+### 修复 / 安全
+- 不再直接信任 `X-Forwarded-For`：仅采信 `security.trusted_proxies` 白名单内反代的 XFF，防伪造 IP 绕过黑名单/限速/远程封禁。
+- Web API 增加 CORS 支持，可用 `security.cors_allowed_origins` 收紧来源。
 
----
+## v1.0.0（2026-08-20）—— 首个正式版
 
-## v1.3.0-beta.0-alpha.0
-
-### 重大特性
-
-- **插件化架构重构**：框架核心极简化，所有具体功能改为「官方插件」按需加载：
-  - 核心壳：插件加载器 + 事件总线 + 消息路由 + ctx + 数据库
-  - 官方插件（`core_plugins/`）：OneBot适配、WebUI、会话管理、定时调度
-  - 用户插件（`plugins/`）：业务逻辑
-
-- **OneBot 11 适配器可选**：OneBot 协议处理从框架核心脱离，作为官方插件 `core_plugins.onebot_adapter`
-  - 配置 `core_plugins.onebot_adapter: false` 可完全禁用
-  - 不加载时 WebSocket 服务不启动，内存占用大幅降低
-
-- **WebUI 可选**：Web 管理后台作为官方插件 `core_plugins.webui`
-  - 配置 `core_plugins.webui: false` 可完全禁用
-  - 关闭后所有 API 返回友好提示，插件调用 `ctx.webui()` 不报错
-
-- **内置多轮会话能力**：新增 `core_plugins.session` 官方插件
-  - `ctx.wait_for(event, prompt, timeout)` — 等待用户下一条消息
-  - `ctx.create_session(event, timeout)` — 创建会话对象（支持 async with）
-  - 会话对象支持 `sess.ask(prompt)` 发送提示并等待回复
-  - 会话期间消息不走命令匹配，超时自动清理
-
-- **服务注册表**：`framework/protocol.py` 定义服务接口，官方插件注册自身为核心能力
-  - 核心框架通过 `services.get()` 获取服务，不直接 import 官方插件代码
-  - 插件通过 `ctx.api()` / `ctx.onebot` 等调用服务，完全兼容旧代码
-
-- **终端交互**：新增 `framework/terminal.py` 终端交互模块
-  - 支持终端命令: help, status, plugins, send, recv, reload, users, groups, exit
-  - 支持模拟接收消息: `recv <user_id> <消息内容>`
-  - 支持发送消息: `send <user_id> <消息>` 或 `send g:<group_id> <消息>`
-
-### 配置变更
-
-- `config.yaml` 新增 `core_plugins` 段：控制官方插件启停
-- `config.yaml` 新增 `onebot.enabled` / `web.enabled`：独立开关
-- 默认所有官方插件启用，向后兼容
-
----
-
-## v1.2.0-beta.1
-
-### 修复
-
-- **插件上传软链接校验回归**：v1.1.2 引入的 ZIP 符号链接检查使用了 `ZipInfo.is_symlink()`，但在本机 Python（zipfile 未提供该方法）下会抛 `AttributeError: 'ZipInfo' object has no attribute 'is_symlink'`，导致任何插件 ZIP 上传失败。已改为兼容写法：通过 `external_attr` 高 16 位 Unix 权限判断符号链接（`(external_attr >> 16) & 0xF000 == 0xA000`），所有 Python 版本均可正常工作。
-
----
-
-## v1.2.0-beta.0
-
-### 新增
-
-- **插件孤儿任务自动自检校正**：新增 `PluginLoader.self_check_orphans()`，随心跳（默认每分钟，`config.yaml → plugin.heartbeat_interval` 控制频率）自动执行：
-  - 扫描 `tasks` / `commands` 表，清理「插件代码目录已不存在」的孤儿条目（任务同时移除调度器注册），避免手动删除/卸载异常/禁用流程未完全清理导致的「幽灵任务」继续触发。
-  - 移除调度器中属于「当前未加载插件」的任务。
-  - 清理后使路由缓存失效，保证内存与数据库对齐。全程异常隔离，不会误删仍存在的插件数据。
-
-### 修复
-
-- 同 v1.1.2 的已知 bug 修复（重启加载禁用插件、ZIP 符号链接、A1 事件顺序、A13 黑名单拦截）已包含在本次基线中。
-
----
-
-## v1.1.2
-
-### 修复
-
-- **框架重启后不再加载已禁用插件**：`load_all()` 原来盲目加载 `discover()` 发现的所有插件，完全无视 `plugins.is_active`。现已新增 `is_plugin_active_in_db()` 检查，启动及依赖自愈补加载阶段都会跳过 `is_active=0` 的插件（首次发现的插件默认启用不受影响）。
-- **ZIP 上传解压拒绝符号链接**：插件上传原本只校验路径穿越（`..`/绝对路径），未拦截 `symlink`，可被软链逃逸出插件目录。现解压前用 `ZipInfo.is_symlink()` 拒绝含符号链接的包。
-- **同连接事件按到达顺序处理（修复 A1）**：同一 OneBot 连接上来的事件原来并发派发、无顺序保证，多轮/状态机插件会乱序出错。现为每个连接维护事件派发链（`_conn_chains`），同连接事件严格 FIFO 串行，跨连接仍并发，并保留有界信号量与排队丢弃策略。
-- **黑名单真正拦截命令（修复 A13）**：命中用户黑名单（`role=='blacklist'`）原来仅降级为 member 仍放行公开命令。现命令命中后新增黑名单拦截，拉黑用户直接拒绝执行并终止传播。
-
-### 文档
-
-- 同步修正 `docs/KNOWN_ISSUES.md` 中一批已修复但文档过期的条目（S1 / A1 / A3 / A4 / A7 / A8 / A13），并补充 v1.1.2 新修复项。
-
----
-
-## v1.1.1
-
-### 修复
-
-- **插件上传不再产生残留 `.bak` 目录**：`upload_plugin` 原来每次上传都把旧目录备份到 `.bak.{timestamp}`，但从不清理，反复上传同一插件会堆积大量无用备份且在 Windows 上难以删除。现在上传前先清理该插件的所有历史 `.bak` 目录，上传成功/失败后立即删除当前 `.bak`。
-- **插件更新后配置项能正确同步**：`_conf_schema.json` 原来在 `plugins_dat` 已有时不会被覆盖，导致插件升级后新增/修改的配置字段不显示在 WebUI。现在随 `plugin.yaml` 一起始终覆盖。同时 `init_plugin_configs` 新增逻辑：自动删除已废弃的旧配置 key，新增字段补默认值，已有字段保留用户设置不动。
-- **清理旧版遗留文件**：删除 `web_legacy/` 目录（已被 `webui/` 完全替代）。
-
----
-
-## v1.1.0-beta.0
-
-### 新增
-
-- **内存看门狗**：框架启动后每 30s 检查进程 RSS，超过 `memory.limit_mb`（默认 120MB）时自动触发清理——清空框架级角色缓存、统计聚合计数，并强制 `gc.collect()`；清理前后打印 RSS 变化。可通过 `config.yaml → memory.limit_mb / memory.check_interval` 自定义阈值与检查频率。
-
----
-
-## v1.0.1
-
-修复版，聚焦稳定性、内存与安全优化。
-
-### 优化
-
-- **图片渲染字体缓存改为 LRU 上限**（`plugins/image_renderer`）：`_FONT_CACHE` 原来无上限，每增加一个字号就常驻约 8MB 字体对象，长期运行会无限增长导致内存泄漏；现在最多缓存 16 个字号（约 128MB 上限），超限自动淘汰最旧条目。
-- **`ctx.get_config` 加 30 秒 TTL 缓存**（`framework/ctx.py`）：原来每次读取插件配置都同步查库，async handler 里会阻塞事件循环；现在带短时缓存，命中即返回。
-
-### 修复
-
-- **`X-Forwarded-For` 直接信任（安全）**：`get_client_ip()` 原来无条件采信 `X-Forwarded-For`，攻击者可伪造 IP 绕过全局黑名单 / 登录限速，甚至配合双请求认证远程封禁任意 IP（DoS）。现改为仅当来源 IP 命中 `security.trusted_proxies` 白名单时才采信 `X-Forwarded-For`，默认全部使用 `remote_addr`。
-- **Web API 增加 CORS 支持**：自定义网页 / 第三方面板跨源调用 8081 API 时不再被浏览器 CORS 策略拦截；默认反射请求方 Origin（兼容带凭据的跨域），可通过 `security.cors_allowed_origins` 收紧为指定来源。
-
----
-
-## v1.0.0（正式版）
-
-首个正式版。相比于公测版，重点强化了 Web 前端的可扩展性、健壮性与个性化能力。
+> 重点强化 Web 前端的可扩展性、健壮性与个性化。
 
 ### 重大特性
+- 插件可整体接管前端（`override_webui`）：`/` 自动重定向到插件网页入口，插件被禁用/卸载时自动回退默认前端。
+- custom_ui 个性化前端插件：从 GitHub 拉取网页模板（zip），支持模板选择/下载/安装/切换，刷新网页生效。
+- 快刷检测与恢复页：同一 IP 5 秒内刷新 ≥5 次自动重定向到 `/reset` 恢复页。
 
-- **插件可接管整个前端（override_webui）**：插件可通过 `ctx.override_webui()` 接管框架根路由，`/` 自动 `redirect` 到插件网页入口（如 `/custom_ui/`），由插件路由服务其模板网页；插件被禁用/卸载/删除时自动回退框架默认前端。
-- **custom_ui 个性化前端插件**：从 GitHub 拉取网页模板（zip，存放于插件仓库顶层 `webui/` 目录），提供模板管理 WebUI（模板列表 / 下载 / 安装 / 切换），多模板并存切换即生效，刷新网页应用。
-- **快刷检测与恢复页**：后端检测同一 IP 在 5 秒内刷新页面 ≥2 次时，自动重定向到 `/reset` 恢复页（排除 `/api/` 与静态资源，避免 JS 轮询误判；`/reset` 自身不触发重定向防死循环）。
-
-### 新增
-
-- 新增 `custom_ui` 官方插件：个性化前端接管插件（模板选择/下载/安装/切换、`/reset` 恢复页、刷新过快检测）。
-
-### 变更
-
-- 前端实现亮/暗主题切换、页面切换动画（自 beta.1 起）。
+### 框架更新
+- 更新支持指定版本号（可下拉选择，默认最新）；本地已最新也允许更新；移除备份/回滚。
 
 ### 修复
-
-- 插件管理页 `applyFilter` 未定义导致的崩溃（自 beta.2 起）。
-- **插件更新后 plugin.yaml 元信息被旧缓存遮挡**：`plugins_dat/<插件名>/plugin.yaml` 旧版永远不覆盖，导致插件新增的更新源（github.repo）、版本号、依赖声明等不生效。已修复：`plugin.yaml` 随插件更新，其他配置文件（`_conf_schema.json` 等）仍保护用户修改。
+- 插件管理页 `applyFilter` 崩溃；插件更新后 `plugin.yaml` 元信息被旧缓存遮挡；custom_ui 路由热重载时 `add_url_rule` 报错。
 
 ---
 
-## v0.1.0-beta.2
+# 第二代 · 公测与界面现代化（v0.0.1-beta / v0.1.0-beta）
+
+## v0.1.0-beta.2（2026-08-20，预发布）
 
 ### 修复
+- 插件管理页崩溃：`Plugins.vue` 模板引用未定义的 `applyFilter`，组件渲染时报 `withKeys undefined`、页面空白；已补全定义并重建前端产物。
 
-- **插件管理页崩溃**：Plugins.vue 模板引用了未定义的 `applyFilter`，导致组件渲染时报 `withKeys undefined` 错误、页面空白。已补全函数定义（搜索过滤由 computed 自动完成）。
-- 重建前端产物并同步。
-
----
-
-## v0.1.0-beta.1
+## v0.1.0-beta.1（2026-08-20，预发布）
 
 ### 界面体验
-
-- **亮/暗主题切换**：顶栏一键切换，跟随系统偏好，记忆选择（localStorage），全站适配（含登录页）
-- **页面切换动画**：路由切换淡入淡出 + 位移动效
-- **微交互动效**：卡片悬浮上浮、按钮按压、侧边菜单过渡、滚动条美化、Logo 恢复（登录页/侧边栏）
-- 侧边栏品牌名改为渐变文字，顶栏新增主题切换按钮
+- 亮/暗主题一键切换，跟随系统偏好并记忆选择（localStorage），全站适配（含登录页）。
+- 路由切换淡入淡出 + 位移动效；卡片悬浮、按钮按压、侧边菜单过渡、滚动条等微交互。
+- 恢复品牌 Logo（登录页与侧边栏），新增 `/img/` 静态资源路由。
 
 ### 修复
+- 移除命令管理中的"关键词回复"界面（该能力交由插件，如 keyword_api）；前端构建产物同步。
 
-- 移除命令管理中"关键词回复"管理界面（该能力由插件负责，如 keyword_api）
-- 新增 `/img/<path>` 静态资源路由，恢复 Web 管理面板 Logo 显示
-
----
-
-## v0.1.0-beta.0
+## v0.1.0-beta.0（2026-08-20，预发布）—— WebUI 现代化重写
 
 ### 重大变化
+- Web 管理面板**全量重写**：原生 HTML/JS → Vue 3 + Vite + Element Plus，覆盖全部 14 个管理页面（仪表盘/插件市场/插件管理/命令管理/用户管理/群组管理/定时任务/运行状态/连接管理/文件管理/运行日志/数据库管理/插件 WebUI/全局设置）。
+- 构建产物按需分包（element-plus、vue 独立 chunk），首页 JS 仅约 8KB；旧前端保留为 `web_legacy/`，`webui/` 为需 Node 构建的源码工程。
 
-- **Web 管理面板全量重写**：由原生 HTML/JS 迁移至 **Vue 3 + Vite + Element Plus**，全新现代化界面（深色侧边导航、卡片式布局、响应式适配），覆盖全部 14 个管理页面：
-  - 仪表盘 / 插件市场 / 插件管理 / 命令管理 / 用户管理 / 群组管理 / 定时任务 / 运行状态 / 连接管理 / 文件管理 / 运行日志 / 数据库管理 / 插件 WebUI / 全局设置
-  - 构建产物按需分包（element-plus、vue 独立 chunk），首页 JS 仅 ~8KB
-  - 旧版前端保留在 `web_legacy/` 备份，`webui/` 为源码工程（需 Node 构建）
-- 版本号提升至 **v0.1.0-beta.0**（首个功能完整的公测版本）
+### 文档 / 修复
+- 新增 KNOWN_ISSUES.md、debugging.md、plugin-tutorial.md，扩写 best-practices、重写 INDEX、更新 README。
+- 修复插件页切换路由 key 解析失败；修复 `Event.role` 缓存缺 global 声明导致的权限降级。
 
-### 文档
+## v0.0.1-beta.1（2026-08-19，预发布）
 
-- 新增 `docs/KNOWN_ISSUES.md`：已知问题分级追踪（P0 已修复项 / P1 已知问题 / P2 待办 / 刻意设计）
-- 新增 `docs/debugging.md`：调试指南（日志 → DEBUG 级别 → 断点 → 热重载 → 症状对照）
-- 新增 `docs/plugin-tutorial.md`：插件开发入门教程
-- 扩充 `docs/best-practices.md`：提交前自查清单 + 可测试插件编写思路
-- 重写 `docs/INDEX.md`：按阅读路径组织，新增"什么时候读"指引列
-- README 重构"进阶文档"章节，挂载新文档
+### 框架修复
+- contextvars 多 bot 并发修复（回复不错发）；事件订阅去重（心跳重注册不再重复回复）；多 bot 连接注册表泄漏修复 + X-Self-ID 识别。
+- OneBot 协议补齐（`send_like` 封装 / meta 事件广播）；修复内存泄漏 7 处（角色缓存/任务引用/队列/nonce 等）。
+- 图片渲染内存优化（字体缓存 + malloc_trim 定期归还 OS）；仪表盘卡片超时隔离、数据库统计缓存。
 
-### 修复
+### 新增基础插件
+- `session_waiter`（多轮会话，等待用户下一条消息）、`message_guard`（唤醒词/白名单/限流/敏感词）、
+  `plugin_depgraph`（插件依赖图，WebUI + `/依赖` `/依赖图`）、`ui_ext_demo`（群组/用户管理页扩展演示）。
 
-- 修复 Web UI 插件页面切换时路由 key 解析失败的问题
+### 其他
+- `/status` 图片版状态卡；文档全面重写（手把手入门）；WebUI 群组/用户管理页插件扩展接口。
+
+## v0.0.1-beta.0（2026-08-11，公测版）
+
+公测首发。基于 OneBot v11 协议的异步 QQ 机器人框架，提供插件化架构、Web 管理面板、双数据库支持等核心能力。
+
+### 框架核心
+- 全异步架构（消息处理/API 调用/定时任务均不阻塞事件循环）；插件 handler 支持 `async def`，旧同步插件自动桥接到线程池。
+- 插件热加载/热卸载、动态注册指令；反向 WebSocket 服务端，兼容 Lagrange/NapCat/go-cqhttp 等 OneBot v11 客户端。
+- 内存路由表（热路径零 DB 查询、零线程切换）；统计批量异步写库；数据库专用线程池与消息处理隔离。
+
+### 数据库
+- 默认 SQLite 零配置；可选 MySQL，自动翻译方言 SQL（`ON DUPLICATE KEY UPDATE`→`ON CONFLICT`、`NOW()`→参数化、ENUM→TEXT 等）。
+- MySQL DBUtils 连接池（有上限、空闲回收、坏连接重建）、自动重连；`ctx.create_table()` 统一建表入口，长列索引自动改前缀索引。
+
+### Web 管理面板 / 安全 / 插件开发
+- 侧边导航 + 深色主题，覆盖仪表盘/插件/命令/用户/群组/任务/日志/设置；ZIP 安装、热重载、依赖安装、隔离虚拟环境、GitHub 更新检查。
+- 系统级关键词自动回复（动态命令，四种匹配方式）；SSE 实时日志；审计日志；仪表盘卡片；插件 WebUI；群级插件开关。
+- Bearer Token（2048 位 hex）+ 双请求防破解（蜜罐探针 + nonce 挑战）；登录防爆破、IP 黑名单持久化、内网豁免；角色体系 超管>群主>管理员>普通用户>黑名单。
+- `PluginContext(ctx)` 全能力 + 同步/异步双 API；代码与数据分离；依赖自动安装（多镜像回退）与独立虚拟环境；`plugin.yaml`/`_conf_schema.json`；生命周期钩子。
+
+### 内置插件
+- echo、help、image_renderer（Rust+pyo3 原生渲染，按架构绑定、缺失回退 PIL）、restart_manager、runtime_status。
+
+### 已知限制
+- 公测版可能不稳定；SSE 日志推送需用 fetch + ReadableStream（EventSource 不能自定义请求头）；未实现 API 限流（建议反代限流）；原生渲染扩展仅支持 Win x64 / Linux x64 / Linux aarch64。
 
 ---
 
-## v0.0.1-beta.0（公测版）
+# 第一代 · 诞生（v0.0.1-alpha，持续构建）
 
-公测首发版本。基于 OneBot v11 协议的异步 QQ 机器人框架，提供插件化架构、Web 管理面板、双数据库支持等核心能力。
+> 2026-08-04 首发，随后以 `build.N` 高频迭代（08-06 ~ 08-10）。下列构建号均有对应 Git Tag（无 build.12 / build.16 标签）。
 
-### 框架核心
+## v0.0.1-alpha.0-build.4（2026-08-04）—— 首版
 
-- 全异步架构：消息处理、API 调用、定时任务均不阻塞事件循环
-- 插件 handler 支持 `async def`（旧同步插件自动兼容，框架自动桥接到线程池）
-- 插件热加载 / 热卸载，支持动态注册指令
-- 反向 WebSocket 服务端，兼容 OneBot v11 协议客户端（Lagrange、NapCat、go-cqhttp 等）
-- 内存路由表：热路径零 DB 查询、零线程切换，命令匹配在内存中完成
-- 统计批量写库：用户注册、命令命中计数走异步队列，不阻塞消息处理
-- 数据库专用线程池：DB 操作与消息处理线程池隔离，DB 繁忙不影响消息分发
+- OneBot v11（反向 WebSocket）全异步架构，同步插件自动兼容；插件化热加载/热卸载、依赖冲突检测与隔离虚拟环境。
+- 内置 Web 管理面板（仪表盘/插件/命令/用户/群组/任务/日志/设置）；角色权限 + 登录防爆破、SSE 实时日志。
+- SQLite 零配置，可选 MySQL 自动翻译方言；内置插件 echo / help / runtime_status / image_renderer。
 
-### 数据库
+## v0.0.1-alpha.1-build.5 ~ build.23（2026-08-06 ~ 08-10）
 
-- 默认 SQLite 零配置开箱即用
-- 可选 MySQL（自动翻译方言 SQL：`ON DUPLICATE KEY UPDATE` → `ON CONFLICT`、`NOW()` → 参数化、ENUM → TEXT 等）
-- MySQL 连接池（DBUtils PooledDB）：连接数有上限且空闲回收，坏连接自动丢弃重建
-- MySQL 自动重连：连接断开后自动 ping 保活并重连
-- 插件建表统一入口 `ctx.create_table()`：自动适配方言，MySQL 长列索引自动改写为前缀索引
+| 构建号 | 日期 | 要点 |
+|--------|------|------|
+| build.5 | 08-06 | 数据库自动重连；框架 Web 面板一键更新（ZIP，仅覆盖框架代码、自动备份）；VERSION 文件驱动的 Release 版本检测；公开 `/api/version`；插件市场改按 GitHub API 文件树索引下载；IP 黑名单持久化 + 内网豁免；双请求防破解认证 |
+| build.6 | 08-06 | image_renderer 引入 Rust+pyo3 原生渲染（Win x64/Linux x64/aarch64，缺失回退 PIL），三平台二进制入库；第三方插件与 llm_plugin_gen 移出框架仓库、改走官方插件市场 |
+| build.7 | 08-06 | 加载 main.py 时注册 `sys.modules`（修复热重载残留）；更新检测走 GitHub Release |
+| build.8 | 08-06 | 日志页 SSE 改轮询，修复占满 waitress 线程导致 WebUI 卡死；插件市场参考 AstrBot 改进（GitHub 加速、磁盘判定"已安装"、失败回滚、缓存兜底、幽灵插件标记） |
+| build.9 | 08-07 | MySQL 改用 DBUtils `PooledDB`，修复连接只增不减、全 Sleep；连接参数真正生效、坏连接透明重建 |
+| build.10 | 08-07 | 框架更新走 Release tag ZIP；下载逐候选校验 ZIP 魔数，跳过镜像返回的 HTML 错误页 |
+| build.11 | 08-07 | **重要修复**：卸载插件不再删除 `plugin_configs`，重载/更新/禁用不再重置用户配置（仅真正删除插件时清配置） |
+| build.13 | 08-07 | **框架防堵塞**：连接池有界等待（`blocking=False` + 借连超时）、新增 DB 专用线程池与默认线程池隔离，DB 繁忙不再拖垮消息处理 |
+| build.14 | 08-07 | 内存路由表（5s 快照、热路径零 DB）；群开关/插件启用内存缓存与失效钩子；角色 60s TTL 缓存；生命周期钩子 `on_loaded/on_error/after_message_sent`；更新自动装依赖、备份/回滚入口 |
+| build.15 | 08-07 | 修复插件 WebUI iframe 401：token 同步 HttpOnly Cookie 兜底鉴权 |
+| build.17 | 08-07 | 深/浅主题切换（CSS 变量、跟随系统、无闪烁）；文件管理升级为"宝塔风"（面包屑/新建/上传/重命名/删除/下载/搜索）及对应 `/api/files/*` 接口 |
+| build.18 | 08-07 | 401 自动种 Cookie 免重登；文件浏览右键菜单；新增 `/api/files/copy` |
+| build.19 | 08-08 | 无文本消息（分享卡片等）广播 `message.<段类型>` / `message.media`；`Event` 新增 `has_share/share` |
+| build.20 | 08-08 | **系统级动态命令（关键词自动回复）落地**：exact/prefix/contains/regex 四种匹配，正则预编译进内存路由表；`/api/dynamic-commands` 与命令管理页卡片 |
+| build.21 | 08-08 | 框架改进 6 项：分享/JSON 卡片链接提取、`message` 统一文本事件、`continue_route()`、关键词 handler 回调、MySQL 前缀索引、`ctx.create_table()` 统一入口 |
+| build.22 | 08-10 | 修复插件页切换路由 key 解析失败（先截断 `?` 再取段）；侧边栏进入插件页自动带 name |
+| build.23 | 08-10 | 修复 GitHub 加速候选 URL 双重协议拼接 bug；默认加速代理改为 `gh.jasonzeng.dev`，失败回退内置镜像与直连 |
 
-### Web 管理面板
+---
 
-- 侧边导航 + 深色主题，覆盖仪表盘、插件、命令、用户、群组、任务、日志、设置
-- 插件管理：上传 ZIP 安装、热重载、启停、依赖安装、隔离虚拟环境、GitHub 更新检查
-- 命令管理：静态命令别名/描述/启停，动态命令展示
-- 系统级关键词自动回复（动态命令）：完全相等 / 前缀 / 包含 / 正则 四种匹配方式
-- 运行日志：多级过滤、关键词搜索、SSE 实时推送
-- 审计日志：管理员操作记录，插件操作审计
-- 仪表盘卡片：插件可注册自定义数据卡片展示
-- 插件 WebUI：插件可注册自己的管理页面嵌入框架 Web UI
-- 群级插件开关：按群独立控制插件启停
+## 版本编号与发布说明
 
-### 安全
-
-- Bearer Token 认证（2048 位随机 hex）
-- 双请求防破解认证系统：蜜罐探针 + nonce 挑战机制
-- 登录防爆破：IP 黑名单持久化，内网 IP 自动豁免
-- 权限体系：超级管理员 > 群主 > 管理员 > 普通用户 > 黑名单
-
-### 插件开发支持
-
-- `PluginContext (ctx)` 提供完整框架能力：命令注册、消息发送、OneBot API、数据库、配置、定时任务、事件总线、权限判断、日志审计
-- 同步/异步双模式 API：`ctx.send_msg()` / `await ctx.asend_msg()`，旧插件无需改动
-- 代码与数据分离：`plugins/` 存代码（可 GitHub 更新覆盖），`plugins_dat/` 存用户数据（永久保留）
-- 插件依赖自动安装（清华源 + 自动回退阿里云/华为云/官方源）
-- 依赖冲突时支持创建插件独立虚拟环境
-- `plugin.yaml` 元信息声明、`_conf_schema.json` 配置 schema（Web UI 动态渲染表单）
-- 插件生命周期钩子：`on_load` / `on_unload`
-
-### 内置插件
-
-- **echo** — 原样返回用户文本消息
-- **help** — 查询所有已注册命令，生成图片帮助菜单
-- **image_renderer** — Rust + pyo3 原生渲染引擎，按架构强制绑定，缺失时自动回退 PIL
-- **restart_manager** — 框架重启管理
-- **runtime_status** — 系统运行状态监控
-
-### 插件仓库扩展插件
-
-- **file** — 文件处理
-- **llm_chat** — LLM 对话插件，支持多模型切换、函数调用、人格预设、对话统计
-- **llm_plugin_gen** — AI 驱动的插件开发助手
-- **qqadmin** — QQ 群管理
-
-### 已知限制
-
-- 此为公测版本，可能存在不稳定因素
-- SSE 日志推送不支持 `EventSource` 自定义请求头，需使用 fetch + ReadableStream 方案
-- 未实现 API 速率限制，生产环境建议通过反向代理配置限流
-- 原生渲染扩展仅支持 Windows x86_64 / Linux x86_64 / Linux aarch64 三种架构
+- 正式 Release 与历史构建号均可在 GitHub Tags/Releases 查到：<https://github.com/kuangxing6367/zcbot/releases>。
+- `VERSION` 文件记录当前框架版本；插件通过 WebUI/`/api/version` 看到的版本以此为准。
+- 文档与代码如有出入，以当前代码与最新 Release 说明为准，并欢迎在 Issue 指出。

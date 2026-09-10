@@ -14,8 +14,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
-from framework.onebot_api import OneBotAPI
-
 logger = logging.getLogger('zcbot')
 
 # 全局线程池，用于异步执行耗时操作（如图片渲染），不阻塞主消息处理流程
@@ -67,17 +65,20 @@ class PluginContext:
 
     @property
     def onebot(self):
-        """OneBot 11 API 封装（从服务注册表获取，兼容旧插件）"""
+        """
+        OneBot 11 API 封装（兼容旧插件的便捷面）。
+        优先返回当前接入端注册的专用动作封装 services['onebot_api']；
+        若接入端只注册了通用 api_caller，则用协议无关的 ActionProxy 兜底，
+        框架核心本身不包含任何 OneBot 实现。
+        """
         api = self._framework.services.get('onebot_api')
-        if api is None:
-            # 兼容：如果 onebot_adapter 未加载，尝试从 api_caller 创建
-            caller = self._framework.services.get('api_caller')
-            if caller is not None:
-                from framework.onebot_api import OneBotAPI
-                api = OneBotAPI(caller)
-            else:
-                raise RuntimeError("无可用协议适配器（请启用 core_plugins.onebot_adapter）")
-        return api
+        if api is not None:
+            return api
+        caller = self._framework.services.get('api_caller')
+        if caller is not None:
+            from framework.protocol import ActionProxy
+            return ActionProxy(caller)
+        raise RuntimeError("无可用协议适配器（请启用一个接入端，如 core_plugins.onebot_adapter 或 core_plugins.http_inject）")
 
     @property
     def logger(self):
@@ -97,8 +98,8 @@ class PluginContext:
         module.ctx._current_bot 会在并发消息交错时发错 bot）
         """
         try:
-            from framework.api import current_bot_var
-            return current_bot_var.get()
+            from framework.runtime import current_source_var
+            return current_source_var.get()
         except Exception:
             return None
 
@@ -254,6 +255,86 @@ class PluginContext:
         except Exception as e:
             logger.error(f"[{self._plugin_name}] 读取全部配置失败: {e}")
             return {}
+
+    # ---- 插件自定义 API 路由（Web 后台 / REST，复用框架鉴权）----
+
+    def register_api(self, path: str, handler: Callable, methods=None, auth: bool = True,
+                     description: str = None):
+        """
+        在框架 Web 服务器上注册一条自定义 REST 路由，自动复用框架登录/API Key 鉴权。
+
+        这是把 ZCBOT 当通用服务宿主的关键接入点：外部系统/页面可通过 HTTP 与插件交互，
+        而不必自己开 HTTP 服务、自己写鉴权。
+
+        :param path: 路由路径，如 '/api/my/stats' 或 '/my/stats'
+        :param handler: Flask 视图函数（同 Flask，可返回 jsonify/Response/(resp, status)）
+        :param methods: 允许的 HTTP 方法，默认 ['GET']
+        :param auth: 是否复用框架鉴权（默认 True：需登录或有效 API Key）
+        :param description: 可选说明（当前仅日志记录）
+        :return: True 表示已挂载；False 表示 Web 未启用（路由已登记，启用后自动挂载）
+        """
+        from framework.api import registry as _api_registry
+        if methods is None:
+            methods = ['GET']
+        methods = [m.upper() for m in methods]
+
+        # 双进程宿主模式：Web 在核心进程，走远程路由（handler 契约 fn(params)->dict/(status,dict)）
+        rr = getattr(self._framework, '_remote_routes', None)
+        if rr is not None:
+            try:
+                rr.register_route(path, methods, handler, auth)
+            except Exception as e:
+                self.log(f"远程 API 路由注册失败 {path} {methods}: {e}")
+                return False
+            if description:
+                self.log(f"已注册远程 API 路由 {path} {methods}" + (f" ({description})" if description else ""))
+            else:
+                self.log(f"已注册远程 API 路由 {path} {methods}")
+            return True
+
+        route = _api_registry.register_route(path, methods, handler, auth)
+        ok = route is not None
+        if ok and description:
+            self.log(f"已注册 API 路由 {path} {methods}" + (f" ({description})" if description else ""))
+        elif not ok:
+            self.log(f"已登记 API 路由 {path}（等待 Web 启用后挂载）")
+        return ok
+
+    # ---- 异步调度 / 文本提取等便捷能力 ----
+
+    def call_async(self, coro):
+        """
+        把协程安全地调度到框架主事件循环执行（可从任意线程调用）。
+
+        常见用途：在同步 handler / executor 线程 / Web 线程里触发一个异步动作，
+        不必自己写 asyncio.run_coroutine_threadsafe 样板。
+        :param coro: 待执行的协程对象
+        :return: concurrent.futures.Future（可在原线程阻塞 .result()，或忽略让其后台运行）
+        """
+        import asyncio
+        loop = getattr(self._framework, 'loop', None)
+        if loop is None or not loop.is_running():
+            raise RuntimeError("框架主事件循环未运行")
+        return asyncio.run_coroutine_threadsafe(coro, loop)
+
+    def get_text(self, message_or_event) -> str:
+        """
+        从消息中提取纯文本。入参可以是：
+          - OneBot 消息（str，或富媒体段列表 [{'type':'text','data':{'text':'...'}}, ...]）
+          - 事件对象 / dict（自动取 message / raw_message / text 字段）
+        富媒体（图片等）被剥离，只保留文本内容。
+        """
+        from framework.event import _extract_text
+        if isinstance(message_or_event, dict):
+            text = (message_or_event.get('message')
+                    or message_or_event.get('raw_message')
+                    or message_or_event.get('text'))
+        elif hasattr(message_or_event, 'message'):
+            text = getattr(message_or_event, 'message', None) \
+                or getattr(message_or_event, 'raw_message', None)
+        else:
+            text = message_or_event
+        return _extract_text(text or '')
 
     # ---- 定时任务 ----
 

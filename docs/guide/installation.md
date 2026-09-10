@@ -1,11 +1,13 @@
 # 安装
 
+> **本篇面向**：角色 A（想把 ZCBOT 跑起来的使用者）。按步骤操作即可，无需编程基础。
+
 ## 环境要求
 
 - Python 3.10 或更高版本（开发验证环境为 3.10–3.14）；
 - 操作系统：Windows / Linux / macOS；
 - 一个 OneBot 11 协议端（如 [NapCat](https://github.com/NapNeko/NapCatQQ)、Lagrange），
-  用于真正连接 QQ；ZCBOT 本身只实现框架与 WebSocket 服务端。
+  用于真正连接 QQ；ZCBOT 框架本身协议无关，OneBot 反向 WebSocket 服务端由内置官方插件 `onebot_adapter` 提供。
 
 ## 下载代码
 
@@ -48,13 +50,15 @@ zcbot/
 ├── main.py                 # 启动入口（python main.py [自定义配置路径]）
 ├── config.yaml             # 全局配置（首次启动自动生成）
 ├── requirements.txt        # 核心依赖
-├── framework/              # 框架核心（加载器/路由/事件/上下文/数据库…）
-├── core_plugins/           # 官方插件（可在 config.yaml 开关）
-│   ├── onebot_adapter/     #   OneBot 11 协议适配器（WebSocket 服务端）
-│   ├── webui/              #   Web 管理后台服务
-│   ├── session/            #   多轮会话管理器
-│   ├── scheduler/          #   定时任务调度器
-│   └── http_api/           #   独立 HTTP API（默认关闭）
+├── framework/              # 极简内核（加载器/路由/事件/上下文/协议抽象/数据库…）
+├── core_plugins.yaml       # 官方插件配置中心（开关/配置，启动自动扫描同步）
+├── core_plugins/           # 官方插件（在 core_plugins.yaml 开关）
+│   ├── onebot_adapter/     #   OneBot 11 接入端（反向 WebSocket，默认开）
+│   ├── webui/              #   Web 管理后台（默认开）
+│   ├── session/            #   多轮会话管理器（默认开）
+│   ├── scheduler/          #   定时任务调度器（默认开）
+│   ├── http_inject/        #   HTTP 事件注入接入端（默认关）
+│   └── http_api/           #   独立对外 HTTP API（默认关）
 ├── plugins/                # 用户插件（每个一个子目录，含 main.py）
 ├── data/                   # 运行数据（自动创建）
 │   ├── logs/               #   日志
@@ -71,7 +75,7 @@ zcbot/
 python main.py
 ```
 
-首次启动会生成 `config.yaml` 与 `data/` 目录。下一步见
+首次启动会生成 `config.yaml`、`core_plugins.yaml` 与 `data/` 目录。下一步见
 [开始使用](./getting-started.md)。
 
 ## 升级
