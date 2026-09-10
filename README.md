@@ -4,7 +4,7 @@
 >
 > **OneBot 11 是它的默认接入端之一，但不是它的身份。** 换一个 `ProtocolAdapter`，它可以是 Telegram / Discord 机器人、HTTP Webhook 接收器、纯定时任务服务，或任何"事件 → 插件 → 响应"的程序。
 
-**当前正式版：v1.3.6** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
+**当前正式版：v1.3.7** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
 
 - 项目地址：https://github.com/kuangxing6367/zcbot
 - 官方插件仓库：https://github.com/kuangxing6367/zcbot_plugins

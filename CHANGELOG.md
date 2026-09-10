@@ -24,15 +24,27 @@
 
 ---
 
-# 开发中（Unreleased）
+## v1.3.7（2026-09-10）
 
-## 双核心架构（core/host 双进程，实验版）
+> 主题：**双核心实验版进入文档与发版流程（默认关闭）+ 修复终端命令在异步线程中的协程调度错误**。
+> 双核心是长期实验线，默认单进程行为完全不变；终端修复解决了 `send`/`recv`/`ban`/`unban`/`kick`/`broadcast` 在 worker 线程里因无事件循环而「发送失败 / coroutine never awaited」的问题。
 
-- 把一次启动拆成「核心进程 + 宿主进程」两个进程，经标准库 IPC（回环 TCP + authkey）通信，零第三方依赖。
-- `config.yaml` 暴露 `dual_process` 开关（`enabled` / `core_plugins` / `max_restarts` / `restart_interval`），默认关闭、行为不变。
-- 官方插件按 `__plugin_meta__['process']` 标记自动分派：`onebot_adapter` / `http_inject` / `http_api` / `webui` 留在核心进程，其余与用户插件在宿主进程加载。
-- 新增开发文档 `docs/advanced/dual-core.md`，README 增加「十二、双核心实验版」章节。
+### 新增
+- **双核心架构（core/host 双进程，实验特性）**：把一次启动拆成「核心进程 + 宿主进程」，经标准库 IPC（回环 TCP + authkey）通信，零第三方依赖。
+  - `config.yaml` 暴露 `dual_process` 开关（`enabled` / `core_plugins` / `max_restarts` / `restart_interval`），**默认关闭，单进程行为完全不变**。
+  - 官方插件按 `__plugin_meta__['process']` 标记自动分派：`onebot_adapter` / `http_inject` / `http_api` / `webui` 留在核心进程，其余与用户插件在宿主进程加载。
+  - 新增开发文档 `docs/advanced/dual-core.md`，README 增加「十二、双核心实验版」章节。
 - 新增 `tests/test_dual_core.py`：插件归属解析、IPC 协议往返、远程数据库约束；实测双进程可正常拉起（核心 spawn 宿主、IPC 握手成功、RemoteDatabase 代理生效）。
+
+### 修复
+- **终端命令异步调度修复**（`framework/terminal.py`）：`send`/`recv`/`ban`/`unban`/`kick`/`broadcast` 原在 `asyncio.to_thread` 的 worker 线程内定义闭包协程并 `ensure_future`，该线程无事件循环，导致 `There is no current event loop in thread 'asyncio_0'` 与 `coroutine was never awaited`。现改为 `async def` 直接在事件循环内 `await`，同步 DB 操作包进 `asyncio.to_thread`，不再抛错。
+
+### 兼容性
+- 双核心默认关闭，单进程启动、配置键、服务名、数据库 schema 全部不变；老业务插件零改动。
+- 终端命令对外行为（命令名、参数格式、输出文案）不变，仅内部调度方式修正。
+
+### 测试
+- `compileall` 全量编译通过；`tests/test_dual_core.py` 4/4 通过。
 
 ---
 
