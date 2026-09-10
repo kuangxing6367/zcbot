@@ -1,5 +1,7 @@
 # 编写插件
 
+> **本篇面向**：角色 B（写业务插件的 Python 开发者）。假设你已能按[安装](./installation.md)把宿主跑起来。
+
 本章从零开始，手把手教你写一个完整的 ZCBOT 插件，并覆盖多文件拆分、配置、
 数据库、定时任务、事件订阅、生命周期等实际开发会遇到的全部主题。
 
@@ -72,9 +74,9 @@ __plugin_meta__ = {
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `name` | ✅ | 插件显示名 |
-| `version` | ✅ | 语义化版本号 |
-| `author` | ✅ | 作者名 |
+| `name` | 是 | 插件显示名 |
+| `version` | 是 | 语义化版本号 |
+| `author` | 是 | 作者名 |
 | `desc` | 否 | 一句话描述 |
 | `priority` | 否 | 加载/匹配优先级，默认 50 |
 
@@ -127,15 +129,15 @@ async def handle(event, match):  # 异步（推荐）
 
 ```python
 # plugins/chatroom/main.py
-from .ws_server import WsServer     # ✅ 相对导入同目录模块（推荐）
-from . import utils                # ✅ 导入整个兄弟模块
-from .core.engine import Engine    # ✅ 导入子包模块
-from ws_server import WsServer     # ✅ 旧写法仍兼容（短名绝对导入）
+from .ws_server import WsServer     # 推荐：相对导入同目录模块
+from . import utils                # 推荐：导入整个兄弟模块
+from .core.engine import Engine    # 推荐：导入子包模块
+from ws_server import WsServer     # 兼容：旧写法仍可用（短名绝对导入）
 ```
 
 ```python
 # plugins/chatroom/core/engine.py
-from ..utils import log            # ✅ 回到上一层
+from ..utils import log            # 推荐：回到上一层
 ```
 
 :::tip 机制速记
@@ -201,7 +203,7 @@ async def handle_echo(event, match):
 
 发送 `/echo 你好世界`，`match.group(1)` 即 `"你好世界"`。
 
-## 发送消息与调用 OneBot API
+## 发送消息与调用接入端 API（默认 OneBot）
 
 ### 快捷发送
 
@@ -228,9 +230,9 @@ await ctx.asend_msg(user_id=event.user_id,
 | `ctx.get_member_list(g)` | `ctx.aget_member_list(g)` | 群成员列表 |
 | `ctx.get_member_info(g, u)` | `ctx.aget_member_info(g, u)` | 成员信息 |
 
-### 通用 API：任意 OneBot action
+### 通用 API：任意接入端 action
 
-快捷方法没覆盖的 action，用 `ctx.api` / `ctx.aapi` 直接调：
+`ctx.api/aapi` 走协议无关的 `api_caller`：默认接入端是 OneBot，动作名即 OneBot action；换成其它接入端后用该接入端的动作名。快捷方法没覆盖的动作都能这样直接调：
 
 ```python
 await ctx.aapi("set_group_leave", group_id=123456)
@@ -446,7 +448,7 @@ async def handle_ban(event, match):
 ```python
 def register(ctx):
     # 在管理后台加一个插件页面（资源放插件 web/ 目录）
-    ctx.webui(title="我的面板", entry="index.html", icon="⚙️", order=50)
+    ctx.webui(title="我的面板", entry="index.html", icon="", order=50)
     # 在「群组管理」页加一列/一个详情面板
     ctx.register_group_extension("sign_days", "签到天数", get_sign_days)
     # 在「用户管理」页加扩展
@@ -522,7 +524,7 @@ async def handle_score(event, match):
 | `attempted relative import with no known parent package` | 绕过框架直接运行了脚本，或框架过旧；用相对导入并由框架加载，详见[模块机制](../advanced/loader.md) |
 | `缺少 register(ctx) 函数` | `main.py` 必须定义可调用的 `register(ctx)` |
 | 改了函数逻辑没生效 | 心跳只重注册；函数体改动需在面板点「重载」 |
-| `无可用协议适配器` | 启用 `core_plugins.onebot_adapter`，或等其就绪后再调 API |
+| `无可用协议适配器` | 当前没有任何已就绪接入端；在 `core_plugins.yaml` 启用一个接入端（默认即 onebot_adapter），或等其就绪后再调 API |
 | 多插件同名文件互相串 | 改用相对导入 `from .xxx import`，不要依赖短名 |
 | handler 里阻塞导致机器人卡顿 | 改 `async def` + 异步 DB/API，耗时活用 `ctx.run_async` |
 

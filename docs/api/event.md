@@ -1,8 +1,10 @@
 # Event 事件对象
 
-`Event`（`framework/event.py`）封装一条 OneBot 11 事件，传给命令处理器与
-`message` 类订阅处理器。原始消息处理器（`ctx.on_raw_message`）拿到的则是
-**未封装的原始 dict**，注意区分。
+> **本篇面向**：角色 B。`Event` 是接入端归一化后的事件对象（默认接入端 OneBot 11，字段最丰富）；其它接入端按同一结构归一化。
+
+`Event`（`framework/event.py`）是接入端归一化后、传给命令处理器与
+`message` 类订阅处理器的事件对象（默认接入端为 OneBot 11，字段最丰富；其它接入端按同一结构归一化）。
+原始消息处理器（`ctx.on_raw_message`）拿到的则是**未封装的原始 dict**，注意区分。
 
 ## 一、基本属性
 

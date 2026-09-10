@@ -1,5 +1,7 @@
 # ServiceRegistry 服务注册表
 
+> **本篇面向**：角色 B/C。理解内核与官方插件如何通过服务注册表解耦、如何取用官方能力。
+
 服务注册表（`framework/protocol.py → ServiceRegistry`）是框架核心与官方插件之间的
 解耦层：核心不直接 import 官方插件，官方插件在 `register(ctx)` 时把能力“注册”进来，
 用户插件按需“取用”。
@@ -33,10 +35,10 @@ if api is None:
 
 | 服务名 | 提供者 | 类型/能力 |
 |--------|--------|-----------|
-| `protocol_adapter` | onebot_adapter | `ProtocolAdapter` 实现，协议层抽象 |
-| `api_caller` | onebot_adapter | API 调用器，`.call(action, **kw)` / `.acall(...)` |
-| `onebot_api` | onebot_adapter | 面向对象的 OneBot API 封装（即 `ctx.onebot`） |
-| `ws_server` | onebot_adapter | WebSocket 服务端实例 |
+| `protocol_adapter` | 当前接入端（onebot_adapter / http_inject / 双进程 IPC） | `ProtocolAdapter` 实现，协议层抽象 |
+| `api_caller` | 当前接入端 | 通用动作调用器，`.call(action, **kw)` / `.acall(...)` |
+| `onebot_api` | onebot_adapter | 面向对象的 OneBot API 封装（即 `ctx.onebot`）；接入端未注册时由协议无关 `ActionProxy` 兜底 |
+| `ws_server` | onebot_adapter | 反向 WebSocket 服务端实例 |
 | `scheduler` | scheduler | APScheduler 封装（`add_plugin_task`、`get_jobs` 等） |
 | `session_manager` | session | 多轮会话管理器（支撑 `ctx.wait_for/create_session`） |
 | `web_server` | webui | 管理后台 Web 服务 |

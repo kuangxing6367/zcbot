@@ -1,5 +1,7 @@
 # PluginContext (ctx) 完整参考
 
+> **本篇面向**：角色 B（插件开发者）。这是写插件时最常查的能力清单。
+
 `ctx` 是插件与框架交互的**唯一入口**，由框架在 `register(ctx)` 时注入，
 并挂到插件主模块上（handler 里可直接使用全局 `ctx`）。
 
@@ -13,7 +15,7 @@
 
 1. [属性](#一属性)
 2. [命令注册](#二命令注册)
-3. [消息发送与 OneBot API](#三消息发送与-onebot-api)
+3. [消息发送与接入端 API](#三消息发送与接入端-api默认-onebot)
 4. [群管快捷方法](#四群管快捷方法)
 5. [事件订阅与发布](#五事件订阅与发布)
 6. [配置读取](#六配置读取)
@@ -32,7 +34,7 @@
 |------|------|------|
 | `ctx.plugin_name` | `str` | 当前插件名（用户插件即目录名） |
 | `ctx.logger` | `logging.Logger` | 标准库 logger，自动带插件名前缀 |
-| `ctx.onebot` | `OneBotAPI` | OneBot 11 API 封装；适配器未加载时抛 `RuntimeError` |
+| `ctx.onebot` | 动作封装 | OneBot 11 API 封装（取 `services['onebot_api']`）；只有通用 `api_caller` 时用协议无关 `ActionProxy` 兜底，连接入端都没有才抛 `RuntimeError` |
 | `ctx.db_pool_status` | `dict` | 数据库连接池状态 |
 
 ```python
@@ -69,7 +71,7 @@ def register(ctx):
 匹配规则：普通命令名做前缀匹配；含正则元字符的模式走 `re.search()`，
 命令后参数统一用 `match.group(1)` 捕获。
 
-## 三、消息发送与 OneBot API
+## 三、消息发送与接入端 API（默认 OneBot）
 
 ### ctx.send_msg() / ctx.asend_msg()
 
@@ -94,7 +96,7 @@ await ctx.asend_msg(
 
 ### ctx.api() / ctx.aapi()：任意 action
 
-快捷方法没覆盖的 OneBot action，用通用入口直接调（参数以关键字展开）：
+`ctx.api/aapi` 走协议无关的 `api_caller`（默认接入端 OneBot，动作名即 OneBot action；换接入端后用该接入端动作名）。快捷方法没覆盖的动作，用通用入口直接调（参数以关键字展开）：
 
 ```python
 ctx.api("set_group_leave", group_id=123456)
@@ -285,7 +287,7 @@ def get_count():
     row = ctx.db_query_one("SELECT COUNT(*) AS c FROM users WHERE online=1")
     return {"title": "在线用户", "value": row["c"], "label": "人"}
 
-ctx.dashboard_card("在线用户", get_count, icon="👥")
+ctx.dashboard_card("在线用户", get_count, icon="users")
 ```
 
 ### ctx.webui(title, entry="index.html", icon=None, order=50)

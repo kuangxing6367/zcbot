@@ -4,10 +4,24 @@
 """
 import asyncio
 import logging
+import os
 import sys
 import threading
 
 logger = logging.getLogger('zcbot')
+
+
+def _installed_core_plugins() -> set:
+    """扫描 core_plugins/ 目录得到已安装官方插件名（替代硬编码名单）"""
+    plugins_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'core_plugins')
+    try:
+        return {
+            n for n in os.listdir(plugins_dir)
+            if not n.startswith('_') and os.path.isfile(os.path.join(plugins_dir, n, 'main.py'))
+        }
+    except Exception:
+        return set()
 
 
 class TerminalCommand:
@@ -198,7 +212,7 @@ def register_builtins(fw):
             return
         
         # 检查是否是核心插件
-        core_plugins = ['onebot_adapter', 'webui', 'session', 'scheduler', 'http_api']
+        core_plugins = _installed_core_plugins()
         if plugin_name in core_plugins:
             # 更新配置
             import yaml
@@ -231,7 +245,7 @@ def register_builtins(fw):
             return
         
         # 检查是否是核心插件
-        core_plugins = ['onebot_adapter', 'webui', 'session', 'scheduler', 'http_api']
+        core_plugins = _installed_core_plugins()
         if plugin_name in core_plugins:
             # 更新配置
             import yaml
@@ -352,18 +366,22 @@ def register_builtins(fw):
             else:
                 user_id = int(target)
             
-            # 通过 api_caller 发送
+            # 通过当前接入端的中立 send_text 发送（协议翻译在适配器内）
+            adapter = fw.services.get('protocol_adapter')
             api_caller = fw.services.get('api_caller')
-            if api_caller is None:
-                print("错误: OneBot 适配器未加载")
+            if adapter is None and api_caller is None:
+                print("错误: 未加载任何协议接入端")
                 return
-            
+
             async def _send():
+                if adapter is not None:
+                    await adapter.send_text(message, group_id=group_id, user_id=user_id)
+                else:
+                    act = 'send_group_msg' if group_id else 'send_private_msg'
+                    await api_caller.acall(act, group_id=group_id, user_id=user_id, message=message)
                 if group_id:
-                    await api_caller.send_group_msg(group_id=group_id, message=message)
                     print(f"已发送到群 {group_id}: {message}")
                 else:
-                    await api_caller.send_private_msg(user_id=user_id, message=message)
                     print(f"已发送给用户 {user_id}: {message}")
             
             asyncio.ensure_future(_send())
@@ -493,12 +511,12 @@ def register_builtins(fw):
             
             api_caller = fw.services.get('api_caller')
             if api_caller is None:
-                print("错误: OneBot 适配器未加载")
+                print("错误: 未加载任何协议接入端")
                 return
             
             async def _ban():
                 if group_id:
-                    await api_caller.set_group_ban(group_id=group_id, user_id=user_id, duration=duration)
+                    await api_caller.acall('set_group_ban', group_id=group_id, user_id=user_id, duration=duration)
                     print(f"已禁言用户 {user_id} {duration//60} 分钟")
                 else:
                     # 私聊封禁（标记到数据库）
@@ -530,12 +548,12 @@ def register_builtins(fw):
             
             api_caller = fw.services.get('api_caller')
             if api_caller is None:
-                print("错误: OneBot 适配器未加载")
+                print("错误: 未加载任何协议接入端")
                 return
             
             async def _unban():
                 if group_id:
-                    await api_caller.set_group_ban(group_id=group_id, user_id=user_id, duration=0)
+                    await api_caller.acall('set_group_ban', group_id=group_id, user_id=user_id, duration=0)
                     print(f"已解除用户 {user_id} 的禁言")
                 else:
                     fw.db.execute("UPDATE users SET is_banned=0 WHERE user_id=%s", (user_id,))
@@ -562,11 +580,11 @@ def register_builtins(fw):
             
             api_caller = fw.services.get('api_caller')
             if api_caller is None:
-                print("错误: OneBot 适配器未加载")
+                print("错误: 未加载任何协议接入端")
                 return
             
             async def _kick():
-                await api_caller.set_group_kick(group_id=group_id, user_id=user_id)
+                await api_caller.acall('set_group_kick', group_id=group_id, user_id=user_id)
                 print(f"已踢出用户 {user_id}")
             
             asyncio.ensure_future(_kick())
@@ -584,9 +602,10 @@ def register_builtins(fw):
             return
         
         message = args.strip()
+        adapter = fw.services.get('protocol_adapter')
         api_caller = fw.services.get('api_caller')
-        if api_caller is None:
-            print("错误: OneBot 适配器未加载")
+        if adapter is None and api_caller is None:
+            print("错误: 未加载任何协议接入端")
             return
         
         try:
@@ -597,7 +616,10 @@ def register_builtins(fw):
                 success = 0
                 for gid in group_ids:
                     try:
-                        await api_caller.send_group_msg(group_id=gid, message=message)
+                        if adapter is not None:
+                            await adapter.send_text(message, group_id=gid)
+                        else:
+                            await api_caller.acall('send_group_msg', group_id=gid, message=message)
                         success += 1
                     except Exception:
                         pass

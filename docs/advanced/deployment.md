@@ -1,5 +1,7 @@
 # 部署
 
+> **本篇面向**：角色 A（要把宿主长期稳定跑起来的部署者）。
+
 ## 直接运行（开发/小规模）
 
 ```bash
@@ -100,7 +102,7 @@ WebSocket 反向连接端口（6830）按需单独放行或代理（需要 `Upgr
 
 ## 安全清单
 
-1. `onebot.access_token` 设置强随机令牌，OneBot 客户端保持一致；
+1. 在 `core_plugins.yaml` 给 `onebot_adapter.access_token` 设强随机令牌，OneBot 客户端保持一致；
 2. 管理后台默认密码 `admin/admin123` 首次登录立即修改；
 3. `web.host` 保持 `127.0.0.1`，公网访问走反代 + HTTPS + IP 白名单；
 4. 配置 `security.whitelist_ips` 限制管理接口来源；
@@ -113,6 +115,7 @@ WebSocket 反向连接端口（6830）按需单独放行或代理（需要 `Upgr
 
 - `data/`：SQLite 数据库、日志、`plugins_dat/` 插件数据；
 - `config.yaml`：全局配置；
+- `core_plugins.yaml`：官方插件的开关与配置；
 - `plugins/`：自行开发/定制的插件代码。
 
 迁移到新机器：复制上述内容 → 安装依赖 → `python main.py` 即可。

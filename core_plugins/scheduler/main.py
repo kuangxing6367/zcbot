@@ -18,6 +18,7 @@ __plugin_meta__ = {
     "desc": "基于 APScheduler 的 cron 定时任务调度",
     "priority": 0,
     "official": True,
+    "process": "host",
 }
 
 

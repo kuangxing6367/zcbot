@@ -1,5 +1,7 @@
 # 插件加载与模块机制
 
+> **本篇面向**：角色 B/C。**插件要拆成多个文件前必读**，讲清合成包、相对导入与可靠热重载。
+
 本文讲清楚 ZCBOT 到底是怎么把 `plugins/xxx/main.py` 变成一个运行中插件的，
 尤其是**插件内部多个文件之间该怎么互相 import**。这是新人最容易踩坑的地方，
 建议在写「不止一个 `main.py`」的插件前先读完本文。
@@ -131,12 +133,12 @@ plugins/chatroom/
 
 | 写法 | 解析到 | 是否推荐 |
 |---|---|---|
-| `from .ws_server import WsServer` | `plugin_chatroom.ws_server` | ✅ 推荐 |
-| `from . import utils` | `plugin_chatroom.utils` | ✅ 推荐 |
-| `from .core.sub import X` | `plugin_chatroom.core.sub` | ✅ 推荐 |
-| `from ws_server import WsServer` | 短名 `ws_server`（同一对象） | ✅ 兼容可用 |
-| `import utils` | 短名 `utils`（同一对象） | ✅ 兼容可用 |
-| `from ..utils import U`（在 `core/sub.py` 内） | `plugin_chatroom.utils` | ✅ 推荐 |
+| `from .ws_server import WsServer` | `plugin_chatroom.ws_server` | 推荐 |
+| `from . import utils` | `plugin_chatroom.utils` | 推荐 |
+| `from .core.sub import X` | `plugin_chatroom.core.sub` | 推荐 |
+| `from ws_server import WsServer` | 短名 `ws_server`（同一对象） | 兼容可用 |
+| `import utils` | 短名 `utils`（同一对象） | 兼容可用 |
+| `from ..utils import U`（在 `core/sub.py` 内） | `plugin_chatroom.utils` | 推荐 |
 
 ## 三、插件内导入规则
 
@@ -198,11 +200,11 @@ if img is not None and hasattr(img, "_send_image"):
 
 ### 3.5 不要做的事
 
-- ❌ 不要假设 `__file__` 的上级目录是标准安装包、用 `import plugins.chatroom.xxx`；
-- ❌ 不要依赖别的插件的**短名**（`import ws_server`）来跨插件引用，短名会被覆盖；
-- ❌ 不要在模块顶层执行耗时操作或立刻调用尚未就绪的服务（服务可能还没注册，
+- 不要假设 `__file__` 的上级目录是标准安装包、用 `import plugins.chatroom.xxx`；
+- 不要依赖别的插件的**短名**（`import ws_server`）来跨插件引用，短名会被覆盖；
+- 不要在模块顶层执行耗时操作或立刻调用尚未就绪的服务（服务可能还没注册，
   改为在 `register(ctx)` 或订阅 `system.plugin.loaded` 后使用）；
-- ❌ 避免循环导入：A 顶层导入 B、B 顶层又导入 A。把共用逻辑下沉到第三个模块。
+- 避免循环导入：A 顶层导入 B、B 顶层又导入 A。把共用逻辑下沉到第三个模块。
 
 ## 四、多插件同名模块隔离
 

@@ -1,56 +1,113 @@
 # 配置系统
 
-ZCBOT 使用 `config.yaml` 作为全局配置，首次启动自动生成。
-也可以在启动时传入自定义配置路径：`python main.py /path/to/config.yaml`。
+> **本篇面向**：角色 A/B（使用者与插件开发者）。ZCBOT 有两份配置，分工如下：
+> - **`config.yaml`**：框架**全局**配置（数据库、日志、安全、插件目录等），首次启动自动生成；
+> - **`core_plugins.yaml`**：**官方插件配置中心**，集中管理 `core_plugins/` 下每个官方插件的开关与配置。
+>
+> 也可以在启动时传入自定义的全局配置路径：`python main.py /path/to/config.yaml`。
 
-## 官方插件开关
+## 官方插件配置中心 core_plugins.yaml（重点）
+
+官方插件（`core_plugins/` 目录）的开关与配置**统一写在根目录 `core_plugins.yaml`**，不再散落在 `config.yaml`。
+
+启动时框架会自动完成同步（见 `framework/config.py` 的 `_autoload_core_plugins`）：
+
+1. 扫描 `core_plugins/` 目录，得到"已安装"的官方插件；
+2. 为**已安装但 yaml 里缺失**的插件补上默认配置块；
+3. **删除** yaml 里已经不再安装的插件块（即卸载插件后配置块自动消失）；
+4. 有变化就**自动回写** `core_plugins.yaml`（无需手动维护）；
+5. 把每个插件的 `enabled` 合并进主配置的 `core_plugins` 段，把插件配置块合并进对应主配置段
+   （`onebot_adapter → onebot`、`webui → web`，其余插件段名与插件名相同）。
+
+因此**代码里既有的 `fw.config.get('onebot')`、`fw.config.get('web')` 等读法保持不变**，对插件透明。
+
+一份开箱即用的 `core_plugins.yaml` 形如：
 
 ```yaml
 core_plugins:
-  onebot_adapter: true    # OneBot 11 协议适配器（连 QQ 必备）
-  webui: true             # Web 管理后台
-  session: true           # 多轮会话管理器（ctx.wait_for/create_session）
-  scheduler: true         # 定时任务调度器（ctx.task）
-  http_api: false         # 独立 HTTP API（默认关闭）
+  onebot_adapter:          # 合并后主配置段名为 onebot
+    enabled: true
+    listen_host: 0.0.0.0
+    listen_port: 6830      # 反向 WebSocket 服务端端口（等 OneBot 客户端连入）
+    access_token: ''       # 接入令牌，公网必须设非空强随机值
+  webui:                   # 合并后主配置段名为 web
+    enabled: true
+    host: 127.0.0.1
+    port: 8080             # Web 管理后台端口
+  session:
+    enabled: true          # 多轮会话（ctx.wait_for/create_session）
+  scheduler:
+    enabled: true          # 定时任务（ctx.task）
+  http_inject:             # HTTP 事件注入接入端（默认关闭）
+    enabled: false
+    host: 127.0.0.1
+    port: 8901
+    path: /hook
+    token: ''
+  http_api:                # 独立对外 HTTP API（默认关闭）
+    enabled: false
+    host: 127.0.0.1
+    port: 1145
+    token: ''
+    allow_db: false
 ```
 
-设为 `false` 禁用对应官方插件，**重启后生效**。关闭某个服务后，
-依赖它的 `ctx` 能力（如会话、定时任务、API 调用）会不可用。
+把某个插件的 `enabled` 改为 `false` 即禁用，**重启后生效**。关闭某个服务后，依赖它的能力
+（如会话、定时、API 调用）会不可用。`http_api`、`http_inject` 涉及开放端口，**默认关闭**，需显式开启。
 
-## 协议适配（OneBot 11）
+> 提示：旧版本把开关写在 `config.yaml → core_plugins` 的写法仍能被识别（向后兼容，首次合并时迁移），
+> 但新配置请统一写到 `core_plugins.yaml`。
+
+## 协议接入（OneBot 11，来自 onebot_adapter）
+
+`onebot_adapter` 的配置块在 `core_plugins.yaml`，合并后主配置段为 `onebot`：
 
 ```yaml
-onebot:
-  listen_port: 6830       # WebSocket 服务端监听端口（等 OneBot 客户端反向连入）
-  access_token: ""        # 接入令牌，公网部署必须设置非空强随机值
-  enabled: true           # 是否启用
+# core_plugins.yaml
+core_plugins:
+  onebot_adapter:
+    enabled: true
+    listen_host: 0.0.0.0
+    listen_port: 6830   # WebSocket 服务端端口（等 OneBot 实现端反向连入）
+    access_token: ""    # 接入令牌，公网部署必须设置非空强随机值
 ```
 
-ZCBOT 作为 WebSocket **服务端**，由 NapCat / Lagrange 等 OneBot 实现反向连接，
-配置方式见 [开始使用](./getting-started.md#连接-qq)。
+ZCBOT 作为 WebSocket **服务端**，由 NapCat / Lagrange 等 OneBot 实现端反向连接，
+配置方式见 [开始使用](./getting-started.md#连接-qq)。不使用 QQ 时可整体关闭该插件，改用
+`http_inject` / `scheduler` 或自写接入端，见[最佳实践](./best-practices.md)。
 
-## Web 管理后台
+## Web 管理后台（来自 webui）
 
 ```yaml
+# core_plugins.yaml → core_plugins.webui（合并后主配置段为 web）
 web:
   host: 127.0.0.1         # 监听地址；0.0.0.0 = 监听所有网卡（公网可访问，务必配合令牌/白名单）
   port: 8080              # 监听端口
-  session_timeout: 3600   # 登录会话超时时长（秒）
-  enabled: true           # 是否启用
+  session_timeout: 3600   # 登录会话超时时长（秒），同时也是会话 Token 有效期
+  enabled: true
 ```
 
-## 独立 HTTP API
+后台 REST 接口（`/api/**`）与后台页面**共用这个端口**；另有独立的 `http_api` 插件（默认 1145、默认关闭）用于对外集成，两者区别见 README「接口令牌」一节。
+
+## 独立对外 HTTP API（来自 http_api，默认关闭）
+
+先在 `core_plugins.yaml` 把 `http_api.enabled` 置为 `true`：
 
 ```yaml
-http_api:
-  host: 127.0.0.1         # 仅本机访问更安全
-  port: 1145              # HTTP API 端口
-  token: ""               # 调用令牌；留空则首次自动生成
+core_plugins:
+  http_api:
+    enabled: true
+    host: 127.0.0.1       # 仅本机访问更安全
+    port: 1145            # HTTP API 端口
+    token: ""             # 调用令牌；留空则首次自动生成
+    allow_db: false       # 是否开放数据库网关 db/query、db/execute（默认关闭）
 ```
 
-需要先把 `core_plugins.http_api` 置为 `true`。
+> **权限说明**：HTTP API 用单一共享 token 认证（`?token=xxx`），`allow_db: true` 后
+> `db/query` / `db/execute` 可执行**任意 SQL（含写库/删表）**，没有表级或角色级粒度。默认关闭；
+> 确有需要时再开启，并务必：① 固定 `token`；② 仅绑定内网 `host`；③ 尽量用只读账号/反向代理限权。
 
-## 数据库
+## 数据库（config.yaml）
 
 ```yaml
 # SQLite（默认，零配置，数据落在单文件）
@@ -71,7 +128,7 @@ database:
 插件 SQL 统一写 `%s` 占位、`AUTOINCREMENT` 自增，框架自动适配方言，
 详见 [数据库](../advanced/database.md)。
 
-## 插件相关
+## 插件相关（config.yaml）
 
 ```yaml
 plugin:
@@ -87,7 +144,7 @@ plugin:
 原理见 [插件加载与模块机制](../advanced/loader.md)。
 :::
 
-## 日志
+## 日志（config.yaml）
 
 ```yaml
 log:
@@ -99,7 +156,7 @@ log:
 
 插件内用 `ctx.log()` 或标准 `logging` 输出，会自动带插件名前缀。
 
-## 系统状态展示
+## 系统状态展示（config.yaml）
 
 ```yaml
 system:
@@ -108,15 +165,15 @@ system:
   status_interval: 30        # 状态采样间隔（秒）
 ```
 
-## GitHub 加速
+## GitHub 加速（config.yaml）
 
 ```yaml
-github_proxy: ""             # 插件更新走的 GitHub 代理前缀，留空直连
+github_proxy: ""             # 插件更新走的 GitHub 代理前缀，留空直连（内置多镜像回退）
 ```
 
 从 GitHub 拉取插件更新较慢时，可填镜像代理地址。
 
-## 安全配置
+## 安全配置（config.yaml）
 
 ```yaml
 security:
@@ -124,16 +181,16 @@ security:
   real_token_len: 8192       # 真实认证 Token 长度
   nonce_len: 16              # 防重放 Nonce 长度
   nonce_expiry: 60           # Nonce 有效期（秒）
-  fake_response_msg: "🎣 你上钩了！但这里只是蜜罐，请去 GitHub 点个 Star。"
+  fake_response_msg: "你上钩了！但这里只是蜜罐，请去 GitHub 点个 Star。"
   blacklist_enabled: true    # 启用黑名单
   whitelist_ips:             # 白名单 IP（仅这些 IP 可访问管理接口）
     - "127.0.0.1"
 ```
 
 :::warning 公网部署清单
-1) `onebot.access_token` 设为强随机值；2) `web.host` 保持 `127.0.0.1`
+1) `onebot_adapter.access_token` 设为强随机值；2) `webui.host` 保持 `127.0.0.1`
 或放在反代/防火墙之后；3) 首次登录后立刻修改默认管理员密码；
-4) 按需配置 `security.whitelist_ips`。
+4) 按需配置 `security.whitelist_ips`；5) 不需要对外的 `http_api/http_inject` 保持关闭。
 :::
 
 ## 插件元信息（plugin.yaml）

@@ -1,5 +1,7 @@
 # 架构详解
 
+> **本篇面向**：角色 C，以及想理解内核运行机制的 B。讲清分层、启动时序与消息流转。
+
 ## 分层总览
 
 ```
@@ -21,12 +23,14 @@
                 └──────────────┘
 ```
 
+> 上图以默认接入端 `onebot_adapter` 为例；`http_inject`、自写 `ProtocolAdapter` 都在同一位置把事件归一化后送入内核，后续流程完全一致——内核不区分事件来自哪个接入端。
+
 ## 启动时序
 
 `main.py → Framework.start()`（`framework/core.py`）：
 
 1. 打印安全提示（监听 `0.0.0.0` 且无 token 时告警）；
-2. `_load_core_plugins()`：按 `config.yaml → core_plugins` 开关加载官方插件，
+2. `_load_core_plugins()`：按 `core_plugins.yaml`（启动时合并进主配置 `core_plugins` 段）的开关加载官方插件，
    它们向服务注册表注册基础能力；
 3. 创建 `data/plugins_dat/`，把旧版散落在代码目录的配置迁移过去；
 4. `plugin_loader.load_all()`：发现并加载全部未被禁用的用户插件
@@ -91,6 +95,9 @@ caller = ctx._framework.services.get('api_caller')
 | `scheduler` | scheduler | 定时任务调度器（APScheduler） |
 | `session_manager` | session | 多轮会话管理器 |
 | `web_server` | webui | Web 管理后台服务 |
+| `http_api` | http_api | 独立对外 HTTP API（默认关闭） |
+
+> `protocol_adapter` / `api_caller` 是**协议无关的通用槽位**：默认由 onebot_adapter 填充；换成其它接入端后由新接入端填充，业务插件的取用方式不变。
 
 详见 [ServiceRegistry](../api/services.md)。
 
