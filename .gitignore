@@ -7,6 +7,14 @@ __pycache__/
 
 # Vite 构建期临时配置快照
 webui/vite.config.js.timestamp-*
+
+# ============================================================
+# 文档站（VitePress）
+# ============================================================
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+docs/.vitepress/.temp/
 *.egg-info/
 dist/
 build/
