@@ -24,3 +24,5 @@ core_plugins:
     listen_host: 0.0.0.0
     listen_port: 6830
     access_token: ''
+  image_renderer:
+    enabled: true

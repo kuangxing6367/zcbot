@@ -122,7 +122,7 @@ security:
   fake_token_len: 8            # 探针请求的 Token 长度（任意字符串）
   real_token_len: 8192         # 真实认证的 Token 长度
   nonce_len: 16                # 下发 nonce 的长度
-  fake_response_msg: "🎣 你上钩了！但这里只是蜜罐，请去 GitHub 点个 Star。"
+  fake_response_msg: "你上钩了！但这里只是蜜罐，请去 GitHub 点个 Star。"
   nonce_expiry: 60             # nonce 有效期（秒）
   blacklist_enabled: true      # 是否启用黑名单（持久化到数据库 ip_blacklist 表，重启不清除）
   whitelist_ips:               # 白名单 IP，跳过所有检查
@@ -138,13 +138,13 @@ security:
 # 其余能力（崩溃自动重启、跨进程事务、日志合并、远程 REST 路由）见架构文档
 dual_process:
   enabled: false             # 是否启用双进程
-  # core_plugins:            # 核心进程加载的官方插件白名单（缺省自动选协议+Web 类）
-  #   - onebot_adapter
-  #   - http_inject
-  #   - http_api
-  #   - webui
-  # max_restarts: 5          # 宿主崩溃重启限流：窗口内最大重启次数（默认 5）
-  # restart_interval: 30     # 限流窗口（秒）（默认 30）
+  core_plugins:              # 核心进程加载的官方插件白名单（缺省由插件 process:'core' 标记自动判定）
+    - onebot_adapter
+    - http_inject
+    - http_api
+    - webui
+  max_restarts: 5           # 宿主崩溃重启限流：窗口内最大重启次数（默认 5）
+  restart_interval: 30      # 限流窗口（秒）（默认 30）
 """
 
 
