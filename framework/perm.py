@@ -139,7 +139,7 @@ def _bool_val(row) -> bool:
 class PermissionSet:
     """一次权限解析的结果（不可变快照）
 
-    :ivar user_id: QQ 号
+    :ivar user_id: 用户 ID
     :ivar context: 解析时使用的上下文字典
     :ivar groups:  生效组名列表，按 weight 降序
     :ivar nodes:   合并后的节点表 {node: True/False}
@@ -334,7 +334,7 @@ def resolve(db, user_id, context=None, role=None, use_cache=True) -> PermissionS
     """解析用户在指定上下文下的完整权限
 
     :param db: 数据库实例
-    :param user_id: QQ 号
+    :param user_id: 用户 ID
     :param context: {'group': '123456', 'bot': 'main', 'msgtype': 'group'}，None 表示无上下文
     :param role: 框架身份（Event.role），用于注入内置角色组
     :return: PermissionSet

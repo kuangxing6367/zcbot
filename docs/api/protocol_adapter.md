@@ -1,6 +1,6 @@
 # 协议适配器（写自己的接入端）
 
-> 这是让 ZCBOT **不局限于 QQ** 的关键文档。框架核心不绑定任何具体 IM 协议（`framework/`
+> 这是让 ZCBOT **不局限于单一平台** 的关键文档。框架核心不绑定任何具体 IM 协议（`framework/`
 > 内没有任何 OneBot 实现）；你写一个 `ProtocolAdapter`，就能把宿主接到任意"事件源"上
 > ——另一个 IM、HTTP Webhook、定时器、MQTT、消息队列……业务插件完全感知不到接入端换了。
 
@@ -101,7 +101,7 @@ async def send_text(self, text, *, user_id=None, group_id=None, source=None):
 ## 三、完整工作示例：HTTP Webhook adapter
 
 下面是一个**可运行的完整 adapter**：接收外部 HTTP POST，转成内部消息事件，
-业务插件照常响应。它证明了"没有 QQ，宿主也能跑完整流程"。
+业务插件照常响应。它证明了"没有 IM 平台，宿主也能跑完整流程"。
 
 ### 3.1 目录结构
 
@@ -120,7 +120,7 @@ core_plugins/http_webhook/
 # core_plugins/http_webhook/main.py
 """
 HTTP Webhook 接入端：接收外部 POST → 转内部事件 → 交给框架路由。
-演示「换 adapter 不换插件」：业务插件不需要知道消息来自 HTTP 还是 QQ。
+演示「换 adapter 不换插件」：业务插件不需要知道消息来自 HTTP 还是 IM 平台。
 """
 import asyncio
 import json

@@ -1,8 +1,8 @@
 # 开始使用
 
-> **本篇面向**：角色 A。以默认接入端（QQ / OneBot）为例；不用 QQ 请看[最佳实践](./best-practices.md)。
+> **本篇面向**：角色 A。以默认接入端（OneBot）为例；不用 IM 平台 请看[最佳实践](./best-practices.md)。
 
-> 本页以默认接入端（QQ / OneBot）为例。**不用 QQ？** 关掉 `core_plugins.onebot_adapter`，
+> 本页以默认接入端（OneBot）为例。**不用 IM 平台？** 关掉 `core_plugins.onebot_adapter`，
 > 接 HTTP Webhook / 定时 / 其它 IM 接入端即可，见 [官方最佳实践](./best-practices.md)。
 
 ## 启动框架
@@ -29,7 +29,7 @@ ZCBOT 框架 启动中...
 最后一行 `框架启动完成，等待消息...` 出现后，框架开始监听 OneBot 连接。
 启动日志同时写入 `data/logs/zcbot.log`。
 
-## 连接 QQ
+## 接入平台
 
 ZCBOT 作为 WebSocket **服务端**运行（默认端口 6830），需要 OneBot 客户端
 （NapCat、Lagrange 等）以**反向 WebSocket** 连入。
@@ -66,7 +66,7 @@ ZCBOT 作为 WebSocket **服务端**运行（默认端口 6830），需要 OneBo
 
 ## 第一次对话
 
-在 QQ 中向机器人发送：
+在接入的平台上向机器人发送：
 
 ```
 /echo 你好

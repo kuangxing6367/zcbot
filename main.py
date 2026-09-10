@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ZCBOT OneBot QQ机器人框架 · 启动入口（异步）
+ZCBOT 插件化服务宿主 · 启动入口（异步）
 项目地址：https://github.com/kuangxing6367/zcbot
 """
 import asyncio

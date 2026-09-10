@@ -5,7 +5,7 @@
         <img src="/img/logo.png" alt="ZCBOT" class="login-logo-img" />
       </div>
       <h1 class="login-title">ZCBOT 管理面板</h1>
-      <div class="login-sub">OneBot QQ 机器人统一管理平台</div>
+      <div class="login-sub">插件化服务宿主 · 统一管理后台</div>
 
       <el-form :model="form" @submit.prevent="onLogin" size="large">
         <el-form-item>

@@ -2,13 +2,13 @@
 
 > **事件驱动的插件化服务宿主**：把"事件进来 → 插件处理 → 给出响应"这类应用的骨架（插件加载、事件总线、权限、数据库、Web 后台、定时任务）全部做好，你只写业务。
 >
-> **OneBot 11（QQ）是它的默认接入端，但不是它的身份。** 换一个 `ProtocolAdapter`，它可以是 Telegram / Discord 机器人、HTTP Webhook 接收器、纯定时任务服务，或任何"事件 → 插件 → 响应"的程序。
+> **OneBot 11 是它的默认接入端之一，但不是它的身份。** 换一个 `ProtocolAdapter`，它可以是 Telegram / Discord 机器人、HTTP Webhook 接收器、纯定时任务服务，或任何"事件 → 插件 → 响应"的程序。
 
-**当前正式版：v1.3.5** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
+**当前正式版：v1.3.6** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
 
 - 项目地址：https://github.com/kuangxing6367/zcbot
 - 官方插件仓库：https://github.com/kuangxing6367/zcbot_plugins
-- 反馈交流：QQ 群 **1060129201**
+- 反馈交流：群组 **1060129201**
 
 ---
 
@@ -17,22 +17,22 @@
 ### 一句话定位
 
 ZCBOT 是一个**通用的插件化服务宿主**：内核只负责"加载插件、路由事件、提供公共能力"，
-所有具体功能（连 QQ、开网页后台、管会话、跑定时）都是可插拔的官方插件。
+所有具体功能（接入平台、开网页后台、管会话、跑定时）都是可插拔的官方插件。
 
 ### 它适合谁（三类目标用户）
 
 | 你是…… | 你能用 ZCBOT 做什么 | 从哪里开始 |
 | ------ | ------------------- | ---------- |
-| **① 想开箱搭一个 QQ 机器人的使用者**（不一定会编程） | 默认接入端就是 OneBot，启动 + 连一个 NapCat/Lagrange 就能用；后台点点鼠标装插件、改配置、管权限 | [快速开始](#四快速开始约-5-分钟) |
+| **① 想开箱搭一个 托管机器人的使用者**（不一定会编程） | 默认接入端就是 OneBot，启动 + 连一个 NapCat/Lagrange 就能用；后台点点鼠标装插件、改配置、管权限 | [快速开始](#四快速开始约-5-分钟) |
 | **② 写业务功能的 Python 开发者** | 白拿依赖注入、权限引擎、双方言数据库、多轮会话、定时任务、Web 扩展，只专注写 `register(ctx)` 里的业务 | [编写插件](docs/guide/writing-plugins.md) |
 | **③ 需要"事件→插件→响应"通用宿主的开发者** | 接非 IM 事件源：HTTP Webhook（内置 `http_inject`）、纯定时（`scheduler`）、或自写 `ProtocolAdapter` 接 Telegram/Discord/MQTT 等 | [协议适配器](docs/api/protocol_adapter.md)、[最佳实践](docs/guide/best-practices.md) |
 
 ### 它**不**是什么（非目标，避免选错工具）
 
-- **不是** NapCat / Lagrange / go-cqhttp 这类协议端——它**不直连 QQ**，需要 OneBot 实现端以"反向 WebSocket"连入。
+- **不是** NapCat / Lagrange / go-cqhttp 这类协议端——它**不直接入平台**，需要 OneBot 实现端以"反向 WebSocket"连入。
 - **不是**分布式/多节点中台：它是单进程（可选 core/host 双进程）宿主，不内置集群、消息队列编排。
 - **不提供**跨语言 SDK：业务插件用 Python 编写；跨语言交互请走它暴露的 HTTP API / Webhook。
-- 内核不绑定任何 IM：连 QQ 只是因为官方默认带了 `onebot_adapter`，把它关掉就是个通用宿主。
+- 内核不绑定任何 IM：接入平台 只是因为官方默认带了 `onebot_adapter`，把它关掉就是个通用宿主。
 
 ### 核心理念：框架 = 极简壳 + 官方插件集 + 用户插件
 
@@ -40,7 +40,7 @@ ZCBOT 是一个**通用的插件化服务宿主**：内核只负责"加载插件
 - **官方插件集（core_plugins/）**：随项目提供的基础能力，开关与配置集中在根目录 **`core_plugins.yaml`**，按需加载。
 - **用户插件（plugins/）**：你自己的业务逻辑，每个一个文件夹。
 
-> 提示：想要**纯 QQ 机器人**？什么都不用关，开箱即用。想要别的形态？在 `core_plugins.yaml` 里切换接入端、换一套业务插件即可，权限、后台、持久化、会话这些骨架原样保留。
+> 提示：想要**纯 托管机器人**？什么都不用关，开箱即用。想要别的形态？在 `core_plugins.yaml` 里切换接入端、换一套业务插件即可，权限、后台、持久化、会话这些骨架原样保留。
 
 ---
 
@@ -82,7 +82,7 @@ ZCBOT 是一个**通用的插件化服务宿主**：内核只负责"加载插件
 
 | 官方插件 | 默认 | 职责 |
 | -------- | ---- | ---- |
-| `onebot_adapter` | 开 | OneBot 11 反向 WebSocket 接入端（连 QQ 用），含 38 个 OneBot 动作封装 |
+| `onebot_adapter` | 开 | OneBot 11 反向 WebSocket 接入端（接入平台 用），含 38 个 OneBot 动作封装 |
 | `webui` | 开 | Web 管理后台 + 后台 REST 接口（默认 `127.0.0.1:8080`） |
 | `session` | 开 | 多轮会话（`ctx.wait_for` / `create_session`） |
 | `scheduler` | 开 | 定时任务（cron/interval/date，基于 APScheduler） |
@@ -93,17 +93,17 @@ ZCBOT 是一个**通用的插件化服务宿主**：内核只负责"加载插件
 
 ## 四、快速开始（约 5 分钟）
 
-> 以默认接入端（QQ / OneBot）为例。全程命令很少，复制粘贴即可。不懂的词点旁边的 **「什么是 XX」** 展开。
+> 以默认接入端（OneBot）为例。全程命令很少，复制粘贴即可。不懂的词点旁边的 **「什么是 XX」** 展开。
 
 ### 第 1 步：准备环境
 
 - **Python 3.10+**（验证环境覆盖 3.10–3.14），Windows / Linux / macOS 均可。
-- 要连 QQ 的话，再准备一个 OneBot 实现端（[NapCat](https://github.com/NapNeko/NapCatQQ)、Lagrange、go-cqhttp 任选）。**只用定时/Webhook 则不需要它。**
+- 要接入聊天平台的话，再准备一个 OneBot 实现端（[NapCat](https://github.com/NapNeko/NapCatQQ)、Lagrange、go-cqhttp 任选）。**只用定时/Webhook 则不需要它。**
 
 <details>
 <summary><b>什么是 OneBot 实现端？什么是反向 WebSocket？</b>（点我展开）</summary>
 
-QQ 官方不提供"把号变成机器人"的接口，社区用 **OneBot 实现端**接管一个 QQ 号，再把消息转发给 ZCBOT。
+聊天平台官方通常不提供"把账号变成机器人"的接口，社区用 **OneBot 实现端**接管一个账号，再把消息转发给 ZCBOT。
 
 - **WebSocket（WS）**：一条常驻连接，消息即时推送，类似"打电话"而非"发短信"。
 - **反向连接**：ZCBOT 当**服务端**（在 `6830` 端口等），OneBot 端当客户端主动连进来，所以叫"反向"。你只需在 OneBot 端填对地址。
@@ -144,7 +144,7 @@ python main.py                 # 也可指定配置：python main.py D:\config\z
 
 | 配置（编辑 `core_plugins.yaml`） | 默认值 | 作用 |
 | ------ | ------ | ---- |
-| `onebot_adapter.listen_port` | `6830` | OneBot 端**反向 WS** 连入端口（仅连 QQ 需要） |
+| `onebot_adapter.listen_port` | `6830` | OneBot 端**反向 WS** 连入端口（仅接入平台 需要） |
 | `onebot_adapter.access_token` | 空 | 接入令牌，**公网必须设强随机值** |
 | `webui.host` / `webui.port` | `127.0.0.1` / `8080` | Web 后台地址端口 |
 | `http_inject`（默认关） | `127.0.0.1:8901/hook` | HTTP 事件注入 |
@@ -155,7 +155,7 @@ Web 后台默认登录账号 `admin` / `admin123`（**首次登录后立即改�
 
 </details>
 
-### 第 4 步：连上 QQ（仅默认接入端需要）
+### 第 4 步：接入平台（仅默认接入端需要）
 
 在 OneBot 实现端新增「反向 WebSocket 客户端」：
 
@@ -189,7 +189,7 @@ Web 后台默认登录账号 `admin` / `admin123`（**首次登录后立即改�
 官方插件 `llm_plugin_gen` 支持"用自然语言描述需求 → 自动生成并加载插件"。它在插件仓库独立维护，见
 [插件文档](https://github.com/kuangxing6367/zcbot_plugins/blob/main/plugins/llm_plugin_gen/docs/INDEX.md)。
 
-### 4. 不碰 QQ：用 HTTP 注入事件（内置 `http_inject`）
+### 4. 不接 IM：用 HTTP 注入事件（内置 `http_inject`）
 
 在 `core_plugins.yaml` 把 `http_inject.enabled` 改为 `true` 并重启，外部系统 POST 一条 JSON 即可注入事件，业务插件照常处理——接 GitHub/支付回调、搭内部工具都不需要 IM：
 

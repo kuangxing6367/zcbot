@@ -5,14 +5,14 @@
         <div class="card-head">
           用户管理 (共 {{ total }} 人)
           <div>
-            <el-input v-model="keyword" placeholder="搜索昵称/QQ号/备注" style="width:220px" clearable
+            <el-input v-model="keyword" placeholder="搜索昵称/用户 ID/备注" style="width:220px" clearable
                       @keyup.enter="search" @clear="search" />
             <el-button @click="search">搜索</el-button>
           </div>
         </div>
       </template>
       <el-table :data="rows" size="small" border>
-        <el-table-column prop="user_id" label="QQ号" width="120">
+        <el-table-column prop="user_id" label="用户 ID" width="120">
           <template #default="{ row }"><span class="mono">{{ row.user_id }}</span></template>
         </el-table-column>
         <el-table-column prop="nickname" label="昵称" />

@@ -52,7 +52,7 @@
         <!-- ══════════ 用户授权 ══════════ -->
         <el-tab-pane label="用户授权" name="users">
           <div class="toolbar">
-            <el-input v-model="userQuery" size="small" placeholder="输入 QQ 号" style="width: 200px" @keyup.enter="loadUser" />
+            <el-input v-model="userQuery" size="small" placeholder="输入 用户 ID" style="width: 200px" @keyup.enter="loadUser" />
             <el-button size="small" type="primary" @click="loadUser">查询</el-button>
             <el-select v-model="userCtx" size="small" placeholder="上下文（可选）" clearable style="width: 220px">
               <el-option v-for="c in ctxOptions" :key="c.value" :label="c.label" :value="c.value" />
@@ -109,7 +109,7 @@
               <el-button size="small" @click="trackDlg = true">升降级</el-button>
             </div>
           </template>
-          <el-empty v-else description="输入 QQ 号后查询" :image-size="60" />
+          <el-empty v-else description="输入 用户 ID后查询" :image-size="60" />
         </el-tab-pane>
 
         <!-- ══════════ 升降级轨道 ══════════ -->
@@ -136,7 +136,7 @@
         <!-- ══════════ 权限检查器 ══════════ -->
         <el-tab-pane label="权限检查器" name="check">
           <div class="toolbar">
-            <el-input v-model="checkForm.user_id" size="small" placeholder="QQ 号" style="width: 180px" />
+            <el-input v-model="checkForm.user_id" size="small" placeholder="用户 ID" style="width: 180px" />
             <el-input v-model="checkForm.node" size="small" placeholder="权限节点，如 chat.ban" style="width: 260px" />
             <el-select v-model="checkForm.role" size="small" placeholder="身份（可选）" clearable style="width: 150px">
               <el-option v-for="r in roleOptions" :key="r" :label="r" :value="r" />
