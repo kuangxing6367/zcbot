@@ -39,11 +39,23 @@ ZCBOT 起步于 OneBot 11 接入端，但插件化、权限、持久化、Web �
 
 ```python
 # 一个最小插件：plugins/hello/main.py
-from framework import ctx
+__plugin_meta__ = {
+    "name": "Hello",
+    "version": "1.0.0",
+    "author": "你的名字",
+    "desc": "一个简单的 Hello 插件",
+    "priority": 50,
+}
 
-@ctx.command("echo")
-async def echo(event, args):
-    await ctx.send_msg(event, args or "你好")
+def register(ctx):
+    ctx.command("/hello", handle_hello, description="打个招呼")
+
+def handle_hello(event, match):
+    ctx.send_msg(
+        user_id=event.user_id,
+        group_id=event.group_id if event.is_group else None,
+        message="Hello, World!"
+    )
 ```
 
 ## 三分钟跑起来

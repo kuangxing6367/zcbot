@@ -6,8 +6,9 @@
 
 - Python 3.10 或更高版本（开发验证环境为 3.10–3.14）；
 - 操作系统：Windows / Linux / macOS；
-- 一个 OneBot 11 协议端（如 [NapCat](https://github.com/NapNeko/NapCatQQ)、Lagrange），
-  用于真正接入平台；ZCBOT 框架本身协议无关，OneBot 反向 WebSocket 服务端由内置官方插件 `onebot_adapter` 提供。
+- （可选）一个 IM 平台的接入端：框架协议无关，默认内置 `onebot_adapter`（OneBot 11，常用于接入 QQ）。
+  只有「要和一个聊天软件收发消息」时才需要它；纯定时任务 / HTTP 事件注入场景可以完全不接 IM 平台。
+  如何对接见 [对接 IM 平台](./connect-im.md)。
 
 ## 下载代码
 
@@ -53,7 +54,7 @@ zcbot/
 ├── framework/              # 极简内核（加载器/路由/事件/上下文/协议抽象/数据库…）
 ├── core_plugins.yaml       # 官方插件配置中心（开关/配置，启动自动扫描同步）
 ├── core_plugins/           # 官方插件（在 core_plugins.yaml 开关）
-│   ├── onebot_adapter/     #   OneBot 11 接入端（反向 WebSocket，默认开）
+│   ├── onebot_adapter/     #   OneBot 11 接入端（反向 WebSocket，可选，默认开）
 │   ├── webui/              #   Web 管理后台（默认开）
 │   ├── session/            #   多轮会话管理器（默认开）
 │   ├── scheduler/          #   定时任务调度器（默认开）
@@ -76,7 +77,7 @@ python main.py
 ```
 
 首次启动会生成 `config.yaml`、`core_plugins.yaml` 与 `data/` 目录。下一步见
-[开始使用](./getting-started.md)。
+[开始使用](./getting-started.md)；要接入聊天平台见 [对接 IM 平台](./connect-im.md)。
 
 ## 升级
 
