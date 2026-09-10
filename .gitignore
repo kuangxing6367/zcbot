@@ -4,6 +4,9 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Vite 构建期临时配置快照
+webui/vite.config.js.timestamp-*
 *.egg-info/
 dist/
 build/

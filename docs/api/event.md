@@ -13,9 +13,9 @@
 | `event.post_type` | `str` | 事件大类：`message` / `notice` / `request` / `meta_event` |
 | `event.message_type` | `str` | `"group"` 或 `"private"` |
 | `event.sub_type` | `str` | 事件子类型（如群成员变动的 `approve/invite`） |
-| `event.user_id` | `int` | 发送者 QQ 号 |
+| `event.user_id` | `int` | 发送者 用户 ID |
 | `event.group_id` | `int` | 群号（私聊为 `0`/None，用 `is_group` 判断） |
-| `event.self_id` | `int` | 机器人自身 QQ 号 |
+| `event.self_id` | `int` | 机器人自身 用户 ID |
 | `event.message` | `str` | 提取后的纯文本内容 |
 | `event.raw_message` | `str` | 原始消息文本（CQ 码字符串形式） |
 | `event.message_id` | `int` | 消息 ID |
@@ -65,7 +65,7 @@ for seg in event.segments:
 | `event.images` | `list[dict]` | 全部图片段的 data（含 file/url 等） |
 | `event.first_image` | `dict` | 第一张图片 data，没有则 `{}` |
 | `event.has_at` | `bool` | 是否含 @ |
-| `event.at_list` | `list[int]` | 被 @ 的 QQ 号列表（不含“全体”） |
+| `event.at_list` | `list[int]` | 被 @ 的用户 ID 列表（不含“全体”） |
 | `event.at_all` | `bool` | 是否 @全体成员 |
 | `event.has_at_bot` | `bool` | 是否 @ 了机器人本身 |
 | `event.has_reply` | `bool` | 是否为回复消息 |

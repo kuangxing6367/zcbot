@@ -73,7 +73,7 @@ core_plugins:
 ```
 
 ZCBOT 作为 WebSocket **服务端**，由 NapCat / Lagrange 等 OneBot 实现端反向连接，
-配置方式见 [开始使用](./getting-started.md#连接-qq)。不使用 QQ 时可整体关闭该插件，改用
+配置方式见 [开始使用](./getting-started.md#连接-qq)。不使用该平台 时可整体关闭该插件，改用
 `http_inject` / `scheduler` 或自写接入端，见[最佳实践](./best-practices.md)。
 
 ## Web 管理后台（来自 webui）
