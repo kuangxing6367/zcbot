@@ -90,7 +90,13 @@ def host_entry(config_path, address, token, core_pid):
             await fw.stop()
             client.close()
 
-    asyncio.run(_amain())
+    try:
+        asyncio.run(_amain())
+    except KeyboardInterrupt:
+        # Ctrl+C 在子进程里可能以裸 KeyboardInterrupt 形式抵达（Windows 上
+        # add_signal_handler 对 SIGINT/SIGTERM 抛 NotImplementedError 被静默吞掉），
+        # 照核心进程的做法吞掉它，让宿主随核心一起干净退出（finally 已做 stop/close）。
+        pass
 
 
 if __name__ == '__main__':
