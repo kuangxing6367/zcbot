@@ -51,7 +51,8 @@
 | 文档 | 内容 | 主要受众 |
 | ---- | ---- | -------- |
 | [安装](./installation.md) | 环境要求、依赖安装、目录结构、升级 | A |
-| [开始使用](./getting-started.md) | 启动、连接 OneBot、第一次对话、Web 面板 | A |
+| [开始使用](./getting-started.md) | 启动、接入平台（可选）、第一次对话、Web 面板 | A |
+| [对接 IM 平台](./connect-im.md) | 启用 onebot_adapter、NapCat/Lagrange 反向 WS、富媒体与群管 API | A |
 | [配置系统](./configuration.md) | `config.yaml`、`core_plugins.yaml`、插件配置 schema | A/B |
 | [编写插件](./writing-plugins.md) | 从零写完整插件的手把手教程 | B |
 | [多轮会话](./session.md) | `wait_for` / `create_session` 多轮交互 | B |

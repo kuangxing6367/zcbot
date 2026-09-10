@@ -28,7 +28,7 @@ async def handle_survey(event, match):
 
 ### 返回值是什么
 
-`wait_for` 返回的是**原始 OneBot 事件 dict**（不是 `Event` 对象），超时返回 `None`。
+`wait_for` 返回的是**框架消息事件 dict**（不是 `Event` 对象），超时返回 `None`。
 纯文本要用框架的提取函数从消息段里取：
 
 ```python
