@@ -392,6 +392,31 @@ npm run build      # 产物输出到 ../web/
 
 ---
 
+## 十二、双核心实验版（core/host 双进程，实验特性）
+
+> 这是一条**长期实验线**：把一次启动拆成两个进程，隔离用户插件故障、降低核心内存占用。
+> 默认关闭，行为完全不变；开启前请先读 [双核心开发文档](docs/advanced/dual-core.md)。
+
+**概念**：单进程宿主拆成「核心进程」+「宿主进程」，中间用标准库 IPC（回环 TCP + authkey）通信，零第三方依赖。
+
+- **核心进程（Core）**：真实数据库、协议接入端、Web/WebUI、IPC 服务端，并监督宿主存活。
+- **宿主进程（Host）**：加载执行全部用户插件，经 IPC 远程代理访问数据库/发消息/注册路由/推送日志。
+
+**开启方式**：在 `config.yaml` 末段设置 `dual_process.enabled: true`，重启即可。
+
+```yaml
+dual_process:
+  enabled: true        # 开启双进程
+  max_restarts: 5      # 宿主崩溃重启限流（窗口内最大次数）
+  restart_interval: 30 # 限流窗口（秒）
+```
+
+**适用场景**：插件较多/不稳定、希望接入端与 Web 在插件崩溃时仍在线、或想压低核心常驻内存。
+
+**已知限制**：`db.get_connection()` 在双进程下不可用（改用 `db.transaction()` 或 `ctx` 的 db 系列）；目前为单宿主，多接入端并发、跨机部署尚未实现。详见 [双核心开发文档](docs/advanced/dual-core.md)。
+
+---
+
 ## 开源协议
 
 MIT + Apache 2.0 双协议，任选其一适用。
