@@ -72,9 +72,10 @@ core_plugins:
     access_token: ""    # 接入令牌，公网部署必须设置非空强随机值
 ```
 
-ZCBOT 作为 WebSocket **服务端**，由 NapCat / Lagrange 等 OneBot 实现端反向连接，
-配置方式见 [开始使用](./getting-started.md#连接-qq)。不使用该平台 时可整体关闭该插件，改用
-`http_inject` / `scheduler` 或自写接入端，见[最佳实践](./best-practices.md)。
+ZCBOT 作为 WebSocket **服务端**，由 NapCat / Lagrange 等 OneBot 实现端反向连接。
+客户端怎么配、连接怎么验证、插件里怎么发图片 / @ / 做群管，见 [对接 IM 平台](./connect-im.md)。
+不使用该平台 时可整体关闭该插件，改用 `http_inject` / `scheduler` 或自写接入端，
+见 [最佳实践](./best-practices.md)。
 
 ## Web 管理后台（来自 webui）
 

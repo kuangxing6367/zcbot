@@ -37,6 +37,7 @@ export default defineConfig({
             { text: '文档总入口', link: '/guide/' },
             { text: '安装', link: '/guide/installation' },
             { text: '开始使用', link: '/guide/getting-started' },
+            { text: '对接 IM 平台', link: '/guide/connect-im' },
             { text: '配置系统', link: '/guide/configuration' }
           ]
         },
