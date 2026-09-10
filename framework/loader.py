@@ -7,6 +7,7 @@
 import importlib
 import importlib.metadata
 import importlib.util
+import importlib.machinery
 import gc
 import json
 import logging
@@ -24,6 +25,26 @@ import psutil
 import yaml
 
 logger = logging.getLogger('zcbot')
+
+
+class _PluginSourceLoader(importlib.machinery.SourceFileLoader):
+    """
+    插件模块专用加载器：始终从 .py 源码现场编译，不读取也不写入 __pycache__。
+
+    背景：CPython 默认按“源码整数秒 mtime + 文件大小”校验 .pyc。热重载/自动
+    改码时若在同一秒内把文件改成相同字节数，会误判字节码仍有效而执行旧代码。
+    插件加载频率很低，直接每次从源码编译最稳妥，从根上保证“磁盘是什么就跑什么”。
+    （深层嵌套包由原生 finder 沿合成包 __path__ 懒加载，其 __pycache__ 另由
+    _clear_plugin_bytecode_cache 在加载前清理。）
+    """
+
+    def get_code(self, fullname):
+        source_path = self.get_filename(fullname)
+        return self.source_to_code(self.get_data(source_path), source_path)
+
+    def set_data(self, *args, **kwargs):
+        # 不生成 .pyc
+        return None
 
 # 仪表盘卡片执行线程池（共享，避免每次请求创建线程；慢卡片隔离在此池）
 _cards_executor = None
@@ -1041,7 +1062,9 @@ class PluginLoader:
         dotted_name = f"{pkg_name}.{mod_name}"
         legacy_name = f"{pkg_name}_{mod_name}"
         try:
-            spec = importlib.util.spec_from_file_location(dotted_name, file_path)
+            spec = importlib.util.spec_from_file_location(
+                dotted_name, file_path,
+                loader=_PluginSourceLoader(dotted_name, file_path))
             if spec is None or spec.loader is None:
                 return
             module = importlib.util.module_from_spec(spec)
@@ -1108,6 +1131,23 @@ class PluginLoader:
         except Exception as e:
             logger.debug(f"[{plugin_name}] 清理 sys.modules 异常: {e}")
 
+    def _clear_plugin_bytecode_cache(self, plugin_path: str):
+        """
+        删除插件目录下的 __pycache__，保证（完全）重载时总是从源码重新编译。
+
+        CPython 依据“源码整数秒 mtime + 文件大小”校验 .pyc：若在同一秒内把
+        文件改成相同字节数（自动化改码/快速热重载场景），会误判字节码仍有效而
+        复用旧代码。插件加载并不频繁，直接清掉本插件的字节码缓存最稳妥；
+        只删除本插件目录内的 __pycache__，不影响其他插件。
+        """
+        try:
+            for root, dirs, _files in os.walk(plugin_path):
+                if "__pycache__" in dirs:
+                    shutil.rmtree(os.path.join(root, "__pycache__"), ignore_errors=True)
+            importlib.invalidate_caches()
+        except Exception as e:
+            logger.debug(f"清理插件字节码缓存异常: {e}")
+
     def load_plugin(self, plugin_name: str) -> bool:
         """加载单个插件，返回是否成功"""
         plugin_path = os.path.join(self.plugins_dir, plugin_name)
@@ -1148,6 +1188,9 @@ class PluginLoader:
                 if attempt == 1:
                     self._purge_plugin_modules(plugin_name, plugin_path)
 
+                # 0) 清掉本插件 __pycache__，避免同秒同尺寸改动复用旧字节码
+                self._clear_plugin_bytecode_cache(plugin_path)
+
                 # 1) 先建合成包 plugin_<插件名>（含 __package__/__path__）：
                 #    它既是 main.py 的执行载体，也是插件相对导入的父包
                 module = self._ensure_plugin_package(plugin_name, plugin_path)
@@ -1159,7 +1202,8 @@ class PluginLoader:
                 #    否则刚设置的 __package__/__path__ 会重置为普通顶层模块，相对导入又会失效）
                 spec = importlib.util.spec_from_file_location(
                     f"plugin_{plugin_name}",
-                    main_path
+                    main_path,
+                    loader=_PluginSourceLoader(f"plugin_{plugin_name}", main_path)
                 )
                 if spec is None or spec.loader is None:
                     logger.error(f"[{plugin_name}] 导入失败: spec 为空")
