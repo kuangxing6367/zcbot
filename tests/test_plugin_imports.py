@@ -167,6 +167,25 @@ try:
     chk("合成包仍在，可供兜底解析", "plugin_broken" in sys.modules)
     loader._purge_plugin_modules("broken", pdir3)
 
+    # ------------------------------------------------------------------
+    print("== 5. 同秒同尺寸快速热重载：不得复用旧字节码 ==")
+    pdir5 = os.path.join(root, "rapid")
+    write(os.path.join(pdir5, "main.py"),
+          "from .val import V\n"
+          "def register(ctx): pass\n"
+          "R = V\n")
+    rapid_fresh = True
+    for n in range(3, 9):  # V = 3..8 均为单字节，文件尺寸恒为 6
+        write(os.path.join(pdir5, "val.py"), f"V = {n}\n")
+        loader._purge_plugin_modules("rapid", pdir5)
+        m5 = load_like_framework(loader, "rapid", pdir5)
+        if m5.R != n:
+            rapid_fresh = False
+    chk("同秒同尺寸改写后每次重载都拿到新源码", rapid_fresh)
+    chk("插件模块不生成 __pycache__",
+        not os.path.isdir(os.path.join(pdir5, "__pycache__")))
+    loader._purge_plugin_modules("rapid", pdir5)
+
 finally:
     # 清理测试期间加入的 sys.path
     for p in list(sys.path):
