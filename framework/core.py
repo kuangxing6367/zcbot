@@ -758,6 +758,8 @@ class Framework:
         event_type = event.get('type', '')
         bot_name = event.get('bot_name', 'default')
 
+        logger.debug(f"dispatch_event: type={event_type} bot={bot_name} msg_type={event.get('message_type','')}")
+
         # 元事件 → 广播
         if event_type == 'meta_event':
             meta_type = event.get('sub_type', 'unknown')
