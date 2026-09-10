@@ -410,9 +410,7 @@ class MessageRouter:
         })
         if not reply:
             return True  # 已匹配但无回复内容，避免重复匹配
-        target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
-        await self.framework.api_caller.acall(
-            'send_msg', **target, message=reply)
+        await self.framework.reply_text(ev, reply)
         return True
 
     async def _call_keyword_handler(self, rule, message: str):
@@ -593,12 +591,8 @@ class MessageRouter:
                         'role': ev.role,
                         'message': message[:80],
                     })
-                    target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
-                    await self.framework.api_caller.acall(
-                        'send_msg',
-                        **target,
-                        message=f'权限不足（需要 {require} 权限，当前身份: {ev.role}）'
-                    )
+                    await self.framework.reply_text(
+                        ev, f'权限不足（需要 {require} 权限，当前身份: {ev.role}）')
                     return True
                 if require == 'super' and not ev.is_superuser:
                     self._stats_hit(cmd.id)
@@ -607,12 +601,7 @@ class MessageRouter:
                         'user_id': ev.user_id,
                         'role': ev.role,
                     })
-                    target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
-                    await self.framework.api_caller.acall(
-                        'send_msg',
-                        **target,
-                        message=f'权限不足（需要超级管理员权限）'
-                    )
+                    await self.framework.reply_text(ev, '权限不足（需要超级管理员权限）')
                     return True
 
                 # ── 权限节点检查（LuckPerms 风格，与 require_level 并存）──
@@ -628,12 +617,8 @@ class MessageRouter:
                         'role': ev.role,
                         'message': message[:80],
                     })
-                    target = {'group_id': ev.group_id} if ev.is_group else {'user_id': ev.user_id}
-                    await self.framework.api_caller.acall(
-                        'send_msg',
-                        **target,
-                        message=f'权限不足（需要权限节点: {perm_node}）'
-                    )
+                    await self.framework.reply_text(
+                        ev, f'权限不足（需要权限节点: {perm_node}）')
                     return True
 
                 # 命中计数（异步批量落库，不阻塞路由）
@@ -650,7 +635,7 @@ class MessageRouter:
                     # 注入当前事件的 bot 到上下文变量（contextvars），确保回复走正确的
                     # OneBot 实例。协程创建与 asyncio.to_thread 均携带上下文快照，
                     # 并发消息互不干扰（原 module.ctx 插件级共享变量多 bot 时会交错错发）
-                    from framework.api import current_bot_var
+                    from framework.runtime import current_source_var as current_bot_var
                     _bot_token = current_bot_var.set(ev.bot_name)
                     try:
                         if asyncio.iscoroutinefunction(handler):

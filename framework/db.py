@@ -16,6 +16,7 @@ import os
 import re
 import sqlite3
 import time
+from contextlib import contextmanager
 from threading import local
 
 logger = logging.getLogger('zcbot')
@@ -525,8 +526,19 @@ class Database:
                 time.sleep(0.05)
 
     def _close_thread_conn(self):
-        """连接池接管后无需手动关闭连接（坏连接由 PooledDB 借出时 ping 检测并重建）"""
-        pass
+        """关闭当前线程的 SQLite 连接并释放线程本地状态。
+        MySQL 连接池接管后无需手动关闭连接（坏连接由 PooledDB 借出时 ping 检测并重建）。"""
+        if self.db_type != 'mysql':
+            conn = getattr(self._local, 'conn', None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception as e:
+                    logger.warning(f"关闭 SQLite 线程连接失败: {e}")
+                try:
+                    del self._local.conn
+                except Exception:
+                    pass
 
     def _mark_conn_used(self):
         """记录连接最近使用时间（避免频繁 ping）"""
@@ -548,10 +560,17 @@ class Database:
         return any(kw in msg for kw in _MYSQL_RECONNECT_KEYWORDS)
 
     def _get_conn(self):
-        """获取连接"""
+        """获取连接。处于事务中时返回被固定（pin）的事务连接，确保事务内所有操作走同一连接，原子生效。"""
+        txn_conn = getattr(self._local, 'txn_conn', None)
+        if txn_conn is not None:
+            return txn_conn
         if self.db_type == 'mysql':
             return self._get_conn_mysql()
         return self._get_conn_sqlite()
+
+    def _should_commit(self) -> bool:
+        """事务内不自动提交（交由外层 transaction() 统一提交/回滚），避免破坏原子性"""
+        return not getattr(self._local, 'in_txn', False)
 
     def _get_cursor(self):
         """获取游标"""
@@ -646,10 +665,15 @@ class Database:
                 else:
                     sql = _translate_sql_for_mysql(sql)
                 self._exec(cursor, sql, params)
-                conn.commit()
+                if self._should_commit():
+                    conn.commit()
                 return cursor.rowcount
             except Exception:
-                conn.rollback()
+                if not getattr(self._local, 'in_txn', False):
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                 raise
             finally:
                 cursor.close()
@@ -677,10 +701,15 @@ class Database:
                 else:
                     sql = _translate_sql_for_mysql(sql)
                 cursor.executemany(sql, params_list)
-                conn.commit()
+                if self._should_commit():
+                    conn.commit()
                 return cursor.rowcount
             except Exception:
-                conn.rollback()
+                if not getattr(self._local, 'in_txn', False):
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                 raise
             finally:
                 cursor.close()
@@ -702,10 +731,15 @@ class Database:
                 else:
                     sql = _translate_sql_for_mysql(sql)
                 self._exec(cursor, sql, params)
-                conn.commit()
+                if self._should_commit():
+                    conn.commit()
                 return cursor.lastrowid
             except Exception:
-                conn.rollback()
+                if not getattr(self._local, 'in_txn', False):
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                 raise
             finally:
                 cursor.close()
@@ -716,6 +750,70 @@ class Database:
     def get_connection(self):
         """获取原始连接（高级用法）"""
         return self._get_conn()
+
+    def scalar(self, sql: str, params: tuple = None):
+        """
+        取单行单列的值。
+        SELECT COUNT(*) / MAX(id) 等聚合、单值查询的快捷方式。
+        无结果返回 None。
+        """
+        row = self.query_one(sql, params)
+        if not row:
+            return None
+        if isinstance(row, dict):
+            # 取第一个值（无论列名是什么）
+            return next(iter(row.values()), None)
+        return row[0]
+
+    def exists(self, sql: str, params: tuple = None) -> bool:
+        """判断查询是否有结果（EXISTS 快捷方式）"""
+        return self.query_one(sql, params) is not None
+
+    def count(self, sql: str, params: tuple = None) -> int:
+        """执行 COUNT 查询并返回整数结果（无结果返回 0）"""
+        v = self.scalar(sql, params)
+        return int(v) if v is not None else 0
+
+    @contextmanager
+    def transaction(self, conn=None):
+        """
+        事务上下文管理器：
+            with db.transaction():
+                db.execute(...)
+                db.insert(...)
+        块内 db.execute / db.insert / db.execute_many 会固定在同一连接上执行，
+        正常退出统一提交，块内抛异常自动回滚，保证原子性。
+        入参 conn 可选：传入原始连接时，在该连接上手动控制事务（配合 get_connection 使用）。
+        """
+        if conn is None:
+            conn = self._get_conn()
+            borrowed = self.db_type == 'mysql'  # 池借出的连接需归还
+        else:
+            borrowed = False
+        # 固定事务连接：事务内所有 db.* 调用走同一连接
+        self._local.txn_conn = conn
+        self._local.in_txn = True
+        if self.db_type == 'mysql':
+            conn.autocommit(False)
+        else:
+            conn.execute('BEGIN')
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            self._local.in_txn = False
+            self._local.txn_conn = None
+            if self.db_type == 'mysql':
+                conn.autocommit(True)
+                if borrowed:
+                    conn.close()  # 归还连接池
+            # SQLite 线程本地连接不关闭，交给后续复用
 
     def table_exists(self, table_name: str) -> bool:
         """检查表是否存在"""

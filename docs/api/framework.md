@@ -1,6 +1,8 @@
 # Framework 核心对象
 
-`Framework`（`framework/core.py`）是整个机器人的运行容器，插件里通过
+> **本篇面向**：角色 C（需要触碰底层容器的高级开发者）。绝大多数插件只用 `ctx` 即可，不必读本篇。
+
+`Framework`（`framework/core.py`）是整个宿主的运行容器，插件里通过
 `ctx._framework` 拿到它的引用。绝大多数插件只需要 `ctx`，本页供需要访问
 底层能力（服务注册表、加载器、事件循环等）的高级场景参考。
 
@@ -8,7 +10,7 @@
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `fw.config` | `dict` | 加载后的 `config.yaml` |
+| `fw.config` | `dict` | 加载并合并 `core_plugins.yaml` 后的全局配置 |
 | `fw.config_path` | `str` | 实际使用的配置文件绝对路径 |
 | `fw.services` | `ServiceRegistry` | 服务注册表，详见 [ServiceRegistry](./services.md) |
 | `fw.db` | `Database` | 数据库实例，详见 [数据库](../advanced/database.md) |

@@ -21,7 +21,6 @@ import time
 import types
 from typing import Dict, Optional
 
-import psutil
 import yaml
 
 logger = logging.getLogger('zcbot')
@@ -1682,6 +1681,7 @@ class PluginLoader:
         max_mb = cfg.get('max_memory_mb', 64)
 
         def monitor():
+            import psutil  # 延迟导入：psutil 导入较慢，仅在启动内存监控线程时加载
             process = psutil.Process(os.getpid())
 
             while self._memory_monitor_running:

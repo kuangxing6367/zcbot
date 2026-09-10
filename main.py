@@ -4,6 +4,7 @@ ZCBOT OneBot QQ机器人框架 · 启动入口（异步）
 项目地址：https://github.com/kuangxing6367/zcbot
 """
 import asyncio
+import multiprocessing
 import os
 import re
 import signal
@@ -18,7 +19,13 @@ def _check_and_install_deps():
     启动前自检：扫描 requirements.txt，自动安装缺失的依赖
     解决移机/首次部署时依赖缺失导致 import 报错的问题
     """
-    import importlib.metadata
+    # 一次扫描所有已安装发行版，建立规范名集合，避免对每个依赖各做一次 metadata 查找
+    import importlib.metadata as _imd
+
+    def _norm(name: str) -> str:
+        return name.strip().lower().replace('_', '-')
+
+    installed = {_norm(d.metadata['Name']) for d in _imd.distributions()}
 
     project_dir = os.path.dirname(os.path.abspath(__file__))
     req_file = os.path.join(project_dir, 'requirements.txt')
@@ -37,9 +44,7 @@ def _check_and_install_deps():
             if not m:
                 continue
             pkg_name = m.group(1)
-            try:
-                importlib.metadata.version(pkg_name)
-            except importlib.metadata.PackageNotFoundError:
+            if _norm(pkg_name) not in installed:
                 missing.append(pkg_name)
 
     if not missing:
@@ -90,6 +95,25 @@ def main():
     # 启动前依赖自检（移机自愈）
     _check_and_install_deps()
 
+    # 解析配置文件路径（首个非 '-' 开头的参数）
+    config_path = None
+    for arg in sys.argv[1:]:
+        if not arg.startswith('-'):
+            config_path = arg
+            break
+
+    # 双进程模式：由 config.yaml 的 dual_process.enabled 门控（默认关闭，行为不变）
+    try:
+        from framework.config import load_config
+        cfg = load_config(config_path)
+    except Exception:
+        cfg = {}
+    dual = cfg.get('dual_process', {}) or {}
+    if dual.get('enabled'):
+        from framework.ipc.core_runtime import CoreRuntime
+        CoreRuntime(config_path).run()
+        return
+
     try:
         asyncio.run(amain())
     except KeyboardInterrupt:
@@ -97,4 +121,6 @@ def main():
 
 
 if __name__ == '__main__':
+    # freeze_support：防止 spawn 的宿主子进程重复执行本入口
+    multiprocessing.freeze_support()
     main()

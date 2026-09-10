@@ -1,5 +1,7 @@
 # 数据库
 
+> **本篇面向**：角色 B。插件如何建表、CRUD、事务，以及 SQLite/MySQL 双方言自动适配。
+
 ZCBOT 支持 SQLite（默认，零配置）与 MySQL，上层使用同一套接口，
 插件基本不需要感知当前是哪种数据库。
 
@@ -71,9 +73,9 @@ await ctx.db_execute_many_async(sql, params_list)
 自动转换成 `?`。不要拼接字符串，避免 SQL 注入与方言问题：
 
 ```python
-# ✅ 参数化
+# 正确：参数化
 ctx.db_execute("UPDATE t SET v=%s WHERE id=%s", (v, id_))
-# ❌ 字符串拼接
+# 错误：字符串拼接
 ctx.db_execute(f"UPDATE t SET v={v} WHERE id={id_}")
 ```
 

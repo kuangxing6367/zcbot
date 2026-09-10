@@ -1,5 +1,10 @@
 # 开始使用
 
+> **本篇面向**：角色 A。以默认接入端（QQ / OneBot）为例；不用 QQ 请看[最佳实践](./best-practices.md)。
+
+> 本页以默认接入端（QQ / OneBot）为例。**不用 QQ？** 关掉 `core_plugins.onebot_adapter`，
+> 接 HTTP Webhook / 定时 / 其它 IM 接入端即可，见 [官方最佳实践](./best-practices.md)。
+
 ## 启动框架
 
 ```bash
@@ -34,7 +39,7 @@ ZCBOT 作为 WebSocket **服务端**运行（默认端口 6830），需要 OneBo
 在 NapCat 的网络配置中新增「反向 WebSocket 客户端」：
 
 - 目标地址：`ws://127.0.0.1:6830`
-- AccessToken：与 `config.yaml → onebot.access_token` 保持一致（本地调试可留空）
+- AccessToken：与 `core_plugins.yaml → onebot_adapter.access_token` 保持一致（本地调试可留空）
 
 等价 JSON 片段：
 
@@ -71,7 +76,7 @@ ZCBOT 作为 WebSocket **服务端**运行（默认端口 6830），需要 OneBo
 
 ## Web 管理面板
 
-浏览器访问 `http://127.0.0.1:8080`（地址端口以 `config.yaml → web` 为准），
+浏览器访问 `http://127.0.0.1:8080`（地址端口以 `core_plugins.yaml → webui` 为准），
 默认账号：
 
 - 用户名：`admin`

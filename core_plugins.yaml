@@ -1,0 +1,26 @@
+core_plugins:
+  http_api:
+    enabled: false
+    host: 127.0.0.1
+    port: 1145
+    token: ''
+    allow_db: false
+  http_inject:
+    enabled: false
+    host: 127.0.0.1
+    port: 8901
+    path: /hook
+    token: ''
+  scheduler:
+    enabled: true
+  session:
+    enabled: true
+  webui:
+    enabled: true
+    host: 127.0.0.1
+    port: 8080
+  onebot_adapter:
+    enabled: true
+    listen_host: 0.0.0.0
+    listen_port: 6830
+    access_token: ''

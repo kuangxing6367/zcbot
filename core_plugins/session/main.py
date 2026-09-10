@@ -17,6 +17,7 @@ __plugin_meta__ = {
     "desc": "内置多轮会话：ctx.wait_for() / ctx.create_session()",
     "priority": 0,
     "official": True,
+    "process": "host",
 }
 
 _DEFAULT_TIMEOUT = 60
