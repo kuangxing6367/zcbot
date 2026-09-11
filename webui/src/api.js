@@ -55,6 +55,7 @@ export async function apiCall(url, options = {}) {
 export const session = reactive({
   admin: null,
   pluginWebUIs: [],
+  officialSidebar: true,
   frameworkVersion: '',
 })
 

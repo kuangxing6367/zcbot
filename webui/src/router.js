@@ -22,6 +22,7 @@ const routes = [
       { path: 'logs', name: 'logs', component: () => import('./views/Logs.vue') },
       { path: 'database', name: 'database', component: () => import('./views/Database.vue') },
       { path: 'plugin_webui', name: 'plugin_webui', component: () => import('./views/PluginWebUI.vue') },
+      { path: 'plugin/:name', name: 'plugin', component: () => import('./views/PluginWebUI.vue') },
       { path: 'settings', name: 'settings', component: () => import('./views/Settings.vue') },
     ],
   },

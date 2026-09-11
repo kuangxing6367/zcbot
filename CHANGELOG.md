@@ -19,8 +19,39 @@
 | **第五代 · 通用插件化服务宿主** | v1.3.x | 2026-09-09 起 | 官方能力全部下沉为 `core_plugins`，框架回归"极简壳"；补齐终端、相对导入、可靠热重载；**v1.3.5 起框架核心零 OneBot 实现，OneBot 11 退为可插拔的默认接入端** |
 
 > 主线叙事：ZCBOT 起步于「OneBot v11 接入端的插件化服务宿主」，但插件化、权限、持久化、Web 后台这些骨架从一开始就是通用的。
-> 第五代（v1.3.x）把这条路线收口——**框架 = 极简内核 + 官方插件集（core_plugins）+ 用户插件（plugins）**，
+> 第五代（v1.3.x）把这条路线收口——**内核 = 极简微内核 + 扩展点契约 + 官方插件集（core_plugins）+ 用户插件（plugins）**，
 > 换一个 `ProtocolAdapter` 就能接入 HTTP Webhook、定时事件或任意其它 IM，OneBot 只是默认接入端，不再是身份。
+> v1.3.8 起内核正式确立**扩展点（Hook）系统**，允许扩展挂到启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每一个运行环节。
+
+---
+
+## v1.3.8（2026-09-11）
+
+> 主题：**微内核化（Microkernel）+ 可插拔侧边栏**——内核正式确立「最小核心 + 扩展点」契约，
+> WebUI 侧边栏开放给插件注册，并修复 GitHub Pages 部署下的排版错乱。
+
+### 新增
+- **扩展点系统（HookRegistry，`framework/hooks.py`）**：微内核核心契约。内核在运行流程预留 12 个标准扩展点
+  （`lifecycle.startup/shutdown`、`http.before/after_request`、`event.before/after_dispatch`、
+  `command.before/after`、`message.before/after_send`、`action.before/after`），扩展用 `ctx.hook(point, handler)`
+  往任意环节插入逻辑；支持 sync/async handler、优先级、同名去重、插件卸载自动清理。
+  - `action.before/after` 覆盖每一次协议动作（send_msg / 禁言 / 查询…），适合统一审计 / 限流 / 中间件；
+  - `event.before_dispatch` 返回 `False` 可丢弃事件；`command.before` 返回 `False` 跳过该命令；`http.before_request` 返回 Response 可短路请求。
+- **Ctx 新增 `ctx.hook()` / `ctx.unhook()`**：插件侧统一注册 / 注销扩展点。
+- **WebUI 可插拔侧边栏**：插件现在可以用 `ctx.webui(title, entry, icon, order, sidebar=True)` 在
+  **侧边栏注册独立入口**（点击跳转 `/plugin/<插件名>` 直接打开该插件页面），不再局限于「插件页面」聚合页；
+  `sidebar=False`（默认）保持向后兼容，仍归入聚合入口。前端新增 `/plugin/:name` 路由，`GET /api/menu` 返回侧边栏结构。
+- **官方默认侧边栏支持开关**：新增 `config.yaml` → `web.official_sidebar`（默认 `true`），
+  关闭后侧边栏仅显示插件注册项与「设置」；可在「设置 → Web 服务 → 显示官方侧边栏」中切换，保存后**即时生效，无需重启**。
+- **文档与 README 微内核化重构**：
+  - README 从「插件化框架」升级为「微内核」叙事，新增「扩展点（Extension Points）」章节，保留全部原有详解（快速开始、权限、API Key、目录结构、双核心等）。
+  - `docs/api/` 重组为 **基础参考**（`basic/`：ctx / event / framework / services）与 **进阶扩展**（`advanced/`：扩展点 / 协议适配器）两大块，原有详解完整保留。
+  - 新增 `docs/api/advanced/hooks.md`（扩展点完整文档）与 `docs/api/index.md`（API 总览）。
+
+### 修复
+- **GitHub Pages 部署下排版错乱**：前端构建 `base` 由 `'/'`（产出绝对资源路径 `/js/`、`/css/`）改为 `'./'`（相对路径），
+  修复在 GitHub Pages 子路径托管时 css/js 因路径 404 而未被加载、页面失去样式（排版乱）的问题；
+  logo 引用改用 `import.meta.env.BASE_URL` 拼接，兼容子路径与自定义域名两种部署。
 
 ---
 

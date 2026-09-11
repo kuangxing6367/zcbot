@@ -23,7 +23,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: '指南', link: '/guide/', activeMatch: '/guide/' },
-      { text: 'API', link: '/api/ctx', activeMatch: '/api/' },
+      { text: 'API', link: '/api/', activeMatch: '/api/' },
       { text: '进阶', link: '/advanced/architecture', activeMatch: '/advanced/' },
       { text: '更新日志', link: 'https://github.com/kuangxing6367/zcbot/blob/main/CHANGELOG.md' },
       { text: 'GitHub', link: 'https://github.com/kuangxing6367/zcbot' }
@@ -52,13 +52,20 @@ export default defineConfig({
       ],
       '/api/': [
         {
-          text: 'API 参考',
+          text: '基础参考',
           items: [
-            { text: 'PluginContext (ctx)', link: '/api/ctx' },
-            { text: 'Event 事件对象', link: '/api/event' },
-            { text: 'Framework', link: '/api/framework' },
-            { text: '服务注册表', link: '/api/services' },
-            { text: '协议适配器', link: '/api/protocol_adapter' }
+            { text: 'API 总览', link: '/api/' },
+            { text: 'PluginContext (ctx)', link: '/api/basic/ctx' },
+            { text: 'Event 事件对象', link: '/api/basic/event' },
+            { text: 'Framework 核心', link: '/api/basic/framework' },
+            { text: '服务注册表（DI）', link: '/api/basic/services' }
+          ]
+        },
+        {
+          text: '进阶扩展',
+          items: [
+            { text: '扩展点（Hook 系统）', link: '/api/advanced/hooks' },
+            { text: '协议适配器', link: '/api/advanced/protocol_adapter' }
           ]
         }
       ],

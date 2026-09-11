@@ -27,20 +27,20 @@
 
 1. [编写插件](./writing-plugins.md) —— **新手必读**，从零写一个完整插件
 2. [多轮会话](./session.md) —— 一问一答 / 连续多轮交互
-3. 写插件时随时查 API：[PluginContext (ctx)](../api/ctx.md)、[Event 事件对象](../api/event.md)
+3. 写插件时随时查 API：[PluginContext (ctx)](../api/basic/ctx.md)、[Event 事件对象](../api/basic/event.md)
 4. 插件要拆多个文件：[插件加载与模块机制](../advanced/loader.md)（**多文件插件必读**，避免导入踩坑）
 5. 需要时按主题查：[数据库](../advanced/database.md)、[定时任务](../advanced/scheduler.md)、
-   [权限系统](../advanced/permission.md)、[服务注册表（DI）](../api/services.md)
+   [权限系统](../advanced/permission.md)、[服务注册表（DI）](../api/basic/services.md)
 
 ### 角色 C：我要接非 IM 的事件源 / 写自己的接入端（高级开发者）
 
 > 目标：把 ZCBOT 当通用宿主，接 HTTP Webhook、纯定时、其它 IM，或理解内核分层。
 
 1. [官方最佳实践](./best-practices.md) —— **先读这篇**：纯定时、HTTP Webhook、带权限业务后台的完整范式
-2. [协议适配器 ProtocolAdapter](../api/protocol_adapter.md) —— 写自己接入端的契约与完整示例
-3. [服务注册表（DI）](../api/services.md) —— 内核与插件如何通过服务解耦
+2. [协议适配器 ProtocolAdapter](../api/advanced/protocol_adapter.md) —— 写自己接入端的契约与完整示例
+3. [服务注册表（DI）](../api/basic/services.md) —— 内核与插件如何通过服务解耦
 4. [架构详解](../advanced/architecture.md) —— 分层、启动时序、消息流转、事件总线
-5. [Framework 核心对象](../api/framework.md) —— 底层容器与高级用法
+5. [Framework 核心对象](../api/basic/framework.md) —— 底层容器与高级用法
 
 ---
 
@@ -62,11 +62,11 @@
 
 | 文档 | 内容 | 主要受众 |
 | ---- | ---- | -------- |
-| [PluginContext (ctx)](../api/ctx.md) | 插件可用能力的完整清单 | B |
-| [Event 事件对象](../api/event.md) | 消息字段、富媒体段、传播控制、权限 | B |
-| [服务注册表 Services](../api/services.md) | 官方插件能力如何取用、DI 机制 | B/C |
-| [协议适配器 ProtocolAdapter](../api/protocol_adapter.md) | 接入端契约、ActionProxy、内置 http_inject 示例 | C |
-| [Framework 核心对象](../api/framework.md) | 底层容器、生命周期与高级用法 | C |
+| [PluginContext (ctx)](../api/basic/ctx.md) | 插件可用能力的完整清单 | B |
+| [Event 事件对象](../api/basic/event.md) | 消息字段、富媒体段、传播控制、权限 | B |
+| [服务注册表 Services](../api/basic/services.md) | 官方插件能力如何取用、DI 机制 | B/C |
+| [协议适配器 ProtocolAdapter](../api/advanced/protocol_adapter.md) | 接入端契约、ActionProxy、内置 http_inject 示例 | C |
+| [Framework 核心对象](../api/basic/framework.md) | 底层容器、生命周期与高级用法 | C |
 
 ### 进阶 Advanced（深入机制）
 

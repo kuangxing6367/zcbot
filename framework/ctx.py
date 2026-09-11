@@ -381,6 +381,44 @@ class PluginContext:
         """发布事件（同步桥接，供旧插件使用）"""
         self._framework.event_bus.emit(event_name, payload)
 
+    # ---- 扩展点（微内核契约：把行为挂到内核的任意运行环节）----
+
+    def hook(self, point: str, handler: Callable, priority: int = 50):
+        """
+        在内核的**扩展点**注册一个处理器——这是"往框架里插入自己的逻辑"的统一入口，
+        可在几乎任意运行环节挂接行为：
+
+          - 'lifecycle.startup' / 'lifecycle.shutdown'   进程启动 / 关闭
+          - 'http.before_request' / 'http.after_request' Web 请求前后（before 可返回 Response 短路）
+          - 'event.before_dispatch' / 'event.after_dispatch'  事件进入内核前后（before 返回 False 丢弃）
+          - 'command.before' / 'command.after'          命令执行前后（before 返回 False 跳过）
+          - 'message.before_send' / 'message.after_send' 框架主动发文本前后
+          - 'action.before' / 'action.after'            任意协议动作调用前后（通知，不短路）
+
+        handler 可以是普通函数或 `async def`；同名（本插件内）重复注册自动去重。
+        也可注册自定义扩展点（任意字符串点位），由你自己的代码触发。
+
+        :param point: 扩展点名称（建议使用上面的标准常量）
+        :param handler: 处理函数；签名随扩展点而异，详见文档「扩展点」一节
+        :param priority: 优先级，越小越先执行（默认 50）
+        :return: True 表示已注册
+        """
+        if not callable(handler):
+            raise TypeError(f"hook 的 handler 必须可调用: {getattr(handler, '__name__', handler)}")
+        name = f"{self._plugin_name}:{point}"
+        self._framework.hooks.register(point, name, handler, priority)
+        return True
+
+    def unhook(self, point: str):
+        """
+        注销本插件在该扩展点的全部处理器（插件卸载/重载前清理用）。
+        :param point: 扩展点名称
+        :return: True 表示已注销
+        """
+        name = f"{self._plugin_name}:{point}"
+        self._framework.hooks.unregister(point, name)
+        return True
+
     async def aemit(self, event_name: str, payload: dict = None):
         """异步发布事件（推荐 async handler 使用，不阻塞事件循环）"""
         await self._framework.event_bus.aemit(event_name, payload)
@@ -736,21 +774,25 @@ class PluginContext:
 
     # ---- WebUI 内嵌 ----
 
-    def webui(self, title: str, entry: str = 'index.html', icon: str = None, order: int = 50):
+    def webui(self, title: str, entry: str = 'index.html', icon: str = None, order: int = 50,
+              sidebar: bool = False):
         """
         注册插件 WebUI 页面
         插件目录下的 web/ 子目录中的 HTML/JS/CSS 文件将被框架内嵌展示
 
-        :param title: 页面标题（显示在导航栏）
+        :param title: 页面标题（显示在导航栏 / 侧边栏）
         :param entry: 入口文件名（默认 index.html）
-        :param icon: 图标（HTML 实体或 emoji）
+        :param icon: 图标（HTML 实体或 emoji，留空则用默认图标）
         :param order: 排序权重（越小越靠前）
+        :param sidebar: 是否在侧边栏注册独立入口（True=独立菜单项跳转到 /plugin/<name>；
+                        False=仍归入「插件页面」聚合页）。默认 False 以兼容旧插件。
         """
         self._framework.plugin_loader.register_webui(self._plugin_name, {
             'title': title,
             'entry': entry,
             'icon': icon,
             'order': order,
+            'sidebar': sidebar,
         })
 
     def override_webui(self):

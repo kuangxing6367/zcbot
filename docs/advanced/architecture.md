@@ -99,7 +99,7 @@ caller = ctx._framework.services.get('api_caller')
 
 > `protocol_adapter` / `api_caller` 是**协议无关的通用槽位**：默认由 onebot_adapter 填充；换成其它接入端后由新接入端填充，业务插件的取用方式不变。
 
-详见 [ServiceRegistry](../api/services.md)。
+详见 [ServiceRegistry](../api/basic/services.md)。
 
 ## 插件加载机制（要点）
 

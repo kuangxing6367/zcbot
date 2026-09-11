@@ -1,6 +1,6 @@
 <template>
   <div class="page-container">
-    <el-card shadow="never" class="mb">
+    <el-card shadow="never" class="mb" v-if="!singleMode">
       <div class="toolbar">
         <span>选择插件页面</span>
         <el-select v-model="selected" style="width:260px" @change="onSelect">
@@ -9,37 +9,42 @@
       </div>
     </el-card>
     <el-empty v-if="!session.pluginWebUIs.length" description="没有可用的插件页面" :image-size="60" />
-    <iframe v-else :key="frameKey" class="webui-frame"
-            :src="`/api/plugin_webui/${encodeURIComponent(selected)}?entry=${encodeURIComponent(entry)}`" />
+    <el-alert v-else-if="singleMode && !current" type="warning" :closable="false"
+              :title="`未找到插件「${route.params.name}」的 WebUI`" />
+    <iframe v-else-if="current" :key="frameKey" class="webui-frame"
+            :src="`/api/plugin_webui/${encodeURIComponent(current.plugin_name)}?entry=${encodeURIComponent(current.entry || 'index.html')}`" />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { session } from '../api'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { session, api } from '../api'
 
+const route = useRoute()
 const selected = ref('')
-const entry = ref('index.html')
 const frameKey = ref(0)
 
-const frameSrc = computed(() =>
-  `/api/plugin_webui/${encodeURIComponent(selected.value)}?entry=${encodeURIComponent(entry.value)}`)
-
-function onSelect(name) {
-  const w = session.pluginWebUIs.find(x => x.plugin_name === name)
-  if (w) {
-    entry.value = w.entry || 'index.html'
-    frameKey.value++
-  }
-}
-
-onMounted(() => {
-  if (session.pluginWebUIs.length) {
-    const first = session.pluginWebUIs[0]
-    selected.value = first.plugin_name
-    entry.value = first.entry || 'index.html'
-  }
+const singleMode = computed(() => !!route.params.name)
+const current = computed(() => {
+  const name = singleMode.value ? route.params.name : selected.value
+  return (session.pluginWebUIs || []).find(x => x.plugin_name === name) || null
 })
+
+function onSelect() { frameKey.value++ }
+async function ensureList() {
+  if (!session.pluginWebUIs.length) {
+    const r = await api('/api/plugin_webuis').catch(() => null)
+    if (r && r.code === 0) session.pluginWebUIs = r.data || []
+  }
+  if (!singleMode.value && !selected.value && session.pluginWebUIs.length) {
+    selected.value = session.pluginWebUIs[0].plugin_name
+  }
+  frameKey.value++
+}
+watch(() => route.params.name, () => { frameKey.value++ })
+
+onMounted(ensureList)
 </script>
 
 <style scoped>

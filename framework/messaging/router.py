@@ -20,6 +20,7 @@ from typing import Callable, Optional
 
 from framework.log_broker import log_broker
 from framework.messaging.event import _extract_text, _has_text_segment
+from framework.hooks import HookPoints
 
 logger = logging.getLogger('zcbot')
 
@@ -630,6 +631,24 @@ class MessageRouter:
                     'user_id': ev.user_id,
                     'group_id': ev.group_id,
                 })
+                # ── 命令执行前扩展点（返回 False 跳过本命令，继续尝试其它匹配）──
+                try:
+                    _cb_res = await self.framework.hooks.trigger_async(
+                        HookPoints.COMMAND_BEFORE,
+                        {'plugin': plugin_name, 'handler': cmd.handler_name,
+                         'command_id': cmd.id, 'pattern': cmd.pattern,
+                         'event': ev, 'match': match})
+                    if False in _cb_res:
+                        log_broker.log_plugin(plugin_name, '命令被扩展点 command.before 跳过', {
+                            'handler': cmd.handler_name,
+                            'user_id': ev.user_id,
+                            'group_id': ev.group_id,
+                            'message': message[:80],
+                        })
+                        continue
+                except Exception as e:
+                    logger.error(f"command.before 扩展点异常: {e}")
+
                 handler = getattr(module, cmd.handler_name, None)
                 if handler and callable(handler):
                     # 注入当前事件的 bot 到上下文变量（contextvars），确保回复走正确的
@@ -659,6 +678,15 @@ class MessageRouter:
                         return True  # 视为已处理，避免半处理消息继续传播
                     finally:
                         current_bot_var.reset(_bot_token)
+                    # 命令执行后扩展点（通知，不短路）
+                    try:
+                        await self.framework.hooks.trigger_async(
+                            HookPoints.COMMAND_AFTER,
+                            {'plugin': plugin_name, 'handler': cmd.handler_name,
+                             'command_id': cmd.id, 'event': ev, 'match': match,
+                             'result': result})
+                    except Exception as e:
+                        logger.error(f"command.after 扩展点异常: {e}")
                     # handler 返回 False 表示"未实际处理，继续路由"
                     if result is False:
                         continue

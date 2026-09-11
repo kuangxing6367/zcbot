@@ -51,6 +51,7 @@ web:
   port: 8080
   # secret_key: ""          # 留空则每次重启随机生成，填入后重启保持登录态
   session_timeout: 3600      # 登录会话超时（秒），同时作为登录 token 的有效期
+  official_sidebar: true     # 是否显示官方默认侧边栏菜单（关闭后仅显示插件注册项与设置）
 
 # ── HTTP API（可选，需同时开启 core_plugins.http_api）────────
 # 给外部程序用的 RESTful 接口，默认监听 1145 端口，token 认证
