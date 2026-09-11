@@ -276,12 +276,15 @@ class ApiCaller:
 class OneBotWebSocketServer:
     """OneBot 11 反向 WebSocket 服务端（作为适配器的一部分）"""
 
-    def __init__(self, config: dict, on_event_callback, api_caller: ApiCaller):
+    def __init__(self, config: dict, on_event_callback, api_caller: ApiCaller,
+                 ssl_context=None):
         self.host = config.get('listen_host', '0.0.0.0')
         self.port = config.get('listen_port', 6830)
         self.access_token = config.get('access_token', '')
         self.on_event_callback = on_event_callback
         self.api_caller = api_caller
+        # 启用 SSL 后 WebSocket 走 wss（与 Web 后台共用 config['ssl'] 证书）
+        self.ssl_context = ssl_context
 
         self._server = None
         self._server_task = None
@@ -309,6 +312,9 @@ class OneBotWebSocketServer:
 
     async def _serve(self):
         serve_kwargs = {'ping_interval': 30, 'ping_timeout': 10}
+        # 启用 SSL 时走 wss（websockets 原生支持 ssl= 参数）
+        if self.ssl_context is not None:
+            serve_kwargs['ssl'] = self.ssl_context
         if _WS_MAJOR >= 13:
             serve_kwargs['process_request'] = self._process_request_v13
         elif _WS_MAJOR >= 10:
@@ -321,7 +327,8 @@ class OneBotWebSocketServer:
             logger.error(f"WebSocket 服务启动失败: {e}")
             self._running = False
             return
-        logger.info(f"OneBot WebSocket 服务端已启动: ws://{self.host}:{self.port}")
+        scheme = 'wss' if self.ssl_context is not None else 'ws'
+        logger.info(f"OneBot WebSocket 服务端已启动: {scheme}://{self.host}:{self.port}")
         try:
             await asyncio.Future()
         except asyncio.CancelledError:
@@ -485,8 +492,15 @@ class OneBotAdapter(ProtocolAdapter):
         self.config = framework.config.get('onebot', {})
         self.api_caller = ApiCaller()
         self.api_caller.on_message_sent = self._on_message_sent
+        # SSL：与 Web 后台共用 config['ssl']；启用后反向 WS 走 wss
+        ssl_context = None
+        try:
+            ssl_context = framework.build_ssl_context()
+        except Exception as e:
+            logger.error(f"SSL 配置无效，OneBot 反向 WS 回退为 ws: {e}")
+        self.ssl_context = ssl_context
         self.ws_server = OneBotWebSocketServer(
-            self.config, self._on_raw_event, self.api_caller)
+            self.config, self._on_raw_event, self.api_caller, ssl_context=ssl_context)
         self._onebot_api = OneBotAPI(self.api_caller)
 
     async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
@@ -568,7 +582,8 @@ def register(ctx):
     # 启动 WebSocket 服务
     _adapter_instance.start()
 
-    ctx.log(f"OneBot 适配器已启动 (ws://{_adapter_instance.config.get('listen_host', '0.0.0.0')}:{_adapter_instance.config.get('listen_port', 6830)})")
+    _scheme = 'wss' if getattr(_adapter_instance, 'ssl_context', None) else 'ws'
+    ctx.log(f"OneBot 适配器已启动 ({_scheme}://{_adapter_instance.config.get('listen_host', '0.0.0.0')}:{_adapter_instance.config.get('listen_port', 6830)})")
 
 
 def unregister():

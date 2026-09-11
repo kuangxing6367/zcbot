@@ -154,7 +154,7 @@ def register(ctx):
 
     # ---- 系统配置（config.yaml 分组读写）----
 
-    _YAML_SECTIONS = ('database', 'onebot', 'web', 'plugin', 'log', 'system', 'security')
+    _YAML_SECTIONS = ('database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system', 'security')
 
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth

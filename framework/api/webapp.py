@@ -934,6 +934,14 @@ class WebServer:
         web_cfg = framework.config.get('web', {})
         self.host = web_cfg.get('host', '0.0.0.0')
         self.port = web_cfg.get('port', 8080)
+        # SSL：与 OneBot WSS 共用 config['ssl']；证书路径支持相对/绝对。
+        # waitress 不支持 TLS，故启用 SSL 时改用 werkzeug（支持 ssl_context）。
+        self.ssl_context = None
+        try:
+            self.ssl_context = framework.build_ssl_context()
+        except Exception as e:
+            logger.error(f"SSL 配置无效，Web 后台回退为 http: {e}")
+        self.scheme = 'https' if self.ssl_context else 'http'
         self._thread = None
         self._server = None
         self._running = False
@@ -943,11 +951,18 @@ class WebServer:
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True, name="web-server")
         self._thread.start()
-        logger.info(f"Web UI 已启动: http://{self.host}:{self.port}")
+        logger.info(f"Web UI 已启动: {self.scheme}://{self.host}:{self.port}")
 
     def _run(self):
         """运行 Web 服务器（保存 server 句柄，供 stop() 真正停止并释放端口）"""
         try:
+            if self.ssl_context is not None:
+                # HTTPS：waitress 不支持 TLS，使用 werkzeug 的 ssl_context
+                from werkzeug.serving import make_server
+                self._server = make_server(self.host, self.port, self.app,
+                                           threaded=True, ssl_context=self.ssl_context)
+                self._server.serve_forever()
+                return
             try:
                 from waitress.server import create_server as waitress_create_server
                 self._server = waitress_create_server(

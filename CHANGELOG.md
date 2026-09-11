@@ -48,6 +48,16 @@
   - `docs/api/` 重组为 **基础参考**（`basic/`：ctx / event / framework / services）与 **进阶扩展**（`advanced/`：扩展点 / 协议适配器）两大块，原有详解完整保留。
   - 新增 `docs/api/advanced/hooks.md`（扩展点完整文档）与 `docs/api/index.md`（API 总览）。
   - 文档站首页（`bot.zgric.top` 宣传页）重写为微内核定位：明确「使用人群 / 使用范围」，参考示例补齐非 IM 场景（纯定时任务、HTTP Webhook 事件源、自写接入端、扩展点切面）。
+- **HTTPS / WSS（SSL 证书）**：新增顶层 `ssl` 配置段（`enabled` / `cert` / `key`）。`cert`/`key` 支持
+  **相对项目根目录**或**绝对路径**；启用后 Web 管理后台走 **https**、OneBot 反向 WS 走 **wss**（共用同一证书）。
+  可在后台「设置 → SSL / TLS」修改（改动需重启生效）。实现：`framework/tls.py` 构建 SSLContext；
+  Web 在启用 SSL 时改用 werkzeug 提供 TLS（waitress 本身不支持 TLS），未启用时行为不变。
+- **WebUI 左侧栏支持自定义显示**：`web.sidebar`（`order` 顺序 / `hidden` 隐藏）控制官方菜单项的显示与顺序；
+  后台新增「设置 → 侧边栏」可视化调整（勾选显示 + 上移/下移），保存后即时生效。
+  插件 `ctx.webui(..., sidebar=True)` 注册的入口仍自动入栏；`/api/menu` 一并返回该配置。
+- **新增原生扩展 CI 构建**：`.github/workflows/build-zcbot-render.yml`，在 GitHub Actions 上构建
+  `image_renderer` 的 Rust 扩展（Windows 出 `zcbot_render.pyd`、Linux 出 `zcbot_render.so`），
+  补上 README 已引用但仓库中缺失的自动构建工作流。
 
 ### 修复
 - **文档站（`bot.zgric.top`）排版错乱**：VitePress `base` 由 `'/zcbot/'`（面向旧的 `kuangxing6367.github.io/zcbot/` 项目页）

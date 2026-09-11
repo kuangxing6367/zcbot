@@ -8,20 +8,9 @@
       </div>
       <el-menu :default-active="activeKey" router :collapse="collapsed" class="nav-menu">
         <template v-if="session.officialSidebar">
-          <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>仪表盘</span></el-menu-item>
-          <el-menu-item index="/marketplace"><el-icon><Shop /></el-icon><span>插件市场</span></el-menu-item>
-          <el-menu-item index="/plugins"><el-icon><Grid /></el-icon><span>插件管理</span></el-menu-item>
-          <el-menu-item index="/commands"><el-icon><ChatDotRound /></el-icon><span>命令管理</span></el-menu-item>
-          <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
-          <el-menu-item index="/groups"><el-icon><Avatar /></el-icon><span>群组管理</span></el-menu-item>
-          <el-menu-item index="/permissions"><el-icon><Key /></el-icon><span>权限管理</span></el-menu-item>
-          <el-menu-item index="/apikeys"><el-icon><Tickets /></el-icon><span>接口令牌</span></el-menu-item>
-          <el-menu-item index="/tasks"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
-          <el-menu-item index="/runtime"><el-icon><DataLine /></el-icon><span>运行状态</span></el-menu-item>
-          <el-menu-item index="/connection"><el-icon><Connection /></el-icon><span>连接设置</span></el-menu-item>
-          <el-menu-item index="/filebrowser"><el-icon><Folder /></el-icon><span>文件浏览</span></el-menu-item>
-          <el-menu-item index="/logs"><el-icon><Document /></el-icon><span>日志中心</span></el-menu-item>
-          <el-menu-item index="/database"><el-icon><Coin /></el-icon><span>数据库</span></el-menu-item>
+          <el-menu-item v-for="it in officialItems" :key="it.key" :index="it.path">
+            <el-icon><component :is="it.icon" /></el-icon><span>{{ it.title }}</span>
+          </el-menu-item>
         </template>
         <el-menu-item v-for="p in pluginSidebarItems" :key="p.plugin_name" :index="'/plugin/' + p.plugin_name">
           <el-icon v-if="!p.icon"><Menu /></el-icon>
@@ -81,6 +70,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { session, api, clearToken } from '../api'
 import { theme, toggleTheme } from '../theme'
+import { OFFICIAL_SIDEBAR_ITEMS } from '../sidebar'
 
 const route = useRoute()
 const router = useRouter()
@@ -95,6 +85,17 @@ const titleMap = {
 }
 const pluginSidebarItems = computed(() => (session.pluginWebUIs || []).filter(p => p.sidebar))
 const aggregatePlugins = computed(() => (session.pluginWebUIs || []).filter(p => !p.sidebar))
+// 官方菜单按自定义配置渲染：hidden 隐藏、order 指定顺序（未列出的按默认次序追加）
+const officialItems = computed(() => {
+  const cfg = session.sidebar || {}
+  const hidden = new Set(cfg.hidden || [])
+  const order = cfg.order || []
+  const items = OFFICIAL_SIDEBAR_ITEMS.filter(it => !hidden.has(it.key))
+  if (!order.length) return items
+  const pos = {}
+  order.forEach((k, i) => { pos[k] = i })
+  return items.slice().sort((a, b) => (pos[a.key] ?? 999) - (pos[b.key] ?? 999))
+})
 
 const activeKey = computed(() => {
   const seg = route.path.replace(/^\//, '').split('/')
@@ -124,6 +125,7 @@ async function loadWebUIs() {
   if (w && w.code === 0) {
     session.pluginWebUIs = w.data.plugins || []
     session.officialSidebar = w.data.official_sidebar !== false
+    session.sidebar = w.data.sidebar || { order: [], hidden: [] }
   }
 }
 

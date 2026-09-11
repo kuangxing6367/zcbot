@@ -489,6 +489,16 @@ class Framework:
         out = buf.getvalue()
         return out if out.strip() else f"[{name}] 已执行"
 
+    def build_ssl_context(self):
+        """构建服务端 SSLContext（Web HTTPS 与 OneBot WSS 共用 config['ssl']）。
+
+        cert/key 支持绝对路径或相对项目根目录（config.yaml 所在目录）。
+        未启用 ssl 时返回 None；已启用但证书缺失会抛异常（调用方负责降级/报错）。
+        """
+        from framework.tls import build_server_ssl_context
+        return build_server_ssl_context(
+            self.config.get('ssl', {}), os.path.dirname(self.config_path))
+
     def _load_core_plugins(self):
         """加载官方插件（core_plugins/ 目录）"""
         core_plugins_dir = os.path.join(
