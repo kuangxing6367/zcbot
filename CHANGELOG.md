@@ -25,10 +25,40 @@
 
 ---
 
+## v1.4.0（2026-09-11）
+
+> 主题：**HTTPS/WSS 与可自定义界面**——开启 HTTPS/WSS（SSL 证书路径可配，相对/绝对），
+> WebUI 左侧栏支持自定义显示，双核心补上跨进程终端，并让原生图片渲染扩展可在 CI 构建。
+
+### 新增
+- **HTTPS / WSS（SSL 证书）**：新增顶层 `ssl` 配置段（`enabled` / `cert` / `key`）。`cert`/`key` 支持
+  **相对项目根目录**或**绝对路径**；启用后 Web 管理后台走 **https**、OneBot 反向 WS 走 **wss**（共用同一证书）。
+  可在后台「设置 → SSL / TLS」修改（改动需重启生效）。实现：`framework/tls.py` 构建 SSLContext；
+  Web 在启用 SSL 时改用 werkzeug 提供 TLS（waitress 本身不支持 TLS），未启用时行为不变。
+- **WebUI 左侧栏支持自定义显示**：`web.sidebar`（`order` 顺序 / `hidden` 隐藏）控制官方菜单项的显示与顺序；
+  后台新增「设置 → 侧边栏」可视化调整（勾选显示 + 上移/下移），保存后即时生效。
+  插件 `ctx.webui(..., sidebar=True)` 注册的入口仍自动入栏；`/api/menu` 一并返回该配置。
+- **原生扩展 CI 构建**：`.github/workflows/build-zcbot-render.yml`，在 GitHub Actions 上构建
+  `image_renderer` 的 Rust 扩展（Windows 出 `zcbot_render.pyd`、Linux 出 `zcbot_render.so`），
+  补上 README 已引用但仓库中缺失的自动构建工作流；产物已回填 `native/bin/`，win64 `.pyd` 经 Python 3.13 实测可加载并出图。
+- **文档站首页（`bot.zgric.top` 宣传页）重写**为微内核定位：明确「使用人群 / 使用范围」，
+  参考示例补齐非 IM 场景（纯定时任务、HTTP Webhook 事件源、自写接入端、扩展点切面）。
+
+### 修复
+- **文档站（`bot.zgric.top`）排版错乱**：VitePress `base` 由 `'/zcbot/'`（面向旧的 `kuangxing6367.github.io/zcbot/` 项目页）
+  改为 `'/'`。站点已切到自定义域名 `bot.zgric.top`（根路径托管），沿用旧的 `/zcbot/` 前缀会让 css/js 与站内链接
+  全部指向 `bot.zgric.top/zcbot/...` 而 404，页面因此失去样式；改为根路径后恢复正常。
+- **双进程终端交互修复（跨进程终端）**：核心进程此前不走 `fw.start()`，导致双核心下**终端从未启动**。
+  现在核心进程显式注册并启动终端；终端命令按 `target`（`core` / `host` / `both`）路由，
+  `plugins` / `enable` / `disable` / `reload` / `tasks` 经 IPC `terminal.exec` 转发到宿主进程执行，
+  `status` / `plugins` 两侧合并展示；单进程（`standard`）行为不变。见[双核心](docs/advanced/dual-core.md) 5.3 节。
+
+---
+
 ## v1.3.8（2026-09-11）
 
 > 主题：**微内核化（Microkernel）+ 可插拔侧边栏**——内核正式确立「最小核心 + 扩展点」契约，
-> WebUI 侧边栏开放给插件注册，并修复 GitHub Pages 部署下的排版错乱。
+> WebUI 侧边栏开放给插件注册。
 
 ### 新增
 - **扩展点系统（HookRegistry，`framework/hooks.py`）**：微内核核心契约。内核在运行流程预留 12 个标准扩展点
@@ -47,28 +77,10 @@
   - README 从「插件化框架」升级为「微内核」叙事，新增「扩展点（Extension Points）」章节，保留全部原有详解（快速开始、权限、API Key、目录结构、双核心等）。
   - `docs/api/` 重组为 **基础参考**（`basic/`：ctx / event / framework / services）与 **进阶扩展**（`advanced/`：扩展点 / 协议适配器）两大块，原有详解完整保留。
   - 新增 `docs/api/advanced/hooks.md`（扩展点完整文档）与 `docs/api/index.md`（API 总览）。
-  - 文档站首页（`bot.zgric.top` 宣传页）重写为微内核定位：明确「使用人群 / 使用范围」，参考示例补齐非 IM 场景（纯定时任务、HTTP Webhook 事件源、自写接入端、扩展点切面）。
-- **HTTPS / WSS（SSL 证书）**：新增顶层 `ssl` 配置段（`enabled` / `cert` / `key`）。`cert`/`key` 支持
-  **相对项目根目录**或**绝对路径**；启用后 Web 管理后台走 **https**、OneBot 反向 WS 走 **wss**（共用同一证书）。
-  可在后台「设置 → SSL / TLS」修改（改动需重启生效）。实现：`framework/tls.py` 构建 SSLContext；
-  Web 在启用 SSL 时改用 werkzeug 提供 TLS（waitress 本身不支持 TLS），未启用时行为不变。
-- **WebUI 左侧栏支持自定义显示**：`web.sidebar`（`order` 顺序 / `hidden` 隐藏）控制官方菜单项的显示与顺序；
-  后台新增「设置 → 侧边栏」可视化调整（勾选显示 + 上移/下移），保存后即时生效。
-  插件 `ctx.webui(..., sidebar=True)` 注册的入口仍自动入栏；`/api/menu` 一并返回该配置。
-- **新增原生扩展 CI 构建**：`.github/workflows/build-zcbot-render.yml`，在 GitHub Actions 上构建
-  `image_renderer` 的 Rust 扩展（Windows 出 `zcbot_render.pyd`、Linux 出 `zcbot_render.so`），
-  补上 README 已引用但仓库中缺失的自动构建工作流。
 
 ### 修复
-- **文档站（`bot.zgric.top`）排版错乱**：VitePress `base` 由 `'/zcbot/'`（面向旧的 `kuangxing6367.github.io/zcbot/` 项目页）
-  改为 `'/'`。站点已切到自定义域名 `bot.zgric.top`（根路径托管），沿用旧的 `/zcbot/` 前缀会让 css/js 与站内链接
-  全部指向 `bot.zgric.top/zcbot/...` 而 404，页面因此失去样式；改为根路径后恢复正常。
 - **管理后台前端（WebUI）构建改用相对路径**：`base` 由 `'/'` 改为 `'./'`，logo 采用 `import.meta.env.BASE_URL` 拼接，
   使 `web/` 产物部署到任意子路径时都不会因绝对路径 `/js/`、`/css/` 404 而丢样式。
-- **双进程终端交互修复（跨进程终端）**：核心进程此前不走 `fw.start()`，导致双核心下**终端从未启动**。
-  现在核心进程显式注册并启动终端；终端命令按 `target`（`core` / `host` / `both`）路由，
-  `plugins` / `enable` / `disable` / `reload` / `tasks` 经 IPC `terminal.exec` 转发到宿主进程执行，
-  `status` / `plugins` 两侧合并展示；单进程（`standard`）行为不变。见[双核心](docs/advanced/dual-core.md) 5.3 节。
 
 ---
 
