@@ -6,21 +6,39 @@
           <template #header><div class="card-head">全局设置</div></template>
           <el-tabs v-model="activeTab">
             <el-tab-pane v-for="g in SETTING_GROUPS" :key="g.key" :label="g.title" :name="g.key">
-              <el-form label-width="180px">
-                <el-form-item v-for="(v, k) in yamlCfg[g.key]" :key="k" :label="(SETTING_LABELS[g.key] || {})[k] || k">
-                  <el-switch v-if="typeof v === 'boolean'" v-model="yamlCfg[g.key][k]" />
-                  <el-input-number v-else-if="typeof v === 'number'" v-model="yamlCfg[g.key][k]" :controls="false" style="width:100%" />
-                  <el-input v-else-if="v === null || v === undefined" v-model="yamlCfg[g.key][k]" />
-                  <el-input v-else-if="typeof v === 'object'" v-model="yamlCfg[g.key][k]" type="textarea" :rows="3" class="mono"
-                            :model-value="jsonText(g.key, k)"
-                            @update:model-value="parseJson(g.key, k, $event)" />
-                  <el-input v-else v-model="yamlCfg[g.key][k]"
-                            :type="(k === 'access_token' || k === 'password' || k === 'secret_key') ? 'password' : 'text'" show-password />
-                </el-form-item>
-              </el-form>
-              <el-alert v-if="session.admin?.role !== 'super'" type="warning" :closable="false" title="仅超管可修改配置" style="margin-bottom:12px" />
-              <el-button v-if="session.admin?.role === 'super'" type="primary" @click="saveSection">保存 {{ activeTabTitle }}</el-button>
-              <span class="dim small ml">部分字段（端口、地址等）需重启框架生效</span>
+              <template v-if="g.key === 'sidebar'">
+                <div class="dim small mb">勾选要在左侧栏显示的官方菜单，用「上移 / 下移」调整顺序（「设置」固定在底部）。保存后立即生效。</div>
+                <div v-for="(it, idx) in sidebarItems" :key="it.key" class="sb-row">
+                  <el-switch v-model="it.visible" />
+                  <span class="sb-title">{{ it.title }}</span>
+                  <span class="mono dim small">{{ it.key }}</span>
+                  <span class="sb-spacer" />
+                  <el-button size="small" :disabled="idx === 0" @click="moveItem(idx, -1)">上移</el-button>
+                  <el-button size="small" :disabled="idx === sidebarItems.length - 1" @click="moveItem(idx, 1)">下移</el-button>
+                </div>
+                <el-alert v-if="session.admin?.role !== 'super'" type="warning" :closable="false" title="仅超管可修改配置" style="margin-bottom:12px" />
+                <div class="mt">
+                  <el-button v-if="session.admin?.role === 'super'" type="primary" @click="saveSidebar">保存侧边栏</el-button>
+                  <el-button v-if="session.admin?.role === 'super'" @click="resetSidebar">恢复默认</el-button>
+                </div>
+              </template>
+              <template v-else>
+                <el-form label-width="180px">
+                  <el-form-item v-for="(v, k) in yamlCfg[g.key]" :key="k" :label="(SETTING_LABELS[g.key] || {})[k] || k">
+                    <el-switch v-if="typeof v === 'boolean'" v-model="yamlCfg[g.key][k]" />
+                    <el-input-number v-else-if="typeof v === 'number'" v-model="yamlCfg[g.key][k]" :controls="false" style="width:100%" />
+                    <el-input v-else-if="v === null || v === undefined" v-model="yamlCfg[g.key][k]" />
+                    <el-input v-else-if="typeof v === 'object'" v-model="yamlCfg[g.key][k]" type="textarea" :rows="3" class="mono"
+                              :model-value="jsonText(g.key, k)"
+                              @update:model-value="parseJson(g.key, k, $event)" />
+                    <el-input v-else v-model="yamlCfg[g.key][k]"
+                              :type="(k === 'access_token' || k === 'password' || k === 'secret_key') ? 'password' : 'text'" show-password />
+                  </el-form-item>
+                </el-form>
+                <el-alert v-if="session.admin?.role !== 'super'" type="warning" :closable="false" title="仅超管可修改配置" style="margin-bottom:12px" />
+                <el-button v-if="session.admin?.role === 'super'" type="primary" @click="saveSection">保存 {{ activeTabTitle }}</el-button>
+                <span class="dim small ml">部分字段（端口、SSL 证书等）需重启框架生效；证书路径支持绝对路径或相对项目根目录</span>
+              </template>
             </el-tab-pane>
           </el-tabs>
         </el-card>
@@ -119,9 +137,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, apiCall, session, fmtTime } from '../api'
+import { OFFICIAL_SIDEBAR_ITEMS } from '../sidebar'
 
 const SETTING_GROUPS = [
   { key: 'web', title: 'Web 服务' },
+  { key: 'ssl', title: 'SSL / TLS' },
+  { key: 'sidebar', title: '侧边栏' },
   { key: 'onebot', title: 'OneBot 连接' },
   { key: 'database', title: '数据库' },
   { key: 'log', title: '日志' },
@@ -130,6 +151,7 @@ const SETTING_GROUPS = [
 ]
 const SETTING_LABELS = {
   web: { host: '监听地址', port: '监听端口', secret_key: 'Secret Key', session_timeout: '会话超时（秒）', official_sidebar: '显示官方侧边栏' },
+  ssl: { enabled: '启用 HTTPS / WSS', cert: '证书路径（cert）', key: '私钥路径（key）' },
   onebot: { listen_host: '监听地址', listen_port: '监听端口', access_token: 'Access Token' },
   database: { type: '数据库类型', path: '数据库路径', host: '主机', port: '端口', user: '用户名', password: '密码', database: '库名' },
   log: { level: '日志级别', file: '日志文件', retention_days: '日志保留（天）', log_raw_message: '记录原始消息', log_sent_message: '记录发送消息' },
@@ -140,6 +162,7 @@ const SETTING_LABELS = {
 const activeTab = ref('web')
 const activeTabTitle = computed(() => SETTING_GROUPS.find(g => g.key === activeTab.value)?.title || '')
 const yamlCfg = ref({})
+const sidebarItems = ref([])
 const adminList = ref([])
 const pwd = ref({ old: '', new: '' })
 const fwInfo = ref(null)
@@ -156,6 +179,40 @@ function parseJson(group, key, text) {
   catch (e) { /* 保持原值 */ }
 }
 
+function buildSidebarItems() {
+  const cfg = (yamlCfg.value.web && yamlCfg.value.web.sidebar) || {}
+  const hidden = new Set(cfg.hidden || [])
+  const order = cfg.order || []
+  const pos = {}
+  order.forEach((k, i) => { pos[k] = i })
+  const items = OFFICIAL_SIDEBAR_ITEMS.slice()
+    .sort((a, b) => (pos[a.key] ?? 999) - (pos[b.key] ?? 999))
+  sidebarItems.value = items.map(it => ({ key: it.key, title: it.title, visible: !hidden.has(it.key) }))
+}
+
+function moveItem(idx, dir) {
+  const arr = sidebarItems.value
+  const j = idx + dir
+  if (j < 0 || j >= arr.length) return
+  const tmp = arr[idx]; arr[idx] = arr[j]; arr[j] = tmp
+}
+
+async function saveSidebar() {
+  const order = sidebarItems.value.map(it => it.key)
+  const hidden = sidebarItems.value.filter(it => !it.visible).map(it => it.key)
+  const r = await apiCall('/api/config/yaml/web', { method: 'PUT', body: { data: { sidebar: { order, hidden } } } })
+  if (!r) return
+  ElMessage.success(r.msg)
+  // 更新共享状态：左侧栏立即按新配置重绘，无需刷新页面
+  session.sidebar = { order, hidden }
+  yamlCfg.value.web = yamlCfg.value.web || {}
+  yamlCfg.value.web.sidebar = { order, hidden }
+}
+
+function resetSidebar() {
+  sidebarItems.value = OFFICIAL_SIDEBAR_ITEMS.map(it => ({ key: it.key, title: it.title, visible: true }))
+}
+
 async function load() {
   const [admins, yamlRes] = await Promise.all([
     api('/api/admins').catch(() => null),
@@ -163,6 +220,7 @@ async function load() {
   ])
   adminList.value = (admins && admins.data) || []
   yamlCfg.value = (yamlRes && yamlRes.data) || {}
+  buildSidebarItems()
 }
 
 async function saveSection() {
@@ -212,4 +270,7 @@ onMounted(load)
 <style scoped>
 .card-head { display: flex; align-items: center; justify-content: space-between; }
 .ml { margin-left: 8px; }
+.sb-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--el-border-color); }
+.sb-title { min-width: 84px; }
+.sb-spacer { flex: 1; }
 </style>

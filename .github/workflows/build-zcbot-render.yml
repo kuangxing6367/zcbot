@@ -1,0 +1,57 @@
+name: Build zcbot_render native extension
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'core_plugins/image_renderer/native/**'
+      - '.github/workflows/build-zcbot-render.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: zcbot_render-win64
+            produced: zcbot_render.dll
+            renamed: zcbot_render.pyd
+          - os: ubuntu-latest
+            artifact: zcbot_render-linux-x86_64
+            produced: libzcbot_render.so
+            renamed: zcbot_render.so
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # abi3-py39 稳定 ABI：一份扩展兼容 Python 3.9+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build (release)
+        working-directory: core_plugins/image_renderer/native
+        run: cargo build --release
+
+      - name: Prepare artifact
+        shell: bash
+        working-directory: core_plugins/image_renderer/native
+        run: |
+          mkdir -p dist
+          cp "target/release/${{ matrix.produced }}" "dist/${{ matrix.renamed }}"
+          ls -la dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: core_plugins/image_renderer/native/dist/*
+          if-no-files-found: error

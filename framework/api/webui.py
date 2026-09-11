@@ -11,17 +11,18 @@ import yaml
 logger = logging.getLogger('zcbot')
 
 
-def _read_web_official_sidebar(framework, project_root) -> bool:
-    """读取 config.yaml 中 web.official_sidebar（直读文件，保存后即时生效，无需重启）"""
+def _read_web_section(framework, project_root) -> dict:
+    """直读 config.yaml 的 web 段（保存后即时生效，无需重启）"""
     path = getattr(framework, 'config_path', None) or os.path.join(project_root(), 'config.yaml')
     try:
         if os.path.isfile(path):
             with open(path, 'r', encoding='utf-8') as f:
                 doc = yaml.safe_load(f) or {}
-            return bool((doc.get('web') or {}).get('official_sidebar', True))
+            web = doc.get('web')
+            return web if isinstance(web, dict) else {}
     except Exception:
         pass
-    return True
+    return {}
 
 
 def register(ctx):
@@ -33,10 +34,19 @@ def register(ctx):
     @app.route('/api/menu', methods=['GET'])
     @require_auth
     def get_menu():
-        """前端侧边栏菜单：官方侧边栏开关 + 插件注册的侧边栏项/聚合项"""
-        official = _read_web_official_sidebar(framework, project_root)
-        plugins = framework.plugin_loader.get_plugin_webuis()
-        return jsonify({'code': 0, 'data': {'official_sidebar': official, 'plugins': plugins}})
+        """前端侧边栏菜单：官方侧边栏开关 / 自定义（顺序+隐藏）+ 插件注册项"""
+        web = _read_web_section(framework, project_root)
+        sidebar = web.get('sidebar')
+        if not isinstance(sidebar, dict):
+            sidebar = {}
+        return jsonify({'code': 0, 'data': {
+            'official_sidebar': bool(web.get('official_sidebar', True)),
+            'sidebar': {
+                'order': sidebar.get('order') or [],
+                'hidden': sidebar.get('hidden') or [],
+            },
+            'plugins': framework.plugin_loader.get_plugin_webuis(),
+        }})
 
     @app.route('/api/plugin_webuis', methods=['GET'])
     @require_auth

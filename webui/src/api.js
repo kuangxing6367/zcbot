@@ -56,6 +56,7 @@ export const session = reactive({
   admin: null,
   pluginWebUIs: [],
   officialSidebar: true,
+  sidebar: { order: [], hidden: [] },
   frameworkVersion: '',
 })
 

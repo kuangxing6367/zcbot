@@ -86,9 +86,32 @@ web:
   port: 8080              # 监听端口
   session_timeout: 3600   # 登录会话超时时长（秒），同时也是会话 Token 有效期
   enabled: true
+  official_sidebar: true  # 是否显示官方默认侧边栏菜单
+  sidebar:                # 自定义左侧栏（也可在后台「设置 → 侧边栏」调整）
+    order: []             # 官方菜单显示顺序（键名，留空用默认顺序）
+    hidden: []            # 隐藏的官方菜单项（键名）
 ```
 
 后台 REST 接口（`/api/**`）与后台页面**共用这个端口**；另有独立的 `http_api` 插件（默认 1145、默认关闭）用于对外集成，两者区别见 README「接口令牌」一节。
+
+左侧栏支持自定义显示：官方项用 `web.sidebar`（或后台「设置 → 侧边栏」）选择显示/隐藏并调整顺序；
+插件用 `ctx.webui(..., sidebar=True)` 注册的入口会自动出现在侧边栏。
+
+## SSL / TLS（HTTPS / WSS）
+
+开启后 **Web 管理后台走 https、OneBot 反向 WS 走 wss**（两者共用同一份证书）：
+
+```yaml
+ssl:
+  enabled: false
+  cert: ""          # 证书链文件；支持绝对路径，或相对项目根目录（如 certs/fullchain.pem）
+  key: ""           # 私钥文件；同上
+```
+
+- 证书路径支持**相对**（相对 `config.yaml` 所在目录）与**绝对**两种写法。
+- 也可在后台「设置 → SSL / TLS」中修改并保存；**改动需重启框架生效**。
+- 后台页面按当前协议自动显示接入地址（https → `wss://`），见「连接设置」页。
+- 启用 SSL 后 Web 后台由 werkzeug 提供 TLS（waitress 本身不支持 TLS）；未启用时仍用 waitress。
 
 ## 独立对外 HTTP API（来自 http_api，默认关闭）
 
