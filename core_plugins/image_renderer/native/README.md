@@ -10,9 +10,32 @@ native/
 ├── Cargo.toml          # 工程配置（pyo3 + image + fontdue）
 ├── src/lib.rs          # render_card / render_text 实现
 └── bin/                # 编译产物（插件按平台自动加载）
-    ├── win64/zcbot_render.pyd     # Windows x64
-    └── linux64/zcbot_render.so    # Linux x64
+    ├── win64/zcbot_render.pyd         # Windows x64
+    ├── win32/zcbot_render.pyd         # Windows x86 (32 位)
+    ├── linux-x86_64/zcbot_render.so   # Linux x64
+    ├── linux-aarch64/zcbot_render.so  # Linux ARM64
+    ├── linux-i686/zcbot_render.so     # Linux x32 (i686)
+    ├── linux-armv7/zcbot_render.so    # Linux ARMv7 (armhf)
+    └── linux-loongarch64/zcbot_render.so  # 龙芯 LoongArch64
 ```
+
+## 支持平台
+
+| 平台目录 | 架构 | 构建方式 | ABI |
+|---|---|---|---|
+| `win64` | Windows x86_64 | 原生 runner（MSVC） | `.pyd` |
+| `win32` | Windows i686（32 位） | 原生 runner（MSVC，x86 Python 提供 python3.lib） | `.pyd` |
+| `linux-x86_64` | Linux x86_64 | 原生 runner（GNU） | `.so` |
+| `linux-aarch64` | Linux ARM64 | 原生 runner（`ubuntu-24.04-arm`） | `.so` |
+| `linux-i686` | Linux x32 | 交叉编译（cargo-zigbuild，glibc 2.17） | `.so` |
+| `linux-armv7` | Linux ARMv7 (armhf) | 交叉编译（cargo-zigbuild，glibc 2.17） | `.so` |
+| `linux-loongarch64` | 龙芯 LoongArch64 | 交叉编译（cargo-zigbuild，glibc 2.36） | `.so` |
+
+> 全部为 abi3 稳定 ABI，一份产物兼容 Python 3.9+。产物由仓库的
+> `.github/workflows/build-zcbot-render.yml` 自动构建并通过 ELF/PE 架构自校验；
+> 本地无对应工具链时无需手工编译，直接 `gh run download` 取回放入对应目录即可。
+> 插件加载器（`core_plugins/image_renderer/main.py`）按 `sys.platform` / `platform.machine()` /
+> Python 指针宽度自动选择对应目录，未命中也仅记 DEBUG 并回退 PIL。
 
 ## 函数签名
 
