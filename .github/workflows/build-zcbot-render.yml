@@ -29,21 +29,27 @@ jobs:
             target: x86_64-pc-windows-msvc
             produced: zcbot_render.dll
             renamed: zcbot_render.pyd
+            setup_python: 'true'
+            python_arch: x64
           - platform: win32
             os: windows-latest
             target: i686-pc-windows-msvc
             produced: zcbot_render.dll
             renamed: zcbot_render.pyd
+            setup_python: 'true'
+            python_arch: x86
           - platform: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             produced: libzcbot_render.so
             renamed: zcbot_render.so
+            setup_python: 'false'
           - platform: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             produced: libzcbot_render.so
             renamed: zcbot_render.so
+            setup_python: 'false'
     steps:
       - uses: actions/checkout@v4
 
@@ -56,12 +62,17 @@ jobs:
           workspaces: core_plugins/image_renderer/native
           key: ${{ matrix.platform }}
 
-      # abi3 扩展不需要 Python 解释器；显式跳过可避免 32/64 位不一致
-      # （i686 目标遇上 runner 的 64 位 Python 会被 pyo3 拒绝）
+      # Windows 的 cdylib 必须显式链接 python3.lib（PE 无法像 ELF 那样运行时解析），
+      # 因此按目标位宽提供对应架构的 Python：win32 用 x86 版以拿到 32 位 python3.lib，
+      # 让 pyo3 自动探测并链接；Linux 无此约束，沿用系统 python 即可。
+      - uses: actions/setup-python@v5
+        if: matrix.setup_python == 'true'
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.python_arch }}
+
       - name: Build (release)
         working-directory: core_plugins/image_renderer/native
-        env:
-          PYO3_NO_PYTHON: '1'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare artifact
