@@ -56,8 +56,12 @@ jobs:
           workspaces: core_plugins/image_renderer/native
           key: ${{ matrix.platform }}
 
+      # abi3 扩展不需要 Python 解释器；显式跳过可避免 32/64 位不一致
+      # （i686 目标遇上 runner 的 64 位 Python 会被 pyo3 拒绝）
       - name: Build (release)
         working-directory: core_plugins/image_renderer/native
+        env:
+          PYO3_NO_PYTHON: '1'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare artifact
@@ -110,11 +114,9 @@ jobs:
           workspaces: core_plugins/image_renderer/native
           key: ${{ matrix.platform }}
 
-      # pip 包会连带装上 ziglang（自带 zig 二进制），无需系统工具链
-      - name: Install cargo-zigbuild + zig
-        run: |
-          pip install cargo-zigbuild
-          cargo zigbuild --version
+      # pip 包会连带装上 ziglang（cargo-zigbuild 通过该包内置的 zig 二进制链接，无需把 zig 放到 PATH）
+      - name: Install cargo-zigbuild
+        run: pip install cargo-zigbuild
 
       - name: Build (release, cross via zig)
         working-directory: core_plugins/image_renderer/native
@@ -127,9 +129,12 @@ jobs:
       - name: Verify ELF architecture
         working-directory: core_plugins/image_renderer/native
         run: |
-          python - "${{ matrix.target }}" "target/${{ matrix.target }}/release/libzcbot_render.so" <<'PY'
+          SO=$(find target -type f -name 'libzcbot_render.so' -path '*/release/*' | head -1)
+          echo "built: $SO"
+          test -n "$SO"
+          python - "$SO" "${{ matrix.target }}" <<'PY'
           import struct, sys
-          expect_arch, path = sys.argv[1], sys.argv[2]
+          path, expect_arch = sys.argv[1], sys.argv[2]
           d = open(path, 'rb').read()
           assert d[:4] == b'\x7fELF', 'not an ELF file'
           machines = {3: 'i686', 40: 'armv7', 183: 'aarch64', 258: 'loongarch64', 62: 'x86_64'}
@@ -146,7 +151,8 @@ jobs:
         run: |
           set -e
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/libzcbot_render.so" dist/zcbot_render.so
+          SO=$(find target -type f -name 'libzcbot_render.so' -path '*/release/*' | head -1)
+          cp "$SO" dist/zcbot_render.so
           ls -la dist
 
       - uses: actions/upload-artifact@v4
