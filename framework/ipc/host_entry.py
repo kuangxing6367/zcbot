@@ -38,6 +38,11 @@ def host_entry(config_path, address, token, core_pid):
     fw.services.register('protocol_adapter', adapter)
     fw.services.register('api_caller', adapter)
 
+    # 终端命令远程执行：核心进程的终端把宿主侧命令（plugins/tasks 等）转发过来执行
+    async def _terminal_exec(name, args=''):
+        return await fw.terminal_exec(name, args)
+    client.register('terminal.exec', _terminal_exec)
+
     # 远程 REST 路由（务实版）：插件 ctx.register_api 在宿主侧注册，
     # 核心 Flask 请求经 http.dispatch 转发回来执行
     from framework.ipc.remote_route import RemoteRouteRegistry

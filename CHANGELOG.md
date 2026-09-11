@@ -55,6 +55,10 @@
   全部指向 `bot.zgric.top/zcbot/...` 而 404，页面因此失去样式；改为根路径后恢复正常。
 - **管理后台前端（WebUI）构建改用相对路径**：`base` 由 `'/'` 改为 `'./'`，logo 采用 `import.meta.env.BASE_URL` 拼接，
   使 `web/` 产物部署到任意子路径时都不会因绝对路径 `/js/`、`/css/` 404 而丢样式。
+- **双进程终端交互修复（跨进程终端）**：核心进程此前不走 `fw.start()`，导致双核心下**终端从未启动**。
+  现在核心进程显式注册并启动终端；终端命令按 `target`（`core` / `host` / `both`）路由，
+  `plugins` / `enable` / `disable` / `reload` / `tasks` 经 IPC `terminal.exec` 转发到宿主进程执行，
+  `status` / `plugins` 两侧合并展示；单进程（`standard`）行为不变。见[双核心](docs/advanced/dual-core.md) 5.3 节。
 
 ---
 

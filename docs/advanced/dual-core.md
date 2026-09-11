@@ -97,6 +97,28 @@
 - **远程 REST 路由**：宿主侧 `ctx.register_api` 注册的路由，核心 Flask 挂远程 stub，请求经 `http.dispatch` 转发回宿主执行。
 - **日志合并**：宿主日志经 IPC `log` 事件推到核心 `log_broker`，WebUI 可见。
 
+### 5.3 终端命令转发（core → host）
+
+终端输入只在**核心进程**启动（它是前台、占控制台；宿主子进程无交互 stdin，避免两个进程抢控制台）。
+但用户插件与调度器在**宿主进程**，所以命令按归属路由：
+
+- 每条终端命令带一个 `target`：`core`（默认，本地执行）/ `host`（转发宿主执行）/ `both`（两侧都跑，合并视图）。
+- 核心终端遇到 `host` 命令时，经 `IpcServer.arequest_host('terminal.exec', {name, args})` 转发；
+  宿主侧 `host_entry` 注册 `terminal.exec`，执行命令并把 `print` 输出重定向捕获后回传。
+- 归属为宿主的命令：`plugins`（列出插件）、`enable` / `disable` / `reload`（插件管理）、`tasks`（调度器）；
+  `status`、`plugins` 标为 `both`，一次看全两侧视图。
+
+```text
+> plugins
+--- 核心进程 ---
+已加载插件 (1 个): onebot_adapter ...
+--- 宿主进程 ---
+已加载插件 (3 个): session / scheduler / 你的业务插件 ...
+```
+
+单进程模式（`role=standard`）没有下游进程，所有命令一律本地执行，行为与旧版完全一致。
+`help` 会在宿主侧命令后标注 `[宿主进程]` / `[核心+宿主]`。
+
 ## 6. 生命周期与监督
 
 - 入口 `main.py`：开启双进程时走 `CoreRuntime(config_path).run()`，否则单进程 `asyncio.run(amain())`。
