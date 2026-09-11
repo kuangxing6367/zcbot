@@ -1790,6 +1790,12 @@ class PluginLoader:
         except Exception as e:
             logger.warning(f"[{plugin_name}] 清理原始消息处理器失败: {e}")
 
+        # 清理扩展点（hook）处理器，避免卸载后残留空引用
+        try:
+            self.framework.hooks.clear_plugin(plugin_name)
+        except Exception as e:
+            logger.warning(f"[{plugin_name}] 清理扩展点失败: {e}")
+
         # 清理 sys.modules：删除该插件目录下的所有模块（点分层级名/下划线别名/短名
         # 指向同一模块对象，按 __file__ 一次清净，避免热重载污染）
         self._purge_plugin_modules(
@@ -2043,6 +2049,7 @@ class PluginLoader:
                         'entry': w.get('entry', 'index.html'),
                         'icon': w.get('icon'),
                         'order': w.get('order', 50),
+                        'sidebar': bool(w.get('sidebar', False)),
                     })
         result.sort(key=lambda x: x['order'])
         return result

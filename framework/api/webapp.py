@@ -61,6 +61,7 @@ def create_web_app(framework) -> Flask:
     :param framework: Framework 实例
     """
     app = Flask(__name__, static_folder=None)
+    app._framework = framework
     web_cfg = framework.config.get('web', {})
 
     db = framework.db
@@ -180,6 +181,35 @@ def create_web_app(framework) -> Flask:
             from flask import redirect
             return redirect('/reset', code=302)
         return None
+
+    # ---- 扩展点：Web 请求前后（插件可在此做鉴权增强/审计/改写响应）----
+    @app.before_request
+    def _hook_before_request():
+        """请求前扩展点：handler 可返回 Flask Response 以短路请求。"""
+        fw = getattr(app, '_framework', None)
+        hooks = getattr(fw, 'hooks', None) if fw else None
+        if hooks is None:
+            return None
+        try:
+            results = hooks.trigger_sync('http.before_request', request)
+            for r in (results or []):
+                if hasattr(r, 'status_code'):   # 形如 Flask Response
+                    return r
+        except Exception as e:
+            logger.warning(f"http.before_request 扩展点异常: {e}")
+        return None
+
+    @app.after_request
+    def _hook_after_request(resp):
+        """请求后扩展点：可读取/改写响应，必须返回响应对象。"""
+        fw = getattr(app, '_framework', None)
+        hooks = getattr(fw, 'hooks', None) if fw else None
+        if hooks is not None:
+            try:
+                hooks.trigger_sync('http.after_request', request, resp)
+            except Exception as e:
+                logger.warning(f"http.after_request 扩展点异常: {e}")
+        return resp
 
     # ---- 工具函数 ----
 

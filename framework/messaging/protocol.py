@@ -53,22 +53,49 @@ class ProtocolAdapter(ABC):
 
     async def acall(self, action: str, bot: str = None, **params) -> dict:
         """异步动作调用（默认转发到 call_api）"""
-        return await self.call_api(action, bot, **params)
+        fw = getattr(self, 'framework', None)
+        if fw is not None and getattr(fw, 'hooks', None) is not None:
+            try:
+                await fw.hooks.trigger_async(
+                    HookPoints.ACTION_BEFORE, action, params, bot)
+            except Exception as e:
+                logger.error(f"action.before 扩展点异常: {e}")
+        result = await self.call_api(action, bot, **params)
+        if fw is not None and getattr(fw, 'hooks', None) is not None:
+            try:
+                await fw.hooks.trigger_async(
+                    HookPoints.ACTION_AFTER, action, params, bot, result)
+            except Exception as e:
+                logger.error(f"action.after 扩展点异常: {e}")
+        return result
 
     def call(self, action: str, bot: str = None, **params) -> dict:
         """同步动作调用（供 Web/executor 线程使用，内部桥接到主事件循环）"""
+        fw = getattr(self, 'framework', None)
+        if fw is not None and getattr(fw, 'hooks', None) is not None:
+            try:
+                fw.hooks.trigger_sync(HookPoints.ACTION_BEFORE, action, params, bot)
+            except Exception as e:
+                logger.error(f"action.before 扩展点异常: {e}")
         coro = self.call_api(action, bot, **params)
-        loop = getattr(getattr(self, 'framework', None), 'loop', None)
+        loop = getattr(fw, 'loop', None) if fw else None
         if loop is not None and loop.is_running():
             try:
-                return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=15)
+                result = asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=15)
             except Exception as e:
-                return {"status": "failed", "retcode": -3, "msg": str(e)}
+                result = {"status": "failed", "retcode": -3, "msg": str(e)}
         # 没有可复用的运行循环时，在本线程临时运行（极少路径）
-        try:
-            return asyncio.run(coro)
-        except Exception as e:
-            return {"status": "failed", "retcode": -3, "msg": str(e)}
+        else:
+            try:
+                result = asyncio.run(coro)
+            except Exception as e:
+                result = {"status": "failed", "retcode": -3, "msg": str(e)}
+        if fw is not None and getattr(fw, 'hooks', None) is not None:
+            try:
+                fw.hooks.trigger_sync(HookPoints.ACTION_AFTER, action, params, bot, result)
+            except Exception as e:
+                logger.error(f"action.after 扩展点异常: {e}")
+        return result
 
     # ─────────────────────────────────────────────────────────────
     # 协议中立的"主动发送一条文本"能力

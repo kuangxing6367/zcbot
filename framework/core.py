@@ -26,6 +26,7 @@ from framework.messaging.event_bus import EventBus
 from framework.log_broker import log_broker, FrameworkLogHandler
 from framework.messaging.protocol import ServiceRegistry, ProtocolAdapter
 from framework.terminal import TerminalInput, terminal_commands, register_builtins
+from framework.hooks import HookRegistry, HookPoints
 
 logger = logging.getLogger('zcbot')
 
@@ -212,6 +213,9 @@ class Framework:
 
         # 服务注册表（官方插件注册自身为核心能力）
         self.services = ServiceRegistry()
+
+        # 扩展点注册表（微内核契约：插件可挂载到几乎每个运行环节）
+        self.hooks = HookRegistry(self)
 
         # 数据库：宿主模式下用 RemoteDatabase（经 IPC RPC 到核心进程执行）；否则真实数据库
         if role == 'host' and ipc_client is not None:
@@ -445,6 +449,12 @@ class Framework:
 
         # 9. 触发系统事件
         await self.event_bus.aemit('system.plugin.loaded', {'plugins': loaded})
+
+        # 9.5 触发启动扩展点（插件可在此预热/注册后台任务/挂载资源）
+        try:
+            await self.hooks.trigger_async(HookPoints.LIFECYCLE_STARTUP)
+        except Exception as e:
+            logger.error(f"启动扩展点异常: {e}", exc_info=True)
 
         # 10. 启动终端交互（宿主子进程无交互 stdin，跳过）
         if getattr(self, '_role', 'standard') != 'host':
@@ -729,11 +739,23 @@ class Framework:
             is_group = bool(group_id)
         source = _g('bot_name')
 
+        payload = {'text': text, 'group_id': group_id,
+                   'user_id': user_id, 'source': source}
+        # 发送前扩展点（返回 False 取消本次发送）
+        try:
+            if False in (await self.hooks.trigger_async(
+                    HookPoints.MESSAGE_BEFORE_SEND, payload)):
+                logger.debug("消息发送被扩展点 message.before_send 取消")
+                return None
+        except Exception as e:
+            logger.error(f"message.before_send 扩展点异常: {e}")
+
         adapter = self.services.get('protocol_adapter')
+        result = None
         # 仅当接入端确实覆写了 send_text（而非基类 unsupported 默认）时走适配器
         if adapter is not None and type(adapter).send_text is not ProtocolAdapter.send_text:
             try:
-                return await adapter.send_text(
+                result = await adapter.send_text(
                     text,
                     group_id=group_id if is_group else None,
                     user_id=None if is_group else user_id,
@@ -742,13 +764,23 @@ class Framework:
             except Exception as e:
                 logger.warning(f"接入端 send_text 失败，回退通用调用: {e}")
 
-        # 向后兼容：未实现中立 send_text 的旧接入端
-        caller = self.services.get('api_caller')
-        if caller is None:
-            logger.debug("无可用接入端，框架自动回复被跳过")
-            return None
-        tgt = {'group_id': group_id} if is_group else {'user_id': user_id}
-        return await caller.acall('send_msg', **tgt, message=text)
+        # 适配器未返回（不支持/失败）→ 回退到通用 API 调用
+        if result is None:
+            # 向后兼容：未实现中立 send_text 的旧接入端
+            caller = self.services.get('api_caller')
+            if caller is None:
+                logger.debug("无可用接入端，框架自动回复被跳过")
+                return None
+            tgt = {'group_id': group_id} if is_group else {'user_id': user_id}
+            result = await caller.acall('send_msg', **tgt, message=text)
+
+        # 发送后扩展点
+        try:
+            await self.hooks.trigger_async(
+                HookPoints.MESSAGE_AFTER_SEND, {**payload, 'result': result})
+        except Exception as e:
+            logger.error(f"message.after_send 扩展点异常: {e}")
+        return result
 
     async def dispatch_event(self, event: dict):
         """
@@ -758,44 +790,61 @@ class Framework:
         event_type = event.get('type', '')
         bot_name = event.get('bot_name', 'default')
 
-        logger.debug(f"dispatch_event: type={event_type} bot={bot_name} msg_type={event.get('message_type','')}")
+        # 事件进入内核前的扩展点（任何 handler 返回 False 即丢弃该事件）
+        try:
+            if False in (await self.hooks.trigger_async(
+                    HookPoints.EVENT_BEFORE_DISPATCH, event, bot_name)):
+                logger.debug("事件被扩展点 event.before_dispatch 拦截丢弃")
+                return
+        except Exception as e:
+            logger.error(f"event.before_dispatch 扩展点异常: {e}")
 
-        # 元事件 → 广播
-        if event_type == 'meta_event':
-            meta_type = event.get('sub_type', 'unknown')
-            await self.event_bus.aemit(f'meta.{meta_type}', event)
-            return
+        try:
+            logger.debug(f"dispatch_event: type={event_type} bot={bot_name} msg_type={event.get('message_type','')}")
 
-        # 消息事件 → 路由
-        if event_type == 'message':
-            if await self._dispatch_raw_message_handlers(event, bot_name):
+            # 元事件 → 广播
+            if event_type == 'meta_event':
+                meta_type = event.get('sub_type', 'unknown')
+                await self.event_bus.aemit(f'meta.{meta_type}', event)
                 return
 
-            from framework.messaging.event import _extract_text
-            raw_message = _extract_text(event.get('message', ''))
-            message_type = event.get('message_type', 'unknown')
-            user_id = event.get('user_id', 0)
-            group_id = event.get('group_id')
-            sender = event.get('sender', {})
+            # 消息事件 → 路由
+            if event_type == 'message':
+                if await self._dispatch_raw_message_handlers(event, bot_name):
+                    return
 
-            log_raw = self.config.get('log', {}).get('log_raw_message', True)
-            if log_raw:
-                log_broker.log_message(bot_name, message_type, user_id, group_id,
-                                       raw_message, event.get('message_id'))
-            else:
-                source = f"群{group_id}" if group_id else f"私聊{user_id}"
-                log_broker.log('message', 'INFO',
-                               f"[{bot_name}] {message_type} {source}: (原始内容未记录)",
-                               {'bot': bot_name, 'message_type': message_type,
-                                'user_id': user_id, 'group_id': group_id})
+                from framework.messaging.event import _extract_text
+                raw_message = _extract_text(event.get('message', ''))
+                message_type = event.get('message_type', 'unknown')
+                user_id = event.get('user_id', 0)
+                group_id = event.get('group_id')
+                sender = event.get('sender', {})
 
-            self.stats_writer.register_user(user_id, sender, message_type, group_id)
-            await self.router.route(event, bot_name)
+                log_raw = self.config.get('log', {}).get('log_raw_message', True)
+                if log_raw:
+                    log_broker.log_message(bot_name, message_type, user_id, group_id,
+                                           raw_message, event.get('message_id'))
+                else:
+                    source = f"群{group_id}" if group_id else f"私聊{user_id}"
+                    log_broker.log('message', 'INFO',
+                                   f"[{bot_name}] {message_type} {source}: (原始内容未记录)",
+                                   {'bot': bot_name, 'message_type': message_type,
+                                    'user_id': user_id, 'group_id': group_id})
 
-        elif event_type == 'notice':
-            await self._handle_notice(event, bot_name)
-        elif event_type == 'request':
-            await self._handle_request(event, bot_name)
+                self.stats_writer.register_user(user_id, sender, message_type, group_id)
+                await self.router.route(event, bot_name)
+
+            elif event_type == 'notice':
+                await self._handle_notice(event, bot_name)
+            elif event_type == 'request':
+                await self._handle_request(event, bot_name)
+        finally:
+            # 事件处理后扩展点（无论是否提前返回都会触发）
+            try:
+                await self.hooks.trigger_async(
+                    HookPoints.EVENT_AFTER_DISPATCH, event, bot_name)
+            except Exception as e:
+                logger.error(f"event.after_dispatch 扩展点异常: {e}")
 
     def register_raw_message_handler(self, plugin_name: str, handler, priority: int = 50):
         """注册插件原始消息处理器（同插件同 handler 去重，按优先级升序）"""
@@ -887,6 +936,12 @@ class Framework:
         """停止框架（异步）"""
         logger.info("正在停止框架...")
         self._running = False
+
+        # 触发关闭扩展点（插件可在此释放资源/落盘/断开外部连接）
+        try:
+            await self.hooks.trigger_async(HookPoints.LIFECYCLE_SHUTDOWN)
+        except Exception as e:
+            logger.warning(f"关闭扩展点异常: {e}")
 
         # 停止终端交互
         self.terminal.stop()

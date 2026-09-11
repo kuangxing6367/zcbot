@@ -1,19 +1,42 @@
 # -*- coding: utf-8 -*-
 """
-插件 WebUI 内嵌：列表 + 入口页 + 静态资源
+插件 WebUI 内嵌：列表 + 入口页 + 静态资源 + 侧边栏菜单
 """
 import logging
 import os
 
 from flask import jsonify, send_from_directory
+import yaml
 
 logger = logging.getLogger('zcbot')
+
+
+def _read_web_official_sidebar(framework, project_root) -> bool:
+    """读取 config.yaml 中 web.official_sidebar（直读文件，保存后即时生效，无需重启）"""
+    path = getattr(framework, 'config_path', None) or os.path.join(project_root(), 'config.yaml')
+    try:
+        if os.path.isfile(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                doc = yaml.safe_load(f) or {}
+            return bool((doc.get('web') or {}).get('official_sidebar', True))
+    except Exception:
+        pass
+    return True
 
 
 def register(ctx):
     app = ctx.app
     framework = ctx.framework
     require_auth = ctx.require_auth
+    project_root = ctx._project_root
+
+    @app.route('/api/menu', methods=['GET'])
+    @require_auth
+    def get_menu():
+        """前端侧边栏菜单：官方侧边栏开关 + 插件注册的侧边栏项/聚合项"""
+        official = _read_web_official_sidebar(framework, project_root)
+        plugins = framework.plugin_loader.get_plugin_webuis()
+        return jsonify({'code': 0, 'data': {'official_sidebar': official, 'plugins': plugins}})
 
     @app.route('/api/plugin_webuis', methods=['GET'])
     @require_auth

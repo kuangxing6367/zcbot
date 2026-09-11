@@ -129,7 +129,7 @@ const SETTING_GROUPS = [
   { key: 'system', title: '系统' },
 ]
 const SETTING_LABELS = {
-  web: { host: '监听地址', port: '监听端口', secret_key: 'Secret Key', session_timeout: '会话超时（秒）' },
+  web: { host: '监听地址', port: '监听端口', secret_key: 'Secret Key', session_timeout: '会话超时（秒）', official_sidebar: '显示官方侧边栏' },
   onebot: { listen_host: '监听地址', listen_port: '监听端口', access_token: 'Access Token' },
   database: { type: '数据库类型', path: '数据库路径', host: '主机', port: '端口', user: '用户名', password: '密码', database: '库名' },
   log: { level: '日志级别', file: '日志文件', retention_days: '日志保留（天）', log_raw_message: '记录原始消息', log_sent_message: '记录发送消息' },

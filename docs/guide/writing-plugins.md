@@ -460,5 +460,5 @@ ctx.run_async(render_and_send)   # 返回 concurrent.futures.Future
 - [多文件插件与模块机制](../advanced/loader.md) —— 相对导入 / 短名 / 热重载原理
 - [多轮会话](./session.md) —— 交互式对话
 - [配置系统](./configuration.md) —— config.yaml 与插件配置
-- [Event 对象](../api/event.md) / [ctx 全量 API](../api/ctx.md)
+- [Event 对象](../api/basic/event.md) / [ctx 全量 API](../api/basic/ctx.md)
 - [定时任务](../advanced/scheduler.md) / [权限系统](../advanced/permission.md)
