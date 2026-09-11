@@ -75,11 +75,16 @@ def register(ctx):
     @app.route('/api/plugin_webui/<plugin_name>/assets/<path:filename>', methods=['GET'])
     @require_auth
     def serve_plugin_webui_assets(plugin_name, filename):
-        """提供插件 WebUI 的静态资源文件（JS/CSS/图片等）"""
+        """提供插件 WebUI 的静态资源文件（JS/CSS/图片等）
+
+        路由中 /assets/ 为字面段，故 filename 仅含 assets 之后的部分
+        （如 mf.js），需拼到 web_dir/assets 下。
+        """
         web_dir = framework.plugin_loader.get_plugin_webui_path(plugin_name)
         if not web_dir:
             return jsonify({'code': 404, 'msg': 'WebUI 目录不存在'}), 404
-        file_path = os.path.join(web_dir, filename)
+        assets_dir = os.path.join(web_dir, 'assets')
+        file_path = os.path.join(assets_dir, filename)
         if not os.path.isfile(file_path):
             return jsonify({'code': 404, 'msg': '文件不存在'}), 404
-        return send_from_directory(web_dir, filename)
+        return send_from_directory(assets_dir, filename)

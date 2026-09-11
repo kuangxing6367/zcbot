@@ -235,15 +235,24 @@ def _strip_leading_comments(stmt: str) -> str:
 
 
 def _find_sql_file(filename: str) -> str:
-    """查找 SQL 文件（支持 sql/ 目录和项目根目录）"""
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidates = [
-        os.path.join(base_dir, 'sql', filename),
-        os.path.join(base_dir, filename),
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
+    """查找 SQL 文件（项目根 ./sql/<file> 优先，并向上回溯若干级以防 framework 被 vendored 到不同层级）。
+
+    framework 本体与下游项目（framework/ 作为子目录）的 sql/ 均在项目根目录，
+    故需从 framework/database 上溯到 framework 的父目录（即项目根）。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    search_dirs = [here]
+    cur = here
+    for _ in range(4):
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+        search_dirs.append(cur)
+    for d in search_dirs:
+        for cand in (os.path.join(d, 'sql', filename), os.path.join(d, filename)):
+            if os.path.isfile(cand):
+                return cand
     return None
 
 
