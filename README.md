@@ -7,7 +7,7 @@
 > **OneBot 11 是它的一个默认扩展，但不是它的身份。** 换一个 `ProtocolAdapter`，它可以是 Telegram / Discord 机器人、
 > HTTP Webhook 接收器、纯定时任务服务，或任何"事件 → 扩展 → 响应"的程序。
 
-**当前正式版：v1.3.8** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
+**当前正式版：v1.4.0** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
 
 - 项目地址：https://github.com/kuangxing6367/zcbot
 - 官方插件仓库：https://github.com/kuangxing6367/zcbot_plugins
@@ -212,6 +212,10 @@ Web 后台默认登录账号 `admin` / `admin123`（**首次登录后立即改�
 浏览器访问 `http://127.0.0.1:8080`，用 `admin / admin123` 登录。可启停/重载扩展、管理命令与定时任务、管理用户/群组权限、看仪表盘与日志、在线编辑扩展配置。
 
 > 注意：公网部署：`webui.host` 保持 `127.0.0.1` 并经反向代理暴露，设好 `access_token`、改默认密码、按需配置 IP 白名单。详见[部署文档](docs/advanced/deployment.md)。
+>
+> 想直接上 HTTPS / WSS：在 `config.yaml` 顶层配 `ssl: { enabled, cert, key }`（证书路径支持相对项目根目录或绝对），
+> 后台即走 https、OneBot 反向 WS 走 wss；也可在后台「设置 → SSL / TLS」里改。左侧栏显示哪些菜单、什么顺序，
+> 可在「设置 → 侧边栏」自定义。
 
 ---
 
