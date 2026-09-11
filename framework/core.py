@@ -19,12 +19,12 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from framework.config import load_config
-from framework.db import init_db
+from framework.database.db import init_db
 from framework.loader import PluginLoader
-from framework.router import MessageRouter
-from framework.event_bus import EventBus
+from framework.messaging.router import MessageRouter
+from framework.messaging.event_bus import EventBus
 from framework.log_broker import log_broker, FrameworkLogHandler
-from framework.protocol import ServiceRegistry, ProtocolAdapter
+from framework.messaging.protocol import ServiceRegistry, ProtocolAdapter
 from framework.terminal import TerminalInput, terminal_commands, register_builtins
 
 logger = logging.getLogger('zcbot')
@@ -618,7 +618,7 @@ class Framework:
                         f"[内存看门狗] RSS {rss_mb:.1f}MB 超过限制 {self._memory_limit_mb}MB，触发清理"
                     )
                     # 1. 清理框架级角色缓存
-                    from framework.event import _user_role_cache, _group_role_cache
+                    from framework.messaging.event import _user_role_cache, _group_role_cache
                     cache_before = len(_user_role_cache) + len(_group_role_cache)
                     _user_role_cache.clear()
                     _group_role_cache.clear()
@@ -771,7 +771,7 @@ class Framework:
             if await self._dispatch_raw_message_handlers(event, bot_name):
                 return
 
-            from framework.event import _extract_text
+            from framework.messaging.event import _extract_text
             raw_message = _extract_text(event.get('message', ''))
             message_type = event.get('message_type', 'unknown')
             user_id = event.get('user_id', 0)

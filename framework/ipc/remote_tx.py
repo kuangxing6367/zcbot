@@ -10,14 +10,14 @@ RemoteTxManager —— 核心进程（进程1）侧的跨进程事务管理器
   因此用 tx_id → conn 显式映射。
 - SQLite：开独立连接（check_same_thread=False）+ BEGIN，commit/rollback 后关闭。
 - MySQL：从连接池借出并 autocommit(False)，结束归还。
-- 方言翻译/NOW() 处理复用 framework/db.py 的既有逻辑，保证与普通 db.* 一致。
+- 方言翻译/NOW() 处理复用 framework/database/db.py 的既有逻辑，保证与普通 db.* 一致。
 """
 import itertools
 import logging
 import threading
 
-from framework.db import _translate_sql_for_sqlite, _translate_sql_for_mysql
-from framework.db import _replace_now
+from framework.database.db import _translate_sql_for_sqlite, _translate_sql_for_mysql
+from framework.database.db import _replace_now
 
 logger = logging.getLogger('zcbot')
 

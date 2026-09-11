@@ -76,7 +76,7 @@ class PluginContext:
             return api
         caller = self._framework.services.get('api_caller')
         if caller is not None:
-            from framework.protocol import ActionProxy
+            from framework.messaging.protocol import ActionProxy
             return ActionProxy(caller)
         raise RuntimeError("无可用协议适配器（请启用一个接入端，如 core_plugins.onebot_adapter 或 core_plugins.http_inject）")
 
@@ -324,7 +324,7 @@ class PluginContext:
           - 事件对象 / dict（自动取 message / raw_message / text 字段）
         富媒体（图片等）被剥离，只保留文本内容。
         """
-        from framework.event import _extract_text
+        from framework.messaging.event import _extract_text
         if isinstance(message_or_event, dict):
             text = (message_or_event.get('message')
                     or message_or_event.get('raw_message')

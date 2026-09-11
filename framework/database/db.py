@@ -971,7 +971,7 @@ def init_db(config: dict):
     db = Database(db_config)
 
     # 自动检测并初始化数据库表（MySQL 5.5~8.0 / SQLite 全兼容）
-    from framework.init_db import auto_init_database
+    from framework.database.init_db import auto_init_database
     auto_init_database(db)
 
     # 创建框架扩展表 + 迁移（兼容旧版升级）
