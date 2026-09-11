@@ -46,6 +46,8 @@ class CoreRuntime:
         self._dual_cfg = fw.config.get('dual_process', {})
 
         self.server = IpcServer(self._token)
+        # 暴露给 framework：终端在核心进程运行，宿主侧命令经此转发（terminal.exec）
+        fw.ipc_server = self.server
         self._register_core_handlers()
         self._register_remote_route_handler()
 
@@ -248,6 +250,13 @@ class CoreRuntime:
         self.server.start_accept_thread()
         fw._load_core_plugins()
         self._spawn_host()
+
+        # 终端交互在核心进程（它是前台、占控制台）；宿主子进程无交互 stdin。
+        # 核心进程不走 fw.start()（只加载核心侧插件，不加载用户插件），
+        # 故这里显式注册终端命令并启动输入线程；宿主侧命令由终端经 IPC 转发执行。
+        from framework.terminal import register_builtins
+        register_builtins(fw)
+        fw.terminal.start()
 
         stop_event = asyncio.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):
