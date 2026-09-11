@@ -23,7 +23,7 @@
 | 你要做什么 | 迁移成本 | 说明 |
 | ---------- | -------- | ---- |
 | 托管机器人 | 零 | 现状，默认接入端就是 OneBot |
-| 其他 IM（Telegram / Discord / 微信） | 写一个 adapter | 契约见 [协议适配器](../api/protocol_adapter.md) |
+| 其他 IM（Telegram / Discord / 微信） | 写一个 adapter | 契约见 [协议适配器](../api/advanced/protocol_adapter.md) |
 | 带权限后台的内部工具 | 换插件 | 权限 + WebUI + DB 现成 |
 | 定时任务 / 监控 / 告警 | 换插件 | 调度器 + 事件总线 + 通知渠道现成 |
 | 业务系统（审批 / 工单） | 换插件 | 权限 + 会话 + 审计现成 |
@@ -99,7 +99,7 @@ def collect_metrics():
     )
 ```
 
-> 提示：定时任务 handler 签名不带 `event`（`ctx.task` 见 [API 参考](../api/ctx.md)）。
+> 提示：定时任务 handler 签名不带 `event`（`ctx.task` 见 [API 参考](../api/basic/ctx.md)）。
 > 需要发消息时才手动从 `get_connected_bots()` 选一个接入端。
 
 **要点**：定时任务的"事件源"就是时间。没有 OneBot，`scheduler` 就是你的接入端。
@@ -111,7 +111,7 @@ def collect_metrics():
 很多系统之间靠 HTTP Webhook 互通（GitHub、支付回调、CI 结果……）。写一个
 `ProtocolAdapter`，接收外部 POST，转成内部事件，业务插件照常处理。
 
-> 内置 `http_inject` 已实现等价能力（默认 `127.0.0.1:8901/hook`，在 `core_plugins.yaml` 开启即用）。下面手写一个最小 adapter，帮助你理解契约、自定义路径与鉴权；完整版见 [协议适配器](../api/protocol_adapter.md)。
+> 内置 `http_inject` 已实现等价能力（默认 `127.0.0.1:8901/hook`，在 `core_plugins.yaml` 开启即用）。下面手写一个最小 adapter，帮助你理解契约、自定义路径与鉴权；完整版见 [协议适配器](../api/advanced/protocol_adapter.md)。
 
 ```python
 # core_plugins/http_webhook/main.py
@@ -172,7 +172,7 @@ def unregister():
     ...
 ```
 
-> 提示：`call/acall` 由基类从 `call_api` 自动派生，因此把自己注册成 `api_caller` 后 `ctx.api()` 立即可用；需要框架自动回复或主动发文本时再覆写 `send_text`（详见[协议适配器](../api/protocol_adapter.md) 2.2）。
+> 提示：`call/acall` 由基类从 `call_api` 自动派生，因此把自己注册成 `api_caller` 后 `ctx.api()` 立即可用；需要框架自动回复或主动发文本时再覆写 `send_text`（详见[协议适配器](../api/advanced/protocol_adapter.md) 2.2）。
 
 之后任何插件都能 `@ctx.command("/hello")` 响应 webhook 传来的 `text`，命令路由、权限、审计照常工作——**业务插件根本不知道消息来自 HTTP 还是 IM 平台**。
 
@@ -348,6 +348,6 @@ assert fake.sent[0]["message"] == "你 2 级"
 
 ## 八、进一步
 
-- 写自己的接入端 → [协议适配器](../api/protocol_adapter.md)
+- 写自己的接入端 → [协议适配器](../api/advanced/protocol_adapter.md)
 - 完整插件开发 → [编写插件](./writing-plugins.md)
 - 权限引擎 → [权限系统](../advanced/permission.md)

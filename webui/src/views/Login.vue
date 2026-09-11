@@ -2,7 +2,7 @@
   <div class="login-wrap">
     <div class="login-card">
       <div class="login-logo">
-        <img src="/img/logo.png" alt="ZCBOT" class="login-logo-img" />
+        <img :src="logoUrl" alt="ZCBOT" class="login-logo-img" />
       </div>
       <h1 class="login-title">ZCBOT 管理面板</h1>
       <div class="login-sub">插件化服务宿主 · 统一管理后台</div>
@@ -42,6 +42,7 @@ const route = useRoute()
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
 const ver = ref(null)
+const logoUrl = import.meta.env.BASE_URL + 'img/logo.png'
 
 async function onLogin() {
   if (!form.value.username || !form.value.password) {

@@ -2,26 +2,35 @@
   <el-container class="layout">
     <el-aside :width="collapsed ? '64px' : '220px'" class="sidebar">
       <div class="brand">
-        <img v-show="!collapsed" src="/img/logo.png" alt="ZCBOT" class="brand-logo" />
+        <img v-show="!collapsed" :src="logoUrl" alt="ZCBOT" class="brand-logo" />
         <el-icon v-show="collapsed" :size="24" color="#6366f1"><Cpu /></el-icon>
         <span v-show="!collapsed" class="brand-name">ZCBOT</span>
       </div>
       <el-menu :default-active="activeKey" router :collapse="collapsed" class="nav-menu">
-        <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>仪表盘</span></el-menu-item>
-        <el-menu-item index="/marketplace"><el-icon><Shop /></el-icon><span>插件市场</span></el-menu-item>
-        <el-menu-item index="/plugins"><el-icon><Grid /></el-icon><span>插件管理</span></el-menu-item>
-        <el-menu-item index="/commands"><el-icon><ChatDotRound /></el-icon><span>命令管理</span></el-menu-item>
-        <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
-        <el-menu-item index="/groups"><el-icon><Avatar /></el-icon><span>群组管理</span></el-menu-item>
-        <el-menu-item index="/permissions"><el-icon><Key /></el-icon><span>权限管理</span></el-menu-item>
-        <el-menu-item index="/apikeys"><el-icon><Tickets /></el-icon><span>接口令牌</span></el-menu-item>
-        <el-menu-item index="/tasks"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
-        <el-menu-item index="/runtime"><el-icon><DataLine /></el-icon><span>运行状态</span></el-menu-item>
-        <el-menu-item index="/connection"><el-icon><Connection /></el-icon><span>连接设置</span></el-menu-item>
-        <el-menu-item index="/filebrowser"><el-icon><Folder /></el-icon><span>文件浏览</span></el-menu-item>
-        <el-menu-item index="/logs"><el-icon><Document /></el-icon><span>日志中心</span></el-menu-item>
-        <el-menu-item index="/database"><el-icon><Coin /></el-icon><span>数据库</span></el-menu-item>
-        <el-menu-item v-if="session.pluginWebUIs.length" index="/plugin_webui"><el-icon><Monitor /></el-icon><span>插件页面</span></el-menu-item>
+        <template v-if="session.officialSidebar">
+          <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>仪表盘</span></el-menu-item>
+          <el-menu-item index="/marketplace"><el-icon><Shop /></el-icon><span>插件市场</span></el-menu-item>
+          <el-menu-item index="/plugins"><el-icon><Grid /></el-icon><span>插件管理</span></el-menu-item>
+          <el-menu-item index="/commands"><el-icon><ChatDotRound /></el-icon><span>命令管理</span></el-menu-item>
+          <el-menu-item index="/users"><el-icon><User /></el-icon><span>用户管理</span></el-menu-item>
+          <el-menu-item index="/groups"><el-icon><Avatar /></el-icon><span>群组管理</span></el-menu-item>
+          <el-menu-item index="/permissions"><el-icon><Key /></el-icon><span>权限管理</span></el-menu-item>
+          <el-menu-item index="/apikeys"><el-icon><Tickets /></el-icon><span>接口令牌</span></el-menu-item>
+          <el-menu-item index="/tasks"><el-icon><Timer /></el-icon><span>定时任务</span></el-menu-item>
+          <el-menu-item index="/runtime"><el-icon><DataLine /></el-icon><span>运行状态</span></el-menu-item>
+          <el-menu-item index="/connection"><el-icon><Connection /></el-icon><span>连接设置</span></el-menu-item>
+          <el-menu-item index="/filebrowser"><el-icon><Folder /></el-icon><span>文件浏览</span></el-menu-item>
+          <el-menu-item index="/logs"><el-icon><Document /></el-icon><span>日志中心</span></el-menu-item>
+          <el-menu-item index="/database"><el-icon><Coin /></el-icon><span>数据库</span></el-menu-item>
+        </template>
+        <el-menu-item v-for="p in pluginSidebarItems" :key="p.plugin_name" :index="'/plugin/' + p.plugin_name">
+          <el-icon v-if="!p.icon"><Menu /></el-icon>
+          <span v-else class="plugin-ico">{{ p.icon }}</span>
+          <span>{{ p.title }}</span>
+        </el-menu-item>
+        <el-menu-item v-if="aggregatePlugins.length" index="/plugin_webui">
+          <el-icon><Monitor /></el-icon><span>插件页面</span>
+        </el-menu-item>
       </el-menu>
       <div class="sidebar-foot">
         <el-menu class="nav-menu" :default-active="activeKey" router :collapse="collapsed">
@@ -76,6 +85,7 @@ import { theme, toggleTheme } from '../theme'
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
+const logoUrl = import.meta.env.BASE_URL + 'img/logo.png'
 
 const titleMap = {
   dashboard: '仪表盘', marketplace: '插件市场', plugins: '插件管理', commands: '命令管理',
@@ -83,8 +93,22 @@ const titleMap = {
   connection: '连接设置', filebrowser: '文件浏览', logs: '日志中心', database: '数据库',
   plugin_webui: '插件页面', settings: '设置',
 }
-const activeKey = computed(() => '/' + (route.path.replace(/^\//, '').split('/')[0] || 'dashboard'))
-const pageTitle = computed(() => titleMap[route.name] || 'ZCBOT')
+const pluginSidebarItems = computed(() => (session.pluginWebUIs || []).filter(p => p.sidebar))
+const aggregatePlugins = computed(() => (session.pluginWebUIs || []).filter(p => !p.sidebar))
+
+const activeKey = computed(() => {
+  const seg = route.path.replace(/^\//, '').split('/')
+  if (seg[0] === 'plugin' && seg[1]) return '/plugin/' + seg[1]
+  return '/' + (seg[0] || 'dashboard')
+})
+const pageTitle = computed(() => {
+  const seg = route.path.replace(/^\//, '').split('/')
+  if (seg[0] === 'plugin' && seg[1]) {
+    const p = (session.pluginWebUIs || []).find(x => x.plugin_name === seg[1])
+    return p ? p.title : '插件'
+  }
+  return titleMap[route.name] || 'ZCBOT'
+})
 
 let statusTimer = null
 
@@ -96,8 +120,11 @@ async function loadMe() {
 }
 
 async function loadWebUIs() {
-  const w = await api('/api/plugin_webuis').catch(() => null)
-  if (w && w.code === 0) session.pluginWebUIs = w.data || []
+  const w = await api('/api/menu').catch(() => null)
+  if (w && w.code === 0) {
+    session.pluginWebUIs = w.data.plugins || []
+    session.officialSidebar = w.data.official_sidebar !== false
+  }
 }
 
 async function loadVersion() {
@@ -140,6 +167,7 @@ onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer) })
 }
 .brand-logo { height: 30px; width: 30px; object-fit: contain; }
 .nav-menu { border-right: none; flex: 1; overflow-y: auto; }
+.plugin-ico { display: inline-flex; width: 1em; justify-content: center; }
 .sidebar-foot { border-top: 1px solid var(--el-border-color); }
 .sb-version { text-align: center; color: var(--el-text-color-secondary); font-size: 12px; padding: 6px 0; }
 .right { min-width: 0; }
