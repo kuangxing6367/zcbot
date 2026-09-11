@@ -23,7 +23,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from framework.protocol import ProtocolAdapter
+from framework.messaging.protocol import ProtocolAdapter
 
 __plugin_meta__ = {
     "name": "http_inject",
