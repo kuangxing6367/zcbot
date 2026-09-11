@@ -1,13 +1,13 @@
 import { defineConfig } from 'vitepress'
 
 // ZCBOT 文档站配置
-// 部署在 GitHub Pages：https://kuangxing6367.github.io/zcbot/
-// 若改为自定义域名或根路径部署，把 base 改成 '/'
+// 部署在 GitHub Pages，自定义域名：https://bot.zgric.top/（根路径，base 用 '/'）
+// 若改回项目页托管（https://kuangxing6367.github.io/zcbot/），把 base 改成 '/zcbot/'
 export default defineConfig({
   title: 'ZCBOT',
   description: '事件驱动的插件化服务宿主',
   lang: 'zh-CN',
-  base: '/zcbot/',
+  base: '/',
   cleanUrls: true,
   lastUpdated: true,
 
