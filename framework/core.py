@@ -260,6 +260,8 @@ class Framework:
         self._heartbeat_task = None
         self._running = False
         self.loop = None
+        # 双进程核心进程注入的 IPC 服务端（供终端把宿主侧命令转发过去）
+        self.ipc_server = None
 
         # 内存看门狗参数
         mem_cfg = self.config.get('memory', {})
@@ -456,12 +458,36 @@ class Framework:
         except Exception as e:
             logger.error(f"启动扩展点异常: {e}", exc_info=True)
 
-        # 10. 启动终端交互（宿主子进程无交互 stdin，跳过）
+        # 10. 终端命令注册（核心/宿主两个进程都注册，命令绑定到本进程的 fw，供跨进程转发执行）；
+        #     交互输入只在非宿主进程启动（宿主子进程无交互 stdin，避免与核心抢控制台）
+        register_builtins(self)
         if getattr(self, '_role', 'standard') != 'host':
-            register_builtins(self)
             self.terminal.start()
 
         logger.info("框架启动完成，等待消息...")
+
+    async def terminal_exec(self, name: str, args: str = '') -> str:
+        """执行一条终端命令并捕获其输出（供双进程另一侧经 IPC 调用）。
+
+        终端命令 handler 用 print 输出；这里把 stdout 重定向后把文本回传，
+        让核心进程的终端能展示宿主侧命令（plugins / tasks 等）的真实结果。
+        """
+        import io
+        import contextlib
+        handler = terminal_commands.get(name)
+        if handler is None:
+            return f"未知命令: {name}"
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(args)
+                else:
+                    await asyncio.to_thread(handler, args)
+        except Exception as e:
+            return f"命令 [{name}] 执行失败: {e}"
+        out = buf.getvalue()
+        return out if out.strip() else f"[{name}] 已执行"
 
     def _load_core_plugins(self):
         """加载官方插件（core_plugins/ 目录）"""

@@ -52,19 +52,63 @@ class TerminalInput:
                 logger.error(f"终端输入读取异常: {e}")
 
     async def _execute_command(self, line: str):
-        """执行终端命令"""
+        """执行终端命令（按命令归属进程路由）
+
+        双进程模式下，核心进程的终端负责接收输入；状态在宿主进程的命令
+        （plugins / tasks 等）经 IPC 转发到宿主执行，实现跨进程终端。
+        单进程模式（role=standard）下没有下游进程，一律本地执行。
+        """
         parts = line.split(maxsplit=1)
         cmd_name = parts[0].lower()
         args = parts[1] if len(parts) > 1 else ""
 
         handler = terminal_commands.get(cmd_name)
-        if handler:
-            try:
-                if asyncio.iscoroutinefunction(handler):
-                    await handler(args)
-                else:
-                    await asyncio.to_thread(handler, args)
-            except Exception as e:
-                logger.error(f"终端命令 [{cmd_name}] 执行失败: {e}")
-        else:
+        if handler is None:
             logger.warning(f"未知命令: {cmd_name}，输入 help 查看可用命令")
+            return
+
+        role = getattr(self.framework, '_role', 'standard')
+        target = terminal_commands.get_target(cmd_name)
+
+        # 非核心进程（单进程 standard / 宿主 host）：没有下游进程，一律本地执行
+        if role != 'core':
+            await self._run_local(cmd_name, handler, args)
+            return
+
+        # 核心进程（双进程）：按命令归属路由
+        if target == 'host':
+            await self._run_remote(cmd_name, args, label='宿主进程')
+        elif target == 'both':
+            print('--- 核心进程 ---')
+            await self._run_local(cmd_name, handler, args)
+            await self._run_remote(cmd_name, args, label='宿主进程')
+        else:
+            await self._run_local(cmd_name, handler, args)
+
+    async def _run_local(self, cmd_name: str, handler, args: str):
+        """在本进程执行命令"""
+        try:
+            if asyncio.iscoroutinefunction(handler):
+                await handler(args)
+            else:
+                await asyncio.to_thread(handler, args)
+        except Exception as e:
+            logger.error(f"终端命令 [{cmd_name}] 执行失败: {e}")
+
+    async def _run_remote(self, cmd_name: str, args: str, label: str = None):
+        """经 IPC 把命令转发到宿主进程执行，并打印其返回输出"""
+        fw = self.framework
+        server = getattr(fw, 'ipc_server', None)
+        if server is None or not getattr(server, 'connected', False):
+            print(f"[{cmd_name}] 宿主进程未连接，无法执行该命令（其状态在宿主进程）")
+            return
+        try:
+            text = await server.arequest_host(
+                'terminal.exec', {'name': cmd_name, 'args': args})
+        except Exception as e:
+            print(f"[{cmd_name}] 转发到宿主进程失败: {e}")
+            return
+        if label:
+            print(f"--- {label} ---")
+        if text:
+            print(str(text).rstrip())
