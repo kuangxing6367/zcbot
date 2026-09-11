@@ -52,6 +52,20 @@ web:
   # secret_key: ""          # 留空则每次重启随机生成，填入后重启保持登录态
   session_timeout: 3600      # 登录会话超时（秒），同时作为登录 token 的有效期
   official_sidebar: true     # 是否显示官方默认侧边栏菜单（关闭后仅显示插件注册项与设置）
+  # 自定义左侧栏：order = 官方菜单显示顺序；hidden = 隐藏的官方项（可在「设置 → 侧边栏」调整）
+  # 官方键：dashboard, marketplace, plugins, commands, users, groups, permissions,
+  #         apikeys, tasks, runtime, connection, filebrowser, logs, database
+  sidebar:
+    order: []
+    hidden: []
+
+# ── SSL / TLS（HTTPS / WSS，可选）───────────────────────────
+# 启用后：Web 管理后台走 https、OneBot 反向 WS 走 wss（两者共用同一份证书）。
+# cert / key 支持绝对路径，或相对项目根目录的路径（如 certs/fullchain.pem）。
+ssl:
+  enabled: false
+  cert: ""                   # 证书链文件（fullchain.pem / .crt）
+  key: ""                    # 私钥文件（privkey.pem / .key）
 
 # ── HTTP API（可选，需同时开启 core_plugins.http_api）────────
 # 给外部程序用的 RESTful 接口，默认监听 1145 端口，token 认证

@@ -50,6 +50,10 @@ plugins/*
 plugins/image_renderer/native/target/
 plugins/image_renderer/native/bin_extract/
 
+# Rust 原生扩展构建产物（插件已移至 core_plugins/，以下为当前实际路径）
+core_plugins/*/native/target/
+core_plugins/*/native/bin_extract/
+
 # 插件数据/配置目录（仅放行 help 的插件配置）
 plugins_dat/*
 !plugins_dat/help/

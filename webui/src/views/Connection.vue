@@ -32,8 +32,9 @@
         <el-card shadow="never">
           <template #header><div class="card-head">接入指引</div></template>
           <div class="dim" style="line-height:2">
-            <div>反向 WS 服务端地址：<code class="mono">ws://{{ wsUrl }}/ws</code></div>
+            <div>反向 WS 服务端地址：<code class="mono">{{ wsScheme }}://{{ wsUrl }}/ws</code></div>
             <div>OneBot 客户端（NapCat / Lagrange / LLOneBot 等）添加「反向 WebSocket」连接，填写上述地址即可接入。</div>
+            <div class="dim small">面板走 HTTPS 时此处自动显示 wss（需在「设置 → SSL / TLS」启用并配置证书）。</div>
           </div>
         </el-card>
       </el-col>
@@ -48,6 +49,8 @@ import { api, apiCall } from '../api'
 
 const form = ref({ host: '', port: 6830, token: '' })
 const bots = ref([])
+// 面板走 HTTPS 时反向 WS 用 wss（证书在「设置 → SSL / TLS」配置）
+const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws'
 
 const wsUrl = computed(() => {
   const host = form.value.host === '0.0.0.0' || form.value.host === '::' ? '127.0.0.1' : form.value.host
