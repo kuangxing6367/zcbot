@@ -4,7 +4,9 @@
 同时提供 /render_card 命令用于测试渲染效果。
 
 渲染引擎自动选择（按平台）：
-  1. 原生扩展 zcbot_render（Rust + pyo3，Windows .pyd / Linux .so，放在 native/bin/<平台>/）
+  1. 原生扩展 zcbot_render（Rust + pyo3，放在 native/bin/<平台>/）
+     平台目录：win64 / win32 / linux-x86_64 / linux-aarch64 /
+              linux-i686(x32) / linux-armv7 / linux-loongarch64(龙芯)
      → 内存增量 <5MB，无子进程开销
   2. 找不到原生扩展时回退 PIL（Pillow），功能一致
 
@@ -54,21 +56,45 @@ def _font_cache_put(k, v):
         del _FONT_CACHE[oldest]
 
 
+def _linux_native_subdirs(arch: str) -> list:
+    """按 platform.machine() 排出优先尝试的平台目录（精确架构在前）"""
+    ordered = []
+    # 龙芯 LoongArch（platform.machine() = loongarch64 / loong64）
+    if 'loongarch' in arch or arch in ('loong64',):
+        ordered.append('linux-loongarch64')
+    # ARMv7 32 位（armv7l / armv8l 向下兼容，armhf 为软硬浮点别名）
+    if arch.startswith('armv7') or arch in ('armv8l', 'armhf'):
+        ordered.append('linux-armv7')
+    # 32 位 x86（x32）
+    if arch in ('i386', 'i486', 'i586', 'i686', 'x86', 'ia32'):
+        ordered.append('linux-i686')
+    # 64 位 ARM
+    if 'aarch64' in arch or 'arm64' in arch:
+        ordered.append('linux-aarch64')
+    # 64 位 x86
+    if 'x86_64' in arch or 'amd64' in arch:
+        ordered.append('linux-x86_64')
+    # 兜底：列出全部已支持目录（跨架构加载只在成功后缓存，失败仅记 DEBUG）
+    for sub in ('linux-x86_64', 'linux64', 'linux-aarch64', 'linux-armv7',
+                'linux-i686', 'linux-loongarch64'):
+        if sub not in ordered:
+            ordered.append(sub)
+    return ordered
+
+
 def _load_native_renderer():
-    """按平台自动加载原生渲染扩展；找不到返回 None（回退 PIL）"""
+    """按平台自动加载原生渲染扩展；找不到返回 None（回退 PIL）
+
+    支持目录（native/bin/ 下）：win64 / win32 / linux-x86_64 /
+    linux-aarch64 / linux-i686(x32) / linux-armv7 / linux-loongarch64
+    """
     native_dir = os.path.join(_FONT_DIR, 'native', 'bin')
     if sys.platform.startswith('win'):
-        subdirs = ['win64', 'win-amd64']
+        # 32 位 Python（sys.maxsize 仅 2**31-1）走 win32，64 位走 win64
+        subdirs = ['win32', 'win64'] if sys.maxsize <= 2 ** 32 else ['win64', 'win32', 'win-amd64']
         names = ['zcbot_render.pyd', 'zcbot_render.abi3.pyd']
     elif sys.platform.startswith('linux'):
-        # 按本机架构优先排序，避免跨架构 .so 的无效尝试
-        arch = (platform.machine() or '').lower()
-        ordered = []
-        if 'x86_64' in arch or 'amd64' in arch:
-            ordered.append('linux-x86_64')
-        if 'aarch64' in arch or 'arm64' in arch:
-            ordered.append('linux-aarch64')
-        subdirs = ordered + ['linux-x86_64', 'linux64', 'linux-aarch64']
+        subdirs = _linux_native_subdirs((platform.machine() or '').lower())
         names = ['zcbot_render.so', 'zcbot_render.abi3.so']
     else:
         return None
