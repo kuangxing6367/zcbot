@@ -49,9 +49,11 @@
   - 新增 `docs/api/advanced/hooks.md`（扩展点完整文档）与 `docs/api/index.md`（API 总览）。
 
 ### 修复
-- **GitHub Pages 部署下排版错乱**：前端构建 `base` 由 `'/'`（产出绝对资源路径 `/js/`、`/css/`）改为 `'./'`（相对路径），
-  修复在 GitHub Pages 子路径托管时 css/js 因路径 404 而未被加载、页面失去样式（排版乱）的问题；
-  logo 引用改用 `import.meta.env.BASE_URL` 拼接，兼容子路径与自定义域名两种部署。
+- **文档站（`bot.zgric.top`）排版错乱**：VitePress `base` 由 `'/zcbot/'`（面向旧的 `kuangxing6367.github.io/zcbot/` 项目页）
+  改为 `'/'`。站点已切到自定义域名 `bot.zgric.top`（根路径托管），沿用旧的 `/zcbot/` 前缀会让 css/js 与站内链接
+  全部指向 `bot.zgric.top/zcbot/...` 而 404，页面因此失去样式；改为根路径后恢复正常。
+- **管理后台前端（WebUI）构建改用相对路径**：`base` 由 `'/'` 改为 `'./'`，logo 采用 `import.meta.env.BASE_URL` 拼接，
+  使 `web/` 产物部署到任意子路径时都不会因绝对路径 `/js/`、`/css/` 404 而丢样式。
 
 ---
 
