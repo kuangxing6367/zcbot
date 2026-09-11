@@ -25,6 +25,16 @@
 
 ---
 
+## v1.5.0（2026-09-12）
+
+> 主题：**框架路径与静态资源路由修复**——修正 `init_db` 的 SQL 文件查找路径与插件 WebUI 静态资源路由，消除数据库全表缺失与插件页面资源 404 引发的连锁报错。
+
+### 修复
+- **`init_db` SQL 路径查找**：`_find_sql_file()` 原只上溯到 `framework/` 目录，找不到项目根 `sql/init.sql`，导致 SQLite 自动建表被跳过、系统表一张未建，进而 `plugins` / `admin_users` / `tasks` / `commands` 等全链路报 `no such table`。改为从 `framework/database` 向上回溯至多 4 级，优先匹配 `项目根/sql/<file>`，已实测命中。
+- **插件 WebUI 静态资源路由 404**：`/api/plugin_webui/<plugin>/assets/<path:filename>` 路由中 `/assets/` 为字面段，Flask 将 `filename` 解析为 `mf.js`（不含 `assets/`），原 handler 却去 `web/mf.js` 查找（真实文件在 `web/assets/mf.js`）返回 404，导致复用 `mf_core/assets` 的业务插件页 `MF` 全局对象未定义、`MF.crudPage(...)` 抛 `ReferenceError`。改为拼到 `web/assets/<filename>` 下返回，URL 契约不变。
+
+---
+
 ## v1.4.0（2026-09-11）
 
 > 主题：**HTTPS/WSS 与可自定义界面**——开启 HTTPS/WSS（SSL 证书路径可配，相对/绝对），
