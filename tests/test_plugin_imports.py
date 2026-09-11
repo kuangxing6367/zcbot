@@ -22,7 +22,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework.loader import PluginLoader
+from framework.loader import PluginLoader, _PluginSourceLoader
 
 ok = fail = 0
 
@@ -50,9 +50,12 @@ def load_like_framework(loader, plugin_name, plugin_path):
         sys.path.insert(0, plugin_path)
     module = loader._ensure_plugin_package(plugin_name, plugin_path)
     loader._preload_plugin_submodules(plugin_name, plugin_path)
+    main_path = os.path.join(plugin_path, "main.py")
     spec = importlib.util.spec_from_file_location(
-        f"plugin_{plugin_name}", os.path.join(plugin_path, "main.py"))
+        f"plugin_{plugin_name}", main_path,
+        loader=_PluginSourceLoader(f"plugin_{plugin_name}", main_path))
     module.__spec__ = spec
+    module.__loader__ = spec.loader
     spec.loader.exec_module(module)
     return module
 
