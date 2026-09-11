@@ -6,7 +6,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework.db import Database, _auto_create_tables
+from framework.database.db import Database, _auto_create_tables
 from framework import perm
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),

@@ -19,7 +19,7 @@ import time
 from typing import Callable, Optional
 
 from framework.log_broker import log_broker
-from framework.event import _extract_text, _has_text_segment
+from framework.messaging.event import _extract_text, _has_text_segment
 
 logger = logging.getLogger('zcbot')
 
@@ -318,7 +318,7 @@ class MessageRouter:
         if not message:
             return  # 防御：存在文本段时提取结果必非空
 
-        from framework.event import Event
+        from framework.messaging.event import Event
         ev = Event(event, bot_name)
         ev._framework = self.framework
 
@@ -468,7 +468,7 @@ class MessageRouter:
         事件名：message.<消息段类型>（如 message.share）+ 通用 message.media
         载荷：Event 对象，插件可通过 ev.segments / ev.share 等访问富媒体数据
         """
-        from framework.event import Event
+        from framework.messaging.event import Event
         ev = Event(event, bot_name)
         ev._framework = self.framework
         # 提取非文本/非回复消息段类型（text/at/reply 不参与广播）

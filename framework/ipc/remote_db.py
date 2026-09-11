@@ -2,7 +2,7 @@
 """
 RemoteDatabase —— 宿主侧数据库代理（进程2 插件经此 RPC 到进程1 的真实 Database）
 
-接口与 framework/db.py 的 Database 对齐，插件/框架代码无需改动：
+接口与 framework/database/db.py 的 Database 对齐，插件/框架代码无需改动：
 每个方法把调用转发为 IPC RPC `db.<name>`，由核心进程在真实数据库上执行。
 
 说明：
@@ -20,7 +20,7 @@ logger = logging.getLogger('zcbot')
 
 
 class RemoteDatabase:
-    """代理核心进程的 Database（接口对齐 framework/db.py 的 Database）"""
+    """代理核心进程的 Database（接口对齐 framework/database/db.py 的 Database）"""
 
     def __init__(self, client):
         self._client = client

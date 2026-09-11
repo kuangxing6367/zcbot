@@ -12,7 +12,7 @@
 
 调用方式：
 - db.py 的 init_db() 启动时自动调用 auto_init_database(database)
-- 也可独立运行: python -m framework.init_db
+- 也可独立运行: python -m framework.database.init_db
 """
 import logging
 import os
@@ -188,7 +188,7 @@ def _init_mysql(database):
 
 def _init_sqlite(database):
     """SQLite 模式自动建表（复用 db.py 的 SQL 翻译）"""
-    from framework.db import _translate_sql_for_sqlite
+    from framework.database.db import _translate_sql_for_sqlite
 
     sql_file = _find_sql_file('init.sql')
     if not sql_file:
@@ -299,10 +299,10 @@ def _split_sql_statements(sql: str) -> list:
 # ── 独立运行入口 ──────────────────────────────────────────────
 
 def _main():
-    """独立运行: python -m framework.init_db [config.yaml]"""
+    """独立运行: python -m framework.database.init_db [config.yaml]"""
     import sys
     from framework.config import load_config
-    from framework.db import init_db, _parse_sqlite_type
+    from framework.database.db import init_db, _parse_sqlite_type
 
     config_path = sys.argv[1] if len(sys.argv) > 1 else None
     config = load_config(config_path)

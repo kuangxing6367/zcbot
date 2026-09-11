@@ -5,7 +5,7 @@ OneBot 11 协议适配器（官方插件）
 本模块是 OneBot 协议专属实现，框架核心（framework/）不包含任何 OneBot 代码：
 - WebSocket 接入 / 连接管理 / API 调用通道都在本插件内；
 - 标准动作封装见同目录 onebot_api.py；
-- 通过 framework.protocol.ProtocolAdapter 抽象与 ServiceRegistry 接入框架。
+- 通过 framework.messaging.protocol.ProtocolAdapter 抽象与 ServiceRegistry 接入框架。
 """
 import asyncio
 import importlib.util
@@ -21,7 +21,7 @@ from urllib.parse import urlparse, parse_qs
 
 import websockets
 
-from framework.protocol import ProtocolAdapter
+from framework.messaging.protocol import ProtocolAdapter
 
 logger = logging.getLogger('zcbot')
 
