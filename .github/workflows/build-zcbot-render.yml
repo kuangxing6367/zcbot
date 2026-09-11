@@ -1,5 +1,9 @@
 name: Build zcbot_render native extension
 
+# 编译 image_renderer 插件的原生扩展（abi3，一份产物兼容 Python 3.9+）
+#   原生 runner：win64 / win32 / linux-x86_64 / linux-aarch64
+#   交叉编译（zig）：linux-i686(x32) / linux-armv7 / linux-loongarch64(龙芯)
+# 产物为 artifact，下载后放入 core_plugins/image_renderer/native/bin/<平台>/
 on:
   push:
     branches: [main]
@@ -12,46 +16,141 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: build (${{ matrix.os }})
+  # ── 有原生 runner 的平台：直接在本机架构上编译 ──────────────────
+  native:
+    name: native (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            artifact: zcbot_render-win64
+          - platform: win64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
             produced: zcbot_render.dll
             renamed: zcbot_render.pyd
-          - os: ubuntu-latest
-            artifact: zcbot_render-linux-x86_64
+          - platform: win32
+            os: windows-latest
+            target: i686-pc-windows-msvc
+            produced: zcbot_render.dll
+            renamed: zcbot_render.pyd
+          - platform: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             produced: libzcbot_render.so
             renamed: zcbot_render.so
-    runs-on: ${{ matrix.os }}
+          - platform: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            produced: libzcbot_render.so
+            renamed: zcbot_render.so
     steps:
       - uses: actions/checkout@v4
 
-      # abi3-py39 稳定 ABI：一份扩展兼容 Python 3.9+
       - uses: dtolnay/rust-toolchain@stable
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core_plugins/image_renderer/native
+          key: ${{ matrix.platform }}
 
       - name: Build (release)
         working-directory: core_plugins/image_renderer/native
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare artifact
         shell: bash
         working-directory: core_plugins/image_renderer/native
         run: |
+          set -e
           mkdir -p dist
-          cp "target/release/${{ matrix.produced }}" "dist/${{ matrix.renamed }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.produced }}" "dist/${{ matrix.renamed }}"
           ls -la dist
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: zcbot_render-${{ matrix.platform }}
+          path: core_plugins/image_renderer/native/dist/*
+          if-no-files-found: error
+
+  # ── 无原生 runner 的平台：cargo-zigbuild（zig 当链接器）交叉编译 ──
+  # glibc 底线对齐 Rust 官方 gnu target 基线（x86/arm 取 2.17）；
+  # LoongArch 的 glibc 起步就是 2.36，无法更低。
+  cross:
+    name: cross (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-i686
+            target: i686-unknown-linux-gnu
+            glibc: '2.17'
+          - platform: linux-armv7
+            target: armv7-unknown-linux-gnueabihf
+            glibc: '2.17'
+          - platform: linux-loongarch64
+            target: loongarch64-unknown-linux-gnu
+            glibc: '2.36'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core_plugins/image_renderer/native
+          key: ${{ matrix.platform }}
+
+      # pip 包会连带装上 ziglang（自带 zig 二进制），无需系统工具链
+      - name: Install cargo-zigbuild + zig
+        run: |
+          pip install cargo-zigbuild
+          cargo zigbuild --version
+
+      - name: Build (release, cross via zig)
+        working-directory: core_plugins/image_renderer/native
+        env:
+          # abi3 扩展：不需要目标平台的 Python，跳过解释器探测以适配交叉编译
+          PYO3_NO_PYTHON: '1'
+        run: |
+          cargo zigbuild --release --target ${{ matrix.target }}.${{ matrix.glibc }}
+
+      - name: Verify ELF architecture
+        working-directory: core_plugins/image_renderer/native
+        run: |
+          python - "${{ matrix.target }}" "target/${{ matrix.target }}/release/libzcbot_render.so" <<'PY'
+          import struct, sys
+          expect_arch, path = sys.argv[1], sys.argv[2]
+          d = open(path, 'rb').read()
+          assert d[:4] == b'\x7fELF', 'not an ELF file'
+          machines = {3: 'i686', 40: 'armv7', 183: 'aarch64', 258: 'loongarch64', 62: 'x86_64'}
+          machine = machines.get(struct.unpack_from('<H', d, 18)[0], '?')
+          cls = 'ELF64' if d[4] == 2 else 'ELF32'
+          want = expect_arch.split('-')[0]
+          assert machine == want, f'architecture mismatch: built {machine}, expected {want}'
+          print(f'OK  {cls} {machine}  size={len(d)}')
+          PY
+
+      - name: Prepare artifact
+        shell: bash
+        working-directory: core_plugins/image_renderer/native
+        run: |
+          set -e
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/libzcbot_render.so" dist/zcbot_render.so
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zcbot_render-${{ matrix.platform }}
           path: core_plugins/image_renderer/native/dist/*
           if-no-files-found: error
