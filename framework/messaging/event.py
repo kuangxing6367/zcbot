@@ -101,6 +101,18 @@ class Event:
 
         # 消息内容（提取纯文本用于命令匹配）
         self.message = _extract_text(raw.get('message', ''))
+        # 群内被 @机器人 触发时，OneBot 会把 @ 段编码为 [@self_id] 前缀拼进文本，
+        # 导致命令前缀匹配（如 "@bot 查订单"）被污染成 "[@bot]查订单" 而失效。
+        # 此处仅从【匹配文本】剥离 leading [@self_id]，原始 segments 不动，
+        # 插件仍可通过 ev.has_at_bot / ev.at_list 读取艾特信息。
+        _raw_msg = raw.get('message', '')
+        if isinstance(_raw_msg, list) and _raw_msg and \
+                _raw_msg[0].get('type') == 'at' and \
+                str(_raw_msg[0].get('data', {}).get('qq', '')) == str(self.self_id):
+            _bot_at_prefix = f'[@{self.self_id}]'
+            if self.message.startswith(_bot_at_prefix):
+                # 同时清掉 @ 后常见的尾随空格，避免 "查订单" 被前导空格挡住前缀匹配
+                self.message = self.message[len(_bot_at_prefix):].lstrip()
         self.message_id = raw.get('message_id', 0)
         self.raw_message = _extract_text(raw.get('raw_message', raw.get('message', '')))
 
