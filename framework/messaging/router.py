@@ -19,7 +19,7 @@ import time
 from typing import Callable, Optional
 
 from framework.log_broker import log_broker
-from framework.messaging.event import _extract_text, _has_text_segment
+from framework.messaging.event import _has_text_segment
 from framework.hooks import HookPoints
 
 logger = logging.getLogger('zcbot')
@@ -315,13 +315,14 @@ class MessageRouter:
             await self._broadcast_non_text(event, bot_name)
             return
 
-        message = _extract_text(event.get('message', ''))
-        if not message:
-            return  # 防御：存在文本段时提取结果必非空
-
         from framework.messaging.event import Event
         ev = Event(event, bot_name)
         ev._framework = self.framework
+        # 复用 Event 构造时已做 @机器人 前缀剥离的匹配文本（见 Event.__init__），
+        # 使 "@bot 命令" 能正常命中，而非被 [@bot] 前缀污染导致命令失效。
+        message = ev.message
+        if not message:
+            return  # 防御：存在文本段时提取结果必非空
 
         routes = self._routes
         plugin_order = self._plugin_order
