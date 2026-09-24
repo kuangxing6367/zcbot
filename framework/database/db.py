@@ -363,7 +363,7 @@ def _auto_create_tables(database):
             )
         """,
 
-        # ── 权限系统（LuckPerms 风格）─────────────────────────────
+        # ── 权限系统（节点式）─────────────────────────────
         # node = 'group.xxx' 表示继承/加入 xxx 组；context_* 为 NULL = 全局生效
         # 时间字段统一用 VARCHAR(32) 存 unix 时间戳字符串（SQLite/MySQL 一致）
         # 注意：SQLite 不支持 CREATE TABLE 内联 INDEX，索引由 _migrate_perm_tables 补建
@@ -512,7 +512,7 @@ def _migrate_commands_require_perm(database):
             else:
                 database.execute(
                     "ALTER TABLE commands ADD COLUMN require_perm VARCHAR(255) DEFAULT '' "
-                    "COMMENT '权限节点要求(LuckPerms风格), 空=不限制'"
+                    "COMMENT '权限节点要求(节点式), 空=不限制'"
                 )
             logger.info("数据库迁移: commands 表添加 require_perm 列")
     except Exception:

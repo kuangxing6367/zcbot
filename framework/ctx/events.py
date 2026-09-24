@@ -66,7 +66,7 @@ class PluginEventsMixin:
         """
         在框架 Web 服务器上注册一条自定义 REST 路由，自动复用框架登录/API Key 鉴权。
 
-        这是把 ZCBOT 当通用服务宿主的关键接入点：外部系统/页面可通过 HTTP 与插件交互，
+        这是把 ZCBOT 当IM 平台的关键接入点：外部系统/页面可通过 HTTP 与插件交互，
         而不必自己开 HTTP 服务、自己写鉴权。
 
         :param path: 路由路径，如 '/api/my/stats' 或 '/my/stats'
@@ -165,7 +165,7 @@ class PluginEventsMixin:
         """发布事件（同步桥接，供旧插件使用）"""
         self._framework.event_bus.emit(event_name, payload)
 
-    # ---- 扩展点（微内核契约：把行为挂到内核的任意运行环节）----
+    # ---- 扩展点（内核契约：把行为挂到内核的任意运行环节）----
 
     def hook(self, point: str, handler: Callable, priority: int = 50):
         """

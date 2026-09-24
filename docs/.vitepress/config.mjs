@@ -5,7 +5,7 @@ import { defineConfig } from 'vitepress'
 // 若改回项目页托管（https://kuangxing6367.github.io/zcbot/），把 base 改成 '/zcbot/'
 export default defineConfig({
   title: 'ZCBOT',
-  description: '事件驱动的插件化服务宿主',
+  description: '事件驱动的 IM 平台',
   lang: 'zh-CN',
   base: '/',
   cleanUrls: true,

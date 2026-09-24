@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-权限系统（LuckPerms 风格）管理接口
+权限系统（节点式）管理接口
 """
 import logging
 

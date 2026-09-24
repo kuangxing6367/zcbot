@@ -13,12 +13,12 @@
 [project]
 name = "zcbot"
 version = "1.5.1"
-description = "ZCBOT 插件化服务宿主：微内核 + 扩展点契约 + 协议无关接入端（内置 OneBot 11 / QQ 官方 / Telegram / Discord）"
+description = "ZCBOT 事件驱动 IM 平台：内核 + 扩展点契约 + 协议无关接入端（内置 OneBot 11 / QQ 官方 / Telegram / Discord）"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT OR Apache-2.0" }
 authors = [{ name = "kuangxing6367" }]
-keywords = ["onebot", "telegram", "discord", "qq", "bot", "plugin", "microkernel", "framework"]
+keywords = ["onebot", "telegram", "discord", "qq", "bot", "plugin", "event-driven", "framework"]
 
 # 核心依赖（SQLite 模式必须）—— 与 requirements.txt 上半段保持一致
 dependencies = [

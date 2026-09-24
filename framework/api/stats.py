@@ -70,7 +70,7 @@ def register(ctx):
     @app.route('/api/envinfo', methods=['GET'])
     @require_auth
     def envinfo():
-        """获取系统环境信息（参考 Koishi envinfo 命令）"""
+        """获取系统环境信息"""
         import psutil  # 延迟导入，避免拖慢框架启动
         try:
             import platform

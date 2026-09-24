@@ -111,7 +111,7 @@ async def handle(event, match):
 
 ## 五、权限（权限组轴）
 
-身份判断用上面的 `event.role`；LuckPerms 风格的权限节点用下面这套，
+身份判断用上面的 `event.role`；节点式的权限节点用下面这套，
 首次调用时解析并缓存，普通消息零开销：
 
 | 成员 | 说明 |

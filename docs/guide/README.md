@@ -1,6 +1,6 @@
 # ZCBOT 开发文档
 
-> **ZCBOT 是一个事件驱动的插件化服务宿主**，内置依赖注入（服务注册表）、LuckPerms 风格权限引擎、
+> **ZCBOT 是一个事件驱动的 IM 平台**，内置依赖注入（服务注册表）、节点式权限引擎、
 > 双方言持久化、Web 管理后台与协议无关的接入端抽象。
 >
 > **OneBot 11只是默认接入端之一，不是身份。** 换一个 `ProtocolAdapter`，即可接入
@@ -34,7 +34,7 @@
 
 ### 角色 C：我要接非 IM 的事件源 / 写自己的接入端（高级开发者）
 
-> 目标：把 ZCBOT 当通用宿主，接 HTTP Webhook、纯定时、其它 IM，或理解内核分层。
+> 目标：把 ZCBOT 当可扩展 IM 平台，接 HTTP Webhook、纯定时、其它 IM，或理解内核分层。
 
 1. [官方最佳实践](./best-practices.md) —— **先读这篇**：纯定时、HTTP Webhook、带权限业务后台的完整范式
 2. [协议适配器 ProtocolAdapter](../api/advanced/protocol_adapter.md) —— 写自己接入端的契约与完整示例
@@ -56,7 +56,7 @@
 | [配置系统](./configuration.md) | `config.yaml`、`core_plugins.yaml`、插件配置 schema | A/B |
 | [编写插件](./writing-plugins.md) | 从零写完整插件的手把手教程 | B |
 | [多轮会话](./session.md) | `wait_for` / `create_session` 多轮交互 | B |
-| [官方最佳实践](./best-practices.md) | 当通用宿主用：定时/Webhook/业务后台、通用插件规范与自查清单 | B/C |
+| [官方最佳实践](./best-practices.md) | 当可扩展 IM 平台用：定时/Webhook/业务后台、通用插件规范与自查清单 | B/C |
 
 ### API 参考（写插件时查）
 
@@ -87,7 +87,7 @@
 2. 跟「编写插件」做出第一个能响应命令的插件；
 3. 插件要拆多文件时，先读「插件加载与模块机制」；
 4. 需要存数据、定时、权限、多轮交互时，查对应进阶文档；
-5. 想脱离 IM 平台 当通用宿主，读「最佳实践」+「协议适配器」；
+5. 想脱离 IM 平台 当可扩展 IM 平台，读「最佳实践」+「协议适配器」；
 6. 日常开发随时查 `ctx` 与 `Event` 两份 API 参考。
 
 ---

@@ -5,7 +5,7 @@
 核心/宿主两侧复用同一个 JsonRpcConnection：
 - 传输用 multiprocessing.connection（pickle 帧，原生支持 datetime/bytes），
   authkey 在 Listener/Client 层已做内置摘要鉴权。
-- 信封字段 JSON 风格可读：
+- 信封字段 JSON 格式可读：
     {"t":"req|res|event|ping|pong","id":int,"method":str,"params":dict,
      "result":..., "error":str, "channel":str,"payload":...}
 - 双向：
