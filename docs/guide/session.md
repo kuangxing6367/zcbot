@@ -1,16 +1,13 @@
 # 多轮会话
 
-> **适合谁**：想做「问一句、答一句」多轮对话的插件开发者。依赖官方插件 `session`（默认已启用）。
-
-需要官方插件 `core_plugins.session`（默认启用）。它通过一个**原始消息处理器**
-拦截“正在等待中的用户”的下一条消息，从而实现“问一句、等一句”的多轮交互。
+用户发 `/问卷`，机器人问「你的昵称是？」，用户回答后又接着问「你在哪个城市？」——一问一答要接得上号，靠的是官方插件 `core_plugins.session`（默认已启用）。它注册了一个**原始消息处理器**，在命令匹配之前拦下「正在等待回复的用户」发来的下一条消息，把这次对话从普通消息流里摘出来。
 
 :::tip 会话的键
 会话按 `用户:群号` 区分：同一用户在不同群的会话互不影响；私聊的群号为 0。
 等待中的那条回复会被会话**消费掉**（不再走命令匹配）。
 :::
 
-## 方式一：ctx.wait_for()（一问一答）
+## 一问一答：`ctx.wait_for()`
 
 ```python
 async def handle_survey(event, match):
@@ -43,7 +40,7 @@ def extract_text(raw):
 
 ### handler 过滤
 
-第四个参数 `handler(raw_event) -> bool` 用于决定“这条消息算不算有效回复”：
+第四个参数 `handler(raw_event) -> bool` 用来决定「这条消息算不算有效回复」：
 返回 `True` 消费并结束等待，返回 `False` 继续等下一条（同步/异步函数均可）。
 
 ```python
@@ -53,7 +50,7 @@ def only_number(raw):
 reply = await ctx.wait_for(event, prompt="请输入数字：", timeout=30, handler=only_number)
 ```
 
-## 方式二：ctx.create_session()（连续多轮）
+## 连续多轮：`ctx.create_session()`
 
 多轮对话用异步上下文管理器，`ask()` 每轮发送提示并等待，数据累积在 `sess.data`：
 
@@ -121,12 +118,12 @@ def register(ctx):
     ctx.command("/问卷", handle_survey, description="填写问卷")
 ```
 
-## 机制与限制
+## 会话怎么工作、有哪些边界
 
 - 会话由 `SessionManager` 管理，等待中的 future 带过期时间，后台任务周期性清理；
 - 同时存在的会话数有上限（防止内存膨胀），超限时先清理过期会话；
 - 一个用户在同一会话键上同时只能有一个等待；重复发起会覆盖旧等待；
-- 会话只负责“等下一条消息”，不做状态机；复杂分支流程用 `sess.data` + 循环自行编排；
+- 会话只负责「等下一条消息」，不做状态机；复杂分支流程用 `sess.data` + 循环自行编排；
 - 会话等待会让出协程，期间不阻塞其他用户消息；
 - 会话依赖 `api_caller` 服务发送提示；若**一个接入端都没启用**（默认接入端是 onebot_adapter），`ask` 的提示发不出去，但 `wait()` 仍可等待；换成 http_inject 等其它接入端时提示照常。
 
@@ -138,3 +135,5 @@ def register(ctx):
 | 拿到的是消息段数组 | 这是原始事件，用 `_extract_text(raw["message"])` 取文本 |
 | 群里两个人互相干扰 | 不会，会话键含 `user_id`；同一用户多群也按群隔离 |
 | 想中途取消 | 调用 `sess.close()` 或直接 `return`（退出上下文自动清理） |
+
+API 签名与更多参数见 [ctx 参考 · 多轮会话](../api/basic/ctx.md)。

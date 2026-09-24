@@ -1,9 +1,6 @@
 # 定时任务
 
-> **适合谁**：想让 ZCBOT「到点自动干活」（日报、签到重置、健康检查…）的插件开发者。不需要接聊天平台也能跑。
-
-ZCBOT 的定时能力由官方插件 `core_plugins/scheduler`（基于 APScheduler
-`AsyncIOScheduler`）提供，用户插件通过 `ctx.task()` 注册，开箱即用。
+每天 8 点发日报、零点重置签到、每 5 分钟探活——这类到点自动执行的活不必挂在某条消息上。官方插件 `core_plugins/scheduler` 基于 APScheduler `AsyncIOScheduler` 提供定时能力，用户插件通过 `ctx.task()` 注册，开箱即用。
 
 ## 基本用法：ctx.task()
 
@@ -29,7 +26,7 @@ def register(ctx):
 
 :::tip 周字段注意
 APScheduler 的 `day_of_week` 用 `0=monday … 6=sunday`，也接受
-`mon,tue,wed,thu,fri,sat,sun`，和部分 crontab “0=周日”的习惯不同。
+`mon,tue,wed,thu,fri,sat,sun`，和部分 crontab「0=周日」的习惯不同。
 :::
 
 ### 处理函数要求
@@ -42,7 +39,7 @@ async def daily_report():           # 同步 def / async def 都支持
     ctx.log("日报已发送")
 ```
 
-- **任务函数无参数**，也不接收 `event/match`；
+- 任务函数无参数，也不接收 `event/match`；
 - 函数必须定义在插件主模块顶层（调度器按 `handler.__name__` 从主模块取函数对象）；
 - 异步函数直接 await，同步函数在线程中执行；单任务异常被捕获并记录，不影响其他任务；
 - 任务补触发宽限 `misfire_grace_time=600` 秒（进程短暂卡住后，错过 10 分钟内的任务仍补跑一次）。
@@ -57,7 +54,7 @@ async def daily_report():           # 同步 def / async def 都支持
 
 ## 高级：直接使用底层 APScheduler
 
-`ctx.task()` 只覆盖最常用的 **cron** 触发。需要 interval（固定间隔）、
+`ctx.task()` 只覆盖最常用的 cron 触发。需要 interval（固定间隔）、
 date（指定时刻执行一次）等触发器时，可取到底层原生 Scheduler：
 
 ```python
@@ -88,7 +85,7 @@ def register(ctx):
 
 :::warning 任务 ID 约定
 自己 `add_job` 时请用 `<插件名>:<业务名>` 前缀，这样插件卸载时
-`remove_plugin_tasks` 才能按前缀把它一起清掉，避免“幽灵任务”。
+`remove_plugin_tasks` 才能按前缀把它一起清掉，避免幽灵任务。
 :::
 
 ## 管理接口

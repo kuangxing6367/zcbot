@@ -1,12 +1,12 @@
 # 架构详解
 
-> **适合谁**：想搞清「消息从进来到插件回复，中间经历了什么」的读者。这篇讲分层、启动顺序和消息流转；只是写业务命令的话，可以以后再看。
+你在群里发出一条命令，插件几乎立刻回复——这中间经历了分层加载、事件归一、路由匹配和一次服务注册表查询。把这条链路拆开看，才能在插件出问题时知道该往哪一层查。
 
 ## 分层总览
 
 ```
 ┌─────────────────────────────────────────────────┐
-│            Core Framework（framework/ 极简内核）      │
+│      Core Framework（framework/ 极简内核）          │
 │  插件加载器 loader · 事件总线 event_bus          │
 │  消息路由 router · 上下文 ctx · 数据库 db         │
 └──────────────────────┬──────────────────────────┘
@@ -23,7 +23,7 @@
                 └──────────────┘
 ```
 
-> 上图以默认接入端 `onebot_adapter` 为例；`http_inject`、自写 `ProtocolAdapter` 都在同一位置把事件归一化后送入内核，后续流程完全一致——内核不区分事件来自哪个接入端。
+上图以默认接入端 `onebot_adapter` 为例；`http_inject`、自写 `ProtocolAdapter` 都在同一位置把事件归一化后送入内核，后续流程完全一致——内核不区分事件来自哪个接入端。
 
 ## 启动时序
 
@@ -76,7 +76,7 @@ WebSocket 服务端 (core_plugins/onebot_adapter)
 
 ## 服务注册表
 
-核心框架通过 `services` 注册表解耦官方插件与用户插件：
+极简内核通过 `services` 注册表解耦官方插件与用户插件：
 
 ```python
 # 官方插件侧：注册能力
@@ -97,15 +97,15 @@ caller = ctx._framework.services.get('api_caller')
 | `web_server` | webui | Web 管理后台服务 |
 | `http_api` | http_api | 独立对外 HTTP API（默认关闭） |
 
-> `protocol_adapter` / `api_caller` 是**协议无关的通用槽位**：默认由 onebot_adapter 填充；换成其它接入端后由新接入端填充，业务插件的取用方式不变。
-> 连接页 `/api/connection` 与仪表盘状态由各接入端的 `get_connection_info()` / `get_connected_bots()` 自描述，内核不写死任何协议字段。
+`protocol_adapter` / `api_caller` 是协议无关的通用槽位：默认由 onebot_adapter 填充；换成其它接入端后由新接入端填充，业务插件的取用方式不变。
+连接页 `/api/connection` 与仪表盘状态由各接入端的 `get_connection_info()` / `get_connected_bots()` 自描述，内核不写死任何协议字段。
 
 详见 [ServiceRegistry](../api/basic/services.md)。
 
 ## 插件加载机制（要点）
 
 - 每个用户插件的主模块注册为 `plugin_<插件名>`，它同时是一个带 `__path__`
-  的“合成包”，因此插件内部可以用 `from .xxx import Y` 做相对导入；
+  的合成包，因此插件内部可以用 `from .xxx import Y` 做相对导入；
 - 子模块同时拥有 `plugin_<名>.<模块>`（相对导入）、`plugin_<名>_<模块>`（旧唯一名）、
   `<模块>`（短名绝对导入）三个名字，指向同一对象；
 - 卸载按模块 `__file__` 前缀一次性扫净 `sys.modules`。
@@ -127,18 +127,18 @@ caller = ctx._framework.services.get('api_caller')
 ## 心跳、增量注册与热重载
 
 - 每 `plugin.heartbeat_interval`（默认 60s）执行一次 `heartbeat_register()`：
-  扫描插件目录 `.py` 文件的最大 mtime，**仅对发生变化的插件重新执行
-  `register(ctx)`**，不重新 import；
-- 因此“改了注册结构（新增命令/任务）”靠心跳即可刷新，
-  而“改了函数体逻辑”需要 Web 面板的**完全重载**（unload + load，重新读盘）；
+  扫描插件目录 `.py` 文件的最大 mtime，仅对发生变化的插件重新执行
+  `register(ctx)`，不重新 import；
+- 因此改了注册结构（新增命令/任务）靠心跳即可刷新，
+  而改了函数体逻辑需要 Web 面板的完全重载（unload + load，重新读盘）；
 - 心跳后路由缓存失效并兜底重建，保证命令表与内存快照一致。
 
 ## 自检与自愈
 
-- **依赖自愈**：启动时对缺依赖导致加载失败的插件，在补装依赖后自动再试；
-- **孤儿自检 `self_check_orphans`**：周期性清理代码目录已不存在的命令/任务，
-  以及调度器里属于未加载插件的“幽灵任务”；
-- **内存看门狗**：每 3s 采样，单插件模块估算内存连续超过
+- 依赖自愈：启动时对缺依赖导致加载失败的插件，在补装依赖后自动再试；
+- 孤儿自检 `self_check_orphans`：周期性清理代码目录已不存在的命令/任务，
+  以及调度器里属于未加载插件的幽灵任务；
+- 内存看门狗：每 3s 采样，单插件模块估算内存连续超过
   `plugin.max_memory_mb`（默认 64MB）两次即自动卸载并记录日志。
 
 ## 事件总线

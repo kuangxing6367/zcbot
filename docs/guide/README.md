@@ -3,13 +3,13 @@
 **ZCBOT 是一个事件驱动的 IM 平台**：接上聊天软件或定时/Webhook 事件，用 Python 插件处理，再发回去。
 权限、Web 后台、数据库、多轮会话都是现成的——你主要写 `register(ctx)` 里的业务。
 
-不必从下面所有链接读完。**先选身份，按推荐顺序走即可。**
+不必从下面所有链接读完。**先想清楚你现在的任务，按推荐顺序走即可。**
 
 ---
 
-## 一、我该怎么读？
+## 你现在的任务是哪个？
 
-### 只想跑起来用（不写代码或少写代码）
+### 只想跑起来用
 
 1. [安装](./installation.md) —— 下载、依赖、目录
 2. [开始使用](./getting-started.md) —— 启动、第一次对话、进后台
@@ -17,7 +17,7 @@
 4. [配置系统](./configuration.md) —— 改端口、开关插件、换数据库
 5. [部署上线](../advanced/deployment.md) —— 放到服务器长期跑时再看
 
-### 我要写插件（最常见）
+### 要写插件
 
 1. [编写插件](./writing-plugins.md) —— **从零跟做一条完整命令**
 2. [多轮会话](./session.md) —— 一问一答、连续对话
@@ -25,7 +25,7 @@
 4. 插件拆多文件前先读：[加载与模块机制](../advanced/loader.md)
 5. 按需查：[数据库](../advanced/database.md) · [定时任务](../advanced/scheduler.md) · [权限](../advanced/permission.md)
 
-### 我要接非 IM 事件源 / 自写接入端
+### 要接非 IM 事件源 / 自写接入端
 
 1. [最佳实践](./best-practices.md) —— 纯定时、Webhook、带权限后台的完整范式
 2. [协议适配器](../api/advanced/protocol_adapter.md) —— 自定义接入端契约与示例
@@ -33,19 +33,19 @@
 
 ---
 
-## 二、按主题查
+## 按主题查
 
 ### 指南
 
-| 文档 | 你会得到什么 | 受众 |
-| ---- | ------------ | ---- |
-| [安装](./installation.md) | 环境、依赖、目录结构、升级 | 使用者 |
-| [开始使用](./getting-started.md) | 启动成功、第一次对话、Web 后台 | 使用者 |
-| [对接 IM 平台](./connect-im.md) | 反向 WS、多平台接入、富媒体与群管 | 使用者 |
-| [配置系统](./configuration.md) | 两份 yaml、插件开关、安全清单 | 使用者 / 开发 |
-| [编写插件](./writing-plugins.md) | 手把手做出签到类完整插件 | 插件开发者 |
-| [多轮会话](./session.md) | `wait_for` / `create_session` | 插件开发者 |
-| [最佳实践](./best-practices.md) | 不绑 IM 的三种玩法 + 写插件规范 | 开发者 |
+| 文档 | 你会得到什么 |
+| ---- | ------------ |
+| [安装](./installation.md) | 环境、依赖、目录结构、升级 |
+| [开始使用](./getting-started.md) | 启动成功、第一次对话、Web 后台 |
+| [对接 IM 平台](./connect-im.md) | 反向 WS、多平台接入、富媒体与群管 |
+| [配置系统](./configuration.md) | 两份 yaml、插件开关、安全清单 |
+| [编写插件](./writing-plugins.md) | 手把手做出签到类完整插件 |
+| [多轮会话](./session.md) | `wait_for` / `create_session` |
+| [最佳实践](./best-practices.md) | 不绑 IM 的三种玩法 + 写插件规范 |
 
 ### API（写插件时查）
 
@@ -71,9 +71,9 @@
 
 ---
 
-## 三、最短学习路径
+## 最短学习路径
 
-1. **安装 → 开始使用**：把框架跑绿（可以先不接聊天平台）；
+1. **安装 → 开始使用**：把系统跑绿（可以先不接聊天平台）；
 2. **编写插件**：做出第一条能回复的命令；
 3. 需要多文件时读 **加载机制**；要存数据、定时、权限时查对应进阶篇；
 4. 想接 Webhook 或其它 IM，读 **最佳实践 + 协议适配器**；
@@ -81,20 +81,20 @@
 
 ---
 
-## 四、目录速查
+## 目录速查
 
 | 路径 | 作用 |
 | ---- | ---- |
-| `framework/` | 内核：加载、路由、事件、上下文、权限、数据库（无具体 IM 实现） |
+| `framework/` | 平台内核：加载、路由、事件、上下文、权限、数据库（无具体 IM 实现） |
 | `core_plugins/` | 官方插件：`onebot_adapter` / `telegram` / `discord` / `qq_official` / `ws_client` / `http_inject` / `http_api` / `webui` / `session` / `scheduler` |
 | `core_plugins.yaml` | 官方插件开关与配置（启动自动同步） |
 | `plugins/` | 你的插件，每个一个子目录，入口 `main.py` |
 | `data/` | 日志、数据库、`plugins_dat/` 插件私有数据（长期保留） |
 | `tests/` | 自测脚本 |
 
-## 五、贯穿全局的约定
+## 贯穿全局的约定
 
 - **协议无关**：优先 `ctx.send_msg` / `ctx.actions`，少依赖平台特有字段
 - **同步 / 异步双份**：普通 `def` 用同步方法；`async def` 用 `a` 前缀异步方法（推荐）
 - **代码与数据分离**：代码在 `plugins/<名>/`（更新会覆盖），数据写 `ctx.get_data_dir()`
-- **能力来自服务**：官方能力经服务注册表取用（`api_caller`、`scheduler`、`session_manager`…），内核不直接 import 插件
+- **能力来自服务**：官方能力经服务注册表取用（`api_caller`、`scheduler`、`session_manager`…），平台内核不直接 import 插件
