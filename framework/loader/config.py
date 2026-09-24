@@ -14,6 +14,9 @@ import re
 
 logger = logging.getLogger('zcbot')
 
+# 配置/文档文件后缀（定义在此避免 loader/base↔config 循环；base re-export 兼容）
+_CONFIG_FILE_EXTS = ('.yaml', '.yml', '.toml', '.cfg', '.ini', '.md')
+
 
 class PluginConfigMixin:
     """插件配置 schema 与配置文件"""

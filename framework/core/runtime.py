@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """Framework 核心插件加载 / 依赖自愈 / 心跳·内存看门狗 / 内置任务（自 core.py 剥离的 mixin）"""
 import ast
+import asyncio
+import gc
+import importlib.util
 import logging
 import os
 import sys
@@ -15,7 +18,7 @@ class FrameworkRuntimeMixin:
     def _load_core_plugins(self):
         """加载官方插件（core_plugins/ 目录）"""
         core_plugins_dir = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), 'core_plugins')
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'core_plugins')
         if not os.path.isdir(core_plugins_dir):
             logger.warning(f"core_plugins 目录不存在: {core_plugins_dir}")
             return

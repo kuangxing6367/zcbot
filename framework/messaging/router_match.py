@@ -3,9 +3,12 @@
 
 _simple / 正则 / 插件命令匹配与命中统计；依赖 router 中的路由数据结构。
 """
+import asyncio
 import logging
 import re
 from typing import Optional
+
+from framework.log_broker import log_broker
 
 logger = logging.getLogger('zcbot')
 

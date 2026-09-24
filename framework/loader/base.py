@@ -15,7 +15,7 @@ from typing import Dict
 
 import yaml
 
-from framework.loader.config import PluginConfigMixin
+from framework.loader.config import PluginConfigMixin, _CONFIG_FILE_EXTS  # noqa: F401  _CONFIG_FILE_EXTS 定义在 config，此处 re-export
 from framework.loader.lifecycle import PluginLifecycleMixin, _PluginSourceLoader  # noqa: F401
 from framework.loader.runtime import PluginRuntimeMixin
 from framework.loader.ui import (
@@ -42,7 +42,7 @@ _cards_executor = None
 
 # ── 配置文件后缀定义（这些文件存放在 plugins_dat，而非 plugins） ──
 # 后缀匹配（.txt 不自动归类，因为可能是数据文件/requirements.txt）
-_CONFIG_FILE_EXTS = ('.yaml', '.yml', '.toml', '.cfg', '.ini', '.md')
+# _CONFIG_FILE_EXTS 定义在 framework.loader.config（避免循环），见上方 import re-export
 # 明确的配置文件名（无论后缀，都归类为配置文件）
 _CONFIG_FILE_NAMES = {
     'plugin.yaml', '_conf_schema.json', 'metadata.yaml',
