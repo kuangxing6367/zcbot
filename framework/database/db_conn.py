@@ -8,7 +8,17 @@ import logging
 import os
 import time
 import sqlite3
-import pymysql
+
+# MySQL 连接断开类错误码（触发自动重连）——定义在此避免 db↔db_conn 循环
+_MYSQL_RECONNECT_ERRORS = {2006, 2013, 2055, 1927, 1040}
+# 连接断开类错误关键字（用于兜底判断）
+_MYSQL_RECONNECT_KEYWORDS = (
+    'server has gone away',
+    'lost connection',
+    'connection is closed',
+    'broken pipe',
+    'connection reset by peer',
+)
 
 logger = logging.getLogger('zcbot')
 

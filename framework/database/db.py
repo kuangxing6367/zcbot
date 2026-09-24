@@ -28,15 +28,10 @@ from .schema import _auto_create_tables  # noqa: F401  兼容旧导入路径 fra
 
 logger = logging.getLogger('zcbot')
 
-# MySQL 连接断开类错误码（触发自动重连）
-_MYSQL_RECONNECT_ERRORS = {2006, 2013, 2055, 1927, 1040}
-# 连接断开类错误关键字（用于兜底判断）
-_MYSQL_RECONNECT_KEYWORDS = (
-    'server has gone away',
-    'lost connection',
-    'connection is closed',
-    'broken pipe',
-    'connection reset by peer',
+# MySQL 连接断开类错误码（触发自动重连）——定义在 db_conn，此处 re-export 兼容旧导入
+from framework.database.db_conn import (  # noqa: F401
+    _MYSQL_RECONNECT_ERRORS,
+    _MYSQL_RECONNECT_KEYWORDS,
 )
 
 

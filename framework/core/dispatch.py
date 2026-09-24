@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from framework.hooks import HookPoints
+from framework.log_broker import log_broker
 from framework.messaging.protocol import ProtocolAdapter
 
 logger = logging.getLogger('zcbot')
