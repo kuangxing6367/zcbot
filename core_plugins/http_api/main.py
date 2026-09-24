@@ -277,7 +277,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         async def _kick():
-            await api.set_group_kick(group_id=int(group_id), user_id=int(user_id))
+            result = await api.acall('set_group_kick',
+                                     group_id=int(group_id),
+                                     user_id=int(user_id))
+            if isinstance(result, dict) and result.get('status') == 'failed':
+                raise RuntimeError(result.get('msg') or 'set_group_kick 失败')
+            return result
 
         try:
             future = asyncio.run_coroutine_threadsafe(_kick(), self.framework.loop)
@@ -299,7 +304,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         async def _ban():
-            await api.set_group_ban(group_id=int(group_id), user_id=int(user_id), duration=int(duration))
+            result = await api.acall('set_group_ban',
+                                     group_id=int(group_id),
+                                     user_id=int(user_id),
+                                     duration=int(duration))
+            if isinstance(result, dict) and result.get('status') == 'failed':
+                raise RuntimeError(result.get('msg') or 'set_group_ban 失败')
+            return result
 
         try:
             future = asyncio.run_coroutine_threadsafe(_ban(), self.framework.loop)
@@ -320,7 +331,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         async def _unban():
-            await api.set_group_ban(group_id=int(group_id), user_id=int(user_id), duration=0)
+            result = await api.acall('set_group_ban',
+                                     group_id=int(group_id),
+                                     user_id=int(user_id),
+                                     duration=0)
+            if isinstance(result, dict) and result.get('status') == 'failed':
+                raise RuntimeError(result.get('msg') or 'set_group_ban 失败')
+            return result
 
         try:
             future = asyncio.run_coroutine_threadsafe(_unban(), self.framework.loop)

@@ -314,7 +314,7 @@ curl -X POST http://127.0.0.1:8901/hook \
 | **Webhook 接收**（HTTP/Web 回调） | 外部 POST | 见上文示例 |
 | **主动轮询 / 定时**（cron/MQTT） | 定时器 / 订阅 | 见[最佳实践](../../guide/best-practices.md)场景一 |
 
-统一入口都是 `framework.dispatch_event(event)`。**形态不同，插件零改动。**
+统一入口都是 `framework.dispatch_event(event)`。**事件入核后插件侧形态一致**（协议专有动作仍按各端能力实现）。
 
 ---
 

@@ -26,6 +26,27 @@
 
 ---
 
+## 开发中（未发版）
+
+### 修复
+- **v1.6.0 预览体检硬伤（P0）**：
+  - `framework/core/dispatch.py` 补 `log_broker` 等导入，消息分发不再 `NameError`；
+  - `framework/core/runtime.py` / `base.py` 路径 `dirname` 由 2 层改为 3 层，`core_plugins` / `plugins` / `config.yaml` 指向仓库根，官方插件可被发现；`runtime` 补 `asyncio`/`gc`/`importlib.util`；
+  - `framework/database/db_conn.py` 去掉顶层 `import pymysql`（干净 SQLite 环境可启动），重连常量下沉并由 `db.py` re-export；
+  - `framework/loader/config.py` 定义 `_CONFIG_FILE_EXTS`（`base.py` re-export）；`lifecycle.py` 补 `pip_install_all`；`ui.py` 补 logging/os/time。
+- **多接入端串线**：`ServiceRegistry.adapter_for_source` 按事件来源选适配器；`reply_text` 与 `ctx.actions` 优先走来源对应端（多端并存时不再固定 onebot / 后加载者）。
+- **http_api 群管**：`kick`/`ban`/`unban` 改走 `api.acall` 并检查 `status`，不再对 `api_caller` 直调方法导致 `AttributeError`→500；终端 `ban`/`kick` 检查返回结果，失败不假报成功。
+- **ws_client**：`websockets` 14+ 用 `additional_headers`，12/13 用 `extra_headers`，装 12/13 不再建连即 `TypeError`。
+- **qq_official**：`msg_seq` 改进程内计数器（同秒多回复不碰撞）；本地图片读取经 `asyncio.to_thread`，不再阻塞事件循环。
+
+### 测试
+- 新增 `tests/test_smoke.py`：路径解析、关键模块 import、分发+回复冒烟、按来源路由、适配器补丁断言。
+
+### 文档
+- 首页/对接 IM 诚实化：群管等协议专有动作按端能力说明，去掉「换接入端插件不用改」等超前概括。
+
+---
+
 ## v1.6.0（2026-09-24）
 
 > 主题：**多协议接入端 + 协议中立内核 + 全库「事件驱动 IM 平台」定位改写**。

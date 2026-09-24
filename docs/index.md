@@ -21,7 +21,7 @@ features:
     details: 插件热加载、Web 管理后台、多用户权限、SQLite / MySQL、定时任务——启动就有，你只写业务命令。
     link: /guide/getting-started
   - title: 一个平台，多种接入
-    details: 内置 OneBot 11（QQ）、QQ 官方、Telegram、Discord、HTTP Webhook 与出站 WS；换接入端，插件不用改。
+    details: 内置 OneBot 11（QQ）、QQ 官方、Telegram、Discord、HTTP Webhook 与出站 WS；换接入端，走统一事件与插件接口（群管等协议专有动作各端能力不同）。
     link: /guide/connect-im
   - title: 改了就能重载
     details: 功能都在 plugins/ 里，一个文件夹一个插件；后台点「重载」立即生效，不影响在线。
@@ -83,14 +83,14 @@ python main.py
 
 ## 拿它能做什么
 
-- **QQ / TG / Discord 机器人**：命令菜单、群管理、AI 对话、自动回复
+- **QQ / TG / Discord 机器人**：命令菜单、AI 对话、自动回复（群管等动作各端能力不同，见 [对接 IM](./guide/connect-im.md)）
 - **定时自动化**：日报、健康检查、到点推送（不需要任何聊天平台）
 - **事件驱动服务**：GitHub / 支付回调 → 插件处理 → 回调或通知
 - **带权限的内部工具**：多用户后台、审计日志、接口令牌
 
 ## 设计上你会在意的几件事
 
-- **协议无关**：业务只碰 `ctx.send_msg` 这类中立接口，换平台零改动
+- **协议无关**：业务优先走 `ctx.actions` 这类中立接口，换平台时事件与插件接口一致（协议专有动作需按端适配）
 - **代码与数据分离**：插件目录更新会覆盖，运行数据在 `data/`，升级不丢
 - **权限、后台、持久化内置**：不必再找一套管理系统
 

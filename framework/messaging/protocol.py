@@ -244,3 +244,31 @@ class ServiceRegistry:
         """当前主接入端（services['protocol_adapter']）"""
         primary = self._services.get('protocol_adapter')
         return primary if isinstance(primary, ProtocolAdapter) else None
+
+    def adapter_for_source(self, source: Optional[str]) -> Optional[ProtocolAdapter]:
+        """
+        按事件来源名（event.bot_name / current_source_var）找到对应适配器。
+        多接入端并存时，自动回复/ctx.actions 应走事件来源那一侧，避免串线。
+        """
+        if not source:
+            return None
+        for adapter in self._adapters.values():
+            try:
+                bots = adapter.get_connected_bots() or []
+                if source in bots:
+                    return adapter
+            except Exception:
+                pass
+        for adapter in self._adapters.values():
+            if getattr(adapter, 'bot_name', None) == source:
+                return adapter
+        primary = self._services.get('protocol_adapter')
+        if isinstance(primary, ProtocolAdapter):
+            try:
+                if source in (primary.get_connected_bots() or []):
+                    return primary
+            except Exception:
+                pass
+            if getattr(primary, 'bot_name', None) == source:
+                return primary
+        return None

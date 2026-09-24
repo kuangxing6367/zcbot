@@ -59,7 +59,14 @@ class FrameworkDispatchMixin:
         except Exception as e:
             logger.error(f"message.before_send 扩展点异常: {e}")
 
-        adapter = self.services.get('protocol_adapter')
+        # 按事件来源选接入端（多接入端并存时不串线）；找不到再退回主接入端
+        adapter = None
+        try:
+            adapter = self.services.adapter_for_source(source)
+        except Exception:
+            adapter = None
+        if adapter is None:
+            adapter = self.services.get('protocol_adapter')
         result = None
         # 仅当接入端确实覆写了 send_text（而非基类 unsupported 默认）时走适配器
         if adapter is not None and type(adapter).send_text is not ProtocolAdapter.send_text:

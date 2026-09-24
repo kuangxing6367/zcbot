@@ -45,7 +45,7 @@
 |------|------|------|
 | `ctx.plugin_name` | `str` | 当前插件名（用户插件即目录名） |
 | `ctx.logger` | `logging.Logger` | 标准库 logger，自动带插件名前缀 |
-| `ctx.actions` | 动作封装 | **协议中立（推荐）**：优先取 `services['onebot_api']`，否则协议无关 `ActionProxy` 转发到 `api_caller`；都没有才抛 `RuntimeError` |
+| `ctx.actions` | 动作封装 | **协议中立（推荐）**：按当前事件来源选对应适配器（多端不串线）；无上下文时优先 `services['onebot_api']`，否则 `ActionProxy` 转发到 `api_caller`；都没有才抛 `RuntimeError` |
 | `ctx.onebot` | 动作封装 | `ctx.actions` 的兼容别名（旧插件无需改） |
 | `ctx.db_pool_status` | `dict` | 数据库连接池状态 |
 
