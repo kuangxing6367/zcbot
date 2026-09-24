@@ -60,7 +60,11 @@ def test_paths_point_to_repo_root():
     chk("plugins 目录为仓库根/plugins",
         os.path.normpath(plugins) == os.path.normpath(os.path.join(ROOT, 'plugins')),
         plugins)
-    chk("config.yaml 在仓库根", os.path.isfile(config), config)
+    # config.yaml 属本地运行时配置（.gitignore 忽略），CI checkout 无此文件；
+    # 只校验 dirname×3 拼出的路径落在仓库根，不强制文件存在
+    chk("config.yaml 路径拼到仓库根",
+        os.path.normpath(config) == os.path.normpath(os.path.join(ROOT, 'config.yaml')),
+        config)
     # 源码字面量不再出现 dirname×2 拼 core_plugins 的旧写法
     src = open(rt.__file__, encoding='utf-8').read()
     # 旧 bug：dirname(dirname(__file__)) 两层；现为三层
