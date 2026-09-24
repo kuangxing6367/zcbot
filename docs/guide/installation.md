@@ -1,8 +1,8 @@
 # 安装
 
-按下面 4 步做完，就能把 ZCBOT 跑起来。不需要编程基础；依赖装漏了启动时也会自动补。
+想把 ZCBOT 跑起来，按下面 4 步走完就行。不需要编程基础；依赖装漏了启动时也会自动补。
 
-## 你先需要准备
+## 开始前先备好这些
 
 | 需要 | 说明 |
 | ---- | ---- |
@@ -44,7 +44,7 @@ pip install -r requirements.txt
 插件自己的依赖也会在加载时自动装。
 :::
 
-MySQL 用户额外需要 `pymysql`、`DBUtils`（切到 MySQL 时框架会提示并安装）。
+MySQL 用户额外需要 `pymysql`、`DBUtils`（切到 MySQL 时平台内核会提示并安装）。
 
 ## 第 4 步：启动
 
@@ -81,7 +81,7 @@ zcbot/
 ├── core_plugins.yaml       # 官方插件开关/配置（启动自动同步）
 ├── requirements.txt        # 依赖清单（启动自检读它）
 ├── pyproject.toml          # 项目元数据（与 requirements 同步）
-├── framework/              # 内核
+├── framework/              # 平台内核
 ├── core_plugins/           # 官方插件（在 yaml 里开关）
 │   ├── onebot_adapter/     #   OneBot 11（默认开）
 │   ├── webui/              #   Web 后台（默认开）

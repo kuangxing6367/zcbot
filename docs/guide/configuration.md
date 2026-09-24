@@ -1,16 +1,17 @@
 # 配置系统
 
-> **适合谁**：要改端口、开关插件、换数据库的人（使用者和写插件的都会用到）。先记住：ZCBOT 只有两份配置——
-> - **`config.yaml`**：框架**全局**配置（数据库、日志、安全、插件目录等），首次启动自动生成；
-> - **`core_plugins.yaml`**：**官方插件配置中心**，集中管理 `core_plugins/` 下每个官方插件的开关与配置。
->
-> 也可以在启动时传入自定义的全局配置路径：`python main.py /path/to/config.yaml`。
+要改端口、开关插件、换数据库时，你会碰到两份配置文件。先记住：
+
+- **`config.yaml`**：框架**全局**配置（数据库、日志、安全、插件目录等），首次启动自动生成；
+- **`core_plugins.yaml`**：**官方插件配置中心**，集中管理 `core_plugins/` 下每个官方插件的开关与配置。
+
+也可以在启动时传入自定义的全局配置路径：`python main.py /path/to/config.yaml`。
 
 ## 官方插件配置中心 core_plugins.yaml（重点）
 
 官方插件（`core_plugins/` 目录）的开关与配置**统一写在根目录 `core_plugins.yaml`**，不再散落在 `config.yaml`。
 
-启动时框架会自动完成同步（见 `framework/config.py` 的 `_autoload_core_plugins`）：
+启动时平台内核会自动完成同步（见 `framework/config.py` 的 `_autoload_core_plugins`）：
 
 1. 扫描 `core_plugins/` 目录，得到"已安装"的官方插件；
 2. 为**已安装但 yaml 里缺失**的插件补上默认配置块；
@@ -100,7 +101,7 @@ core_plugins:
 
 ZCBOT 作为 WebSocket **服务端**，由 NapCat / Lagrange 等 OneBot 实现端反向连接。
 客户端怎么配、连接怎么验证、插件里怎么发图片 / @ / 做群管，见 [对接 IM 平台](./connect-im.md)。
-不使用该平台 时可整体关闭该插件，改用 `http_inject` / `scheduler` 或自写接入端，
+不用 OneBot 时可整体关闭该插件，改用 `http_inject` / `scheduler` 或自写接入端，
 见 [最佳实践](./best-practices.md)。
 
 ## Web 管理后台（来自 webui）
@@ -161,7 +162,7 @@ core_plugins:
 
 ```yaml
 # SQLite（默认，零配置，数据落在单文件）
-# ⚠️ 仅适合小环境与开发环境；多群/高并发/多进程等大环境请用下方 MySQL
+# 注意：仅适合小环境与开发环境；多群/高并发/多进程等大环境请用下方 MySQL
 database:
   type: sqlite
   path: data/zcbot.db
@@ -179,7 +180,7 @@ database:
 **选型提醒**：`sqlite` 是给小环境/开发环境用的默认值，**不适合大环境**；
 上生产、群多了、并发高了就切 `mysql`。详见 [数据库](../advanced/database.md)。
 
-插件 SQL 统一写 `%s` 占位、`AUTOINCREMENT` 自增，框架自动适配方言，
+插件 SQL 统一写 `%s` 占位、`AUTOINCREMENT` 自增，平台内核自动适配方言，
 详见 [数据库](../advanced/database.md)。
 
 ## 插件相关（config.yaml）

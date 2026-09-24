@@ -1,14 +1,14 @@
 # 数据库
 
-> **适合谁**：要在插件里存数据（建表、增删改查、事务）的开发者。默认 SQLite 零配置就能用，MySQL 只需在配置里切换。
+签到插件要把积分落盘、封禁插件要记操作日志——只要你开始在插件里存数据，就会碰到建表、查询和事务。默认的 SQLite 零配置即可用；场景放大后再切 MySQL，上层接口不变。
 
 ZCBOT 支持 SQLite（默认，零配置）与 MySQL，上层使用同一套接口，
 插件基本不需要感知当前是哪种数据库。
 
-> **⚠️ 选型边界（重要）**：**SQLite 仅适合小环境与开发环境**（个人/小群、
-> 单写多读、单文件存储）；**大环境不适合 SQLite**——多群、高并发、多进程
-> 部署、长连接保活、水平扩展等场景请使用 **MySQL**。方言适配只解决
-> “SQL 能不能跑”，解决不了 SQLite 的并发与扩展上限。
+选型边界：SQLite 仅适合小环境与开发环境（个人/小群、
+单写多读、单文件存储）；大环境不适合 SQLite——多群、高并发、多进程
+部署、长连接保活、水平扩展等场景请使用 MySQL。方言适配只解决
+SQL 能不能跑，解决不了 SQLite 的并发与扩展上限。
 
 - 数据库封装：`framework/database/db.py` 的 `Database` 类；
 - SQL 方言翻译：`framework/database/dialect.py`（纯函数）；
@@ -61,7 +61,7 @@ ctx.db_execute_many("INSERT INTO t (v) VALUES (%s)", [(1,), (2,)])           # �
 
 ### 异步（async handler 推荐）
 
-异步方法在**数据库专用线程池**执行，DB 繁忙也不会卡住消息事件循环：
+异步方法在数据库专用线程池执行，DB 繁忙也不会卡住消息事件循环：
 
 ```python
 rows = await ctx.db_query_async(sql, params)
@@ -75,7 +75,7 @@ await ctx.db_execute_many_async(sql, params_list)
 
 ## 占位符：统一用 `%s`
 
-无论 SQLite 还是 MySQL，**插件 SQL 一律写 `%s` 占位符**，框架在 SQLite 下
+无论 SQLite 还是 MySQL，插件 SQL 一律写 `%s` 占位符，框架在 SQLite 下
 自动转换成 `?`。不要拼接字符串，避免 SQL 注入与方言问题：
 
 ```python
@@ -119,13 +119,13 @@ ctx.db_pool_status     # dict：连接池占用/空闲等状态，便于排障
 | 并发 | 单写多读，适合轻量场景 | 支持高并发 |
 | 占位符 | 插件写 `%s`，运行时转 `?` | 原生 `%s` |
 | 自增主键 | `INTEGER PRIMARY KEY AUTOINCREMENT` | `INT ... AUTO_INCREMENT PRIMARY KEY` |
-| 适合规模 | **仅小环境与开发环境**（个人/小群、本地调试） | **大环境**（多群、高并发、多进程部署） |
+| 适合规模 | 仅小环境与开发环境（个人/小群、本地调试） | 大环境（多群、高并发、多进程部署） |
 
-**结论照抄即可**：
+结论照抄即可：
 
 - 本地开发、个人号、小群试点 → `database.type: sqlite`（默认，零配置）；
 - 生产上线、多群、消息量大、双进程/多 worker → `database.type: mysql`，
-  **不要用 SQLite 顶大环境**（写锁、单文件、无网络拓扑，扩容到头就是换库）。
+  不要用 SQLite 顶大环境（写锁、单文件、无网络拓扑，扩容到头就是换库）。
 - 从 SQLite 迁到 MySQL：改 `config.yaml` 后重启，框架会按 `sql/init.sql`
   自动建表；业务数据需自行导出导入（结构为 MySQL 方言，双方言通用）。
 

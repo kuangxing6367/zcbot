@@ -1,13 +1,8 @@
 # 最佳实践
 
-ZCBOT 是**事件驱动的 IM 平台**，OneBot 只是默认接入端之一。
-本页讲：**怎样不把它绑死在某一个聊天软件上**——纯定时、Webhook、带权限的内部后台，以及写插件时该守的规矩。
+凌晨 8 点半，报表要自动生成并落库——此时你可能根本没接任何聊天软件。ZCBOT 的骨架是事件驱动的：调度器到点产生事件，插件响应，权限、Web 后台、数据库照常可用。这一页讲怎么用好这副骨架：纯定时、HTTP Webhook、带权限的内部工具，以及写插件时该守的规矩。
 
-**适合谁**：想把 ZCBOT 用在「不绑死某个聊天软件」场景的插件开发者；也可当进阶索引。
-
----
-
-## 一、先建立正确预期
+## 先建立正确预期
 
 很多人以为它「只能做个 QQ 机器人」。其实骨架是通用的：
 
@@ -31,11 +26,9 @@ ZCBOT 是**事件驱动的 IM 平台**，OneBot 只是默认接入端之一。
 | 审批 / 工单类业务 | 换插件 | 权限 + 会话 + 审计现成 |
 | CMS / 数据平台控制面 | 换插件 + 接入端 | 后台与 HTTP API 现成 |
 
-> **结论：权限、后台、持久化不绑任何 IM。** 你只需要一个能产生事件的接入端，加一组业务插件。
+> 结论：权限、后台、持久化不绑任何 IM。你只需要一个能产生事件的接入端，加一组业务插件。
 
----
-
-## 二、场景：没有聊天平台，纯定时
+## 场景一：没有聊天平台，纯定时
 
 「每天 8 点干活」根本不需要接入端。
 
@@ -97,11 +90,9 @@ def collect_metrics():
 > 提示：定时任务签名不带 `event`（见 [ctx 参考](../api/basic/ctx.md)）。
 > 真要发消息时，再从 `get_connected_bots()` 里选一个就绪接入端。
 
-**要点：定时任务的事件源就是时间。** 没有 OneBot 时，`scheduler` 就是你的接入端。
+要点：定时任务的事件源就是时间。没有 OneBot 时，`scheduler` 就是你的事件源。
 
----
-
-## 三、场景：HTTP Webhook（外部系统推事件）
+## 场景二：HTTP Webhook（外部系统推事件）
 
 GitHub、支付回调、CI 结果……都可以 POST 进来。
 
@@ -173,11 +164,9 @@ def unregister():
     ...
 ```
 
-之后任意插件 `@ctx.command("/hello")` 都能响应——**业务根本不知道消息来自 HTTP 还是 IM。**
+之后任意插件用 `ctx.command("/hello", ...)` 注册的命令都能响应——**业务根本不知道消息来自 HTTP 还是 IM。**
 
----
-
-## 四、场景：带权限的业务后台
+## 场景三：带权限的业务后台
 
 权限引擎、WebUI、数据库都是内置的。做一个「内部审批」只要四步：
 
@@ -187,8 +176,11 @@ def unregister():
 4. `ctx.audit_log()` 记每次操作
 
 ```python
-@ctx.command("请假", require_perm="approval.submit", help="提交请假申请")
-def leave(ev, match):
+def register(ctx):
+    ctx.command("请假", leave, require_perm="approval.submit",
+                description="提交请假申请")
+
+async def leave(ev, match):
     days = match.group(1)
     ctx.db_execute(
         "INSERT INTO leave_requests (user_id, days, status, created_at) "
@@ -197,14 +189,14 @@ def leave(ev, match):
     )
     ctx.audit_log(action="leave.submit", target_type="user",
                   target_name=str(ev.user_id), detail={"days": days})
-    ctx.asend_msg(...)  # 或任何通知渠道
+    await ctx.asend_msg(user_id=ev.user_id,
+                        group_id=ev.group_id if ev.is_group else None,
+                        message="请假申请已提交")
 ```
 
-权限、审计、后台是平台给的，你只写业务。
+权限、审计、后台是平台给的，你只写业务。权限节点与身份轴的细节见 [权限系统](../advanced/permission.md)。
 
----
-
-## 五、写插件的通用规范
+## 写插件的通用规范
 
 ### 1. 代码与数据分离
 
@@ -233,10 +225,10 @@ def handle(event, match):
     try:
         result = call_external_api()
     except requests.Timeout:
-        ctx.asend_msg(...); return
+        ctx.send_msg(...); return
     except Exception as e:
         ctx.logger.exception(f"处理失败: {e}")   # 别裸 except 吞掉
-        ctx.asend_msg(...); return
+        ctx.send_msg(...); return
 ```
 
 ### 4. 耗时操作别堵事件循环
@@ -246,7 +238,7 @@ def handle(event, match):
 ```python
 async def handle(event, match):
     result = await asyncio.to_thread(expensive_operation, arg)
-    ctx.asend_msg(...)
+    await ctx.asend_msg(...)
 ```
 
 ### 5. 业务表写进 `managed_tables`
@@ -263,14 +255,12 @@ managed_tables:
 ### 6. 卸载时清理资源
 
 ```python
-def on_unload(ctx):
+def on_unload():
     if hasattr(ctx, '_http_session'):
         ctx._http_session.close()
 ```
 
----
-
-## 六、提交前自查
+## 提交前自查
 
 - [ ] 函数里给模块级变量重赋值有没有 `global`？（只改内容 `.append` / `d[k]=v` 不用）
 - [ ] `except` 有没有至少 `ctx.logger.exception(...)`？
@@ -280,11 +270,9 @@ def on_unload(ctx):
 - [ ] 业务表是否进了 `managed_tables`？
 - [ ] 有没有写死平台字段 / 发送目标？（见规范第 2 条）
 
----
+## 怎么测插件
 
-## 七、怎么测插件
-
-> `ctx` 虽是 `register(ctx)` 注入的全局，但核心逻辑写成纯函数后，用「假 ctx」就能单测。
+`ctx` 虽是 `register(ctx)` 注入的全局，但核心逻辑写成纯函数后，用「假 ctx」就能单测。
 
 ### 1. 逻辑写成纯函数
 
@@ -332,9 +320,7 @@ handle_exp(FakeEvent(...), FakeMatch("150"))
 assert fake.sent[0]["message"] == "你 2 级"
 ```
 
----
-
-## 八、继续深入
+## 继续深入
 
 - 自写接入端 → [协议适配器](../api/advanced/protocol_adapter.md)
 - 完整插件教程 → [编写插件](./writing-plugins.md)
