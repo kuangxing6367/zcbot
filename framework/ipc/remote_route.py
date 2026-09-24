@@ -10,7 +10,7 @@ handler 在宿主进程。务实版方案：
 - 核心 Flask 收到请求 → 把请求数据打成 params dict → `request_host('http.dispatch')`
   → 宿主执行真 handler → 回传响应 → 核心生成 Flask JSON 响应。
 
-handler 契约（务实版，与单进程 Flask view 风格不同）：
+handler 契约（务实版，与单进程 Flask view 形式不同）：
     def my_api(params: dict) -> dict
     # params 含 method/path/args/json/form/headers
     # 返回 dict 即 JSON 响应；可返回 (status, dict) 或 (status, dict, headers)

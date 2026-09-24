@@ -3,7 +3,7 @@
     <el-card shadow="never">
       <template #header>
         <div class="card-head">
-          <span>权限管理 · LuckPerms 风格</span>
+          <span>权限管理</span>
           <div>
             <el-button size="small" @click="loadAll">刷新</el-button>
             <el-button size="small" @click="cleanup">清理过期</el-button>

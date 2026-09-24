@@ -3,7 +3,7 @@ layout: home
 
 hero:
   name: ZCBOT
-  text: 微内核式通用事件服务宿主
+  text: 事件驱动的 IM 平台
   tagline: 内核只做三件事——加载插件、路由事件、暴露扩展点契约；事件从哪来、业务做什么，全部由你插拔
   actions:
     - theme: brand
@@ -17,7 +17,7 @@ hero:
       link: https://github.com/kuangxing6367/zcbot
 
 features:
-  - title: 微内核，不是又一个「框架」
+  - title: 内核极小，不是又一个「框架」
     details: 内核只负责加载插件、路由事件、暴露扩展点（hook）契约；IM 接入、Web 后台、会话、定时、权限……全是挂在内核上的扩展，可增可减。
     link: /advanced/architecture
   - title: 不限 IM，任意事件源
@@ -27,13 +27,13 @@ features:
     details: 12 个标准扩展点覆盖启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本；ctx.hook() 一行挂上去，做审计、限流或中间件。
     link: /api/advanced/hooks
   - title: 自带治理与持久化
-    details: LuckPerms 风格权限、接口令牌、审计日志、多用户 Web 后台，SQLite / MySQL 双方言持久化，多用户与多场景开箱可用。
+    details: 节点式权限、接口令牌、审计日志、多用户 Web 后台，SQLite / MySQL 双方言持久化，多用户与多场景开箱可用。
     link: /advanced/permission
 ---
 
 ## 它是什么
 
-ZCBOT 是一个**微内核式的通用事件服务宿主**：内核极小（加载、路由、扩展点契约），
+ZCBOT 是一个**事件驱动的 IM 平台**：内核极小（加载、路由、扩展点契约），
 其余能力——接入平台、Web 后台、会话、定时、权限、数据库——全部是**可插拔的扩展**。
 
 它不绑任何平台：框架内核**不含任何 IM 协议实现**，OneBot 11 只是 `onebot_adapter` 这个官方插件。
@@ -46,13 +46,13 @@ ZCBOT 是一个**微内核式的通用事件服务宿主**：内核极小（加�
 | 做 IM 机器人 / 群管工具 | 白拿接入、权限、多轮会话、定时、Web 后台，只写 `register(ctx)` 里的业务 |
 | 要接非 IM 事件源（Webhook / 定时 / MQTT / 任意系统） | 用内置 `http_inject` / `scheduler`，或自写 `ProtocolAdapter`；复用同一套插件、权限与后台 |
 | 想把一批脚本 / 运维任务收成「事件 → 处理 → 响应」服务 | 内核自带调度、持久化、鉴权、可插拔前端，不必自己搭壳 |
-| 想给现成系统加后台 / 权限 / 审计 | 微内核 + 扩展点切面，以最小侵入挂载 |
+| 想给现成系统加后台 / 权限 / 审计 | 平台内核 + 扩展点切面，以最小侵入挂载 |
 
 ## 能用来做什么（使用范围）
 
 - **接入层**：OneBot 11（默认）/ HTTP Webhook 注入 / 出站 WebSocket / 纯定时 / 自写 `ProtocolAdapter`（Telegram、Discord、MQTT…）
 - **业务层**：命令、事件订阅、多轮会话、定时任务、任意 Python 逻辑
-- **治理层**：LuckPerms 风格权限引擎、接口令牌、审计日志、多用户 Web 管理后台
+- **治理层**：节点式权限引擎、接口令牌、审计日志、多用户 Web 管理后台
 - **数据层**：SQLite / MySQL 双方言持久化，自动建表与 schema 迁移
 - **表现层**：可被插件接管 / 扩展的 Web 后台、仪表盘卡片、CLI 终端、扩展点切面
 

@@ -166,7 +166,7 @@ class RouterMatchMixin:
                     await self.framework.reply_text(ev, '权限不足（需要超级管理员权限）')
                     return True
 
-                # ── 权限节点检查（LuckPerms 风格，与 require_level 并存）──
+                # ── 权限节点检查（节点式，与 require_level 并存）──
                 # require_perm 为空时完全不触发权限解析，普通消息零开销
                 perm_node = cmd.require_perm
                 if perm_node and not ev.has_perm(perm_node):

@@ -194,7 +194,7 @@ timeout = ctx.get_config("timeout", default=30)
 | `db_execute(sql, params=None)` | `int` | 写操作，返回受影响行数 |
 | `db_execute_many(sql, params_list)` | `int` | 批量写 |
 | `db_insert(sql, params=None)` | `int` | 插入并返回自增 ID |
-| `create_table(ddl)` | - | 建表，自动适配方言（MySQL 风格 DDL） |
+| `create_table(ddl)` | - | 建表，自动适配方言（MySQL 方言 DDL） |
 | `db_connection()` | connection | 取连接（事务用，close 归还连接池） |
 
 ### 异步接口（async handler 推荐，走 DB 专用线程池）

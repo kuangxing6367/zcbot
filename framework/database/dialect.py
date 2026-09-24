@@ -1,7 +1,7 @@
 """
 SQL 方言翻译层（纯函数，无连接、无状态）
 
-把统一书写风格的 SQL 翻译成目标方言，让插件只写一套 SQL（%s 占位符 + MySQL 风格 DDL）：
+把统一书写格式的 SQL 翻译成目标方言，让插件只写一套 SQL（%s 占位符 + MySQL 方言 DDL）：
 - → SQLite：清理 MySQL 专有语法（ENGINE/CHARSET/COMMENT/AUTO_INCREMENT…）、
   函数与子句改写（IF/IFNULL/ON DUPLICATE KEY/INSERT IGNORE/NOW()）、%s → ?
 - → MySQL：防御性反向翻译（AUTOINCREMENT → AUTO_INCREMENT）、

@@ -1,10 +1,10 @@
 """
-权限系统（LuckPerms 风格）
+权限系统（节点式）
 ====================================
 
 在框架原有「单一 role 字符串」身份轴之外，平行提供一套完整的权限节点模型。
 
-核心概念（对齐 Minecraft LuckPerms v5）：
+核心概念（节点式权限模型）：
 
 - **节点 node**：`plugin.action.sub` 形式的权限字符串，三态（授予 / 显式否决 / 未定义）
 - **组 group**：一组节点的集合，带 weight（权重决定优先级与 primary group）
@@ -85,7 +85,7 @@ CONTEXT_KEYS = ('group', 'bot', 'msgtype')
 # ═══════════════════════════════════════════════════════════
 
 def normalize_node(node) -> str:
-    """节点规范化：去空白 + 转小写（与 LuckPerms 一致，权限节点大小写不敏感）"""
+    """节点规范化：去空白 + 转小写（权限节点大小写不敏感）"""
     return (str(node or '')).strip().lower()
 
 
@@ -172,7 +172,7 @@ class PermissionSet:
         return None
 
     def has(self, node: str) -> bool:
-        """二态查询：未定义按拒绝处理（与 LuckPerms 默认行为一致）"""
+        """二态查询：未定义按拒绝处理（默认行为）"""
         return self.check(node) is True
 
     def has_any(self, *nodes) -> bool:

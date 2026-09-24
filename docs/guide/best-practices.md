@@ -1,12 +1,12 @@
 # 官方最佳实践
 
-> 定位：ZCBOT 是一个**事件驱动的插件化服务宿主**，OneBot只是默认接入端之一。
+> 定位：ZCBOT 是一个**事件驱动的 IM 平台**，OneBot只是默认接入端之一。
 > **本篇面向**：角色 B/C，尤其是想把它用于非 IM 场景（纯定时 / HTTP Webhook / 内部后台 / 其它 IM）的开发者。
-> 本页讲的是**把它当通用服务宿主用**的正确姿势——不局限于单一平台。
+> 本页讲的是**把它当IM 平台用**的正确姿势——不局限于单一平台。
 
 ---
 
-## 一、先想清楚：ZCBOT 不是"插件化服务宿主"
+## 一、先想清楚：ZCBOT 不止是一个 IM 机器人宿主
 
 很多人误以为 ZCBOT 只能做 托管机器人。其实它的骨架是通用的：
 
@@ -39,7 +39,7 @@
 
 托管机器人依赖 OneBot 客户端实时推消息。但如果你要的是"每天定时干活"，**根本不需要任何 IM 接入端**。
 
-`core_plugins/scheduler` 已经内置 APScheduler。把 `core_plugins.onebot_adapter` 关掉，只留调度器，就变成一个纯定时服务宿主：
+`core_plugins/scheduler` 已经内置 APScheduler。把 `core_plugins.onebot_adapter` 关掉，只留调度器，就变成一个纯定时服务：
 
 ```yaml
 # core_plugins.yaml（官方插件配置中心）

@@ -24,7 +24,7 @@ ZCBOT 支持 SQLite（默认，零配置）与 MySQL，上层使用同一套接�
 
 插件不要自己去改框架表结构；自己的业务表用 `ctx.create_table()` 创建。
 
-## 插件建表：统一写 MySQL 风格
+## 插件建表：统一写 MySQL 方言
 
 ```python
 def register(ctx):
@@ -127,7 +127,7 @@ ctx.db_pool_status     # dict：连接池占用/空闲等状态，便于排障
 - 生产上线、多群、消息量大、双进程/多 worker → `database.type: mysql`，
   **不要用 SQLite 顶大环境**（写锁、单文件、无网络拓扑，扩容到头就是换库）。
 - 从 SQLite 迁到 MySQL：改 `config.yaml` 后重启，框架会按 `sql/init.sql`
-  自动建表；业务数据需自行导出导入（结构为 MySQL 风格，双方言通用）。
+  自动建表；业务数据需自行导出导入（结构为 MySQL 方言，双方言通用）。
 
 ## 字段元信息系统
 

@@ -12,14 +12,14 @@
 
 | 代际 | 版本区间 | 时间 | 这一代在解决什么 |
 |------|----------|------|------------------|
-| **第一代 · 诞生** | v0.0.1-alpha（build.4–23） | 2026-08-04 ~ 08-10 | 从 0 搭出「基于 OneBot v11 的异步 插件化服务宿主」：反向 WS、插件热加载、Web 面板、双方言数据库，并用连续 build 快速夯实稳定性 |
+| **第一代 · 诞生** | v0.0.1-alpha（build.4–23） | 2026-08-04 ~ 08-10 | 从 0 搭出「基于 OneBot v11 的事件驱动的 IM 平台」：反向 WS、插件热加载、Web 面板、双方言数据库，并用连续 build 快速夯实稳定性 |
 | **第二代 · 公测与界面现代化** | v0.0.1-beta、v0.1.0-beta | 2026-08-11 ~ 08-20 | 公测首发、补齐基础插件；Web 管理后台从原生 HTML/JS 全量重写为 Vue 3 + Element Plus |
 | **第三代 · 正式版与健壮性** | v1.0.x、v1.1.x | 2026-08-20 ~ 08-30 | 发布首个正式版，前端可被插件接管；集中修复内存/性能/安全，引入内存看门狗与插件管理修复 |
-| **第四代 · 权限与治理** | v1.2.0-beta | 2026-08-30 ~ 09-08 | 引入 LuckPerms 风格权限引擎与接口令牌（API Key），插件孤儿任务自检，框架开始具备"可治理的多用户后台"骨架 |
-| **第五代 · 通用插件化服务宿主** | v1.3.x | 2026-09-09 起 | 官方能力全部下沉为 `core_plugins`，框架回归"极简壳"；补齐终端、相对导入、可靠热重载；**v1.3.5 起框架核心零 OneBot 实现，OneBot 11 退为可插拔的默认接入端** |
+| **第四代 · 权限与治理** | v1.2.0-beta | 2026-08-30 ~ 09-08 | 引入 节点式权限引擎与接口令牌（API Key），插件孤儿任务自检，框架开始具备"可治理的多用户后台"骨架 |
+| **第五代 · 事件驱动 IM 平台** | v1.3.x | 2026-09-09 起 | 官方能力全部下沉为 `core_plugins`，框架回归"极简内核"；补齐终端、相对导入、可靠热重载；**v1.3.5 起框架核心零 OneBot 实现，OneBot 11 退为可插拔的默认接入端** |
 
-> 主线叙事：ZCBOT 起步于「OneBot v11 接入端的插件化服务宿主」，但插件化、权限、持久化、Web 后台这些骨架从一开始就是通用的。
-> 第五代（v1.3.x）把这条路线收口——**内核 = 极简微内核 + 扩展点契约 + 官方插件集（core_plugins）+ 用户插件（plugins）**，
+> 主线叙事：ZCBOT 起步于「OneBot v11 接入端的事件驱动 IM 平台」，但插件化、权限、持久化、Web 后台这些骨架从一开始就是通用的。
+> 第五代（v1.3.x）把这条路线收口——**内核 = 极简内核 + 扩展点契约 + 官方插件集（core_plugins）+ 用户插件（plugins）**，
 > 换一个 `ProtocolAdapter` 就能接入 HTTP Webhook、定时事件或任意其它 IM，OneBot 只是默认接入端，不再是身份。
 > v1.3.8 起内核正式确立**扩展点（Hook）系统**，允许扩展挂到启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每一个运行环节。
 
@@ -208,7 +208,7 @@
 - **原生扩展 CI 构建**：`.github/workflows/build-zcbot-render.yml`，在 GitHub Actions 上构建
   `image_renderer` 的 Rust 扩展（Windows 出 `zcbot_render.pyd`、Linux 出 `zcbot_render.so`），
   补上 README 已引用但仓库中缺失的自动构建工作流；产物已回填 `native/bin/`，win64 `.pyd` 经 Python 3.13 实测可加载并出图。
-- **文档站首页（`bot.zgric.top` 宣传页）重写**为微内核定位：明确「使用人群 / 使用范围」，
+- **文档站首页（`bot.zgric.top` 宣传页）重写**为事件驱动 IM 平台定位：明确「使用人群 / 使用范围」，
   参考示例补齐非 IM 场景（纯定时任务、HTTP Webhook 事件源、自写接入端、扩展点切面）。
 
 ### 修复
@@ -224,11 +224,11 @@
 
 ## v1.3.8（2026-09-11）
 
-> 主题：**微内核化（Microkernel）+ 可插拔侧边栏**——内核正式确立「最小核心 + 扩展点」契约，
+> 主题：**扩展点契约 + 可插拔侧边栏**——内核正式确立「最小核心 + 扩展点」契约，
 > WebUI 侧边栏开放给插件注册。
 
 ### 新增
-- **扩展点系统（HookRegistry，`framework/hooks.py`）**：微内核核心契约。内核在运行流程预留 12 个标准扩展点
+- **扩展点系统（HookRegistry，`framework/hooks.py`）**：内核核心契约。内核在运行流程预留 12 个标准扩展点
   （`lifecycle.startup/shutdown`、`http.before/after_request`、`event.before/after_dispatch`、
   `command.before/after`、`message.before/after_send`、`action.before/after`），扩展用 `ctx.hook(point, handler)`
   往任意环节插入逻辑；支持 sync/async handler、优先级、同名去重、插件卸载自动清理。
@@ -240,8 +240,8 @@
   `sidebar=False`（默认）保持向后兼容，仍归入聚合入口。前端新增 `/plugin/:name` 路由，`GET /api/menu` 返回侧边栏结构。
 - **官方默认侧边栏支持开关**：新增 `config.yaml` → `web.official_sidebar`（默认 `true`），
   关闭后侧边栏仅显示插件注册项与「设置」；可在「设置 → Web 服务 → 显示官方侧边栏」中切换，保存后**即时生效，无需重启**。
-- **文档与 README 微内核化重构**：
-  - README 从「插件化框架」升级为「微内核」叙事，新增「扩展点（Extension Points）」章节，保留全部原有详解（快速开始、权限、API Key、目录结构、双核心等）。
+- **文档与 README 内核叙事重构**：
+  - README 从「插件化框架」升级为「内核 + 扩展点」叙事，新增「扩展点（Extension Points）」章节，保留全部原有详解（快速开始、权限、API Key、目录结构、双核心等）。
   - `docs/api/` 重组为 **基础参考**（`basic/`：ctx / event / framework / services）与 **进阶扩展**（`advanced/`：扩展点 / 协议适配器）两大块，原有详解完整保留。
   - 新增 `docs/api/advanced/hooks.md`（扩展点完整文档）与 `docs/api/index.md`（API 总览）。
 
@@ -275,7 +275,7 @@
 
 ---
 
-# 第五代 · 通用插件化服务宿主（v1.3.x）
+# 第五代 · 通用插件化能力沉淀（v1.3.x）
 
 ## v1.3.6（2026-09-10）
 
@@ -284,11 +284,11 @@
 
 ### 变更
 - 启动入口与内核文案中立化：`main.py`、`framework/__init__.py`、`framework/config.py` 顶部的
-  「OneBot QQ机器人框架」改为「插件化服务宿主」。
+  「OneBot QQ机器人框架」改为「事件驱动 IM 平台」。
 - 源码注释与文档字符串中的 QQ 品牌词全部改为中立表述：`QQ 号` → `用户 ID`、`QQ 群` → `群组`、
   `QQ 特有字段` → `平台特有字段`、`不局限于 QQ` → `不局限于单一平台` 等。
 - 数据库脚本注释同步中立化（`sql/init.sql`、`sql/init_mysql55.sql`）：**表结构、字段名、索引均不变**，老库无需迁移。
-- WebUI 文案：`QQ号` → `用户 ID`；登录页「OneBot QQ 机器人统一管理平台」改为「插件化服务宿主 · 统一管理后台」。
+- WebUI 文案：`QQ号` → `用户 ID`；登录页「OneBot QQ 机器人统一管理平台」改为「事件驱动 IM 平台 · 统一管理后台」。
 - README 与 docs 去除 QQ 品牌字样；OneBot 仅作为默认接入端插件（`onebot_adapter`）的协议名出现。
 
 ### 修复
@@ -334,14 +334,14 @@
 
 ### 兼容性
 - 所有既有公开 API、服务名、配置键、事件结构保持不变；老业务插件**零改动**即可运行。
-- 关闭 `onebot_adapter` 后，框架可作为纯定时 / HTTP Webhook / 其它接入端的通用宿主运行。
+- 关闭 `onebot_adapter` 后，框架可作为纯定时 / HTTP Webhook / 其它接入端的可扩展 IM 平台运行。
 
 ### 测试
 - `compileall` 全量编译通过；`tests/test_plugin_imports.py` 31/31、`tests/test_perm.py` 43/43；
 - 23 项解耦专项冒烟、三角色加载矩阵与旧白名单逐插件等价核对全部通过；
 - 真实冷启动验证：Web 后台（8080）、反向 WS（6830）握手与事件注入正常，优雅停机退出码 0。
 
-### 文档 / 风格
+### 文档 / 表述
 - 全项目文档去除 emoji：README 与 6 篇 docs 统一改为文字标记（必填 / 推荐 / 兼容、提示 / 注意、正确与错误示例），表格与列表结构不变。
 - 版本来源统一：`VERSION` 文件是唯一版本出处（WebUI、`/api/version`、终端 `version`、`http_api` 元数据均读它），本次发布 v1.3.5。
 
@@ -405,7 +405,7 @@
 ## v1.2.0-beta.1（2026-09-08，预发布）—— 权限系统 + 接口令牌
 
 ### 新增
-- **LuckPerms 风格权限系统**（`framework/perm.py`）：权限节点模型、三态判定、通配 `*`、显式否决、组继承 `group.*`、上下文隔离（group/bot/msgtype）、临时权限（expire_at）、Tracks 晋升轨道、审计日志、60s 缓存。
+- **节点式权限系统**（`framework/perm.py`）：权限节点模型、三态判定、通配 `*`、显式否决、组继承 `group.*`、上下文隔离（group/bot/msgtype）、临时权限（expire_at）、Tracks 晋升轨道、审计日志、60s 缓存。
 - 内置角色组 `__member <- __admin <- __owner <- __super`（映射 `zcbot.role.*`）。
 - `Event`/`ctx` 新增 `has_perm / check_perm / perms / perm_groups / primary_group`；`command(require_perm=)` 与既有 `require_level` 双轨并存。
 - **接口令牌 API Key**：`api_tokens` 表 + `/api/apikeys` 创建/吊销（需超管，token 仅明文返回一次）；鉴权兼容 2048 位会话 token 与 ≥40 位 API Key。
@@ -515,7 +515,7 @@
 
 ## v0.0.1-beta.0（2026-08-11，公测版）
 
-公测首发。基于 OneBot v11 协议的异步 插件化服务宿主，提供插件化架构、Web 管理面板、双数据库支持等核心能力。
+公测首发。基于 OneBot v11 协议的事件驱动的 IM 平台，提供插件化架构、Web 管理面板、双数据库支持等核心能力。
 
 ### 框架核心
 - 全异步架构（消息处理/API 调用/定时任务均不阻塞事件循环）；插件 handler 支持 `async def`，旧同步插件自动桥接到线程池。
@@ -557,7 +557,7 @@
 | build.5 | 08-06 | 数据库自动重连；框架 Web 面板一键更新（ZIP，仅覆盖框架代码、自动备份）；VERSION 文件驱动的 Release 版本检测；公开 `/api/version`；插件市场改按 GitHub API 文件树索引下载；IP 黑名单持久化 + 内网豁免；双请求防破解认证 |
 | build.6 | 08-06 | image_renderer 引入 Rust+pyo3 原生渲染（Win x64/Linux x64/aarch64，缺失回退 PIL），三平台二进制入库；第三方插件与 llm_plugin_gen 移出框架仓库、改走官方插件市场 |
 | build.7 | 08-06 | 加载 main.py 时注册 `sys.modules`（修复热重载残留）；更新检测走 GitHub Release |
-| build.8 | 08-06 | 日志页 SSE 改轮询，修复占满 waitress 线程导致 WebUI 卡死；插件市场参考 AstrBot 改进（GitHub 加速、磁盘判定"已安装"、失败回滚、缓存兜底、幽灵插件标记） |
+| build.8 | 08-06 | 日志页 SSE 改轮询，修复占满 waitress 线程导致 WebUI 卡死；插件市场改进（GitHub 加速、磁盘判定"已安装"、失败回滚、缓存兜底、幽灵插件标记） |
 | build.9 | 08-07 | MySQL 改用 DBUtils `PooledDB`，修复连接只增不减、全 Sleep；连接参数真正生效、坏连接透明重建 |
 | build.10 | 08-07 | 框架更新走 Release tag ZIP；下载逐候选校验 ZIP 魔数，跳过镜像返回的 HTML 错误页 |
 | build.11 | 08-07 | **重要修复**：卸载插件不再删除 `plugin_configs`，重载/更新/禁用不再重置用户配置（仅真正删除插件时清配置） |
