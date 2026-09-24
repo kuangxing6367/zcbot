@@ -45,7 +45,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 记录实际使用的配置文件路径（供 Web API 读写 config.yaml 使用）
         if config_path is None:
             config_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.yaml')
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'config.yaml')
         self.config_path = os.path.abspath(config_path)
         self.config = load_config(config_path)
         # 数据目录统一迁移（logs / plugins_dat → data/ 下），必须在日志与插件加载前执行
@@ -165,7 +165,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         数据目录统一迁移：将旧版分散在项目根的 logs/、plugins_dat/ 迁移到 data/ 下。
         仅当目标目录不存在时执行一次，避免覆盖新数据。
         """
-        project_root = os.path.dirname(os.path.dirname(__file__))
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         data_dir = os.path.join(project_root, 'data')
         os.makedirs(data_dir, exist_ok=True)
 
@@ -181,7 +181,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
     def _setup_logging(self):
         """配置日志（统一存放于 data/logs/ 下）"""
-        project_root = os.path.dirname(os.path.dirname(__file__))
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         log_level = self.config.get('log', {}).get('level', 'INFO')
 
         # 日志文件路径：优先配置 log.file，默认 data/logs/zcbot.log
@@ -228,8 +228,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         if plugin_dir:
             if os.path.isabs(plugin_dir):
                 return plugin_dir
-            return os.path.join(os.path.dirname(os.path.dirname(__file__)), plugin_dir)
-        return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'plugins')
+            return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), plugin_dir)
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'plugins')
 
     def _get_plugins_dat_dir(self) -> str:
         """获取插件数据/配置目录路径（与 plugins 同级，统一存放于 data/ 下）"""
@@ -237,8 +237,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         if dat_dir:
             if os.path.isabs(dat_dir):
                 return dat_dir
-            return os.path.join(os.path.dirname(os.path.dirname(__file__)), dat_dir)
-        return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'plugins_dat')
+            return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), dat_dir)
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'plugins_dat')
 
     async def start(self):
         """启动框架（异步）"""

@@ -13,6 +13,8 @@ import shutil
 import sys
 import types
 
+from framework.deps import pip_install_all
+
 logger = logging.getLogger('zcbot')
 
 

@@ -7,6 +7,11 @@ PluginLoader 的 UI 相关能力（自 framework/loader/ 剥离）
   PluginWebuiMixin         插件 WebUI 注册与路径解析
   PluginGroupSettingsMixin 群级插件开关（带缓存）
 """
+import logging
+import os
+import time
+
+logger = logging.getLogger('zcbot')
 
 # 仪表盘卡片线程池（懒创建；global 指向本模块命名空间）
 _cards_executor = None
