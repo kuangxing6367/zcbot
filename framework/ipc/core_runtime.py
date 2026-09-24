@@ -4,10 +4,10 @@ CoreRuntime —— 双进程模式下进程1（核心）的运行时
 
 职责（轻量，不加载用户插件）：
 - 构造完整 Framework(role='core')：真实 Database + 白名单 core 插件
-  （onebot_adapter / http_inject / http_api / webui）
+  （协议接入端 onebot_adapter/http_inject、http_api、webui）
 - 启动 IpcServer（标准库 AF_INET + authkey 握手），accept 宿主连接
 - 把 framework.dispatch_event 替换为"IPC 推送事件到宿主"
-- 提供核心侧 RPC 服务：db.*（真实数据库执行）、api.call（转发 onebot 发送）、bots.list
+- 提供核心侧 RPC 服务：db.*（真实数据库执行）、api.call / api.send_text（转发接入端发送）、bots.list
 - spawn 宿主进程（multiprocessing spawn），并监督其存活（Phase 1 提供基本 terminate）
 """
 import asyncio
@@ -70,7 +70,7 @@ class CoreRuntime:
 
         self.server.on('log', _on_host_log)
 
-        # 替换事件分发：协议（onebot/http_inject）收到事件 → 推送到宿主
+        # 替换事件分发：协议接入端收到事件 → 推送到宿主
         async def _ipc_dispatch(event):
             await self.server.asend_event(event)
 
@@ -92,7 +92,7 @@ class CoreRuntime:
                      'table_has_column', 'pool_status'):
             srv.register(f'db.{name}', _db_handler(name))
 
-        # api.call：插件发消息 → 核心的 onebot_adapter 经 WebSocket 发出
+        # api.call：插件发消息 → 核心接入端经其协议发出
         async def _api_call(action, bot=None, params=None):
             caller = fw.services.get('api_caller')
             if caller is None:
@@ -100,6 +100,16 @@ class CoreRuntime:
             return await caller.acall(action, bot=bot, **(params or {}))
 
         srv.register('api.call', _api_call)
+
+        # api.send_text：协议中立发文本 → 核心 protocol_adapter.send_text（宿主 IpcAdapter 转发）
+        async def _send_text(text, user_id=None, group_id=None, source=None):
+            adapter = fw.services.get('protocol_adapter')
+            if adapter is None:
+                raise RuntimeError("核心进程无协议适配器（protocol_adapter）")
+            return await adapter.send_text(
+                text, user_id=user_id, group_id=group_id, source=source)
+
+        srv.register('api.send_text', _send_text)
 
         def _bots_list():
             pa = fw.services.get('protocol_adapter')

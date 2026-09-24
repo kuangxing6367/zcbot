@@ -12,17 +12,46 @@ core_plugins:
     path: /hook
     token: ''
   scheduler:
-    enabled: true
+    enabled: false
   session:
-    enabled: true
+    enabled: false
   webui:
-    enabled: true
+    enabled: false
     host: 127.0.0.1
     port: 8080
   onebot_adapter:
-    enabled: true
+    enabled: false
     listen_host: 0.0.0.0
     listen_port: 6830
     access_token: ''
+  ws_client:
+    enabled: false
+    url: ws://127.0.0.1:9000/ws
+    bot_name: ws_client
+    token: ''
+    reconnect_interval: 5
+    max_queue: 256
   image_renderer:
-    enabled: true
+    enabled: false
+  qq_official:
+    enabled: false
+    app_id: ''
+    app_secret: ''
+    bot_name: qq_official
+    intents: 33554432
+    reconnect_interval: 5
+    api_base: https://api.bot.qq.com
+  telegram:
+    enabled: false
+    token: ''
+    bot_name: telegram
+    polling_timeout: 30
+    api_base: https://api.telegram.org
+  discord:
+    enabled: false
+    token: ''
+    bot_name: discord
+    intents: 37377
+    reconnect_interval: 5
+    api_base: https://discord.com/api/v10
+    gateway_url: wss://gateway.discord.gg/

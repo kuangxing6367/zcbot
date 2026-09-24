@@ -147,9 +147,15 @@ class ApiHandler(BaseHTTPRequestHandler):
 
             bots = []
             try:
-                ws = fw.services.get('ws_server')
-                if ws and hasattr(ws, 'get_connected_bots'):
-                    bots = ws.get_connected_bots()
+                adapter = fw.services.get('protocol_adapter')
+                if adapter is None:
+                    adapter = getattr(fw, 'protocol_adapter', None)
+                if adapter is not None and hasattr(adapter, 'get_connected_bots'):
+                    bots = adapter.get_connected_bots()
+                else:
+                    ws = fw.services.get('ws_server')
+                    if ws and hasattr(ws, 'get_connected_bots'):
+                        bots = ws.get_connected_bots()
             except Exception:
                 pass
 
@@ -221,24 +227,40 @@ class ApiHandler(BaseHTTPRequestHandler):
         self._do_send(None, int(group_id), message)
 
     def _do_send(self, user_id, group_id, message):
+        # 优先中立 send_text（协议翻译在适配器内），无则回落通用 send_msg 动作
+        adapter = self.framework.services.get('protocol_adapter')
         api = self.framework.services.get('api_caller')
-        if not api:
-            self._send_json(503, {'ok': False, 'error': 'OneBot 适配器未加载'})
+        if adapter is None and api is None:
+            self._send_json(503, {'ok': False, 'error': '协议适配器未加载'})
             return
 
         async def _send():
+            from framework.messaging.protocol import ProtocolAdapter
+            if (adapter is not None
+                    and type(adapter).send_text is not ProtocolAdapter.send_text):
+                result = await adapter.send_text(
+                    message,
+                    group_id=int(group_id) if group_id else None,
+                    user_id=int(user_id) if user_id else None,
+                )
+                if isinstance(result, dict) and result.get('status') == 'unsupported':
+                    raise RuntimeError(result.get('msg', '当前接入端不支持主动发送'))
+                return result
+            if api is None:
+                raise RuntimeError('协议适配器未加载')
             if group_id:
-                await api.send_group_msg(group_id=int(group_id), message=message)
-            elif user_id:
-                await api.send_private_msg(user_id=int(user_id), message=message)
-            else:
-                raise ValueError('必须指定 user_id 或 group_id')
+                return await api.acall('send_msg', group_id=int(group_id), message=message)
+            if user_id:
+                return await api.acall('send_msg', user_id=int(user_id), message=message)
+            raise ValueError('必须指定 user_id 或 group_id')
 
         try:
             loop = self.framework.loop
             if loop and loop.is_running():
                 future = asyncio.run_coroutine_threadsafe(_send(), loop)
                 future.result(timeout=10)
+            else:
+                asyncio.run(_send())
             self._send_json(200, {'ok': True})
         except Exception as e:
             self._send_json(500, {'ok': False, 'error': str(e)})
@@ -251,7 +273,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         api = self.framework.services.get('api_caller')
         if not api:
-            self._send_json(503, {'ok': False, 'error': 'OneBot 适配器未加载'})
+            self._send_json(503, {'ok': False, 'error': '协议适配器未加载'})
             return
 
         async def _kick():
@@ -273,7 +295,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         api = self.framework.services.get('api_caller')
         if not api:
-            self._send_json(503, {'ok': False, 'error': 'OneBot 适配器未加载'})
+            self._send_json(503, {'ok': False, 'error': '协议适配器未加载'})
             return
 
         async def _ban():
@@ -294,7 +316,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
         api = self.framework.services.get('api_caller')
         if not api:
-            self._send_json(503, {'ok': False, 'error': 'OneBot 适配器未加载'})
+            self._send_json(503, {'ok': False, 'error': '协议适配器未加载'})
             return
 
         async def _unban():
@@ -315,7 +337,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         api = self.framework.services.get('api_caller')
         if not api:
-            self._send_json(503, {'ok': False, 'error': 'OneBot 适配器未加载'})
+            self._send_json(503, {'ok': False, 'error': '协议适配器未加载'})
             return
 
         try:
@@ -326,7 +348,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 success = 0
                 for gid in group_ids:
                     try:
-                        await api.send_group_msg(group_id=gid, message=message)
+                        await api.acall('send_msg', group_id=gid, message=message)
                         success += 1
                     except Exception:
                         pass

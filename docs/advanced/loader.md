@@ -14,7 +14,7 @@
 
 ## 一、插件生命周期总览
 
-用户插件由 `framework/loader.py` 的 `PluginLoader` 管理，完整生命周期如下：
+用户插件由 `framework/loader/` 的 `PluginLoader` 管理，完整生命周期如下：
 
 ```
 discover()                扫描 plugins/，凡是含 main.py 的子目录就算一个插件
@@ -32,7 +32,7 @@ heartbeat_register()      每 60s 检查 .py 文件 mtime，变了就重新 regi
 unload_plugin(name)       调 on_unload → 清理命令/任务/事件/sys.modules/sys.path → gc
 ```
 
-启动顺序（`framework/core.py → Framework.start()`）：
+启动顺序（`framework/core/ → Framework.start()`）：
 
 1. 先加载 `core_plugins/` 官方插件（提供协议适配、调度器、会话等基础服务）；
 2. 建立 `data/plugins_dat/` 数据目录并迁移旧配置；
@@ -180,7 +180,7 @@ import utils
 
 ```python
 from framework.ctx import ...          # 框架代码：正常绝对导入（项目根在 sys.path）
-from framework.event import Event
+from framework.messaging.event import Event
 import requests                       # 第三方库：写进 requirements.txt 自动安装
 ```
 
@@ -308,7 +308,18 @@ CPython 默认按「源码**整数秒** mtime + 文件大小」校验 `.pyc`：�
 
 ## 八、维护者速查
 
-相关方法均在 `framework/loader.py` 的 `PluginLoader`：
+核心生命周期方法在 `framework/loader/` 的 `PluginLoader`（`base.py`）；
+加载/卸载/合成包预载/字节码清理在 `framework/loader/lifecycle.py`（`PluginLifecycleMixin`）；
+依赖/pip/venv 在 `framework/deps/`（`PluginDepsMixin`），pip 镜像安装与版本说明符解析在
+`framework/deps/pip.py`（经 `deps/` re-export）；
+配置 schema 在 `framework/loader/config.py`（`PluginConfigMixin`）；
+内存监控/心跳/孤儿自检在 `framework/loader/runtime.py`（`PluginRuntimeMixin`）；
+UI 相关（仪表盘卡片 / 插件 WebUI / 群级开关）在 `framework/loader/ui.py`（三个 mixin）。
+
+`PluginContext`（ctx）能力按域拆至 `framework/ctx/` 的
+`messaging` / `events` / `webui` / `db` 四个 mixin，`ctx/base.py` 保留构造、配置、
+权限快捷方式、日志与会话。
+权限引擎核心在 `framework/perm/`，管理面在 `perm/{admin,groups,tracks}.py`（懒加载 re-export）。
 
 | 方法 | 职责 |
 |---|---|

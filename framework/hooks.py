@@ -23,7 +23,7 @@ handler 既可以是普通函数，也可以是 `async def`：
 import asyncio
 import logging
 import threading
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Tuple
 
 logger = logging.getLogger('zcbot')
 

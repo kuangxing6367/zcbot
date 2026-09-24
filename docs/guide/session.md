@@ -32,7 +32,7 @@ async def handle_survey(event, match):
 纯文本要用框架的提取函数从消息段里取：
 
 ```python
-from framework.event import _extract_text
+from framework.messaging.event import _extract_text
 
 def extract_text(raw):
     return _extract_text(raw.get("message", "")).strip()
@@ -90,7 +90,7 @@ async def handle_register(event, match):
 ## 完整示例：问卷调查
 
 ```python
-from framework.event import _extract_text
+from framework.messaging.event import _extract_text
 
 QUESTIONS = [
     ("nick",  "你的昵称是？"),

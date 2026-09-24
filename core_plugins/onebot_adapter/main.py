@@ -487,6 +487,8 @@ class OneBotWebSocketServer:
 class OneBotAdapter(ProtocolAdapter):
     """OneBot 11 协议适配器"""
 
+    adapter_id = 'onebot'
+
     def __init__(self, framework):
         self.framework = framework
         self.config = framework.config.get('onebot', {})
@@ -502,6 +504,27 @@ class OneBotAdapter(ProtocolAdapter):
         self.ws_server = OneBotWebSocketServer(
             self.config, self._on_raw_event, self.api_caller, ssl_context=ssl_context)
         self._onebot_api = OneBotAPI(self.api_caller)
+
+    def get_connection_info(self) -> Optional[dict]:
+        """连接自描述：供 WebUI /api/connection 动态渲染（内核不写死 OneBot 字段）"""
+        host = self.config.get('listen_host', '0.0.0.0')
+        port = self.config.get('listen_port', 6830)
+        scheme = 'wss' if getattr(self, 'ssl_context', None) else 'ws'
+        return {
+            'id': 'onebot',
+            'name': 'OneBot 11 反向 WS',
+            'config_section': 'onebot',
+            'fields': [
+                {'key': 'listen_host', 'label': '监听地址', 'type': 'string'},
+                {'key': 'listen_port', 'label': '监听端口', 'type': 'number'},
+                {'key': 'access_token', 'label': 'Access Token', 'type': 'password'},
+            ],
+            'restart_keys': ['listen_host', 'listen_port'],
+            'endpoint_hint': f"{scheme}://{host}:{port}/ws",
+            'guide': 'OneBot 客户端（NapCat / Lagrange / LLOneBot 等）添加「反向 WebSocket」连接，'
+                     '填写反向 WS 服务端地址即可接入。',
+            'status_extra': {'ws_port': port},
+        }
 
     async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
         return normalize_event(raw_event, bot_name)

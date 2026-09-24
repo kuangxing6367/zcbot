@@ -21,7 +21,7 @@ features:
     details: 内核只负责加载插件、路由事件、暴露扩展点（hook）契约；IM 接入、Web 后台、会话、定时、权限……全是挂在内核上的扩展，可增可减。
     link: /advanced/architecture
   - title: 不限 IM，任意事件源
-    details: 内置 OneBot 11 与 HTTP Webhook（http_inject）接入，纯定时任务也能跑；换一个 ProtocolAdapter 即可接 Telegram / Discord / MQTT 或任意系统，业务插件零改动。
+    details: 内置 OneBot 11、QQ 官方、Telegram、Discord、HTTP Webhook 与出站 WS 接入，纯定时任务也能跑；换一个 ProtocolAdapter 即可接 MQTT 或任意系统，业务插件零改动。
     link: /api/advanced/protocol_adapter
   - title: 扩展点，处处可插
     details: 12 个标准扩展点覆盖启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本；ctx.hook() 一行挂上去，做审计、限流或中间件。
@@ -50,7 +50,7 @@ ZCBOT 是一个**微内核式的通用事件服务宿主**：内核极小（加�
 
 ## 能用来做什么（使用范围）
 
-- **接入层**：OneBot 11（默认）/ HTTP Webhook 注入 / 纯定时 / 自写 `ProtocolAdapter`（Telegram、Discord、MQTT…）
+- **接入层**：OneBot 11（默认）/ HTTP Webhook 注入 / 出站 WebSocket / 纯定时 / 自写 `ProtocolAdapter`（Telegram、Discord、MQTT…）
 - **业务层**：命令、事件订阅、多轮会话、定时任务、任意 Python 逻辑
 - **治理层**：LuckPerms 风格权限引擎、接口令牌、审计日志、多用户 Web 管理后台
 - **数据层**：SQLite / MySQL 双方言持久化，自动建表与 schema 迁移

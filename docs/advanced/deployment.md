@@ -96,7 +96,8 @@ WebSocket 反向连接端口（6830）按需单独放行或代理（需要 `Upgr
 
 ## MySQL 部署
 
-群多、并发高时把 `database.type` 切到 `mysql`，提前建库（如 `zcbot`，
+**默认的 SQLite 只适合小环境与开发环境，不适合大环境**：群多、并发高、
+多进程部署时把 `database.type` 切到 `mysql`，提前建库（如 `zcbot`，
 `utf8mb4`），框架会自动适配 DDL 并建表；需要 `pymysql`、`DBUtils`
 （切换时会提示/自动安装）。
 
