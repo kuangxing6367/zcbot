@@ -131,7 +131,7 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
             os.makedirs(dat_dir, exist_ok=True)
         return dat_dir
 
-    # ---- 权限组（LuckPerms 风格）----
+    # ---- 权限组（节点式）----
 
     def has_perm(self, user_id: int, node: str, context: dict = None,
                  role: str = None) -> bool:

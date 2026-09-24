@@ -5,7 +5,7 @@
         <img :src="logoUrl" alt="ZCBOT" class="login-logo-img" />
       </div>
       <h1 class="login-title">ZCBOT 管理面板</h1>
-      <div class="login-sub">插件化服务宿主 · 统一管理后台</div>
+      <div class="login-sub">事件驱动 IM 平台 · 统一管理后台</div>
 
       <el-form :model="form" @submit.prevent="onLogin" size="large">
         <el-form-item>

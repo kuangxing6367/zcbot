@@ -35,7 +35,7 @@ class PluginDatabaseMixin:
     def create_table(self, ddl: str):
         """
         插件建表统一入口（自动适配方言，无需判断数据库类型）
-        - SQLite：自动翻译 MySQL 风格 DDL（ENUM→TEXT、AUTO_INCREMENT→AUTOINCREMENT、INDEX 移除等）
+        - SQLite：自动翻译 MySQL 方言 DDL（ENUM→TEXT、AUTO_INCREMENT→AUTOINCREMENT、INDEX 移除等）
         - MySQL：自动将长列（TEXT / VARCHAR>191）索引改写为前缀索引 `col`(191)，避免错误 1170/1064
         """
         try:

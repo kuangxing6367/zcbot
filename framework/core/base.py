@@ -58,7 +58,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 服务注册表（官方插件注册自身为核心能力）
         self.services = ServiceRegistry()
 
-        # 扩展点注册表（微内核契约：插件可挂载到几乎每个运行环节）
+        # 扩展点注册表（内核契约：插件可挂载到几乎每个运行环节）
         self.hooks = HookRegistry(self)
 
         # 数据库：宿主模式下用 RemoteDatabase（经 IPC RPC 到核心进程执行）；否则真实数据库

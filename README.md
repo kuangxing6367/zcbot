@@ -1,8 +1,10 @@
 # ZCBOT
 
-> **微内核式事件驱动服务宿主**：内核只做最小必要的事——加载扩展、路由事件、提供公共服务；
+> **事件驱动的 IM 平台**：内核只做最小必要的事——加载扩展、路由事件、提供公共服务；
 > 接入平台、Web 后台、会话、定时任务、权限、数据库……全都是**挂载在内核扩展点上的扩展**。
 > 你只写业务，骨架（含扩展点契约）由内核提供。
+>
+> **微内核设计独立在项目 [zernus / Zero_Nexus](https://github.com/kuangxing6367/Zero_Nexus)**；本仓库是构建于其上的 IM 平台与官方插件集。
 >
 > **OneBot 11 是它的一个默认扩展，但不是它的身份。** 换一个 `ProtocolAdapter`，它可以是 Telegram / Discord 机器人、
 > HTTP Webhook 接收器、纯定时任务服务，或任何"事件 → 扩展 → 响应"的程序。
@@ -19,7 +21,7 @@
 
 ### 一句话定位
 
-ZCBOT 是一个**微内核式的通用服务宿主**：极小内核（加载、路由、公共服务、扩展点契约）+ 层层叠加的扩展。
+ZCBOT 是一个**事件驱动的 IM 平台**：极小内核（加载、路由、公共服务、扩展点契约）+ 层层叠加的扩展。
 所有具体功能（接入平台、开网页后台、管会话、跑定时、做权限）都是可插拔的扩展，通过内核的**扩展点（hook）**
 挂到几乎每一个运行环节。
 
@@ -29,23 +31,23 @@ ZCBOT 是一个**微内核式的通用服务宿主**：极小内核（加载、�
 | ------ | ------------------- | ---------- |
 | **① 想开箱搭一个 托管机器人的使用者**（不一定会编程） | 默认扩展就是 OneBot，启动 + 连一个 NapCat/Lagrange 就能用；后台点点鼠标装插件、改配置、管权限 | [快速开始](#五快速开始约-5-分钟) |
 | **② 写业务功能的 Python 开发者** | 白拿依赖注入、权限引擎、双方言数据库、多轮会话、定时任务、Web 扩展、**扩展点切面**，只专注写 `register(ctx)` 里的业务 | [编写插件](docs/guide/writing-plugins.md) |
-| **③ 需要"事件→扩展→响应"通用宿主的开发者** | 接非 IM 事件源：HTTP Webhook（内置 `http_inject`）、纯定时（`scheduler`）、或自写 `ProtocolAdapter` 接 Telegram/Discord/MQTT 等 | [协议适配器](docs/api/advanced/protocol_adapter.md)、[扩展点](docs/api/advanced/hooks.md) |
+| **③ 需要"事件→扩展→响应"可扩展 IM 平台的开发者** | 接非 IM 事件源：HTTP Webhook（内置 `http_inject`）、纯定时（`scheduler`）、或自写 `ProtocolAdapter` 接 Telegram/Discord/MQTT 等 | [协议适配器](docs/api/advanced/protocol_adapter.md)、[扩展点](docs/api/advanced/hooks.md) |
 
 ### 它**不**是什么（非目标，避免选错工具）
 
 - **不是** NapCat / Lagrange / go-cqhttp 这类协议端——它**不直接入平台**，需要 OneBot 实现端以"反向 WebSocket"连入。
 - **不是**分布式/多节点中台：它是单进程（可选 core/host 双进程）宿主，不内置集群、消息队列编排。
 - **不提供**跨语言 SDK：业务扩展用 Python 编写；跨语言交互请走它暴露的 HTTP API / Webhook。
-- 内核不绑定任何 IM：接入平台 只是因为官方默认带了一个 `onebot_adapter` 扩展，把它关掉就是个通用宿主。
+- 内核不绑定任何 IM：接入平台 只是因为官方默认带了一个 `onebot_adapter` 扩展，把它关掉就是个可扩展 IM 平台。
 
-### 核心理念：微内核 = 最小核心 + 扩展点 + 扩展
+### 核心理念：内核 = 最小核心 + 扩展点 + 扩展
 
 - **最小核心（`framework/`）**：插件加载器、事件总线、消息路由、服务注册表（DI）、**扩展点注册表（HookRegistry）**、
   权限引擎、数据库抽象、运行时上下文。**不实现任何具体业务，也不含任何 OneBot 代码**。
 - **官方扩展（`core_plugins/`）**：随项目提供的基础能力，开关与配置集中在根目录 **`core_plugins.yaml`**，按需加载。
 - **用户扩展（`plugins/`）**：你自己的业务逻辑，每个一个文件夹。
 - **扩展点（hook）**：内核在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等环节预留的插槽；
-  `ctx.hook(point, handler)` 即可往里插逻辑，是"微内核"真正区别于普通框架的地方。详见 [扩展点](#四扩展点extension-points)。
+  `ctx.hook(point, handler)` 即可往里插逻辑，是「平台内核」真正区别于普通框架的地方。详见 [扩展点](#四扩展点extension-points)。
 
 > 提示：想要**纯 托管机器人**？什么都不用关，开箱即用。想要别的形态？在 `core_plugins.yaml` 里切换接入端、换一套业务插件即可，权限、后台、持久化、会话这些骨架原样保留。
 
@@ -57,7 +59,7 @@ ZCBOT 的能力分两层：**内核只负责"运转"**，其余都是"挂在运�
 
 | 层 | 内容 | 属于 |
 | ---- | ---- | ---- |
-| **内核（framework/）** | 加载器 · 事件总线 · 消息路由 · 服务注册表(DI) · **扩展点注册表** · ctx · 权限引擎 · 数据库抽象 · 运行时上下文 | 微内核（不可关） |
+| **内核（framework/）** | 加载器 · 事件总线 · 消息路由 · 服务注册表(DI) · **扩展点注册表** · ctx · 权限引擎 · 数据库抽象 · 运行时上下文 | 平台内核（不可关） |
 | **公共服务扩展（core_plugins/，可开关）** | Web 后台 / 接入端 / 会话 / 定时 / HTTP 注入 / 独立 API | 官方扩展 |
 | **业务扩展（plugins/）** | 你的命令 / 定时任务 / 仪表盘 / WebUI / 切面 | 用户扩展 |
 
@@ -67,7 +69,7 @@ ZCBOT 的能力分两层：**内核只负责"运转"**，其余都是"挂在运�
 | ---- | ---- |
 | **持久化层** | 内核：SQLite / MySQL 双方言自动翻译、自动建表、schema 迁移、连接池、同步/异步双接口（**SQLite 仅适合小环境/开发环境，大环境用 MySQL**） |
 | **运行时层** | 内核：插件加载器、事件总线、消息路由（优先级管线）、服务注册表、依赖自愈、内存看门狗、孤儿任务清理、可靠热重载 |
-| **鉴权层** | 内核：LuckPerms 风格权限引擎（三态 + 组继承 + 上下文 + 时效 + 轨道 + 审计）、双令牌体系（会话 token + API Key） |
+| **鉴权层** | 内核：节点式权限引擎（三态 + 组继承 + 上下文 + 时效 + 轨道 + 审计）、双令牌体系（会话 token + API Key） |
 | **接入层** | 扩展：协议无关的 `ProtocolAdapter` 抽象 + 服务注册表；官方实现 `onebot_adapter`（OneBot 反向 WS）、`http_inject`（HTTP 事件注入）、`http_api`（对外 HTTP API）、终端模拟注入 |
 | **表现层** | 扩展：WebUI（可被插件整体接管、官方侧边栏可开关）、插件 WebUI（可注册独立侧边栏入口 `ctx.webui(..., sidebar=True)`）、仪表盘卡片、群组/用户页扩展、CLI 终端、以及**扩展点切面**（审计/限流/中间件等） |
 
@@ -77,7 +79,7 @@ ZCBOT 的能力分两层：**内核只负责"运转"**，其余都是"挂在运�
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│              framework/ 微内核（零 OneBot 代码）        │
+│              framework/ 平台内核（零 OneBot 代码）       │
 │  加载器 · 事件总线 · 消息路由 · ctx · 服务注册表(DI)     │
 │  扩展点注册表(HookRegistry) · 权限引擎(perm) · 数据库(db) │
 │                       │ 扩展点 / 服务注册 / 事件总线      │
@@ -103,7 +105,7 @@ ZCBOT 的能力分两层：**内核只负责"运转"**，其余都是"挂在运�
 
 ## 四、扩展点（Extension Points）
 
-> 这是微内核对外最核心的契约，也是"允许几乎各个地方插入"的实现方式。完整文档见 [扩展点（Hook 系统）](docs/api/advanced/hooks.md)。
+> 这是内核对外最核心的契约，也是"允许几乎各个地方插入"的实现方式。完整文档见 [扩展点（Hook 系统）](docs/api/advanced/hooks.md)。
 
 内核在运行流程上预留了一组**扩展点（hook point）**。扩展用 `ctx.hook(point, handler)` 往插槽里插函数，
 内核跑到那个环节就按优先级依次调用。`handler` 可以是普通函数或 `async def`；同名（同扩展内）重复注册自动去重。
@@ -310,9 +312,9 @@ ctx.command("/ban", handle_ban, require_perm="myplugin.ban")   # 声明式，框
 
 ---
 
-## 九、权限系统（LuckPerms 风格）
+## 九、权限系统（节点式）
 
-在原有「单一 `role` 身份轴」之外，平行提供一套对齐 Minecraft LuckPerms v5 的**权限节点**模型，两者并存、互不冲突：老命令可继续用 `require_level`，新功能推荐 `require_perm`。
+在原有「单一 `role` 身份轴」之外，平行提供一套**权限节点**模型，两者并存、互不冲突：老命令可继续用 `require_level`，新功能推荐 `require_perm`。
 
 - **节点 node**：`plugin.action.sub` 形式，三态（授予 / 显式否决 / 未定义）。
 - **组 group**：节点集合，带 `weight`；组之间用 `group.xxx` 节点继承。
@@ -368,14 +370,14 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
 ├── requirements.txt        # 依赖安装入口（main.py 启动自检读取，兼容保留）
 ├── config.yaml             # 全局配置（首次启动生成）
 ├── core_plugins.yaml       # 官方扩展配置中心（启动自动扫描 core_plugins/ 同步、回写、合并）
-├── framework/              # 微内核（不含任何 OneBot 实现）
+├── framework/              # 平台内核（不含任何 OneBot 实现；微内核设计见 zernus）
 │   ├── core/               # 内核包：base(Framework) · dispatch · runtime · stats_writer
 │   ├── ctx/                # 插件上下文包：base(PluginContext) · messaging · events · webui · db
 │   ├── loader/             # 加载器包：base(PluginLoader) · config · lifecycle · runtime · ui
 │   ├── deps/               # 依赖包：PluginDepsMixin + pip 镜像安装（pip.py）
 │   ├── perm/               # 权限包：core(resolve/PermissionSet) · admin · groups · tracks（懒加载）
 │   ├── config.py           # 配置加载 + core_plugins.yaml 配置中心
-│   ├── hooks.py            # 扩展点注册表（HookRegistry）—— 微内核契约
+│   ├── hooks.py            # 扩展点注册表（HookRegistry）—— 内核契约
 │   ├── log_broker.py       # 日志总线
 │   ├── dual_auth.py        # 双令牌（会话 token + API Key）
 │   ├── scheduler.py        # 定时任务调度
@@ -419,7 +421,7 @@ npm install
 npm run build      # 产物输出到 ../web/
 ```
 
-数据库表结构见 `sql/init.sql`（MySQL 风格 DDL，运行时自动翻译给 SQLite/MySQL 双方使用）与 `sql/init_mysql55.sql`（MySQL 5.5 兼容），启动时自动建表补缺。
+数据库表结构见 `sql/init.sql`（MySQL 方言 DDL，运行时自动翻译给 SQLite/MySQL 双方使用）与 `sql/init_mysql55.sql`（MySQL 5.5 兼容），启动时自动建表补缺。
 
 ---
 
@@ -435,7 +437,7 @@ npm run build      # 产物输出到 ../web/
 - [PluginContext (ctx) 参考](docs/api/basic/ctx.md) · [Event 事件对象](docs/api/basic/event.md)
 - [服务注册表（DI）](docs/api/basic/services.md) · [Framework 核心](docs/api/basic/framework.md)
 
-**当通用宿主用 / 接入其它源（高级开发者）**
+**当可扩展 IM 平台用 / 接入其它源（高级开发者）**
 
 - [扩展点（Hook 系统）](docs/api/advanced/hooks.md) · [协议适配器（写自己的接入端）](docs/api/advanced/protocol_adapter.md)
 - [官方最佳实践](docs/guide/best-practices.md)
