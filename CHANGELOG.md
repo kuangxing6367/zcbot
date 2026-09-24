@@ -17,6 +17,7 @@
 | **第三代 · 正式版与健壮性** | v1.0.x、v1.1.x | 2026-08-20 ~ 08-30 | 发布首个正式版，前端可被插件接管；集中修复内存/性能/安全，引入内存看门狗与插件管理修复 |
 | **第四代 · 权限与治理** | v1.2.0-beta | 2026-08-30 ~ 09-08 | 引入 节点式权限引擎与接口令牌（API Key），插件孤儿任务自检，框架开始具备"可治理的多用户后台"骨架 |
 | **第五代 · 事件驱动 IM 平台** | v1.3.x | 2026-09-09 起 | 官方能力全部下沉为 `core_plugins`，框架回归"极简内核"；补齐终端、相对导入、可靠热重载；**v1.3.5 起框架核心零 OneBot 实现，OneBot 11 退为可插拔的默认接入端** |
+| **第六代 · 多协议接入 + 定位改版** | v1.6.x | 2026-09-24 起 | 内置 QQ 官方 / Telegram / Discord / 出站 WS 四接入端，连接页与发送路径协议中立；全库统一为「事件驱动 IM 平台」定位 |
 
 > 主线叙事：ZCBOT 起步于「OneBot v11 接入端的事件驱动 IM 平台」，但插件化、权限、持久化、Web 后台这些骨架从一开始就是通用的。
 > 第五代（v1.3.x）把这条路线收口——**内核 = 极简内核 + 扩展点契约 + 官方插件集（core_plugins）+ 用户插件（plugins）**，
@@ -25,7 +26,9 @@
 
 ---
 
-## 开发中（未发布）
+## v1.6.0（2026-09-24）
+
+> 主题：**多协议接入端 + 协议中立内核 + 全库「事件驱动 IM 平台」定位改写**。
 
 ### 新增
 - **官方接入端 `ws_client`（出站 WebSocket）**：与反向 WS 的 onebot_adapter 互补，
@@ -168,6 +171,14 @@
   `framework/messaging/*`；README 目录树补齐 `pyproject.toml`、
   `framework/{database,messaging,terminal,deps,loader_*,stats_writer,api/{webserver,app_helpers,framework_update,plugin_market,plugin_meta}}`；
   `docs/advanced/loader.md` 维护者速查注明 deps / loader_ui / loader_config / loader_runtime 分工。
+- **全库定位改写为「事件驱动的 IM 平台」**：README / CHANGELOG / pyproject / docs /
+  vitepress config / main.py / framework 注释 / sql / WebUI 登录与权限页文案统一口径；
+  清除「插件化服务宿主 / 借鉴 / 参考 AstrBot / 参考 Koishi / LuckPerms 风格 / xxx风格」等措辞；
+  权限系统与 SQL 注释改为「节点式权限」中性表述。
+- **微内核设计归属说明**：README 注明微内核设计独立在项目
+  [zernus / Zero_Nexus](https://github.com/kuangxing6367/Zero_Nexus)，
+  本仓库是构建于其上的 IM 平台与官方插件集；文中自称改为「平台内核 / 极简内核」。
+- WebUI 登录页副标题改为「事件驱动 IM 平台 · 统一管理后台」，权限页去掉品牌风格提法。
 
 ---
 
