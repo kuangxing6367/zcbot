@@ -2,7 +2,7 @@
 
 > **本篇面向**：角色 B/C。理解内核与官方插件如何通过服务注册表解耦、如何取用官方能力。
 
-服务注册表（`framework/protocol.py → ServiceRegistry`）是框架核心与官方插件之间的
+服务注册表（`framework/messaging/protocol.py → ServiceRegistry`）是框架核心与官方插件之间的
 解耦层：核心不直接 import 官方插件，官方插件在 `register(ctx)` 时把能力“注册”进来，
 用户插件按需“取用”。
 
@@ -16,11 +16,13 @@
 
 | 方法 | 说明 |
 |------|------|
-| `services.register(name, service)` | 注册（重复注册会覆盖并告警），一般只有官方插件用 |
+| `services.register(name, service)` | 注册（重复注册会覆盖并告警），一般只有官方插件用；`ProtocolAdapter` 实例会额外按 id 汇总 |
 | `services.get(name, default=None)` | 取服务，**不存在或被禁用时返回 None** |
 | `services.has(name) -> bool` | 是否注册过（注意：禁用的官方插件会注册 `None`，判空更稳妥） |
 | `services.remove(name)` | 移除服务 |
 | `services.all() -> dict` | 全部服务的副本 |
+| `services.protocol_adapters() -> dict` | 全部已注册协议适配器 `{adapter_id: adapter}`（连接页/状态聚合） |
+| `services.primary_adapter()` | 当前主接入端（`services["protocol_adapter"]`，非适配器则 None） |
 
 在插件里通过 `ctx._framework.services` 访问：
 
@@ -35,7 +37,7 @@ if api is None:
 
 | 服务名 | 提供者 | 类型/能力 |
 |--------|--------|-----------|
-| `protocol_adapter` | 当前接入端（onebot_adapter / http_inject / 双进程 IPC） | `ProtocolAdapter` 实现，协议层抽象 |
+| `protocol_adapter` | 当前接入端（onebot_adapter / http_inject / ws_client / qq_official / telegram / discord / 双进程 IPC） | `ProtocolAdapter` 实现，协议层抽象 |
 | `api_caller` | 当前接入端 | 通用动作调用器，`.call(action, **kw)` / `.acall(...)` |
 | `onebot_api` | onebot_adapter | 面向对象的 OneBot API 封装（即 `ctx.onebot`）；接入端未注册时由协议无关 `ActionProxy` 兜底 |
 | `ws_server` | onebot_adapter | 反向 WebSocket 服务端实例 |

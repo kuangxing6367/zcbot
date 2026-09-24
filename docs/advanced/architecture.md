@@ -27,7 +27,7 @@
 
 ## 启动时序
 
-`main.py → Framework.start()`（`framework/core.py`）：
+`main.py → Framework.start()`（`framework/core/`）：
 
 1. 打印安全提示（监听 `0.0.0.0` 且无 token 时告警）；
 2. `_load_core_plugins()`：按 `core_plugins.yaml`（启动时合并进主配置 `core_plugins` 段）的开关加载官方插件，
@@ -51,10 +51,10 @@ OneBot 客户端
 WebSocket 服务端 (core_plugins/onebot_adapter)
     │
     ▼
-事件标准化为 Event (framework/event.py)
+事件标准化为 Event (framework/messaging/event.py)
     │
     ▼
-框架核心 (framework/core.py)
+框架核心 (framework/core/ · base · dispatch · runtime)
     │
     ├─→ 原始消息处理器 (ctx.on_raw_message)
     │       │  返回 True 则被接管，流程终止
@@ -88,16 +88,17 @@ caller = ctx._framework.services.get('api_caller')
 
 | 服务名 | 提供者 | 说明 |
 |--------|--------|------|
-| `protocol_adapter` | onebot_adapter | 协议适配器抽象 |
-| `api_caller` | onebot_adapter | OneBot API 调用器 |
-| `onebot_api` | onebot_adapter | OneBot API 面向对象封装 |
-| `ws_server` | onebot_adapter | WebSocket 服务端 |
+| `protocol_adapter` | 当前接入端（onebot_adapter / http_inject / ws_client / qq_official / telegram / discord / IPC） | 协议适配器抽象 |
+| `api_caller` | 当前接入端 | 通用动作调用器（`call/acall`） |
+| `onebot_api` | onebot_adapter | OneBot API 面向对象封装（`ctx.actions`/`ctx.onebot` 优先取它，否则 ActionProxy 兜底） |
+| `ws_server` | onebot_adapter | WebSocket 服务端（兼容键；`fw.ws_server` 优先取接入端自报实例） |
 | `scheduler` | scheduler | 定时任务调度器（APScheduler） |
 | `session_manager` | session | 多轮会话管理器 |
 | `web_server` | webui | Web 管理后台服务 |
 | `http_api` | http_api | 独立对外 HTTP API（默认关闭） |
 
 > `protocol_adapter` / `api_caller` 是**协议无关的通用槽位**：默认由 onebot_adapter 填充；换成其它接入端后由新接入端填充，业务插件的取用方式不变。
+> 连接页 `/api/connection` 与仪表盘状态由各接入端的 `get_connection_info()` / `get_connected_bots()` 自描述，内核不写死任何协议字段。
 
 详见 [ServiceRegistry](../api/basic/services.md)。
 

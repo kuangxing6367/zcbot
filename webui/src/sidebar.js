@@ -11,7 +11,7 @@ export const OFFICIAL_SIDEBAR_ITEMS = [
   { key: 'apikeys', title: '接口令牌', icon: 'Tickets', path: '/apikeys' },
   { key: 'tasks', title: '定时任务', icon: 'Timer', path: '/tasks' },
   { key: 'runtime', title: '运行状态', icon: 'DataLine', path: '/runtime' },
-  { key: 'connection', title: '连接设置', icon: 'Connection', path: '/connection' },
+  { key: 'connection', title: '接入端连接', icon: 'Connection', path: '/connection' },
   { key: 'filebrowser', title: '文件浏览', icon: 'Folder', path: '/filebrowser' },
   { key: 'logs', title: '日志中心', icon: 'Document', path: '/logs' },
   { key: 'database', title: '数据库', icon: 'Coin', path: '/database' },

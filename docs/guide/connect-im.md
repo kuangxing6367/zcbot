@@ -1,6 +1,6 @@
-# 对接 IM 平台（以 QQ / OneBot 11 为例）
+# 对接 IM 平台（OneBot 11 / QQ 官方 / Telegram / Discord）
 
-> **本篇讲如何把「框架」接到一个真实的聊天平台上去。** 框架本身是协议无关的：消息怎么来、怎么发，全由一个**接入端插件**负责。默认内置的接入端是 `onebot_adapter`（OneBot 11 协议，常用于接入 QQ）。
+> **本篇讲如何把「框架」接到一个真实的聊天平台上去。** 框架本身是协议无关的：消息怎么来、怎么发，全由一个**接入端插件**负责。默认内置的接入端是 `onebot_adapter`（OneBot 11 协议，常用于接入 QQ）；另有 `qq_official` / `telegram` / `discord` 等官方接入端（默认关闭）。
 
 先说清楚：框架能跑起来、命令能注册、定时任务能跑——这些**都不需要**任何 IM 平台。只有「要和一个聊天软件收发消息」时，才需要读完本篇。
 
@@ -12,7 +12,19 @@ ZCBOT 把「协议接入」做成了可插拔的官方插件（`core_plugins/` �
 - 一个 OneBot 客户端（如 NapCat、Lagrange）以**反向 WebSocket** 连进来；
 - 客户端把平台消息推给框架，框架处理完再把回复通过它发回平台。
 
-换一个 `ProtocolAdapter`，框架就能接 Telegram / Discord / 企业微信……默认给你的是 OneBot 11。本篇以它为例。
+换一个 `ProtocolAdapter`，框架就能接任意事件源。本篇默认以 `onebot_adapter` 为例。
+
+### 其它官方接入端（均默认关闭）
+
+| 插件 | 平台 | 凭证 / 开启方式（`core_plugins.yaml`） |
+| ---- | ---- | -------------------------------------- |
+| `qq_official` | QQ 官方机器人 | `enabled: true` + `app_id` / `app_secret`（开放平台 App） |
+| `telegram` | Telegram | `enabled: true` + `token`（@BotFather） |
+| `discord` | Discord | `enabled: true` + `token`（Developer Portal；`MESSAGE_CONTENT` 特权 Intent 需开启） |
+| `ws_client` | 任意 WS 总线 | `enabled: true` + `url`（出站客户端） |
+| `http_inject` | 无 IM / Webhook | `enabled: true` + `host`/`port`/`path` |
+
+上述接入端均实现 5 抽象方法 + `get_connection_info()`，连接页可动态改配置；出站图片统一支持 `base64://`。
 
 ## 1. 启用 onebot_adapter
 

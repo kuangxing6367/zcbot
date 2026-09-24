@@ -27,7 +27,9 @@ _DEFAULT_CONFIG = """\
 
 # ── 数据库配置 ──────────────────────────────────────────────
 # SQLite 模式（默认，零配置开箱即用）
-# MySQL 模式请改为: database: { type: mysql, host: 127.0.0.1, port: 3306, user: root, password: '', database: zcbot }
+#   ⚠️ 适用边界：仅适合小环境与开发环境（单写多读、单文件、无网络扩展）。
+#      多群、高并发、多进程部署等大环境请切换 database.type: mysql。
+# MySQL 模式（大环境推荐）: database: { type: mysql, host: 127.0.0.1, port: 3306, user: root, password: '', database: zcbot }
 database:
   type: sqlite
   path: data/zcbot.db
@@ -225,8 +227,11 @@ def get_config() -> dict:
     return _config
 
 
-# 默认禁用（需显式开启）的官方插件——安全/端口相关，避免误开
-_CORE_PLUGIN_DEFAULT_DISABLED = ('http_api', 'http_inject')
+# 默认禁用（需显式开启）的官方插件——安全/端口/外连相关，避免误开
+_CORE_PLUGIN_DEFAULT_DISABLED = (
+    'http_api', 'http_inject', 'ws_client',
+    'qq_official', 'telegram', 'discord',
+)
 
 
 # 官方插件配置中心：独立 yaml，由启动时自动扫描 core_plugins/ 目录同步
@@ -250,6 +255,18 @@ _CORE_PLUGIN_SCHEMA = {
                  'token': '', 'allow_db': False},
     'http_inject': {'enabled': False, 'host': '127.0.0.1', 'port': 8901,
                     'path': '/hook', 'token': ''},
+    'ws_client': {'enabled': False, 'url': 'ws://127.0.0.1:9000/ws',
+                  'bot_name': 'ws_client', 'token': '',
+                  'reconnect_interval': 5, 'max_queue': 256},
+    'qq_official': {'enabled': False, 'app_id': '', 'app_secret': '',
+                    'bot_name': 'qq_official', 'intents': 33554432,
+                    'reconnect_interval': 5, 'api_base': 'https://api.bot.qq.com'},
+    'telegram': {'enabled': False, 'token': '', 'bot_name': 'telegram',
+                 'polling_timeout': 30, 'api_base': 'https://api.telegram.org'},
+    'discord': {'enabled': False, 'token': '', 'bot_name': 'discord',
+                'intents': 37377, 'reconnect_interval': 5,
+                'api_base': 'https://discord.com/api/v10',
+                'gateway_url': 'wss://gateway.discord.gg/'},
 }
 
 

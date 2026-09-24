@@ -6,6 +6,8 @@ import logging
 
 from flask import jsonify, request
 
+from framework import perm as perm_mod
+
 logger = logging.getLogger('zcbot')
 
 
@@ -23,7 +25,6 @@ def register(ctx):
     @require_auth
     def perm_builtins():
         """内置角色组（只读，由框架代码虚拟注入，不入库）"""
-        from framework import perm as perm_mod
         return jsonify({'code': 0, 'data': [
             {'name': n, 'display_name': g['display_name'], 'weight': g['weight'],
              'inherits': g['inherits'], 'node': g['node']}
@@ -33,7 +34,6 @@ def register(ctx):
     @app.route('/api/perm/groups', methods=['GET'])
     @require_auth
     def perm_list_groups():
-        from framework import perm as perm_mod
         try:
             return jsonify({'code': 0, 'data': perm_mod.list_groups(db)})
         except Exception as e:
@@ -42,7 +42,6 @@ def register(ctx):
     @app.route('/api/perm/groups', methods=['POST'])
     @require_auth
     def perm_create_group():
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.create_group(
@@ -61,7 +60,6 @@ def register(ctx):
     @app.route('/api/perm/groups/<name>', methods=['PUT'])
     @require_auth
     def perm_update_group(name):
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.update_group(
@@ -80,7 +78,6 @@ def register(ctx):
     @app.route('/api/perm/groups/<name>', methods=['DELETE'])
     @require_auth
     def perm_delete_group(name):
-        from framework import perm as perm_mod
         try:
             perm_mod.delete_group(db, name, operator=_perm_operator())
             return jsonify({'code': 0, 'msg': '权限组已删除'})
@@ -90,7 +87,6 @@ def register(ctx):
     @app.route('/api/perm/groups/<name>/nodes', methods=['GET'])
     @require_auth
     def perm_group_nodes(name):
-        from framework import perm as perm_mod
         try:
             rows = db.query(
                 "SELECT id, node, value, context_key, context_val, expire_at, created_at "
@@ -102,7 +98,6 @@ def register(ctx):
     @app.route('/api/perm/groups/<name>/nodes', methods=['POST'])
     @require_auth
     def perm_set_group_node(name):
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.set_group_node(
@@ -119,7 +114,6 @@ def register(ctx):
     @app.route('/api/perm/groups/<name>/nodes', methods=['DELETE'])
     @require_auth
     def perm_unset_group_node(name):
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.unset_group_node(
@@ -134,7 +128,6 @@ def register(ctx):
     @require_auth
     def perm_user_detail(user_id):
         """用户权限详情：直接节点 + 生效快照"""
-        from framework import perm as perm_mod
         ctx = request.args.get('context')
         context = {}
         if ctx:
@@ -155,7 +148,6 @@ def register(ctx):
     @app.route('/api/perm/users/<int:user_id>/nodes', methods=['POST'])
     @require_auth
     def perm_set_user_node(user_id):
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.set_user_node(
@@ -172,7 +164,6 @@ def register(ctx):
     @app.route('/api/perm/users/<int:user_id>/nodes', methods=['DELETE'])
     @require_auth
     def perm_unset_user_node(user_id):
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.unset_user_node(
@@ -186,7 +177,6 @@ def register(ctx):
     @app.route('/api/perm/users/<int:user_id>/groups', methods=['POST'])
     @require_auth
     def perm_add_user_group(user_id):
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.add_user_group(
@@ -200,7 +190,6 @@ def register(ctx):
     @app.route('/api/perm/users/<int:user_id>/groups', methods=['DELETE'])
     @require_auth
     def perm_remove_user_group(user_id):
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.remove_user_group(
@@ -215,7 +204,6 @@ def register(ctx):
     @require_auth
     def perm_track_step(user_id):
         """升降级：body = {track, direction: promote|demote, context_key, context_val}"""
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         direction = (data.get('direction') or 'promote').strip().lower()
         try:
@@ -232,7 +220,6 @@ def register(ctx):
     @app.route('/api/perm/tracks', methods=['GET'])
     @require_auth
     def perm_list_tracks():
-        from framework import perm as perm_mod
         try:
             return jsonify({'code': 0, 'data': perm_mod.list_tracks(db)})
         except Exception as e:
@@ -241,7 +228,6 @@ def register(ctx):
     @app.route('/api/perm/tracks', methods=['POST'])
     @require_auth
     def perm_save_track():
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             perm_mod.save_track(db, (data.get('name') or '').strip(),
@@ -257,7 +243,6 @@ def register(ctx):
     @app.route('/api/perm/tracks/<name>', methods=['DELETE'])
     @require_auth
     def perm_delete_track(name):
-        from framework import perm as perm_mod
         try:
             perm_mod.delete_track(db, name, operator=_perm_operator())
             return jsonify({'code': 0, 'msg': '轨道已删除'})
@@ -268,7 +253,6 @@ def register(ctx):
     @require_auth
     def perm_check():
         """权限检查器：body = {user_id, node, context:{...}, role}"""
-        from framework import perm as perm_mod
         data = request.get_json(silent=True) or {}
         try:
             uid = int(data.get('user_id') or 0)
@@ -295,7 +279,6 @@ def register(ctx):
     @app.route('/api/perm/audit', methods=['GET'])
     @require_auth
     def perm_audit_logs():
-        from framework import perm as perm_mod
         try:
             limit = int(request.args.get('limit') or 100)
             data = perm_mod.list_audit(
@@ -311,7 +294,6 @@ def register(ctx):
     @require_auth
     def perm_cleanup():
         """立即清理过期节点"""
-        from framework import perm as perm_mod
         try:
             n = perm_mod.cleanup_expired(db)
             return jsonify({'code': 0, 'msg': f'已清理 {n} 条过期节点', 'data': {'removed': n}})

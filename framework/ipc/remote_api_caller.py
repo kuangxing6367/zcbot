@@ -2,9 +2,9 @@
 """
 RemoteApiCaller —— 宿主侧协议 API 调用代理
 
-插件发消息（ctx.send_msg / ctx.api / ctx.onebot.*）最终走到 services['api_caller']。
-宿主侧该服务指向此代理：把 action 经 IPC 转发到核心进程，由核心的
-onebot_adapter 经 WebSocket 发出并回传结果。插件侧零改动。
+插件发消息（ctx.send_msg / ctx.api / ctx.actions / ctx.onebot.*）最终走到 services['api_caller']。
+宿主侧该服务指向此代理：把 action 经 IPC 转发到核心进程，由核心当前接入端发出并回传结果。
+插件侧零改动。
 """
 import logging
 

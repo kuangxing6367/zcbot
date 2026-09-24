@@ -44,6 +44,31 @@ core_plugins:
     port: 8901
     path: /hook
     token: ''
+  ws_client:               # 出站 WebSocket 接入端（默认关闭，外连安全）
+    enabled: false
+    url: ws://127.0.0.1:9000/ws
+    bot_name: ws_client
+    token: ''
+    reconnect_interval: 5
+    max_queue: 256
+  qq_official:             # QQ 官方机器人（默认关闭，需 AppID/AppSecret）
+    enabled: false
+    app_id: ''
+    app_secret: ''
+    bot_name: qq_official
+    intents: 33554432      # GROUP_AND_C2C_EVENT
+    reconnect_interval: 5
+  telegram:                # Telegram（默认关闭，需 Bot Token）
+    enabled: false
+    token: ''
+    bot_name: telegram
+    polling_timeout: 30
+  discord:                 # Discord（默认关闭，需 Bot Token）
+    enabled: false
+    token: ''
+    bot_name: discord
+    intents: 37377         # GUILDS|GUILD_MESSAGES|DIRECT_MESSAGES|MESSAGE_CONTENT
+    reconnect_interval: 5
   http_api:                # 独立对外 HTTP API（默认关闭）
     enabled: false
     host: 127.0.0.1
@@ -53,7 +78,8 @@ core_plugins:
 ```
 
 把某个插件的 `enabled` 改为 `false` 即禁用，**重启后生效**。关闭某个服务后，依赖它的能力
-（如会话、定时、API 调用）会不可用。`http_api`、`http_inject` 涉及开放端口，**默认关闭**，需显式开启。
+（如会话、定时、API 调用）会不可用。`http_api`、`http_inject`、`ws_client`、
+`qq_official`、`telegram`、`discord` 涉及开端口、凭证或主动外连，**默认关闭**，需显式开启。
 
 > 提示：旧版本把开关写在 `config.yaml → core_plugins` 的写法仍能被识别（向后兼容，首次合并时迁移），
 > 但新配置请统一写到 `core_plugins.yaml`。
@@ -135,11 +161,12 @@ core_plugins:
 
 ```yaml
 # SQLite（默认，零配置，数据落在单文件）
+# ⚠️ 仅适合小环境与开发环境；多群/高并发/多进程等大环境请用下方 MySQL
 database:
   type: sqlite
   path: data/zcbot.db
 
-# MySQL（高并发/多群推荐）
+# MySQL（大环境推荐：多群、高并发、多进程部署）
 database:
   type: mysql
   host: 127.0.0.1
@@ -148,6 +175,9 @@ database:
   password: ""
   database: zcbot
 ```
+
+**选型提醒**：`sqlite` 是给小环境/开发环境用的默认值，**不适合大环境**；
+上生产、群多了、并发高了就切 `mysql`。详见 [数据库](../advanced/database.md)。
 
 插件 SQL 统一写 `%s` 占位、`AUTOINCREMENT` 自增，框架自动适配方言，
 详见 [数据库](../advanced/database.md)。

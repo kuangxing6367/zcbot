@@ -10,11 +10,16 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
+from framework.hooks import HookPoints
+
 logger = logging.getLogger('zcbot')
 
 
 class ProtocolAdapter(ABC):
     """协议适配器抽象基类（OneBot/HTTP/自定义协议等）"""
+
+    # 接入端唯一 id（连接页/多接入端场景按此引用；子类可覆写）
+    adapter_id: str = ''
 
     @abstractmethod
     async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
@@ -43,6 +48,43 @@ class ProtocolAdapter(ABC):
     async def stop(self):
         """停止适配器"""
         ...
+
+    # ─────────────────────────────────────────────────────────────
+    # 连接自描述（可选）：WebUI /api/connection 据此动态渲染配置表单，
+    # 内核不再写死任何具体协议的字段/文案。
+    # ─────────────────────────────────────────────────────────────
+
+    def get_connection_info(self) -> Optional[dict]:
+        """
+        返回本接入端的连接描述；None 表示无可配置端点。
+
+        约定形状：
+        {
+            "id": "onebot",                 # 唯一 id（缺省用 adapter_id/类名）
+            "name": "OneBot 11 反向 WS",     # 显示名
+            "config_section": "onebot",      # config.yaml 段名（可编辑配置所在）
+            "fields": [                      # 可编辑字段（顺序即表单顺序）
+                {"key": "listen_host", "label": "监听地址", "type": "string"},
+                {"key": "listen_port", "label": "监听端口", "type": "number"},
+                {"key": "access_token", "label": "Access Token", "type": "password"},
+            ],
+            "restart_keys": ["listen_host", "listen_port"],  # 改动需重启才生效
+            "endpoint_hint": "ws://{host}:{port}/ws",        # 可选：接入地址提示
+            "guide": "……接入说明……",                         # 可选：多行指引
+            "status_extra": {"ws_port": 6830},                # 可选：并入 status
+        }
+        """
+        return None
+
+    def _connection_id(self) -> str:
+        info = None
+        try:
+            info = self.get_connection_info()
+        except Exception:
+            info = None
+        if isinstance(info, dict) and info.get('id'):
+            return str(info['id'])
+        return self.adapter_id or type(self).__name__
 
     # ─────────────────────────────────────────────────────────────
     # api_caller 服务统一契约
@@ -123,8 +165,8 @@ class ActionProxy:
     协议中立的动作调用代理（兜底用）。
 
     当接入端没有注册专用的 API 封装对象（如 services['onebot_api']）时，
-    ctx.onebot / 其它便捷面通过本代理把"任意属性访问"翻译成一次
-    api_caller 动作调用。它本身不含任何协议知识，只是机械转发。
+    ctx.actions / ctx.onebot / 其它便捷面通过本代理把"任意属性访问"翻译成
+    一次 api_caller 动作调用。它本身不含任何协议知识，只是机械转发。
     """
 
     def __init__(self, caller, default_bot=None):
@@ -156,12 +198,17 @@ class ServiceRegistry:
 
     def __init__(self):
         self._services: Dict[str, Any] = {}
+        self._adapters: Dict[str, ProtocolAdapter] = {}
 
     def register(self, name: str, service: Any):
         """注册服务（官方插件调用）"""
         if name in self._services:
             logger.warning(f"服务 [{name}] 已注册，将被覆盖")
         self._services[name] = service
+        # 协议适配器按 adapter_id 汇总（多接入端可并存；protocol_adapter 键仍取最后注册者）
+        if isinstance(service, ProtocolAdapter):
+            aid = service._connection_id()
+            self._adapters[aid] = service
         logger.debug(f"服务已注册: [{name}]")
 
     def get(self, name: str, default=None):
@@ -174,8 +221,26 @@ class ServiceRegistry:
 
     def remove(self, name: str):
         """移除服务"""
-        self._services.pop(name, None)
+        svc = self._services.pop(name, None)
+        if isinstance(svc, ProtocolAdapter):
+            aid = svc._connection_id()
+            if self._adapters.get(aid) is svc:
+                self._adapters.pop(aid, None)
 
     def all(self) -> dict:
         """返回所有已注册服务"""
         return dict(self._services)
+
+    def protocol_adapters(self) -> Dict[str, ProtocolAdapter]:
+        """全部已注册协议适配器 {adapter_id: adapter}（连接页/状态聚合用）"""
+        out = dict(self._adapters)
+        # protocol_adapter 键上的当前主适配器兜底（未走过 register 的场景）
+        primary = self._services.get('protocol_adapter')
+        if isinstance(primary, ProtocolAdapter):
+            out.setdefault(primary._connection_id(), primary)
+        return out
+
+    def primary_adapter(self) -> Optional[ProtocolAdapter]:
+        """当前主接入端（services['protocol_adapter']）"""
+        primary = self._services.get('protocol_adapter')
+        return primary if isinstance(primary, ProtocolAdapter) else None

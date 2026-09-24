@@ -8,45 +8,21 @@
 异步模型：
 - 后台刷新任务周期性（默认 5s）从 DB 构建纯内存路由表（插件序 + 预编译命令 + 关键词规则），
   路由热路径零 DB 查询、零线程切换（内存路由思路）
-- 命令/关键词命中计数交给 framework.stats_writer 批量落库，不阻塞事件循环
+- 命令/关键词命中计数交给 framework.core.stats_writer 批量落库，不阻塞事件循环
 - handler 支持 async def（直接 await）和普通 def（转线程执行）
 """
 import asyncio
 import logging
 import re
 import threading
-import time
-from typing import Callable, Optional
+from typing import Optional
 
 from framework.log_broker import log_broker
 from framework.messaging.event import _has_text_segment
-from framework.hooks import HookPoints
+from framework.messaging.router_keywords import KeywordReplyMixin, _KeywordRule  # noqa: F401
 
 logger = logging.getLogger('zcbot')
 
-
-class SimpleMatch:
-    """
-    纯字符串匹配结果，模拟 re.Match 的常用接口
-    group(0) → 匹配的完整文本
-    group(1) → 命令后面的参数（无参数时为空字符串）
-    让 handler 无需区分正则/简单匹配，统一用 match.group(1) 取参数
-    """
-    __slots__ = ('_full', '_args')
-
-    def __init__(self, full: str, args: str = ''):
-        self._full = full
-        self._args = args
-
-    def group(self, n=0):
-        if n == 0:
-            return self._full
-        if n == 1:
-            return self._args
-        return None
-
-    def groups(self):
-        return (self._args,)
 
 
 class _RouteCommand:
@@ -64,35 +40,14 @@ class _RouteCommand:
         self.require_perm = require_perm  # 权限节点要求（LuckPerms 风格），空=不限制
         self.rx = rx          # 编译后的正则，或 None
         self.simple = simple  # 简单前缀匹配 pattern，或 None
-        self.aliases = aliases
 
 
-class _PluginRoute:
-    """单个插件的内存路由条目"""
-
-    __slots__ = ('module', 'commands')
-
-    def __init__(self, module, commands=None):
-        self.module = module
-        self.commands = commands or []
+from framework.messaging.router_match import (  # noqa: E402
+    RouterMatchMixin, SimpleMatch, _PluginRoute,
+)
 
 
-class _KeywordRule:
-    """系统关键词自动回复规则（dynamic_commands 表，预编译后热路径复用）"""
-
-    __slots__ = ('id', 'keyword', 'response', 'match_type', 'rx', 'handler', 'plugin_name')
-
-    def __init__(self, id, keyword, response, match_type, rx, handler, plugin_name):
-        self.id = id
-        self.keyword = keyword
-        self.response = response
-        self.match_type = match_type  # exact / prefix / contains / regex
-        self.rx = rx                  # regex 类型的预编译正则，其他为 None
-        self.handler = handler        # 'plugin:func' 回调，命中后调用生成回复；空则用静态 response
-        self.plugin_name = plugin_name
-
-
-class MessageRouter:
+class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
     """消息路由分发器（纯内存路由表）"""
 
     def __init__(self, framework):
@@ -214,48 +169,6 @@ class MessageRouter:
             self._routes = table
             self._plugin_order = order
             self._keyword_rules = keyword_rules
-
-    def _load_keyword_rules(self) -> list:
-        """从 dynamic_commands 表加载并预编译关键词自动回复规则（兼容旧表无 handler 列）"""
-        try:
-            rows = self.db.query(
-                "SELECT id, keyword, response, match_type, handler, plugin_name "
-                "FROM dynamic_commands WHERE is_active = 1 ORDER BY id ASC"
-            )
-        except Exception:
-            # 旧表无 handler 列 → 回退基础查询，不报错
-            try:
-                rows = self.db.query(
-                    "SELECT id, keyword, response, match_type, plugin_name "
-                    "FROM dynamic_commands WHERE is_active = 1 ORDER BY id ASC"
-                )
-            except Exception as e:
-                logger.error(f"加载关键词回复失败: {e}")
-                return []
-
-        rules = []
-        for r in rows:
-            try:
-                mt = (r.get('match_type') or 'exact').strip().lower()
-                if mt not in ('exact', 'prefix', 'contains', 'regex'):
-                    mt = 'exact'
-                rx = None
-                if mt == 'regex':
-                    rx = re.compile(r.get('keyword') or '')
-                rules.append(_KeywordRule(
-                    id=r['id'],
-                    keyword=r.get('keyword') or '',
-                    response=r.get('response') or '',
-                    match_type=mt,
-                    rx=rx,
-                    handler=r.get('handler') or '',
-                    plugin_name=r.get('plugin_name') or 'system',
-                ))
-            except re.error as e:
-                logger.warning(f"关键词正则编译失败 [id={r.get('id')}]: {e}")
-            except Exception as e:
-                logger.error(f"关键词规则解析失败 [id={r.get('id')}]: {e}")
-        return rules
 
     def _compile_command(self, c: dict) -> Optional[_RouteCommand]:
         """预编译单条命令：正则编译 + 别名预解析"""
@@ -386,84 +299,6 @@ class MessageRouter:
         except Exception as e:
             logger.error(f"message 事件广播异常: {e}")
             return False
-
-    async def _try_keyword_reply(self, ev, message: str) -> bool:
-        """尝试系统关键词自动回复（命中返回 True）"""
-        rule = self._match_keyword(message)
-        if rule is None:
-            return False
-        self._keyword_hit(rule.id)
-
-        # 优先 handler 回调生成回复内容（dynamic_commands.handler = 'plugin:func'），失败回退静态 response
-        reply = rule.response
-        if rule.handler:
-            try:
-                generated = await self._call_keyword_handler(rule, message)
-                if generated:
-                    reply = generated
-            except Exception as e:
-                logger.error(f"关键词 handler 调用失败 [{rule.handler}]: {e}")
-
-        log_broker.log_system('INFO', f'关键词命中: "{rule.keyword}"（{rule.match_type}）', {
-            'user_id': ev.user_id,
-            'group_id': ev.group_id,
-            'keyword': rule.keyword,
-            'match_type': rule.match_type,
-        })
-        if not reply:
-            return True  # 已匹配但无回复内容，避免重复匹配
-        await self.framework.reply_text(ev, reply)
-        return True
-
-    async def _call_keyword_handler(self, rule, message: str):
-        """
-        调用 dynamic_commands.handler（格式 'plugin:func'）生成回复文本
-        签名：func(rule, message) → 回复文本或 None
-        """
-        spec = (rule.handler or '').strip()
-        if not spec or ':' not in spec:
-            return None
-        plugin_name, func_name = spec.split(':', 1)
-        plugin_name = plugin_name.strip()
-        func_name = func_name.strip()
-        if not plugin_name or not func_name:
-            return None
-        module = self.framework.plugin_loader.get_plugin_module(plugin_name)
-        if module is None:
-            return None
-        func = getattr(module, func_name, None)
-        if func is None or not callable(func):
-            return None
-        if asyncio.iscoroutinefunction(func):
-            result = await func(rule, message)
-        else:
-            result = await asyncio.to_thread(func, rule, message)
-        return result or None
-
-    def _match_keyword(self, message: str) -> Optional[_KeywordRule]:
-        """系统关键词自动回复匹配（动态命令，热路径纯内存）"""
-        for r in self._keyword_rules:
-            mt = r.match_type
-            if mt == 'exact':
-                if message == r.keyword:
-                    return r
-            elif mt == 'prefix':
-                if r.keyword and message.startswith(r.keyword):
-                    return r
-            elif mt == 'contains':
-                if r.keyword and r.keyword in message:
-                    return r
-            elif mt == 'regex':
-                if r.rx is not None and r.rx.search(message):
-                    return r
-        return None
-
-    def _keyword_hit(self, kw_id: int):
-        """记录关键词命中（交给 stats_writer 批量落库）"""
-        writer = getattr(self.framework, 'stats_writer', None)
-        if writer is not None:
-            writer.keyword_hit(kw_id)
-
     async def _broadcast_non_text(self, event: dict, bot_name: str = 'default'):
         """
         广播无文本消息到事件总线（供插件订阅，绕开命令匹配）
@@ -483,225 +318,3 @@ class MessageRouter:
         for t in types:
             await self.framework.event_bus.aemit(f'message.{t}', ev)
         await self.framework.event_bus.aemit('message.media', ev)
-
-    # 正则特殊字符，用于判断 pattern 是命令名还是正则
-    _REGEX_CHARS = set('^$.*+?()[]{}|\\')
-
-    def _is_regex(self, pattern: str) -> bool:
-        """判断 pattern 是否包含正则特殊字符"""
-        return any(c in self._REGEX_CHARS for c in pattern)
-
-    @staticmethod
-    def _match_simple(pattern: str, message: str) -> Optional[SimpleMatch]:
-        """
-        纯字符串前缀匹配（不使用 re）
-        支持：
-        - pattern 带 /（如 "/echo"）匹配 "/echo arg"
-        - pattern 不带 /（如 "mc-command"）同时匹配 "mc-command arg" 和 "/mc-command arg"
-        返回 SimpleMatch 或 None；SimpleMatch.group(0) 永远是原始消息全文
-        """
-        def _try(msg: str) -> Optional[SimpleMatch]:
-            """尝试用 msg 匹配 pattern，返回 SimpleMatch（_full 用原始 message）"""
-            if msg == pattern:
-                return SimpleMatch(message, '')
-            if len(msg) > len(pattern) and msg.startswith(pattern):
-                sep = msg[len(pattern)]
-                if sep == ' ' or sep == '\t':
-                    args = msg[len(pattern) + 1:].strip()
-                    return SimpleMatch(message, args)
-            return None
-
-        # 1. 先试原始消息
-        result = _try(message)
-        if result:
-            return result
-        # 2. 消息以 / 开头 且 pattern 不以 / 开头 → 去掉 / 再试
-        if message.startswith("/") and not pattern.startswith("/"):
-            result = _try(message[1:])
-            if result:
-                return result
-        # 3. 消息不以 / 开头 且 pattern 以 / 开头 → 加上 / 再试
-        if not message.startswith("/") and pattern.startswith("/"):
-            result = _try("/" + message)
-            if result:
-                return result
-        return None
-
-    @staticmethod
-    def _regex_search(rx: re.Pattern, message: str) -> Optional[re.Match]:
-        """编译后的正则搜索，自动处理 / 前缀"""
-        match = rx.search(message)
-        if match:
-            return match
-        if message.startswith("/"):
-            match = rx.search(message[1:])
-            if match:
-                return match
-        if not message.startswith("/") and rx.pattern.startswith("^/"):
-            match = rx.search("/" + message)
-        return match
-
-    async def _match_plugin_commands(self, entry: _PluginRoute, ev, message: str,
-                                     plugin_name: str) -> bool:
-        """在指定插件的内存命令表中匹配消息（零 DB）"""
-        module = entry.module
-        if module is None:
-            log_broker.log_plugin(plugin_name, '模块未加载，跳过')
-            return False
-
-        for cmd in entry.commands:
-            match = None
-            matched_by = ''
-
-            # ---- 主 pattern 匹配（仅启用状态时匹配）----
-            if cmd.rx is not None:
-                match = self._regex_search(cmd.rx, message)
-                if match:
-                    matched_by = cmd.pattern
-            elif cmd.simple is not None:
-                match = self._match_simple(cmd.simple, message)
-                if match:
-                    matched_by = cmd.pattern
-
-            # ---- 别名匹配（无论启用/禁用，只要设置别名就匹配）----
-            if not match and cmd.aliases:
-                for alias in cmd.aliases:
-                    match = self._match_simple(alias, message)
-                    if match:
-                        matched_by = f"别名:{alias}"
-                        break
-
-            if match:
-                # ── 黑名单拦截（命中黑名单的用户直接拒绝执行命令，修复 A13）──
-                if ev.role == 'blacklist':
-                    self._stats_hit(cmd.id)
-                    log_broker.log_plugin(plugin_name, '黑名单拦截', {
-                        'handler': cmd.handler_name,
-                        'user_id': ev.user_id,
-                        'group_id': ev.group_id,
-                        'message': message[:80],
-                    })
-                    return True  # 拦截并终止传播，命令不执行
-
-                # ── 权限检查 ──
-                require = cmd.require_level  # 'admin' | 'super' | ''
-                if require == 'admin' and not ev.is_admin:
-                    self._stats_hit(cmd.id)
-                    log_broker.log_plugin(plugin_name, '权限不足', {
-                        'handler': cmd.handler_name,
-                        'user_id': ev.user_id,
-                        'role': ev.role,
-                        'message': message[:80],
-                    })
-                    await self.framework.reply_text(
-                        ev, f'权限不足（需要 {require} 权限，当前身份: {ev.role}）')
-                    return True
-                if require == 'super' and not ev.is_superuser:
-                    self._stats_hit(cmd.id)
-                    log_broker.log_plugin(plugin_name, '权限不足', {
-                        'handler': cmd.handler_name,
-                        'user_id': ev.user_id,
-                        'role': ev.role,
-                    })
-                    await self.framework.reply_text(ev, '权限不足（需要超级管理员权限）')
-                    return True
-
-                # ── 权限节点检查（LuckPerms 风格，与 require_level 并存）──
-                # require_perm 为空时完全不触发权限解析，普通消息零开销
-                perm_node = cmd.require_perm
-                if perm_node and not ev.has_perm(perm_node):
-                    self._stats_hit(cmd.id)
-                    log_broker.log_plugin(plugin_name, '权限不足', {
-                        'handler': cmd.handler_name,
-                        'user_id': ev.user_id,
-                        'group_id': ev.group_id,
-                        'node': perm_node,
-                        'role': ev.role,
-                        'message': message[:80],
-                    })
-                    await self.framework.reply_text(
-                        ev, f'权限不足（需要权限节点: {perm_node}）')
-                    return True
-
-                # 命中计数（异步批量落库，不阻塞路由）
-                self._stats_hit(cmd.id)
-                log_broker.log_plugin(plugin_name, '命令命中', {
-                    'matched_by': matched_by,
-                    'handler': cmd.handler_name,
-                    'message': message[:100],
-                    'user_id': ev.user_id,
-                    'group_id': ev.group_id,
-                })
-                # ── 命令执行前扩展点（返回 False 跳过本命令，继续尝试其它匹配）──
-                try:
-                    _cb_res = await self.framework.hooks.trigger_async(
-                        HookPoints.COMMAND_BEFORE,
-                        {'plugin': plugin_name, 'handler': cmd.handler_name,
-                         'command_id': cmd.id, 'pattern': cmd.pattern,
-                         'event': ev, 'match': match})
-                    if False in _cb_res:
-                        log_broker.log_plugin(plugin_name, '命令被扩展点 command.before 跳过', {
-                            'handler': cmd.handler_name,
-                            'user_id': ev.user_id,
-                            'group_id': ev.group_id,
-                            'message': message[:80],
-                        })
-                        continue
-                except Exception as e:
-                    logger.error(f"command.before 扩展点异常: {e}")
-
-                handler = getattr(module, cmd.handler_name, None)
-                if handler and callable(handler):
-                    # 注入当前事件的 bot 到上下文变量（contextvars），确保回复走正确的
-                    # OneBot 实例。协程创建与 asyncio.to_thread 均携带上下文快照，
-                    # 并发消息互不干扰（原 module.ctx 插件级共享变量多 bot 时会交错错发）
-                    from framework.runtime import current_source_var as current_bot_var
-                    _bot_token = current_bot_var.set(ev.bot_name)
-                    try:
-                        if asyncio.iscoroutinefunction(handler):
-                            result = await handler(ev, match)
-                        else:
-                            # 同步 handler 转线程执行，不阻塞事件循环
-                            result = await asyncio.to_thread(handler, ev, match)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        logger.error(
-                            f"[{plugin_name}] handler 异常: {cmd.handler_name} - {e}",
-                            exc_info=True)
-                        # 生命周期钩子：插件 on_error(event, error) 处理自己的错误
-                        try:
-                            on_error = getattr(module, 'on_error', None)
-                            if callable(on_error):
-                                on_error(ev, e)
-                        except Exception as he:
-                            logger.error(f"[{plugin_name}] on_error 钩子异常: {he}")
-                        return True  # 视为已处理，避免半处理消息继续传播
-                    finally:
-                        current_bot_var.reset(_bot_token)
-                    # 命令执行后扩展点（通知，不短路）
-                    try:
-                        await self.framework.hooks.trigger_async(
-                            HookPoints.COMMAND_AFTER,
-                            {'plugin': plugin_name, 'handler': cmd.handler_name,
-                             'command_id': cmd.id, 'event': ev, 'match': match,
-                             'result': result})
-                    except Exception as e:
-                        logger.error(f"command.after 扩展点异常: {e}")
-                    # handler 返回 False 表示"未实际处理，继续路由"
-                    if result is False:
-                        continue
-                else:
-                    log_broker.log_plugin(plugin_name, '处理函数不存在', {
-                        'handler': cmd.handler_name
-                    })
-                    continue
-                return True  # 匹配成功，由 route() 检查 is_stopped()
-
-        return False
-
-    def _stats_hit(self, cmd_id: int):
-        """记录命令命中（交给 stats_writer 批量落库）"""
-        writer = getattr(self.framework, 'stats_writer', None)
-        if writer is not None:
-            writer.command_hit(cmd_id)

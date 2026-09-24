@@ -2,7 +2,8 @@
 
 > **本篇面向**：角色 B。LuckPerms 风格权限节点、组、继承与上下文的完整机制。
 
-ZCBOT 内置一套 LuckPerms 风格的权限系统（`framework/perm.py`）：
+ZCBOT 内置一套 LuckPerms 风格的权限系统（核心在 `framework/perm/`，管理面拆至
+`perm/{admin,groups,tracks}.py` 子模块，经 `perm/` 懒加载 re-export）：
 **节点（node）+ 权限组（group）+ 继承（inherit）+ 上下文（context）+ 三态判定**，
 同时保留一条独立的“身份轴”（群主/管理员/超管）。
 
@@ -99,7 +100,7 @@ ctx.get_user_role(group_id, user_id)
 ## 晋升轨道（Track）
 
 权限组可以编排成“轨道”，用户沿轨道 `promote`（晋升）/ `demote`（降级），
-适合等级、活跃度体系（底层 API 位于 `framework/perm.py`，可在插件中调用）：
+适合等级、活跃度体系（底层 API 位于 `framework/perm/` / `perm/tracks.py`，可在插件中调用）：
 
 ```python
 from framework import perm

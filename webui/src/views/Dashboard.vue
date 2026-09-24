@@ -13,7 +13,7 @@
       <el-col :span="12">
         <el-card shadow="never">
           <template #header>
-            <div class="card-head">OneBot 连接
+            <div class="card-head">{{ d.adapter_name || '接入端' }} 连接
               <span class="dim small" v-if="d.ws_port">WS :{{ d.ws_port }}</span>
             </div>
           </template>

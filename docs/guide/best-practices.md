@@ -23,7 +23,7 @@
 | 你要做什么 | 迁移成本 | 说明 |
 | ---------- | -------- | ---- |
 | 托管机器人 | 零 | 现状，默认接入端就是 OneBot |
-| 其他 IM（Telegram / Discord / 微信） | 写一个 adapter | 契约见 [协议适配器](../api/advanced/protocol_adapter.md) |
+| 其他 IM（Telegram / Discord / 微信） | 先看内置 `telegram` / `discord` / `qq_official`，不够再写 adapter | 契约见 [协议适配器](../api/advanced/protocol_adapter.md) |
 | 带权限后台的内部工具 | 换插件 | 权限 + WebUI + DB 现成 |
 | 定时任务 / 监控 / 告警 | 换插件 | 调度器 + 事件总线 + 通知渠道现成 |
 | 业务系统（审批 / 工单） | 换插件 | 权限 + 会话 + 审计现成 |
@@ -118,7 +118,7 @@ def collect_metrics():
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from framework.protocol import ProtocolAdapter
+from framework.messaging.protocol import ProtocolAdapter
 
 class WebhookHandler(BaseHTTPRequestHandler):
     framework = None

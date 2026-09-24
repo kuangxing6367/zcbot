@@ -33,7 +33,7 @@
       <el-col :span="12">
         <el-card shadow="never">
           <template #header>
-            <div class="card-head">OneBot 连接
+            <div class="card-head">接入端连接
               <el-tag size="small" :type="bots.length ? 'success' : 'info'">{{ bots.length }} 在线</el-tag>
             </div>
           </template>

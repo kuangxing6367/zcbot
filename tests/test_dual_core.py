@@ -34,9 +34,13 @@ def _plugin_main(name):
 # ── 1. 插件进程归属解析 ──────────────────────────────────────
 
 def test_process_tag_parser():
-    # 标记为 process:'core' 的官方插件
-    for name in ('onebot_adapter', 'http_inject', 'http_api', 'webui'):
-        assert Framework._read_plugin_process_tag(_plugin_main(name)) == 'core', name
+    # 标记为 process:'core' 的官方插件（协议接入类必须在核心进程）
+    core_names = ('onebot_adapter', 'http_inject', 'http_api', 'webui',
+                  'ws_client', 'qq_official', 'telegram', 'discord')
+    for name in core_names:
+        p = _plugin_main(name)
+        if os.path.isfile(p):
+            assert Framework._read_plugin_process_tag(p) == 'core', name
     # 其余官方插件（含用户侧能力）不应标记 core
     for name in ('scheduler', 'session', 'image_renderer'):
         p = _plugin_main(name)

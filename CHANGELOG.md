@@ -25,6 +25,152 @@
 
 ---
 
+## 开发中（未发布）
+
+### 新增
+- **官方接入端 `ws_client`（出站 WebSocket）**：与反向 WS 的 onebot_adapter 互补，
+  作为**客户端**主动连出到外部 WS 服务；远端 JSON 事件归一化入核，`send_msg` /
+  `send_text` 出站，**图片消息段支持 `base64://`**（CQ 码与消息段数组均可解析）。
+  完整实现 5 抽象方法 + `get_connection_info()`（连接页动态表单），断线自动重连、
+  连接前出站有界积压。默认 `enabled: false`（外连安全），配置块
+  `core_plugins.yaml → ws_client`（url / bot_name / token / reconnect_interval）。
+  无新增三方依赖（复用 `websockets`）。
+- **官方接入端 `qq_official`（QQ 官方机器人）**：`getAppAccessToken` 自动刷新
+  access_token → `GET /gateway/bot` 取 WSS → Hello/Identify(op2)/心跳(op1)/Resume(op6)；
+  群 `GROUP_AT_MESSAGE_CREATE` / 单聊 `C2C_MESSAGE_CREATE` 归一化入核，
+  出站 `send_msg` 走 OpenAPI（群 `/v2/groups/{openid}/messages`、单聊
+  `/v2/users/{openid}/messages`），**图片 base64:// 经文件上传 → msg_type=7**，
+  被动回复带 `msg_id`/`msg_seq`。默认 `enabled: false`，配置块
+  `app_id`/`app_secret`/`bot_name`/`intents`（默认 33554432=GROUP_AND_C2C_EVENT）。
+  无新增三方依赖（`websockets`+`requests`，手写协议不依赖 botpy）。
+- **官方接入端 `telegram`**：`getUpdates` 长轮询（offset 自增、断线重试）+
+  `sendMessage`/`sendPhoto`；群/超级群 → `message_type=group`，私聊 → `private`；
+  出站图片 `base64://`/`file://`/http(s)/本地路径 → multipart `sendPhoto`。
+  默认 `enabled: false`，配置块 `token`/`bot_name`/`polling_timeout`。
+  无新增三方依赖（`requests`）。
+- **官方接入端 `discord`**：Gateway WSS（Hello/Identify/Heartbeat/Resume、
+  心跳 ACK 丢失自动重连）+ REST v10 `POST /channels/{id}/messages`；
+  `MESSAGE_CREATE` 归一化（guild→group，DM→private），出站图片 `base64://`
+  → multipart `files[0]`。默认 intents `37377`
+  （GUILDS|GUILD_MESSAGES|DIRECT_MESSAGES|MESSAGE_CONTENT，特权 Intent 需门户开启）。
+  默认 `enabled: false`，配置块 `token`/`bot_name`/`intents`/`reconnect_interval`。
+  无新增三方依赖（`websockets`+`requests`）。
+  三者均：**enabled=true 时即使凭证未填也注册到连接页**（WebUI 可补配，填完重启后才建连）。
+
+### 重构
+- **内核彻底去 OneBot 硬编码（连接页/状态/发送路径协议中立）**：
+  - `ProtocolAdapter` 新增可选 `get_connection_info()` 连接自描述
+    （id/name/config_section/fields/restart_keys/endpoint_hint/guide/status_extra），
+    `ServiceRegistry` 按 `adapter_id` 汇总多接入端（`protocol_adapters()` / `primary_adapter()`）。
+  - `/api/connection` GET 改为返回 `adapters[]` 动态描述（兼容保留扁平 `config`/`status`）；
+    PUT 按 `body.adapter` 与适配器声明的字段白名单写入，不再写死 `onebot` 段与
+    `listen_host/listen_port/access_token`。仪表盘/运行状态/终端 `status` 的在线列表
+    一律取 `protocol_adapter.get_connected_bots()`，`fw.ws_server` 降为兼容别名
+    （优先接入端自报的 `ws_server`）。
+  - `fw.protocol_backend` 属性别名改为 `fw.protocol_adapter`；停止顺序纳入
+    `protocol_adapter`（兼容保留 `ws_server` 键）。
+  - `ctx.actions` 成为协议中立动作面（推荐新代码）；`ctx.onebot` 保留为别名。
+    `ctx.send_msg/ban/kick/...` 快捷方法改走 `ctx.actions`。
+  - 双进程宿主 `IpcAdapter.send_text` 经新增 RPC `api.send_text` 转发核心接入端，
+    不再硬编码 `send_group_msg/send_private_msg`；`http_api` 发送/广播/状态错误文案中立化。
+  - 适配器实现：`onebot_adapter` / `http_inject` / `ipc` 均提供 `get_connection_info()`。
+  - WebUI：连接页按 `adapters[]` 多卡片动态渲染配置表单与在线状态；
+    仪表盘标题用 `adapter_name`，运行状态改为「接入端连接」，侧边栏改为「接入端连接」，
+    设置页 OneBot 标签改为「接入端（onebot 段）」。
+  - 顺带修复：`framework/messaging/protocol.py` 缺 `HookPoints` 导入、
+    `framework/core/dispatch.py` 缺 `asyncio`/`HookPoints`/`ProtocolAdapter` 导入。
+- **framework/ 根目录按域分包（第七轮）**：根目录 29 个散落 .py 收拢为
+  `core/`（base · dispatch · runtime · stats_writer）、`ctx/`（base · messaging ·
+  events · webui · db）、`loader/`（base · config · lifecycle · runtime · ui）、
+  `deps/`（__init__ · pip）、`perm/`（__init__ · admin · groups · tracks）五个子包；
+  根目录仅保留 `config/hooks/log_broker/dual_auth/scheduler/runtime/tls/apis/stats_writer`
+  等入口与 shim。所有旧导入路径（`from framework.core import Framework`、
+  `from framework.loader import pip_install_*`、`from framework.ctx import PluginContext`、
+  `from framework.perm import resolve` 及懒加载属性、`from framework.stats_writer import
+  AsyncStatsWriter` 等）经子包 `__init__.py` re-export 保持兼容。
+- **core 史山剥离（第六轮）**：
+  - `framework/core.py` 按职责拆为 base + 两个 mixin：事件/命令/通知分派与中立回复
+    → `core_dispatch.py`（`FrameworkDispatchMixin`）；核心插件加载、依赖自愈、心跳/内存看门狗、
+    内置任务 → `core_runtime.py`（`FrameworkRuntimeMixin`）；`Framework` 继承两者，
+    公开方法与双进程角色分派（`_read_plugin_process_tag` / `_core_plugin_is_core_side`）行为不变。
+  - `framework/deps.py` 中 pip 镜像安装/requirements 解析/版本说明符 → `deps_pip.py`
+    （`_PIP_MIRRORS` / `_RE_PKG_NAME` 等常量随迁）；`deps.py` 保留 `PluginDepsMixin`
+    与底部 `pip_install_*` re-export，`from framework.deps import pip_install_*` 兼容。
+  - `framework/database/db.py` 连接管理/查询执行 mixin → `db_conn.py`（`DatabaseConnMixin`）；
+    模块级 `init_db` / `_parse_sqlite_type` / 单例 `db` 与 `from framework.database.db import Database, init_db`
+    保持兼容。
+  - `framework/messaging/router.py` 匹配子系统 → `router_match.py`（`RouterMatchMixin` +
+    `SimpleMatch` / `_PluginRoute`）；`MessageRouter` 继承 `RouterMatchMixin` + 关键词子系统
+    `KeywordReplyMixin`，热路径行为不变。
+  - `framework/loader.py` 加载/卸载/合成包预载/字节码清理 → `loader_lifecycle.py`
+    （`PluginLifecycleMixin`）；`_PluginSourceLoader` 随迁并经 `loader.py` re-export，
+    `from framework.loader import pip_install_*` 与加载器公开面不变。
+- **core 史山剥离（第五轮）**：
+  - `framework/ctx.py`（893 行 `PluginContext` 上帝对象，77 方法）按域拆为
+    base + 四个 mixin：`ctx_messaging.py`（OneBot 快捷动作/身份/群级开关）、
+    `ctx_events.py`（命令/任务/事件/扩展点/协议 API）、`ctx_webui.py`（仪表盘/WebUI/
+    管理页扩展）、`ctx_db.py`（同步/异步数据库）；`PluginContext` 继承四个 mixin，
+    全部公开方法名与签名不变（311 行 base）。
+  - `framework/perm.py`（846 行）拆为 core 解析（`resolve`/`PermissionSet`/缓存，
+    531 行）+ `perm_admin.py`（审计/过期清理/上下文构造）+ `perm_groups.py`
+    （组 CRUD + 节点管理）+ `perm_tracks.py`（升降级轨道）；子模块单向依赖 core，
+    `perm.py` 经模块级 `__getattr__` 懒加载 re-export，`from framework.perm import X`
+    与 `perm.X` 属性访问均保持兼容。
+- **core 史山剥离（第四轮）**：
+  - `framework/terminal/builtins.py`（669 行 `register_builtins` 巨型函数）按域拆为
+    `cmd_core.py`（help/status/plugins/log/clear/exit）+ `cmd_plugin.py`
+    （enable/disable/config/reload）+ `cmd_msg.py`（send/recv/ban/unban/kick/broadcast）
+    + `cmd_info.py`（users/groups/tasks）+ `cmd_update.py`（update）+ `helper.py`；
+    `register_builtins(fw)` 保留为编排入口，20 条内置命令注册行为不变。
+  - `framework/api/framework_ops.py`（343 行）：检查更新 / 源码更新拆至
+    `framework_update.py`（262 行）；`framework_ops.py`（109 行）保留 version /
+    restart / terminal_exec 并编排子模块，webapp 调用点不变。
+  - `framework/loader.py`（1282 → 933 行）：配置 schema 能力（`read_config_schema` /
+    `init_plugin_configs` / `get_plugin_config_files`）→ `loader_config.PluginConfigMixin`；
+    运行时监控（`_start_memory_monitor` / `heartbeat_register` / `self_check_orphans`）
+    → `loader_runtime.PluginRuntimeMixin`。
+  - `framework/messaging/router.py`（707 → 571 行）：关键词自动回复子系统
+    （`_KeywordRule` + 加载/匹配/handler/命中计数）→ `router_keywords.KeywordReplyMixin`；
+    `MessageRouter` 改为继承该 mixin，热路径行为不变。
+- **core 史山剥离（第三轮）**：
+  - `framework/api/webapp.py`（1000 行）：`WebServer` 拆至 `webserver.py`；版本/yaml/
+    插件市场/GitHub 下载等 24 个共享辅助闭包外提为 `app_helpers.make_app_helpers()` 工厂
+    （键名与原 ctx 完全一致，1000 → 约 400 行）。
+  - `framework/api/plugins.py`（1074 行）按域拆为 `plugins.py`（生命周期 + 依赖/venv +
+    编排入口）+ `plugin_market.py`（GitHub 更新 / 市场源 / 安装）+ `plugin_meta.py`
+    （README / 配置 / schema / 命令 / 依赖图）；`plugins.register(ctx)` 继续作唯一入口。
+  - `framework/core.py` 的 `AsyncStatsWriter` 剥离至 `framework/stats_writer.py`
+    （`from framework.core import AsyncStatsWriter` re-export 兼容）。
+  - `framework/loader.py`（1604 → 1282 行）UI 能力抽为 `loader_ui.py` 三个 mixin：
+    `PluginUiExtensionsMixin` / `PluginWebuiMixin` / `PluginGroupSettingsMixin`。
+  - `framework/api/perm_api.py`：20 处函数内 `from framework import perm as perm_mod`
+    提升为模块级单次导入。
+- **core 史山剥离（第二轮）**：`framework/database/db.py`（1306 行，五职合一）拆为
+  `dialect.py`（SQL 方言翻译，纯函数）/ `schema.py`（自动建表 + 运行时迁移）/
+  `db.py`（连接管理 + 查询执行 + 事务 + 单例，523 行）；写路径 `execute` /
+  `execute_many` / `insert` 合并为统一 `_write` 管线，消除三段复制粘贴与散落的
+  `if db_type == 'sqlite'` 方言分支（统一走 `_translate_sql` / `_translate_write_sql`）。
+- **loader 依赖职责剥离**：`framework/loader.py`（2177 → 1604 行）中的 pip 镜像安装、
+  requirements 解析、版本说明符解析与插件依赖检查/隔离 venv 迁至新模块
+  `framework/deps.py`（自由函数 + `PluginDepsMixin` 混入）；
+  `from framework.loader import pip_install_*` 等旧导入路径经 re-export 保持兼容。
+- **新增 `pyproject.toml`（PEP 621）**：项目元数据与依赖声明；`requirements.txt`
+  继续作为 `main.py` 启动自检的安装入口，两处依赖同步维护（兼容保留）。
+
+### 文档 / 配置
+- **明确 SQLite 适用边界**：SQLite **仅适合小环境与开发环境**（单写多读、单文件），
+  **不适合大环境**（多群、高并发、多进程部署）——`config.yaml` 注释、默认配置模板、
+  启动日志、`docs/advanced/database.md`、`docs/guide/configuration.md`、README 统一标注，
+  大环境一律切 `database.type: mysql`。
+- 同步过期文档路径：`docs/advanced/database.md` 改指 `framework/database/*`；
+  `architecture.md` / `event.md` / `services.md` / `protocol_adapter.md` / `session.md` /
+  `loader.md` / `best-practices.md` 中的 `framework/{event,protocol}.py` 旧路径改指
+  `framework/messaging/*`；README 目录树补齐 `pyproject.toml`、
+  `framework/{database,messaging,terminal,deps,loader_*,stats_writer,api/{webserver,app_helpers,framework_update,plugin_market,plugin_meta}}`；
+  `docs/advanced/loader.md` 维护者速查注明 deps / loader_ui / loader_config / loader_runtime 分工。
+
+---
+
 ## v1.5.1（2026-09-16）
 
 > 主题：**群内 @机器人 命令修复**——修正消息归一化把 @机器人 前缀编码为 `[@self_id]` 污染命令匹配，导致群内以 `@机器人 命令` 触发的指令被静默吞掉。

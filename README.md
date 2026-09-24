@@ -65,7 +65,7 @@ ZCBOT 的能力分两层：**内核只负责"运转"**，其余都是"挂在运�
 
 | 能力 | 由谁提供（内核/扩展） |
 | ---- | ---- |
-| **持久化层** | 内核：SQLite / MySQL 双方言自动翻译、自动建表、schema 迁移、连接池、同步/异步双接口 |
+| **持久化层** | 内核：SQLite / MySQL 双方言自动翻译、自动建表、schema 迁移、连接池、同步/异步双接口（**SQLite 仅适合小环境/开发环境，大环境用 MySQL**） |
 | **运行时层** | 内核：插件加载器、事件总线、消息路由（优先级管线）、服务注册表、依赖自愈、内存看门狗、孤儿任务清理、可靠热重载 |
 | **鉴权层** | 内核：LuckPerms 风格权限引擎（三态 + 组继承 + 上下文 + 时效 + 轨道 + 审计）、双令牌体系（会话 token + API Key） |
 | **接入层** | 扩展：协议无关的 `ProtocolAdapter` 抽象 + 服务注册表；官方实现 `onebot_adapter`（OneBot 反向 WS）、`http_inject`（HTTP 事件注入）、`http_api`（对外 HTTP API）、终端模拟注入 |
@@ -190,7 +190,7 @@ python main.py                 # 也可指定配置：python main.py D:\config\z
 | `webui.host` / `webui.port` | `127.0.0.1` / `8080` | Web 后台地址端口 |
 | `http_inject`（默认关） | `127.0.0.1:8901/hook` | HTTP 事件注入 |
 | `http_api`（默认关） | `127.0.0.1:1145` | 独立对外 HTTP API |
-| `config.yaml → database.type` | `sqlite`（`data/zcbot.db`） | `sqlite` 零配置或 `mysql` |
+| `config.yaml → database.type` | `sqlite`（`data/zcbot.db`） | `sqlite` 零配置（**仅小环境/开发**）或 `mysql`（**大环境**） |
 
 Web 后台默认登录账号 `admin` / `admin123`（**首次登录后立即改密**）。
 
@@ -364,22 +364,28 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
 ```
 .
 ├── main.py                 # 启动入口：python main.py [自定义配置路径]
+├── pyproject.toml          # 项目元数据/依赖（PEP 621，与 requirements.txt 同步）
+├── requirements.txt        # 依赖安装入口（main.py 启动自检读取，兼容保留）
 ├── config.yaml             # 全局配置（首次启动生成）
 ├── core_plugins.yaml       # 官方扩展配置中心（启动自动扫描 core_plugins/ 同步、回写、合并）
-├── requirements.txt
 ├── framework/              # 微内核（不含任何 OneBot 实现）
-│   ├── core.py             # 内核主体：加载/生命周期/双进程分派/中立回复
+│   ├── core/               # 内核包：base(Framework) · dispatch · runtime · stats_writer
+│   ├── ctx/                # 插件上下文包：base(PluginContext) · messaging · events · webui · db
+│   ├── loader/             # 加载器包：base(PluginLoader) · config · lifecycle · runtime · ui
+│   ├── deps/               # 依赖包：PluginDepsMixin + pip 镜像安装（pip.py）
+│   ├── perm/               # 权限包：core(resolve/PermissionSet) · admin · groups · tracks（懒加载）
 │   ├── config.py           # 配置加载 + core_plugins.yaml 配置中心
 │   ├── hooks.py            # 扩展点注册表（HookRegistry）—— 微内核契约
-│   ├── db.py               # 数据库抽象（SQLite/MySQL 双方言、连接池）
-│   ├── event.py            # Event 事件对象（富媒体/传播控制/权限查询）
-│   ├── ctx.py              # PluginContext（扩展可用能力，含 ctx.hook 扩展点注册）
-│   ├── router.py           # 命令路由（require_perm / require_level）
-│   ├── loader.py           # 用户扩展加载器（合成包/相对导入/可靠热重载）
-│   ├── protocol.py         # ProtocolAdapter 抽象基类 + ActionProxy + 服务注册表
-│   ├── runtime.py          # 中立运行时上下文（current_source_var，兼容 current_bot_var）
-│   ├── perm.py             # LuckPerms 风格权限引擎（无第三方依赖）
-│   ├── api/                # 后台 REST 功能域分包（可插入路由注册表）
+│   ├── log_broker.py       # 日志总线
+│   ├── dual_auth.py        # 双令牌（会话 token + API Key）
+│   ├── scheduler.py        # 定时任务调度
+│   ├── runtime.py          # 中立运行时上下文（current_source_var）
+│   ├── stats_writer.py     # 兼容 shim → framework.core.stats_writer
+│   ├── apis.py             # 兼容 shim：re-export create_web_app / WebServer
+│   ├── database/           # 数据库包：db.py · db_conn.py · dialect.py · schema.py · init_db.py
+│   ├── messaging/          # 消息事件包：event · event_bus · router · router_match · router_keywords · protocol
+│   ├── terminal/           # 终端包：builtins 编排 + cmd_{core,plugin,msg,info,update} + helper
+│   ├── api/                # 后台 REST：webapp · webserver · app_helpers · plugins/market/meta · framework_ops/update
 │   └── ipc/                # core/host 双进程 JSON-RPC（dual_process 门控）
 ├── core_plugins/           # 官方扩展（可在 core_plugins.yaml 开关）
 │   ├── onebot_adapter/     #   OneBot 11 接入端（反向 WS + onebot_api.py 动作封装）
@@ -401,7 +407,7 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
 - **Event 上**（handler 内最常用）：`ev.has_perm(node)`、`ev.check_perm(node)`（三态）、`ev.perms`（快照）、`ev.perm_groups`、`ev.primary_group`，上下文自动从事件构造。
 - **ctx 上**（非事件场景，如定时任务）：`ctx.has_perm(uid, node, context=..., role=...)`、`ctx.check_perm(...)`、`ctx.user_groups(...)`。
 - **命令级**：`@ctx.command(..., require_perm="x.y", require_level="admin")`，两者任一满足即放行；解析顺序：用户直接节点 → 所属组（weight 降序）→ 精确度（精确 > 段通配 > `*`）→ 同精度否决优先。
-- **缓存**：权限解析 60s TTL、组快照 10s，Web 端改动后自动失效。底层能力都在 `framework/perm.py`。
+- **缓存**：权限解析 60s TTL、组快照 10s，Web 端改动后自动失效。底层能力在 `framework/perm/`（核心）与 `perm/{admin,groups,tracks}.py`（子模块，经 `perm` 懒加载 re-export）。
 
 ### 11.3 前端构建
 
@@ -413,7 +419,7 @@ npm install
 npm run build      # 产物输出到 ../web/
 ```
 
-数据库表结构见 `sql/init.sql`（SQLite）与 `sql/init_mysql55.sql`（MySQL 5.5 兼容），启动时自动建表补缺。
+数据库表结构见 `sql/init.sql`（MySQL 风格 DDL，运行时自动翻译给 SQLite/MySQL 双方使用）与 `sql/init_mysql55.sql`（MySQL 5.5 兼容），启动时自动建表补缺。
 
 ---
 

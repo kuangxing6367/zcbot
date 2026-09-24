@@ -56,10 +56,11 @@
 | `core` | 开启双进程时核心进程 | 仅 `process:'core'` 标记的 | 真实 Database | 协议/Web/DB 基础设施 |
 | `host` | 开启双进程时宿主进程 | 排除 `process:'core'` 的 | `RemoteDatabase` 代理 | 用户插件 + scheduler/session |
 
-分派逻辑在 `framework/core.py → _load_core_plugins`：先读 `dual_process.core_plugins` 显式白名单，
+分派逻辑在 `framework/core/ → _load_core_plugins`：先读 `dual_process.core_plugins` 显式白名单，
 未配置则回退到**静态解析**每个插件 `__plugin_meta__['process']`（AST 解析，不执行代码）。
 
-已标记 `process: 'core'` 的官方插件：`onebot_adapter`、`http_inject`、`http_api`、`webui`。
+已标记 `process: 'core'` 的官方插件：`onebot_adapter`、`http_inject`、`ws_client`、
+`qq_official`、`telegram`、`discord`、`http_api`、`webui`。
 其余（`scheduler`、`session`、`image_renderer`）与全部用户插件在宿主进程加载。
 
 ## 4. IPC 协议
