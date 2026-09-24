@@ -22,8 +22,21 @@ use image::{GenericImage, GenericImageView};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub(crate) mod canvas;
+
+// ---------------------------------------------------------------- 字体缓存
+//
+// fontdue 解析一个 10~20MB 的中文字体需要读盘 + 构建字形表，单次耗时几十毫秒、
+// 峰值内存可达字体文件的数倍。渲染接口是高频调用路径，若每次都重新解析字体，
+// 会造成明显的延迟抖动与内存峰值。这里按字体路径做全局缓存，后续调用直接复用。
+
+fn font_cache() -> &'static Mutex<HashMap<String, Arc<Font>>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<Font>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 // ---------------------------------------------------------------- 颜色
 
@@ -251,9 +264,20 @@ impl Opts {
 
 // ---------------------------------------------------------------- 字体 & 排版
 
-pub(crate) fn load_font(path: &str) -> Result<Font, String> {
+pub(crate) fn load_font(path: &str) -> Result<Arc<Font>, String> {
+    if let Ok(cache) = font_cache().lock() {
+        if let Some(f) = cache.get(path) {
+            return Ok(Arc::clone(f));
+        }
+    }
     let data = std::fs::read(path).map_err(|e| format!("读取字体失败: {e}"))?;
-    Font::from_bytes(data, FontSettings::default()).map_err(|e| format!("解析字体失败: {e}"))
+    let font = Font::from_bytes(data, FontSettings::default())
+        .map_err(|e| format!("解析字体失败: {e}"))?;
+    let arc = Arc::new(font);
+    if let Ok(mut cache) = font_cache().lock() {
+        cache.entry(path.to_string()).or_insert_with(|| Arc::clone(&arc));
+    }
+    Ok(arc)
 }
 
 /// 按字符度量宽度换行（CJK 友好），保持与 PIL 版行为一致
@@ -323,10 +347,13 @@ pub(crate) fn draw_text(
                     continue;
                 }
                 let bx = cx + m.xmin + px;
-                // fontdue 的 ymin 语义：位图顶到基线的距离，y 轴向上为正（如 'A'@30px ymin≈+22）。
-                // 位图第 py 行（py=0 为字形顶）的屏幕 y = baseline - ymin + py。
-                // 注意：旧实现误用 +ymin 导致所有字形整体下移且各字符下移量不同（英文"东倒西歪"）。
-                let by = baseline_y - m.ymin + py;
+                // fontdue 0.9 Metrics.ymin = 位图最底边相对基线的偏移（像素坐标 y 向下为正：
+                // 无降部字形贴基线 → 0，有降部（如 g/y）→ 正值）。
+                // 位图顶的屏幕 y = baseline + ymin - height，第 py 行（py=0 为顶）：
+                //   by = baseline + ymin - height + py
+                // 注意：此前误用 ±ymin 直接作为"顶偏移"（实际 ymin 恒为 0 且不含高度），
+                // 导致所有字形整体下移约一个行高、越靠下越明显（这正是 pyd 文本位置错误的根因）。
+                let by = baseline_y + m.ymin - m.height as i32 + py;
                 if bx < 0 || by < 0 || bx >= width as i32 || by >= height as i32 {
                     continue;
                 }
@@ -436,15 +463,14 @@ fn draw_border(buf: &mut [u8], width: u32, height: u32, style: &Style) {
     }
 }
 
-pub(crate) fn encode_png(width: u32, height: u32, buf: Vec<u8>) -> Result<Vec<u8>, String> {
-    use image::{ImageBuffer, Rgba};
-    let img = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width, height, buf)
-        .ok_or_else(|| "图像尺寸非法".to_string())?;
+pub(crate) fn encode_png(width: u32, height: u32, buf: &[u8]) -> Result<Vec<u8>, String> {
+    use image::codecs::png::PngEncoder;
+    use image::{ExtendedColorType, ImageEncoder};
     let mut out: Vec<u8> = Vec::new();
     {
         let mut cursor = std::io::Cursor::new(&mut out);
-        image::DynamicImage::ImageRgba8(img)
-            .write_to(&mut cursor, image::ImageFormat::Png)
+        PngEncoder::new(&mut cursor)
+            .write_image(buf, width, height, ExtendedColorType::Rgba8)
             .map_err(|e| format!("PNG 编码失败: {e}"))?;
     }
     Ok(out)

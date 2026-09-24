@@ -122,8 +122,33 @@ _NATIVE = _load_native_renderer()
 
 
 def _find_font_path():
-    """查找可用于原生渲染的字体文件路径"""
+    """查找可用于原生渲染的字体文件路径（插件自带 → 系统字体回退）
+
+    此前只查插件目录，若未随包分发字体则永远返回 None，
+    导致原生扩展闲置、所有渲染回退 PIL（性能与内存问题来源之一）。
+    """
     for p in _FONT_CANDIDATES:
+        if os.path.isfile(p):
+            return p
+    # 系统字体回退（Windows / Linux），保证原生渲染可用
+    if sys.platform.startswith('win'):
+        windir = os.environ.get('WINDIR', r'C:\Windows')
+        sys_fonts = [
+            os.path.join(windir, 'Fonts', 'msyh.ttc'),
+            os.path.join(windir, 'Fonts', 'msyhbd.ttc'),
+            os.path.join(windir, 'Fonts', 'simhei.ttf'),
+            os.path.join(windir, 'Fonts', 'simsun.ttc'),
+            os.path.join(windir, 'Fonts', 'arial.ttf'),
+        ]
+    else:
+        sys_fonts = [
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/arphic/uming.ttc',
+        ]
+    for p in sys_fonts:
         if os.path.isfile(p):
             return p
     return None
@@ -607,33 +632,18 @@ def _send_image(ctx, event, img_or_bytes):
 # ---------------------------------------------------------------- Canvas（原生优先，PIL 回退）
 
 
-def _font_ascent(font_path, size):
-    """PIL 度量字体 ascent（带缓存），用于原生 Canvas 文本顶部语义转换"""
-    key = ("ascent", font_path, int(size))
-    cached = _FONT_CACHE.get(key)
-    if cached is not None:
-        return cached
-    try:
-        from PIL import ImageFont
-        f = ImageFont.truetype(font_path, int(size))
-        _font_cache_put(key, f.getmetrics()[0])
-    except Exception:
-        # 度量失败按 CJK 常见 ascent 0.88em 估算，误差在可接受范围
-        _font_cache_put(key, max(1, int(int(size) * 0.88)))
-    return _FONT_CACHE[key]
-
-
 class _NativeCanvasProxy:
     """
-    原生 Canvas 的 Python 包装：统一 text() 为「文本顶部」语义（与 PIL 版一致）
+    原生 Canvas 的 Python 包装：text() 直接透传原生实现（顶部语义，与 PIL 版一致）
 
-    原生 zcbot_render.Canvas.text(x, y, ...) 的 y 是基线语义（内部 baseline = y + font_size），
-    而 PIL 版（_CanvasPIL / 原 help 插件）的 y 是文本顶部语义。中英文混排时：
-    - 中文全角字形 ymin≈-0.88em，恰好抵消偏移，看起来正常
-    - 英文（ymin≈-0.45~-0.72em，大小写差异大）明显下沉、高低不一 → "英文东倒西歪"
+    原生 zcbot_render.Canvas.text(x, y, ...) 的 y 为行顶语义（内部 baseline = y + font_size），
+    draw_text 已按 fontdue 0.9 的 ymin 语义修正（by = baseline + ymin - height + py），
+    文本顶部与 _CanvasPIL 一致；中英文混排不再下沉错位。
 
-    这里在 Python 层把 y 从「文本顶部」转换为原生基线坐标（baseline = y + ascent），
-    与原 pyd 行为兼容，无需重编译；其他方法（rect/circle/paste 等）原样透传。
+    此前 text() 每次创建 PIL 临时画布渲染文本再 PNG 编码、经 paste 解码合成，
+    单条文本就有「字体加载 + 画布分配 + PNG 编码 + PNG 解码」四重开销，
+    是"渲染不如 PIL 快、内存占用高"的直接原因。现直连原生 draw_text，
+    零中间对象、零编解码。其他方法（rect/circle/paste 等）原样透传。
     """
 
     def __init__(self, native_canvas, font_path):
@@ -641,60 +651,14 @@ class _NativeCanvasProxy:
         self._font_path = font_path
 
     def text(self, x, y, text, font_size=20, color=None, align="left", wrap_width=0):
-        """
-        文字统一走 PIL 渲染后 paste 到原生画布（顶部语义，与 _CanvasPIL 完全一致）。
-
-        背景：原生 zcbot_render（fontdue 0.9）的 draw_text 曾误用 ymin 符号
-        （baseline + ymin 应为 baseline - ymin），导致所有字形整体下移且各字符
-        下移量不同——中文方块字不明显，英文（ascender/descender 敏感）表现为
-        "东倒西歪"。native/src/lib.rs 已修正源码，待重新编译后可去掉本包装的
-        PIL 渲染（直接透传 self._c.text），并移除 _font_ascent 依赖。
-        """
-        from PIL import Image, ImageDraw, ImageFont
-        from io import BytesIO
-        size = int(font_size)
-        if size <= 0:
-            return self
-        c = _parse_color(color, (40, 40, 60, 255))
-        try:
-            font = ImageFont.truetype(self._font_path, size)
-        except Exception:
-            font = _get_font(size)
-        if font is None:
-            return self
-        line_h = max(1, round(size * 1.35))
-        # 换行逻辑与 _CanvasPIL.text 保持一致
-        lines = []
-        if wrap_width > 0:
-            avg = font.getlength("中")
-            chars = max(1, int(int(wrap_width) / max(1, avg)))
-            for para in str(text).split("\n"):
-                for i in range(0, len(para), chars):
-                    lines.append(para[i:i + chars])
-        else:
-            lines = str(text).split("\n")
-        lines = [ln for ln in lines if ln]
-        if not lines:
-            return self
-        lw = max(font.getlength(ln) for ln in lines)
-        cw = max(int(lw), int(wrap_width)) if wrap_width > 0 else int(lw)
-        ih = len(lines) * line_h
-        # 画布比文字大 8px（右侧/底部留白），文字 ink 从 (0, 0) 起画，
-        # paste 到 (x, y) 后与 _CanvasPIL.text 的锚点（ascender 顶 = y）逐像素一致
-        img = Image.new("RGBA", (cw + 8, max(1, ih) + 8), (0, 0, 0, 0))
-        d = ImageDraw.Draw(img)
-        for i, ln in enumerate(lines):
-            lwi = font.getlength(ln)
-            if align == "center":
-                xx = 0 + (int(max(0, int(wrap_width) - int(lwi)) / 2) if wrap_width > 0 else (cw - int(lwi)) // 2)
-            elif align == "right":
-                xx = 0 + (max(0, int(wrap_width) - int(lwi)) if wrap_width > 0 else (cw - int(lwi)))
-            else:
-                xx = 0
-            d.text((xx, i * line_h), ln, font=font, fill=tuple(c))
-        buf = BytesIO()
-        img.save(buf, "PNG")
-        self._c.paste(buf.getvalue(), int(x), int(y))
+        """文字直连原生 draw_text（顶部语义，与 _CanvasPIL.text 一致）"""
+        self._c.text(
+            int(x), int(y), str(text),
+            font_size=int(font_size),
+            color=color,
+            align=align if align else "left",
+            wrap_width=int(wrap_width or 0),
+        )
         return self
 
     def __getattr__(self, name):
