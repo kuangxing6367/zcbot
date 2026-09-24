@@ -1,6 +1,6 @@
 # 定时任务
 
-> **本篇面向**：角色 B。cron/interval/date 定时任务的注册方式与底层 APScheduler。
+> **适合谁**：想让 ZCBOT「到点自动干活」（日报、签到重置、健康检查…）的插件开发者。不需要接聊天平台也能跑。
 
 ZCBOT 的定时能力由官方插件 `core_plugins/scheduler`（基于 APScheduler
 `AsyncIOScheduler`）提供，用户插件通过 `ctx.task()` 注册，开箱即用。
