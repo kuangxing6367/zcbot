@@ -1,23 +1,24 @@
 # 安装
 
-> **本篇面向**：角色 A（想把 ZCBOT 跑起来的使用者）。按步骤操作即可，无需编程基础。
+按下面 4 步做完，就能把 ZCBOT 跑起来。不需要编程基础；依赖装漏了启动时也会自动补。
 
-## 环境要求
+## 你先需要准备
 
-- Python 3.10 或更高版本（开发验证环境为 3.10–3.14）；
-- 操作系统：Windows / Linux / macOS；
-- （可选）一个 IM 平台的接入端：框架协议无关，默认内置 `onebot_adapter`（OneBot 11，常用于接入 QQ）。
-  只有「要和一个聊天软件收发消息」时才需要它；纯定时任务 / HTTP 事件注入场景可以完全不接 IM 平台。
-  如何对接见 [对接 IM 平台](./connect-im.md)。
+| 需要 | 说明 |
+| ---- | ---- |
+| Python 3.10+ | 建议 3.10–3.14；Windows / Linux / macOS 均可 |
+| （可选）聊天接入端 | 只有要收发聊天消息才需要；纯定时 / Webhook 可以先不接。对接见 [对接 IM 平台](./connect-im.md) |
 
-## 下载代码
+## 第 1 步：下载代码
 
 ```bash
 git clone https://github.com/kuangxing6367/zcbot.git
 cd zcbot
 ```
 
-## 创建虚拟环境（推荐）
+没有 git 的话，也可以在 GitHub 页面点 **Code → Download ZIP**，解压后进入目录。
+
+## 第 2 步：虚拟环境（推荐，可跳过）
 
 ```bash
 python -m venv .venv
@@ -27,66 +28,76 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-## 安装依赖
+## 第 3 步：装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-> `requirements.txt` 与 `pyproject.toml`（PEP 621）两处依赖保持同步：
-> 传统部署/启动自检用 `requirements.txt`；工具链读取元数据时用 `pyproject.toml`。
-> 二选一即可，改依赖请两处同步更新。
+> 依赖也写在 `pyproject.toml` 里，两处保持同步：日常启动自检读 `requirements.txt`，工具链读 `pyproject.toml`。
+> **改依赖时两处都要改**；只使用的话装 `requirements.txt` 就够了。
 
-核心依赖包括 `websockets`（协议连接）、`flask` + `waitress`（管理后台）、
-`apscheduler`（定时任务）、`bcrypt`（密码哈希）、`psutil`（内存监控）等。
+常用核心包：`websockets`（连接）、`flask` + `waitress`（后台）、`apscheduler`（定时）、`bcrypt`（密码）、`psutil`（监控）。
 
-:::tip 依赖会自愈
-即使跳过手动安装，启动时 `main.py` 也会自检 `requirements.txt`，
-缺失的依赖会走内置镜像源（清华→阿里→豆瓣→官方）自动补装；
-插件自己的依赖在加载时也会按 `requirements.txt` 自动安装。
+:::tip 跳过这步也行
+`python main.py` 启动时会自检 `requirements.txt`，缺包会走内置镜像（清华→阿里→豆瓣→官方）自动装。
+插件自己的依赖也会在加载时自动装。
 :::
 
-MySQL 用户额外需要 `pymysql`、`DBUtils`（切换到 MySQL 时框架会提示/自动安装）。
+MySQL 用户额外需要 `pymysql`、`DBUtils`（切到 MySQL 时框架会提示并安装）。
 
-## 目录结构
-
-```
-zcbot/
-├── main.py                 # 启动入口（python main.py [自定义配置路径]）
-├── pyproject.toml          # 项目元数据/依赖（与 requirements.txt 同步）
-├── config.yaml             # 全局配置（首次启动自动生成）
-├── requirements.txt        # 核心依赖
-├── framework/              # 极简内核（加载器/路由/事件/上下文/协议抽象/数据库…）
-├── core_plugins.yaml       # 官方插件配置中心（开关/配置，启动自动扫描同步）
-├── core_plugins/           # 官方插件（在 core_plugins.yaml 开关）
-│   ├── onebot_adapter/     #   OneBot 11 接入端（反向 WebSocket，可选，默认开）
-│   ├── webui/              #   Web 管理后台（默认开）
-│   ├── session/            #   多轮会话管理器（默认开）
-│   ├── scheduler/          #   定时任务调度器（默认开）
-│   ├── http_inject/        #   HTTP 事件注入接入端（默认关）
-│   ├── ws_client/          #   出站 WebSocket 接入端（默认关）
-│   ├── qq_official/        #   QQ 官方机器人接入端（默认关）
-│   ├── telegram/           #   Telegram 接入端（默认关）
-│   ├── discord/            #   Discord 接入端（默认关）
-│   └── http_api/           #   独立对外 HTTP API（默认关）
-├── plugins/                # 用户插件（每个一个子目录，含 main.py）
-├── data/                   # 运行数据（自动创建）
-│   ├── logs/               #   日志
-│   └── plugins_dat/        #   各插件的配置/缓存/私有数据
-├── web/                    # 管理后台默认前端静态资源
-├── sql/                    # 数据库脚本
-├── tests/                  # 自测脚本
-└── docs/                   # 本文档
-```
-
-## 启动
+## 第 4 步：启动
 
 ```bash
 python main.py
 ```
 
-首次启动会生成 `config.yaml`、`core_plugins.yaml` 与 `data/` 目录。下一步见
-[开始使用](./getting-started.md)；要接入聊天平台见 [对接 IM 平台](./connect-im.md)。
+首次启动会生成 `config.yaml`、`core_plugins.yaml` 和 `data/`。
+
+看到类似输出即成功：
+
+```
+ZCBOT 框架 启动中...
+官方插件 [onebot_adapter] 已加载
+官方插件 [webui] 已加载
+...
+框架启动完成，等待事件...
+```
+
+**接着做：**
+
+1. 浏览器打开 `http://127.0.0.1:8080` → 进 [开始使用](./getting-started.md)
+2. 要连聊天软件 → 进 [对接 IM 平台](./connect-im.md)
+3. 要写功能 → 进 [编写插件](./writing-plugins.md)
+
+---
+
+## 目录结构（以后会用到的）
+
+```
+zcbot/
+├── main.py                 # 启动入口：python main.py [自定义配置路径]
+├── config.yaml             # 全局配置（首次启动自动生成）
+├── core_plugins.yaml       # 官方插件开关/配置（启动自动同步）
+├── requirements.txt        # 依赖清单（启动自检读它）
+├── pyproject.toml          # 项目元数据（与 requirements 同步）
+├── framework/              # 内核
+├── core_plugins/           # 官方插件（在 yaml 里开关）
+│   ├── onebot_adapter/     #   OneBot 11（默认开）
+│   ├── webui/              #   Web 后台（默认开）
+│   ├── session/            #   多轮会话（默认开）
+│   ├── scheduler/          #   定时任务（默认开）
+│   ├── telegram/ discord/  #   其它接入端（默认关，填凭证后开）
+│   ├── qq_official/ ws_client/ http_inject/ http_api/
+├── plugins/                # 你的插件（每个一个文件夹）
+├── data/                   # 运行数据：logs/、数据库、plugins_dat/
+├── web/                    # 后台前端静态资源
+├── sql/                    # 建表脚本
+├── tests/                  # 自测
+└── docs/                   # 本文档
+```
+
+日常最常碰：`plugins/`（写功能）、`core_plugins.yaml`（开关/接平台）、`data/`（日志与数据）。
 
 ## 升级
 
@@ -95,5 +106,10 @@ git pull
 pip install -r requirements.txt   # 补全新依赖
 ```
 
-插件配置、数据库都在 `data/` 下，升级代码不会清空；插件更新时
-`plugins/<名>/` 下的配置文件会自动迁移到 `data/plugins_dat/<名>/`。
+插件配置和数据库都在 `data/` 下，**升级不会清空**。旧版散落在插件目录里的配置会自动迁到 `data/plugins_dat/<名>/`。
+
+## 下一步
+
+- [开始使用](./getting-started.md) —— 验证启动、第一次对话、进后台
+- [对接 IM 平台](./connect-im.md) —— 连上真实聊天软件
+- [编写插件](./writing-plugins.md) —— 写你的第一条命令
