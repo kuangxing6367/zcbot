@@ -75,14 +75,35 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
     def actions(self):
         """
         协议中立的动作调用面（推荐新代码使用）。
-        优先返回当前接入端注册的专用动作封装 services['onebot_api']；
-        若接入端只注册了通用 api_caller，则用协议无关的 ActionProxy 兜底，
-        框架核心本身不包含任何具体协议实现。
+        优先按当前事件来源（current_source_var）选对应适配器——多接入端并存时不串线；
+        无来源上下文时，OneBot 已注册则用 services['onebot_api']（旧插件兼容），
+        否则协议无关 ActionProxy 转发到 api_caller；都没有才抛 RuntimeError。
         """
-        api = self._framework.services.get('onebot_api')
+        services = self._framework.services
+        source = None
+        try:
+            from framework.runtime import current_source_var
+            source = current_source_var.get()
+        except Exception:
+            source = None
+        if source:
+            try:
+                adapter = services.adapter_for_source(source)
+            except Exception:
+                adapter = None
+            if adapter is not None:
+                # OneBot 来源：优先类型化 onebot_api（旧 ctx.onebot 写法）
+                if getattr(adapter, 'adapter_id', '') == 'onebot' or \
+                        type(adapter).__name__ == 'OneBotAdapter':
+                    api = services.get('onebot_api')
+                    if api is not None:
+                        return api
+                from framework.messaging.protocol import ActionProxy
+                return ActionProxy(adapter)
+        api = services.get('onebot_api')
         if api is not None:
             return api
-        caller = self._framework.services.get('api_caller')
+        caller = services.get('api_caller')
         if caller is not None:
             from framework.messaging.protocol import ActionProxy
             return ActionProxy(caller)

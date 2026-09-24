@@ -100,7 +100,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self._pending_tasks = set()
 
         # 心跳参数
-        self._heartbeat_interval = self.config['plugin'].get('heartbeat_interval', 60)
+        self._heartbeat_interval = self.config.get('plugin', {}).get('heartbeat_interval', 60)
         self._heartbeat_task = None
         self._running = False
         self.loop = None

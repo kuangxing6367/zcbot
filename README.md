@@ -70,7 +70,7 @@ ZCBOT 的能力分两层：**内核只负责"运转"**，其余都是"挂在运�
 | **持久化层** | 内核：SQLite / MySQL 双方言自动翻译、自动建表、schema 迁移、连接池、同步/异步双接口（**SQLite 仅适合小环境/开发环境，大环境用 MySQL**） |
 | **运行时层** | 内核：插件加载器、事件总线、消息路由（优先级管线）、服务注册表、依赖自愈、内存看门狗、孤儿任务清理、可靠热重载 |
 | **鉴权层** | 内核：节点式权限引擎（三态 + 组继承 + 上下文 + 时效 + 轨道 + 审计）、双令牌体系（会话 token + API Key） |
-| **接入层** | 扩展：协议无关的 `ProtocolAdapter` 抽象 + 服务注册表；官方实现 `onebot_adapter`（OneBot 反向 WS）、`http_inject`（HTTP 事件注入）、`http_api`（对外 HTTP API）、终端模拟注入 |
+| **接入层** | 扩展：协议无关的 `ProtocolAdapter` 抽象 + 服务注册表；官方实现 `onebot_adapter`（OneBot 反向 WS）、`qq_official` / `telegram` / `discord` / `ws_client`（默认关）、`http_inject`（HTTP 事件注入）、`http_api`（对外 HTTP API）、终端模拟注入；群管等协议专有动作按端能力不同 |
 | **表现层** | 扩展：WebUI（可被插件整体接管、官方侧边栏可开关）、插件 WebUI（可注册独立侧边栏入口 `ctx.webui(..., sidebar=True)`）、仪表盘卡片、群组/用户页扩展、CLI 终端、以及**扩展点切面**（审计/限流/中间件等） |
 
 ---

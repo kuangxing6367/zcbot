@@ -17,6 +17,7 @@ QQ 官方机器人接入端（qq_official）
 """
 import asyncio
 import base64
+import itertools
 import json
 import logging
 import re
@@ -30,6 +31,13 @@ import websockets
 from framework.messaging.protocol import ProtocolAdapter
 
 logger = logging.getLogger('zcbot')
+
+# msg_seq：QQ 官方要求同一 msg_id 下 seq 不重复；秒级取模会同秒碰撞，用进程内计数器
+_msg_seq_counter = itertools.count(1)
+
+
+def _next_msg_seq() -> int:
+    return (next(_msg_seq_counter) - 1) % 9999 + 1
 
 __plugin_meta__ = {
     "name": "qq_official",
@@ -72,6 +80,15 @@ def _extract_b64(data: str) -> Optional[str]:
 def _b64_to_bytes(b64: str) -> Optional[bytes]:
     try:
         return base64.b64decode(re.sub(r'\s+', '', b64))
+    except Exception:
+        return None
+
+
+def _read_file_bytes(path: str) -> Optional[bytes]:
+    """线程池内读文件（async 路径避免阻塞事件循环）"""
+    try:
+        with open(path, 'rb') as f:
+            return f.read()
     except Exception:
         return None
 
@@ -619,8 +636,9 @@ class QQOfficialAdapter(ProtocolAdapter):
                                'srv_send_msg': False})
             elif file.startswith('file://'):
                 local = file[7:]
-                with open(local, 'rb') as f:
-                    raw = f.read()
+                raw = await asyncio.to_thread(_read_file_bytes, local)
+                if not raw:
+                    return None
                 mime = _sniff_image_mime(raw)
                 ext = {'image/png': 'png', 'image/jpeg': 'jpg',
                        'image/gif': 'gif', 'image/webp': 'webp'}.get(mime, 'png')
@@ -631,8 +649,9 @@ class QQOfficialAdapter(ProtocolAdapter):
                     files=files, data=form)
             else:
                 # 本地路径
-                with open(file, 'rb') as f:
-                    raw = f.read()
+                raw = await asyncio.to_thread(_read_file_bytes, file)
+                if not raw:
+                    return None
                 mime = _sniff_image_mime(raw)
                 files = {'file': ('image.png', raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
@@ -654,7 +673,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                           reply_msg_id: str = '') -> dict:
         text = _message_to_text(message)
         img = _first_image(message)
-        msg_seq = int(time.time()) % 10000 + 1
+        msg_seq = _next_msg_seq()
         body: dict = {}
         if reply_msg_id:
             body['msg_id'] = reply_msg_id
@@ -679,7 +698,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                         reply_msg_id: str = '') -> dict:
         text = _message_to_text(message)
         img = _first_image(message)
-        msg_seq = int(time.time()) % 10000 + 1
+        msg_seq = _next_msg_seq()
         body: dict = {}
         if reply_msg_id:
             body['msg_id'] = reply_msg_id
@@ -724,8 +743,9 @@ class QQOfficialAdapter(ProtocolAdapter):
             else:
                 if file.startswith('file://'):
                     file = file[7:]
-                with open(file, 'rb') as f:
-                    raw = f.read()
+                raw = await asyncio.to_thread(_read_file_bytes, file)
+                if not raw:
+                    return None
                 mime = _sniff_image_mime(raw)
                 files = {'file': ('image.png', raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}

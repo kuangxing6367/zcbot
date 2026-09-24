@@ -270,13 +270,20 @@ class WsClientAdapter(ProtocolAdapter):
         headers = {}
         if self.token:
             headers['Authorization'] = f'Bearer {self.token}'
-        async with websockets.connect(
-            self.url,
-            additional_headers=headers or None,
+        # websockets 14.x 参数名 additional_headers；12/13 为 extra_headers
+        try:
+            _major = int(str(websockets.__version__).split('.')[0])
+        except Exception:
+            _major = 0
+        _hdr_kw = ('additional_headers' if _major >= 14 else 'extra_headers')
+        _kwargs = dict(
             max_size=8 * 1024 * 1024,
             ping_interval=20,
             ping_timeout=20,
-        ) as ws:
+        )
+        if headers:
+            _kwargs[_hdr_kw] = headers
+        async with websockets.connect(self.url, **_kwargs) as ws:
             self._ws = ws
             self._connected = True
             logger.info(f"ws_client 已连接: {self.url}")

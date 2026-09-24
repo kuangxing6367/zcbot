@@ -134,8 +134,13 @@ def register(fw):
                 return
 
             if group_id:
-                await api_caller.acall('set_group_ban', group_id=group_id, user_id=user_id, duration=duration)
-                print(f"已禁言用户 {user_id} {duration//60} 分钟")
+                result = await api_caller.acall(
+                    'set_group_ban', group_id=group_id,
+                    user_id=user_id, duration=duration)
+                if isinstance(result, dict) and result.get('status') == 'failed':
+                    print(f"禁言失败: {result.get('msg') or result}")
+                else:
+                    print(f"已禁言用户 {user_id} {duration//60} 分钟")
             else:
                 # 私聊封禁（标记到数据库）
                 await asyncio.to_thread(fw.db.execute, "UPDATE users SET is_banned=1 WHERE user_id=%s", (user_id,))
@@ -168,8 +173,13 @@ def register(fw):
                 return
 
             if group_id:
-                await api_caller.acall('set_group_ban', group_id=group_id, user_id=user_id, duration=0)
-                print(f"已解除用户 {user_id} 的禁言")
+                result = await api_caller.acall(
+                    'set_group_ban', group_id=group_id,
+                    user_id=user_id, duration=0)
+                if isinstance(result, dict) and result.get('status') == 'failed':
+                    print(f"解禁失败: {result.get('msg') or result}")
+                else:
+                    print(f"已解除用户 {user_id} 的禁言")
             else:
                 await asyncio.to_thread(fw.db.execute, "UPDATE users SET is_banned=0 WHERE user_id=%s", (user_id,))
                 print(f"已解封用户 {user_id}")
@@ -196,8 +206,12 @@ def register(fw):
                 print("错误: 未加载任何协议接入端")
                 return
 
-            await api_caller.acall('set_group_kick', group_id=group_id, user_id=user_id)
-            print(f"已踢出用户 {user_id}")
+            result = await api_caller.acall(
+                'set_group_kick', group_id=group_id, user_id=user_id)
+            if isinstance(result, dict) and result.get('status') == 'failed':
+                print(f"踢出失败: {result.get('msg') or result}")
+            else:
+                print(f"已踢出用户 {user_id}")
 
         except ValueError:
             print("错误: group_id/user_id 必须是数字")
