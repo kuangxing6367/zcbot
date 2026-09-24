@@ -29,8 +29,8 @@ ZCBOT 是一个**事件驱动的 IM 平台**：极小内核（加载、路由、
 
 | 你是…… | 你能用 ZCBOT 做什么 | 从哪里开始 |
 | ------ | ------------------- | ---------- |
-| **① 想开箱搭一个 托管机器人的使用者**（不一定会编程） | 默认扩展就是 OneBot，启动 + 连一个 NapCat/Lagrange 就能用；后台点点鼠标装插件、改配置、管权限 | [快速开始](#五快速开始约-5-分钟) |
-| **② 写业务功能的 Python 开发者** | 白拿依赖注入、权限引擎、双方言数据库、多轮会话、定时任务、Web 扩展、**扩展点切面**，只专注写 `register(ctx)` 里的业务 | [编写插件](docs/guide/writing-plugins.md) |
+| **① 想开箱搭一个机器人、不太会编程的使用者** | 默认扩展就是 OneBot，启动 + 连一个 NapCat/Lagrange 就能用；后台点点鼠标装插件、改配置、管权限 | [快速开始](#五快速开始约-5-分钟) |
+| **② 写业务功能的 Python 开发者** | 依赖注入、权限引擎、双方言数据库、多轮会话、定时任务、Web 扩展、**扩展点切面**都是现成的，只专注写 `register(ctx)` 里的业务 | [编写插件](docs/guide/writing-plugins.md) |
 | **③ 需要"事件→扩展→响应"可扩展 IM 平台的开发者** | 接非 IM 事件源：HTTP Webhook（内置 `http_inject`）、纯定时（`scheduler`）、或自写 `ProtocolAdapter` 接 Telegram/Discord/MQTT 等 | [协议适配器](docs/api/advanced/protocol_adapter.md)、[扩展点](docs/api/advanced/hooks.md) |
 
 ### 它**不**是什么（非目标，避免选错工具）
@@ -38,7 +38,7 @@ ZCBOT 是一个**事件驱动的 IM 平台**：极小内核（加载、路由、
 - **不是** NapCat / Lagrange / go-cqhttp 这类协议端——它**不直接入平台**，需要 OneBot 实现端以"反向 WebSocket"连入。
 - **不是**分布式/多节点中台：它是单进程（可选 core/host 双进程）宿主，不内置集群、消息队列编排。
 - **不提供**跨语言 SDK：业务扩展用 Python 编写；跨语言交互请走它暴露的 HTTP API / Webhook。
-- 内核不绑定任何 IM：接入平台 只是因为官方默认带了一个 `onebot_adapter` 扩展，把它关掉就是个可扩展 IM 平台。
+- 内核不绑定任何 IM：能当机器人用，只是因为官方默认带了一个 `onebot_adapter` 扩展；关掉它，剩下的是可扩展 IM 平台。
 
 ### 核心理念：内核 = 最小核心 + 扩展点 + 扩展
 
@@ -49,7 +49,7 @@ ZCBOT 是一个**事件驱动的 IM 平台**：极小内核（加载、路由、
 - **扩展点（hook）**：内核在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等环节预留的插槽；
   `ctx.hook(point, handler)` 即可往里插逻辑，是「平台内核」真正区别于普通框架的地方。详见 [扩展点](#四扩展点extension-points)。
 
-> 提示：想要**纯 托管机器人**？什么都不用关，开箱即用。想要别的形态？在 `core_plugins.yaml` 里切换接入端、换一套业务插件即可，权限、后台、持久化、会话这些骨架原样保留。
+> 提示：想要**纯机器人宿主**？什么都不用关，开箱即用。想要别的形态？在 `core_plugins.yaml` 里切换接入端、换一套业务插件即可，权限、后台、持久化、会话这些骨架原样保留。
 
 ---
 
@@ -187,7 +187,7 @@ python main.py                 # 也可指定配置：python main.py D:\config\z
 
 | 配置（编辑 `core_plugins.yaml`） | 默认值 | 作用 |
 | ------ | ------ | ---- |
-| `onebot_adapter.listen_port` | `6830` | OneBot 端**反向 WS** 连入端口（仅接入平台 需要） |
+| `onebot_adapter.listen_port` | `6830` | OneBot 端**反向 WS** 连入端口（仅接聊天平台时需要） |
 | `onebot_adapter.access_token` | 空 | 接入令牌，**公网必须设强随机值** |
 | `webui.host` / `webui.port` | `127.0.0.1` / `8080` | Web 后台地址端口 |
 | `http_inject`（默认关） | `127.0.0.1:8901/hook` | HTTP 事件注入 |

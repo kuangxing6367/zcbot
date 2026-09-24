@@ -1,60 +1,59 @@
-# 官方最佳实践
+# 最佳实践
 
-> 定位：ZCBOT 是一个**事件驱动的 IM 平台**，OneBot只是默认接入端之一。
-> **本篇面向**：角色 B/C，尤其是想把它用于非 IM 场景（纯定时 / HTTP Webhook / 内部后台 / 其它 IM）的开发者。
-> 本页讲的是**把它当IM 平台用**的正确姿势——不局限于单一平台。
+ZCBOT 是**事件驱动的 IM 平台**，OneBot 只是默认接入端之一。
+本页讲：**怎样不把它绑死在某一个聊天软件上**——纯定时、Webhook、带权限的内部后台，以及写插件时该守的规矩。
 
----
-
-## 一、先想清楚：ZCBOT 不止是一个 IM 机器人宿主
-
-很多人误以为 ZCBOT 只能做 托管机器人。其实它的骨架是通用的：
-
-- **事件驱动**：任何"事件进来 → 插件响应"的应用都能跑
-- **插件化**：功能按插件加载，可插拔、可热重载
-- **接入端抽象**：`ProtocolAdapter` 决定"事件从哪来"，与业务插件解耦
-- **内置**：权限引擎、双方言数据库、Web 后台、会话、调度器，全是现成的
-
-**它被"OneBot 机器人"这个第一印象困住了。** 事实是：接入端可以换，插件可以换，
-但权限、后台、持久化、会话这些骨架能力始终不变。
-
-### 换"接入端 + 插件"的迁移成本（从低到高）
-
-| 你要做什么 | 迁移成本 | 说明 |
-| ---------- | -------- | ---- |
-| 托管机器人 | 零 | 现状，默认接入端就是 OneBot |
-| 其他 IM（Telegram / Discord / 微信） | 先看内置 `telegram` / `discord` / `qq_official`，不够再写 adapter | 契约见 [协议适配器](../api/advanced/protocol_adapter.md) |
-| 带权限后台的内部工具 | 换插件 | 权限 + WebUI + DB 现成 |
-| 定时任务 / 监控 / 告警 | 换插件 | 调度器 + 事件总线 + 通知渠道现成 |
-| 业务系统（审批 / 工单） | 换插件 | 权限 + 会话 + 审计现成 |
-| CMS / headless CMS | 换插件 + 前台 adapter | 权限、后台、持久化现成 |
-| 数据平台控制面 | 换插件 | HTTP API（`db/query` 等）+ 权限现成 |
-
-> 核心结论：**权限、后台、持久化不绑定任何 IM**。你只需要一个能产生事件的
-> `ProtocolAdapter`，以及一组业务插件。
+**适合谁**：想把 ZCBOT 用在「不绑死某个聊天软件」场景的插件开发者；也可当进阶索引。
 
 ---
 
-## 二、场景一：没有 IM 平台，纯定时驱动的应用
+## 一、先建立正确预期
 
-托管机器人依赖 OneBot 客户端实时推消息。但如果你要的是"每天定时干活"，**根本不需要任何 IM 接入端**。
+很多人以为它「只能做个 QQ 机器人」。其实骨架是通用的：
 
-`core_plugins/scheduler` 已经内置 APScheduler。把 `core_plugins.onebot_adapter` 关掉，只留调度器，就变成一个纯定时服务：
+| 能力 | 说明 |
+| ---- | ---- |
+| 事件驱动 | 任何「事件进来 → 插件响应」的应用都能跑 |
+| 插件化 | 功能按插件加载，可插拔、可热重载 |
+| 接入端抽象 | `ProtocolAdapter` 决定事件从哪来，与业务解耦 |
+| 自带基建 | 权限、双方言数据库、Web 后台、会话、调度器都是现成的 |
+
+**接入端可以换，插件可以换，权限 / 后台 / 持久化 / 会话这些骨架不变。**
+
+### 换场景要动多少（从易到难）
+
+| 你想做什么 | 改动量 | 说明 |
+| ---------- | ------ | ---- |
+| 默认 QQ 机器人 | 零 | 开箱即是 |
+| 换 Telegram / Discord / QQ 官方 | 开对应接入端 | 已内置，填凭证即可；不够再写 adapter |
+| 定时任务 / 监控告警 | 换插件 | 调度器 + 事件总线现成 |
+| 带权限的内部工具 | 换插件 | 权限 + 后台 + 数据库现成 |
+| 审批 / 工单类业务 | 换插件 | 权限 + 会话 + 审计现成 |
+| CMS / 数据平台控制面 | 换插件 + 接入端 | 后台与 HTTP API 现成 |
+
+> **结论：权限、后台、持久化不绑任何 IM。** 你只需要一个能产生事件的接入端，加一组业务插件。
+
+---
+
+## 二、场景：没有聊天平台，纯定时
+
+「每天 8 点干活」根本不需要接入端。
+
+`core_plugins.yaml` 示例：
 
 ```yaml
-# core_plugins.yaml（官方插件配置中心）
 core_plugins:
   onebot_adapter:
     enabled: false        # 不加载任何 IM 长连接
   webui:
-    enabled: true         # 后台 + REST 仍可用
+    enabled: true         # 后台照常
   session:
-    enabled: true         # 会话（可选）
+    enabled: true         # 可选
   scheduler:
     enabled: true         # 定时任务（必须）
 ```
 
-写一个业务插件，用 `ctx.task()` 注册定时任务：
+插件里用 `ctx.task()` 注册：
 
 ```python
 # plugins/daily_report/main.py
@@ -64,30 +63,26 @@ __plugin_meta__ = {
     "name": "日报生成",
     "version": "1.0.0",
     "author": "you",
-    "desc": "每天 08:30 生成日报并写入数据库/推送到你的通知渠道",
+    "desc": "每天 08:30 生成日报",
 }
 
 def register(ctx):
-    # cron：每天 08:30 执行
     ctx.task("30 8 * * *", daily_report, description="生成每日报表")
-    # cron：每 5 分钟采集一次
     ctx.task("*/5 * * * *", collect_metrics, description="采集指标")
 
 def daily_report():
-    # 定时任务 handler 没有 event 参数
+    # 定时 handler 没有 event 参数
     yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     rows = ctx.db_query(
         "SELECT COUNT(*) AS n, SUM(amount) AS total FROM orders "
         "WHERE DATE(created_at) = %s", (yesterday,)
     )
-    # 写入一张报表表，Web 后台能看
     ctx.db_execute(
         "INSERT INTO daily_reports (report_date, order_count, total_amount) "
         "VALUES (%s, %s, %s) ON CONFLICT(report_date) DO UPDATE SET "
         "order_count=excluded.order_count, total_amount=excluded.total_amount",
         (yesterday, rows[0]['n'], rows[0]['total'] or 0),
     )
-    # 也通过事件总线广播，其他插件可订阅
     ctx.emit("report.generated", {"date": yesterday})
 
 def collect_metrics():
@@ -99,24 +94,32 @@ def collect_metrics():
     )
 ```
 
-> 提示：定时任务 handler 签名不带 `event`（`ctx.task` 见 [API 参考](../api/basic/ctx.md)）。
-> 需要发消息时才手动从 `get_connected_bots()` 选一个接入端。
+> 提示：定时任务签名不带 `event`（见 [ctx 参考](../api/basic/ctx.md)）。
+> 真要发消息时，再从 `get_connected_bots()` 里选一个就绪接入端。
 
-**要点**：定时任务的"事件源"就是时间。没有 OneBot，`scheduler` 就是你的接入端。
+**要点：定时任务的事件源就是时间。** 没有 OneBot 时，`scheduler` 就是你的接入端。
 
 ---
 
-## 三、场景二：HTTP Webhook 接入（外部程序推事件进来）
+## 三、场景：HTTP Webhook（外部系统推事件）
 
-很多系统之间靠 HTTP Webhook 互通（GitHub、支付回调、CI 结果……）。写一个
-`ProtocolAdapter`，接收外部 POST，转成内部事件，业务插件照常处理。
+GitHub、支付回调、CI 结果……都可以 POST 进来。
 
-> 内置 `http_inject` 已实现等价能力（默认 `127.0.0.1:8901/hook`，在 `core_plugins.yaml` 开启即用）。下面手写一个最小 adapter，帮助你理解契约、自定义路径与鉴权；完整版见 [协议适配器](../api/advanced/protocol_adapter.md)。
+**用内置 `http_inject`（推荐）**：`core_plugins.yaml` 打开后，默认收：
+
+```bash
+curl -X POST http://127.0.0.1:8901/hook \
+     -H 'Content-Type: application/json' \
+     -d '{"type":"message","user_id":10001,"message":"/hello"}'
+```
+
+事件归一化入核后，和 IM 来的消息走同一条插件管线。
+
+**想自定义路径 / 鉴权时**，可手写最小接入端（理解契约用，完整版见 [协议适配器](../api/advanced/protocol_adapter.md)）：
 
 ```python
 # core_plugins/http_webhook/main.py
-import json
-import threading
+import json, threading, asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from framework.messaging.protocol import ProtocolAdapter
 
@@ -128,7 +131,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
             data = json.loads(body.decode('utf-8'))
         except Exception:
             self.send_response(400); self.end_headers(); return
-        # 关键：把 HTTP 负载转成框架内部事件，交给 dispatch_event
         event = {
             "type": "message",
             "message_type": "private",
@@ -137,7 +139,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
             "message": data.get("text", ""),
             "sender": {"user_id": data.get("user_id", 0), "nickname": "webhook"},
         }
-        import asyncio
         asyncio.run_coroutine_threadsafe(
             self.framework.dispatch_event(event), self.framework.loop).result()
         self.send_response(200); self.end_headers()
@@ -172,22 +173,18 @@ def unregister():
     ...
 ```
 
-> 提示：`call/acall` 由基类从 `call_api` 自动派生，因此把自己注册成 `api_caller` 后 `ctx.api()` 立即可用；需要框架自动回复或主动发文本时再覆写 `send_text`（详见[协议适配器](../api/advanced/protocol_adapter.md) 2.2）。
-
-之后任何插件都能 `@ctx.command("/hello")` 响应 webhook 传来的 `text`，命令路由、权限、审计照常工作——**业务插件根本不知道消息来自 HTTP 还是 IM 平台**。
-
-> 提示：这就是"换 adapter 换插件"最直观的体现：业务插件零改动，接入端从 IM 换成 HTTP。
+之后任意插件 `@ctx.command("/hello")` 都能响应——**业务根本不知道消息来自 HTTP 还是 IM。**
 
 ---
 
-## 四、场景三：带权限的业务后台
+## 四、场景：带权限的业务后台
 
-权限引擎 + WebUI + 数据库都是框架内置的。做一个"内部审批系统"：
+权限引擎、WebUI、数据库都是内置的。做一个「内部审批」只要四步：
 
-1. 用 `ctx.create_table()` 声明业务表（如 `leave_requests`）
-2. 用 `require_perm` 控制谁能操作（如 `approval.submit` / `approval.approve`）
-3. 用 `ctx.override_webui()` 或插件 WebUI 提供管理界面
-4. 用 `ctx.audit_log()` 记录每次审批
+1. `ctx.create_table()` 声明业务表（如 `leave_requests`）
+2. `require_perm` 控制谁能操作
+3. `ctx.override_webui()` 或插件 WebUI 出界面
+4. `ctx.audit_log()` 记每次操作
 
 ```python
 @ctx.command("请假", require_perm="approval.submit", help="提交请假申请")
@@ -203,16 +200,16 @@ def leave(ev, match):
     ctx.asend_msg(...)  # 或任何通知渠道
 ```
 
-权限、审计、后台全是框架给的，你只写业务。
+权限、审计、后台是平台给的，你只写业务。
 
 ---
 
-## 五、通用插件编写规范（适用于所有接入端）
+## 五、写插件的通用规范
 
 ### 1. 代码与数据分离
 
 ```python
-# 错误：把配置写到 plugins/my_plugin/config.json —— GitHub 更新会覆盖！
+# 错误：配置写在 plugins/my_plugin/config.json —— 更新插件会被覆盖！
 # 正确：用 ctx.get_data_dir()（= data/plugins_dat/my_plugin/）
 import os, json
 
@@ -224,13 +221,12 @@ def load_config(ctx):
     return {}
 ```
 
-### 2. 不要写死"发送到群/特定平台"
+### 2. 不要写死「发到某群 / 某平台」
 
-让"发消息"抽象化：优先用 `ctx.send_msg(...)` 这类已封装的方法，它在没有 IM 时
-可被 adapter 或插件转发到任意通知渠道（Webhook、日志、邮件插件……）。不要在业务
-逻辑里直接依赖 `event.group_id` 这种 平台特有字段，除非你确认只做单一平台。
+优先 `ctx.send_msg(...)`；没有 IM 时也能被转到 Webhook、日志、邮件等渠道。
+除非你确定只服务单一平台，否则别在业务里强依赖 `event.group_id` 这类字段。
 
-### 3. 异常处理
+### 3. 异常要记日志
 
 ```python
 def handle(event, match):
@@ -239,24 +235,23 @@ def handle(event, match):
     except requests.Timeout:
         ctx.asend_msg(...); return
     except Exception as e:
-        ctx.logger.exception(f"处理失败: {e}")   # 一定要记录，别裸 except 吞掉
+        ctx.logger.exception(f"处理失败: {e}")   # 别裸 except 吞掉
         ctx.asend_msg(...); return
 ```
 
-### 4. 耗时操作别阻塞事件循环
+### 4. 耗时操作别堵事件循环
 
-同步 HTTP / 文件 IO 放线程，或 handler 写成 `async def` 直接 `await`：
+同步 HTTP / 文件 IO 放线程，或 handler 直接写 `async def`：
 
 ```python
 async def handle(event, match):
-    result = await asyncio.to_thread(expensive_operation, arg)  # 或直接用 aiohttp
+    result = await asyncio.to_thread(expensive_operation, arg)
     ctx.asend_msg(...)
 ```
 
-### 5. 声明业务表
+### 5. 业务表写进 `managed_tables`
 
-插件自建的业务表写进 `plugin.yaml` 的 `managed_tables`，这样在后台彻底删除插件时
-框架会自动 DROP，避免数据库残留：
+后台彻底删插件时框架会自动 DROP 这些表，避免残留：
 
 ```yaml
 # plugin.yaml
@@ -275,30 +270,23 @@ def on_unload(ctx):
 
 ---
 
-## 六、提交前自查清单
+## 六、提交前自查
 
-写完后对照逐条过一遍，能避开大多数"上线才发现"的坑：
-
-- [ ] **函数内给模块级变量重新赋值有没有 `global`？**
-  `cache = {}` 这类重绑定会变成局部变量 → `UnboundLocalError`（被 `try/except` 吞掉就成"神秘失效"）。只改内容（`.clear()/.append()/d[k]=v`）不用 `global`。
-- [ ] **`except` 是不是裸捕获？**
-  至少加一行 `ctx.logger.exception(...)`；禁止 `except:` 后什么都不做。
-- [ ] **核心逻辑抽成纯函数并自测？**
-  见下方"如何写可测试的插件"。
-- [ ] **数据库有没有防注入？**
-  一律 `%s` 占位符 + 参数元组，禁止 f-string 拼 SQL。
-- [ ] **耗时操作有没有阻塞事件循环？**
-- [ ] **业务表写进 `managed_tables` 了吗？**
-- [ ] **有没有写死 平台特有字段/硬编码发送目标？**（见"通用插件编写规范"第 2 条）
+- [ ] 函数里给模块级变量重赋值有没有 `global`？（只改内容 `.append` / `d[k]=v` 不用）
+- [ ] `except` 有没有至少 `ctx.logger.exception(...)`？
+- [ ] 核心逻辑是否抽成纯函数、能单测？
+- [ ] SQL 是否一律 `%s` 占位 + 参数，没有 f-string 拼接？
+- [ ] 耗时操作有没有阻塞事件循环？
+- [ ] 业务表是否进了 `managed_tables`？
+- [ ] 有没有写死平台字段 / 发送目标？（见规范第 2 条）
 
 ---
 
-## 七、如何写可测试的插件
+## 七、怎么测插件
 
-> 现在框架有服务注册表（DI），但 `ctx` 仍是 `register(ctx)` 注入模块级全局。
-> 用"纯函数 + 假 ctx"即可让核心逻辑脱离宿主单独测试。
+> `ctx` 虽是 `register(ctx)` 注入的全局，但核心逻辑写成纯函数后，用「假 ctx」就能单测。
 
-### 1. 逻辑写成纯函数（不碰 ctx）
+### 1. 逻辑写成纯函数
 
 ```python
 def calc_level(exp: int) -> dict:
@@ -313,10 +301,10 @@ def handle_exp(event, match):
     ctx.asend_msg(...)
 ```
 
-### 2. 给纯函数写测试（不用启动宿主）
+### 2. 直接跑测试（不必启动整个框架）
 
 ```python
-# tests/test_my_plugin.py —— 放项目根 tests/
+# tests/test_my_plugin.py
 from plugins.my_plugin.main import calc_level
 
 def test_calc_level():
@@ -328,7 +316,7 @@ if __name__ == "__main__":
     test_calc_level(); print("全部通过")
 ```
 
-### 3. 用假 ctx（Fake）模拟框架
+### 3. 用 FakeCtx 模拟框架
 
 ```python
 class FakeCtx:
@@ -346,8 +334,8 @@ assert fake.sent[0]["message"] == "你 2 级"
 
 ---
 
-## 八、进一步
+## 八、继续深入
 
-- 写自己的接入端 → [协议适配器](../api/advanced/protocol_adapter.md)
-- 完整插件开发 → [编写插件](./writing-plugins.md)
-- 权限引擎 → [权限系统](../advanced/permission.md)
+- 自写接入端 → [协议适配器](../api/advanced/protocol_adapter.md)
+- 完整插件教程 → [编写插件](./writing-plugins.md)
+- 权限机制 → [权限系统](../advanced/permission.md)
