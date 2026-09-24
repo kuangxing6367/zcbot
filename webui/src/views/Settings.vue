@@ -143,7 +143,7 @@ const SETTING_GROUPS = [
   { key: 'web', title: 'Web 服务' },
   { key: 'ssl', title: 'SSL / TLS' },
   { key: 'sidebar', title: '侧边栏' },
-  { key: 'onebot', title: 'OneBot 连接' },
+  { key: 'onebot', title: '接入端（onebot 段）' },
   { key: 'database', title: '数据库' },
   { key: 'log', title: '日志' },
   { key: 'plugin', title: '插件' },

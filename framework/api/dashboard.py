@@ -73,9 +73,30 @@ def register(ctx):
             _dashboard_stats_cache['data'] = dict(data)
             _dashboard_stats_cache['t'] = now
 
-        # OneBot 连接状态（实时）
-        data['bots'] = framework.ws_server.get_connected_bots()
-        data['ws_port'] = framework.config.get('onebot', {}).get('listen_port', 6830)
+        # 接入端连接状态（实时，由适配器提供）
+        bots = []
+        ws_port = None
+        adapter_name = None
+        try:
+            primary = framework.services.primary_adapter() \
+                if hasattr(framework.services, 'primary_adapter') else None
+            if primary is None:
+                primary = framework.services.get('protocol_adapter')
+            if primary is not None:
+                bots = primary.get_connected_bots() or []
+                info = primary.get_connection_info() if hasattr(primary, 'get_connection_info') else None
+                if isinstance(info, dict):
+                    adapter_name = info.get('name')
+                    extra = info.get('status_extra')
+                    if isinstance(extra, dict):
+                        ws_port = extra.get('ws_port')
+                    if ws_port is None and info.get('config_section'):
+                        ws_port = (framework.config.get(info['config_section']) or {}).get('listen_port')
+        except Exception:
+            pass
+        data['bots'] = bots
+        data['ws_port'] = ws_port
+        data['adapter_name'] = adapter_name
 
         # 框架信息
         data['framework_name'] = 'ZCBOT'

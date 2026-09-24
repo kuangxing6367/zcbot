@@ -2,7 +2,7 @@
 
 > **本篇面向**：角色 C（需要触碰底层容器的高级开发者）。绝大多数插件只用 `ctx` 即可，不必读本篇。
 
-`Framework`（`framework/core.py`）是整个宿主的运行容器，插件里通过
+`Framework`（`framework/core/`）是整个宿主的运行容器，插件里通过
 `ctx._framework` 拿到它的引用。绝大多数插件只需要 `ctx`，本页供需要访问
 底层能力（服务注册表、加载器、事件循环等）的高级场景参考。
 
@@ -28,7 +28,8 @@
 | 属性 | 等价 |
 |------|------|
 | `fw.api_caller` | `fw.services.get("api_caller")` |
-| `fw.ws_server` | `fw.services.get("ws_server")` |
+| `fw.protocol_adapter` | 当前主接入端（`services["protocol_adapter"]`，须实现 `get_connected_bots`） |
+| `fw.ws_server` | 兼容别名：优先 `protocol_adapter.ws_server`，否则 `fw.services.get("ws_server")` |
 | `fw.scheduler` | `fw.services.get("scheduler")` |
 | `fw.web_server` | `fw.services.get("web_server")` |
 

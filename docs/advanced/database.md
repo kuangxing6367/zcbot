@@ -5,8 +5,14 @@
 ZCBOT 支持 SQLite（默认，零配置）与 MySQL，上层使用同一套接口，
 插件基本不需要感知当前是哪种数据库。
 
-- 数据库封装：`framework/db.py` 的 `Database` 类；
-- 启动自动建表/迁移：`framework/init_db.py` 的 `auto_init_database(db)`；
+> **⚠️ 选型边界（重要）**：**SQLite 仅适合小环境与开发环境**（个人/小群、
+> 单写多读、单文件存储）；**大环境不适合 SQLite**——多群、高并发、多进程
+> 部署、长连接保活、水平扩展等场景请使用 **MySQL**。方言适配只解决
+> “SQL 能不能跑”，解决不了 SQLite 的并发与扩展上限。
+
+- 数据库封装：`framework/database/db.py` 的 `Database` 类；
+- SQL 方言翻译：`framework/database/dialect.py`（纯函数）；
+- 自动建表/迁移：`framework/database/schema.py` + `framework/database/init_db.py` 的 `auto_init_database(db)`；
 - 配置见 [配置系统](../guide/configuration.md#数据库)。
 
 ## 自动初始化
@@ -113,7 +119,15 @@ ctx.db_pool_status     # dict：连接池占用/空闲等状态，便于排障
 | 并发 | 单写多读，适合轻量场景 | 支持高并发 |
 | 占位符 | 插件写 `%s`，运行时转 `?` | 原生 `%s` |
 | 自增主键 | `INTEGER PRIMARY KEY AUTOINCREMENT` | `INT ... AUTO_INCREMENT PRIMARY KEY` |
-| 适合规模 | 个人/小群 | 多群、高并发、多进程部署 |
+| 适合规模 | **仅小环境与开发环境**（个人/小群、本地调试） | **大环境**（多群、高并发、多进程部署） |
+
+**结论照抄即可**：
+
+- 本地开发、个人号、小群试点 → `database.type: sqlite`（默认，零配置）；
+- 生产上线、多群、消息量大、双进程/多 worker → `database.type: mysql`，
+  **不要用 SQLite 顶大环境**（写锁、单文件、无网络拓扑，扩容到头就是换库）。
+- 从 SQLite 迁到 MySQL：改 `config.yaml` 后重启，框架会按 `sql/init.sql`
+  自动建表；业务数据需自行导出导入（结构为 MySQL 风格，双方言通用）。
 
 ## 字段元信息系统
 

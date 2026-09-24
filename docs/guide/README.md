@@ -97,7 +97,7 @@
 | 路径 | 作用 |
 |------|------|
 | `framework/` | **极简内核**：加载器、路由、事件、上下文、协议抽象、权限、数据库（不含任何 OneBot 实现） |
-| `core_plugins/` | 官方插件：`onebot_adapter` / `http_inject` / `http_api` / `webui` / `session` / `scheduler` |
+| `core_plugins/` | 官方插件：`onebot_adapter` / `http_inject` / `ws_client` / `qq_official` / `telegram` / `discord` / `http_api` / `webui` / `session` / `scheduler` |
 | `core_plugins.yaml` | **官方插件配置中心**：开关与配置集中于此，启动自动扫描同步并合并进主配置 |
 | `plugins/` | 用户插件，每个一个子目录，入口为 `main.py` |
 | `data/` | 运行数据：日志、SQLite、`plugins_dat/` 插件私有数据 |

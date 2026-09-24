@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-系统配置 / OneBot 连接 / 运行状态 / config.yaml 分组读写
+系统配置 / 接入端连接 / 运行状态 / config.yaml 分组读写
 """
 import json
 import logging
@@ -58,31 +58,100 @@ def register(ctx):
         except Exception as e:
             return jsonify({'code': 500, 'msg': str(e)}), 500
 
-    # ---- OneBot 连接设置 ----
+    # ---- 接入端连接设置（协议中立，由适配器 get_connection_info 自描述）----
+
+    def _collect_connection_adapters() -> list:
+        """汇总全部已注册接入端的连接描述 + 实时状态"""
+        services = framework.services
+        adapters = getattr(services, 'protocol_adapters', None)
+        adapters = adapters() if callable(adapters) else {}
+        if not adapters:
+            primary = services.get('protocol_adapter')
+            if primary is not None:
+                try:
+                    adapters = {primary._connection_id(): primary}
+                except Exception:
+                    adapters = {}
+        out = []
+        for aid, adapter in adapters.items():
+            try:
+                meta = adapter.get_connection_info()
+            except Exception:
+                meta = None
+            if not isinstance(meta, dict):
+                continue
+            section = str(meta.get('config_section') or '')
+            cfg = {}
+            if section:
+                cfg = dict(_read_yaml_section(section) or (framework.config.get(section) or {}))
+            try:
+                bots = adapter.get_connected_bots() or []
+            except Exception:
+                bots = []
+            status = {'connected_bots': bots, 'total': len(bots)}
+            extra = meta.get('status_extra')
+            if isinstance(extra, dict):
+                status.update(extra)
+            fields = meta.get('fields') or []
+            out.append({
+                'id': str(meta.get('id') or aid),
+                'name': str(meta.get('name') or aid),
+                'config_section': section,
+                'config': cfg,
+                'fields': fields,
+                'restart_keys': list(meta.get('restart_keys') or
+                                     [f.get('key') for f in fields
+                                      if isinstance(f, dict) and f.get('type') == 'number'][:1]),
+                'endpoint_hint': meta.get('endpoint_hint'),
+                'guide': meta.get('guide'),
+                'status': status,
+            })
+        return out
 
     @app.route('/api/connection', methods=['GET'])
     @require_auth
     def get_connection():
-        """获取 OneBot 连接配置与实时连接状态"""
-        cfg = _read_yaml_section('onebot') or (framework.config.get('onebot') or {})
-        bots = framework.ws_server.get_connected_bots()
+        """获取全部接入端的连接配置与实时状态（由适配器自描述）"""
+        adapters = _collect_connection_adapters()
+        # 兼容旧 WebUI：扁平取主接入端
+        primary = adapters[0] if adapters else {
+            'config': {}, 'status': {'connected_bots': [], 'total': 0},
+        }
         return jsonify({'code': 0, 'data': {
-            'config': cfg,
-            'status': {
-                'connected_bots': bots,
-                'total': len(bots),
-                'ws_port': framework.config.get('onebot', {}).get('listen_port', 6830),
-            },
+            'adapters': adapters,
+            'config': primary.get('config') or {},
+            'status': primary.get('status') or {'connected_bots': [], 'total': 0},
         }})
 
     @app.route('/api/connection', methods=['PUT'])
     @require_super
     def update_connection():
-        """更新 OneBot 连接配置（写入 config.yaml 并同步内存）"""
+        """更新接入端连接配置（body.adapter 指定接入端，缺省取第一个）"""
         admin = request.admin
         data = request.get_json(silent=True) or {}
-        allowed = {k: data[k] for k in ('listen_host', 'listen_port', 'access_token') if k in data}
+        adapter_id = data.get('adapter')
+        adapters = _collect_connection_adapters()
+        target = None
+        if adapter_id:
+            target = next((a for a in adapters if a['id'] == adapter_id), None)
+            if target is None:
+                return jsonify({'code': 404, 'msg': f'未知接入端: {adapter_id}'}), 404
+        else:
+            target = adapters[0] if adapters else None
+        if not target or not target.get('config_section'):
+            return jsonify({'code': 400, 'msg': '当前无接入端可配置'}), 400
 
+        section = target['config_section']
+        field_keys = [f.get('key') for f in (target.get('fields') or [])
+                      if isinstance(f, dict) and f.get('key')]
+        if not field_keys:
+            return jsonify({'code': 400, 'msg': '该接入端未声明可编辑字段'}), 400
+
+        payload = data.get('data') if isinstance(data.get('data'), dict) else data
+        allowed = {k: payload[k] for k in field_keys if k in payload}
+        # 兼容旧客户端：直接平铺字段
+        if not allowed and not payload.get('data'):
+            allowed = {k: data[k] for k in field_keys if k in data}
         if not allowed:
             return jsonify({'code': 400, 'msg': '没有可更新的字段'}), 400
         if 'listen_port' in allowed:
@@ -91,20 +160,20 @@ def register(ctx):
             except (TypeError, ValueError):
                 return jsonify({'code': 400, 'msg': 'listen_port 必须是整数'}), 400
 
-        merged = dict(_read_yaml_section('onebot'))
+        merged = dict(_read_yaml_section(section))
         merged.update(allowed)
-        if not _update_yaml_section('onebot', merged):
+        if not _update_yaml_section(section, merged):
             return jsonify({'code': 500, 'msg': '写入 config.yaml 失败'}), 500
 
         # 同步内存配置（端口/监听地址改动需重启生效，access_token 立即生效）
-        onebot = framework.config.setdefault('onebot', {})
-        onebot.update(allowed)
-        needs_restart = [k for k in allowed if k in ('listen_host', 'listen_port')]
+        framework.config.setdefault(section, {}).update(allowed)
+        restart_keys = set(target.get('restart_keys') or [])
+        needs_restart = [k for k in allowed if k in restart_keys]
 
-        audit_log(admin['id'], admin['username'], 'update_connection', 'config', 'onebot', allowed)
+        audit_log(admin['id'], admin['username'], 'update_connection', 'config', section, allowed)
         msg = '连接配置已保存'
         if needs_restart:
-            msg += '，监听地址/端口改动需重启框架后生效'
+            msg += '，标注「需重启」的字段改动需重启框架后生效'
         return jsonify({'code': 0, 'msg': msg, 'data': {'needs_restart': needs_restart}})
 
     # ---- 运行状态 ----
@@ -119,7 +188,16 @@ def register(ctx):
             mem = psutil.virtual_memory()
             boot = proc.create_time()
             uptime = max(0, int(time.time() - boot))
-            bots = framework.ws_server.get_connected_bots()
+            bots = []
+            try:
+                primary = framework.services.primary_adapter() \
+                    if hasattr(framework.services, 'primary_adapter') else None
+                if primary is None:
+                    primary = framework.services.get('protocol_adapter')
+                if primary is not None and hasattr(primary, 'get_connected_bots'):
+                    bots = primary.get_connected_bots() or []
+            except Exception:
+                bots = []
             db_type = framework.config.get('database', {}).get('type', 'unknown')
 
             # 插件内存占用（已加载插件）

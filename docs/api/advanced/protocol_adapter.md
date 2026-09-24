@@ -22,7 +22,7 @@ ZCBOT 的事件流是：
 
 ### 1.2 内部事件 dict 长什么样？
 
-`framework/core.py` 的 `dispatch_event` 按 `type` 分流，消息类事件至少需要这些字段：
+`framework/core/` 的 `dispatch_event` 按 `type` 分流，消息类事件至少需要这些字段：
 
 ```python
 event = {
@@ -43,12 +43,12 @@ event = {
 
 ## 二、ProtocolAdapter 抽象契约
 
-`framework/protocol.py` 定义了抽象基类。
+`framework/messaging/protocol.py` 定义了抽象基类。
 
 ### 2.1 必须实现的 5 个抽象方法
 
 ```python
-from framework.protocol import ProtocolAdapter
+from framework.messaging.protocol import ProtocolAdapter
 
 class MyAdapter(ProtocolAdapter):
     async def handle_event(self, raw_event: dict, bot_name: str) -> dict | None:
@@ -67,13 +67,35 @@ class MyAdapter(ProtocolAdapter):
         """停止适配器、释放连接"""
 ```
 
-### 2.2 基类白送的 3 个方法（一般不用自己写）
+### 2.2 基类白送的方法（一般不用自己写）
 
 | 方法 | 默认行为 | 什么时候要覆写 |
 | ---- | -------- | -------------- |
 | `await acall(action, bot=None, **params)` | 直接 `await self.call_api(...)` | 基本不用 |
 | `call(action, bot=None, **params)`（同步） | 把 `call_api` 协程桥接到框架主事件循环执行，供 Web / 线程上下文使用 | 基本不用 |
 | `await send_text(text, *, user_id=None, group_id=None, source=None)` | 返回 `{"status":"unsupported"}`，**不抛异常** | **想让框架/插件能主动发文本时覆写** |
+| `get_connection_info() -> dict \| None` | `None`（连接页不展示本接入端配置） | **想在 WebUI 连接页展示可编辑配置/接入指引时覆写** |
+
+`get_connection_info()` 约定形状（WebUI `/api/connection` 据此动态渲染表单）：
+
+```python
+{
+    "id": "my_adapter",              # 唯一 id（也用于 services.protocol_adapters() 汇总）
+    "name": "我的接入端",             # 卡片标题
+    "config_section": "my_adapter",  # config.yaml 段名（空串表示无本地配置）
+    "fields": [
+        {"key": "host", "label": "监听地址", "type": "string"},   # string/number/password
+        {"key": "port", "label": "监听端口", "type": "number"},
+    ],
+    "restart_keys": ["host", "port"],  # 这些字段改动需重启
+    "endpoint_hint": "ws://127.0.0.1:6830/ws",
+    "guide": "接入说明……",
+    "status_extra": {"ws_port": 6830},  # 并入 status，可选
+}
+```
+
+同时设置类属性 `adapter_id = "my_adapter"`，并 `services.register("protocol_adapter", self)`；
+多接入端可并存展示（`services.protocol_adapters()`）。
 
 要点：
 
@@ -127,7 +149,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from framework.protocol import ProtocolAdapter
+from framework.messaging.protocol import ProtocolAdapter
 
 __plugin_meta__ = {
     "name": "http_webhook",
@@ -311,7 +333,7 @@ curl -X POST http://127.0.0.1:8901/hook \
 
 ## 六、服务注册表（DI）
 
-`framework/protocol.py` 的 `ServiceRegistry` 是核心与插件的解耦点：
+`framework/messaging/protocol.py` 的 `ServiceRegistry` 是核心与插件的解耦点：
 
 ```python
 fw.services.register("protocol_adapter", adapter)   # 接入端本体
@@ -347,6 +369,35 @@ OneBot 协议的全部实现都在 `core_plugins/onebot_adapter/` 内，框架�
 它的 `normalize_event(raw_event, bot_name)` 就是 `handle_event` 的一个实现范例，
 写新接入端时可对照参考字段映射。
 
+### 7.1 其它官方接入端
+
+| 插件 | 方向 | 说明 |
+| ---- | ---- | ---- |
+| `http_inject` | 入站 | HTTP POST 注入事件（默认关） |
+| `ws_client` | **出站** | 主动连出到外部 WS 服务；出站 `send_msg` 支持 `base64://` 图片段（默认关） |
+| `qq_official` | 入站+出站 | QQ 官方机器人：`getAppAccessToken` + WSS 网关 + OpenAPI 群/单聊收发（默认关） |
+| `telegram` | 入站+出站 | Telegram `getUpdates` 长轮询 + `sendMessage`/`sendPhoto`，图片 `base64://`（默认关） |
+| `discord` | 入站+出站 | Discord Gateway（Hello/Identify/Heartbeat/Resume）+ REST v10 发消息，图片 `base64://`（默认关） |
+
+以上均提供 `get_connection_info()`，连接页会按字段自动渲染表单；
+`services.protocol_adapters()` 可同时列出多个已注册接入端。
+
+`ws_client` 消息约定（JSON text frame）：
+
+```json
+// 入站（远端 → 本端）
+{"type":"message","message_type":"private","user_id":1,"message":"hi","sender":{}}
+
+// 出站（本端 → 远端）
+{"action":"send_msg","group_id":123,"message":[
+  {"type":"text","data":{"text":"hi "}},
+  {"type":"image","data":{"file":"base64://...","base64":"..."}}
+]}
+```
+
+`qq_official` / `telegram` / `discord` 出站图片同样接受 `base64://`、`file://`、
+http(s) 与本地路径；配置块在 `core_plugins.yaml` 对应段（均默认 `enabled: false`）。
+
 ---
 
 ## 八、双进程下的进程归属（`__plugin_meta__["process"]`）
@@ -356,12 +407,12 @@ OneBot 协议的全部实现都在 `core_plugins/onebot_adapter/` 内，框架�
 
 | `process` 值 | 加载位置 | 典型插件 |
 | ------------ | -------- | -------- |
-| `"core"` | 单进程 + **核心进程**；宿主进程排除 | 协议接入、Web/API（onebot_adapter、http_inject、http_api、webui） |
+| `"core"` | 单进程 + **核心进程**；宿主进程排除 | 协议接入、Web/API（onebot_adapter、http_inject、ws_client、qq_official、telegram、discord、http_api、webui） |
 | 省略 / `"host"` | 单进程 + **宿主进程**；纯核心进程排除 | 会话、调度器等业务侧能力 |
 
 - 单进程（默认 `standard`）部署时**全部加载**，该字段无影响；
 - 仍可用 `config.yaml → dual_process.core_plugins: [名字...]` 显式指定核心侧名单覆盖 meta；
-- 判断逻辑见 `framework/core.py` 的 `_read_plugin_process_tag`（静态 AST 解析，不执行插件）。
+- 判断逻辑见 `framework/core/runtime.py` 的 `_read_plugin_process_tag`（静态 AST 解析，不执行插件）。
 
 ---
 

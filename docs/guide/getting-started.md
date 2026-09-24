@@ -31,7 +31,7 @@ ZCBOT 框架 启动中...
 
 | 路线 | 说明 | 需要接入端吗 |
 | ---- | ---- | ---- |
-| 对接聊天平台 | 在 QQ / Telegram 等平台收发消息，跑你写的命令型插件 | 需要，见 [对接 IM 平台](./connect-im.md) |
+| 对接聊天平台 | 在 QQ / Telegram / Discord 等平台收发消息，跑你写的命令型插件 | 需要，见 [对接 IM 平台](./connect-im.md) |
 | 纯定时服务 | 到点自动执行任务（日报、健康检查、推送） | 不需要 |
 | HTTP 事件注入 | 外部系统通过 HTTP 把事件推进框架，触发插件逻辑 | 不需要（用 `http_inject` 官方插件） |
 
@@ -66,7 +66,7 @@ ZCBOT 框架 启动中...
 ## 下一步
 
 - [编写你的第一个插件](./writing-plugins.md)
-- [对接 IM 平台（以 QQ / OneBot 11 为例）](./connect-im.md)
+- [对接 IM 平台（OneBot 11 / QQ 官方 / Telegram / Discord）](./connect-im.md)
 - [多文件插件与模块导入机制](../advanced/loader.md)
 - [配置详解](./configuration.md)
 - [部署上线](../advanced/deployment.md)

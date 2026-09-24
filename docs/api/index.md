@@ -20,7 +20,7 @@ ZCBOT 的 API 分为两大部分：**基础参考**（写插件每天都会用�
 | 文档 | 内容 |
 | ---- | ---- |
 | [扩展点（Hook 系统）](./advanced/hooks.md) | 微内核最核心的契约：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个环节插入自己的逻辑 |
-| [协议适配器 ProtocolAdapter](./advanced/protocol_adapter.md) | 写一个接入端（Telegram / Discord / MQTT / 自定义）的契约、ActionProxy、内置 `http_inject` 示例 |
+| [协议适配器 ProtocolAdapter](./advanced/protocol_adapter.md) | 写一个接入端（Telegram / Discord / MQTT / 自定义）的契约、ActionProxy、内置 `http_inject` / `ws_client` / `qq_official` / `telegram` / `discord` 示例 |
 
 ## 微内核视角
 

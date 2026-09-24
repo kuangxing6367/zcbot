@@ -15,7 +15,7 @@
 
 1. [属性](#一属性)
 2. [命令注册](#二命令注册)
-3. [消息发送与接入端 API](#三消息发送与接入端-api默认-onebot)
+3. [消息发送与接入端 API](#三消息发送与接入端-api协议中立)
 4. [群管快捷方法](#四群管快捷方法)
 5. [事件订阅与发布](#五事件订阅与发布)
 6. [配置读取](#六配置读取)
@@ -34,7 +34,8 @@
 |------|------|------|
 | `ctx.plugin_name` | `str` | 当前插件名（用户插件即目录名） |
 | `ctx.logger` | `logging.Logger` | 标准库 logger，自动带插件名前缀 |
-| `ctx.onebot` | 动作封装 | OneBot 11 API 封装（取 `services['onebot_api']`）；只有通用 `api_caller` 时用协议无关 `ActionProxy` 兜底，连接入端都没有才抛 `RuntimeError` |
+| `ctx.actions` | 动作封装 | **协议中立（推荐）**：优先取 `services['onebot_api']`，否则协议无关 `ActionProxy` 转发到 `api_caller`；都没有才抛 `RuntimeError` |
+| `ctx.onebot` | 动作封装 | `ctx.actions` 的兼容别名（旧插件无需改） |
 | `ctx.db_pool_status` | `dict` | 数据库连接池状态 |
 
 ```python
@@ -71,7 +72,11 @@ def register(ctx):
 匹配规则：普通命令名做前缀匹配；含正则元字符的模式走 `re.search()`，
 命令后参数统一用 `match.group(1)` 捕获。
 
-## 三、消息发送与接入端 API（默认 OneBot）
+## 三、消息发送与接入端 API（协议中立）
+
+> 新代码请用 `ctx.actions.<动作>()`；`ctx.onebot` 仍可用作兼容别名。
+> 出站统一走 `ctx.actions.send_text(...)`（适配器可覆写），底层动作也可直接
+> `ctx.api().acall('send_msg', ...)`，不依赖任何具体协议。
 
 ### ctx.send_msg() / ctx.asend_msg()
 

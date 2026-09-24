@@ -1,41 +1,60 @@
 <template>
   <div class="page-container">
     <el-row :gutter="16">
-      <el-col :span="12">
+      <el-col v-for="a in adapters" :key="a.id" :span="12" class="mb">
         <el-card shadow="never">
-          <template #header><div class="card-head">OneBot11 反向 WS 配置</div></template>
-          <el-form label-width="120px">
-            <el-form-item label="监听地址"><el-input v-model="form.host" /></el-form-item>
-            <el-form-item label="监听端口"><el-input-number v-model="form.port" :controls="false" style="width:100%" /></el-form-item>
-            <el-form-item label="Access Token"><el-input v-model="form.token" type="password" show-password /></el-form-item>
-          </el-form>
-          <div>
-            <el-button type="primary" @click="save">保存配置</el-button>
-            <el-button @click="load">刷新</el-button>
-          </div>
-          <div class="dim small mt">监听地址 / 端口改动需重启框架生效；Access Token 立即生效。</div>
-        </el-card>
-      </el-col>
-      <el-col :span="12">
-        <el-card shadow="never" class="mb">
           <template #header>
-            <div class="card-head">实时连接状态
-              <el-tag size="small" :type="bots.length ? 'success' : 'info'">{{ bots.length }} 个在线</el-tag>
+            <div class="card-head">
+              {{ a.name || a.id }}
+              <el-tag size="small" :type="(a.status?.total || 0) ? 'success' : 'info'">
+                {{ a.status?.total || 0 }} 个在线
+              </el-tag>
             </div>
           </template>
-          <div v-for="b in bots" :key="b" class="bot-row">
-            <span class="mono">{{ b }}</span>
-            <el-tag size="small" type="success">在线</el-tag>
+          <el-form v-if="a.fields?.length" label-width="120px">
+            <el-form-item v-for="f in a.fields" :key="f.key" :label="f.label || f.key">
+              <el-input-number
+                v-if="f.type === 'number'"
+                v-model="a.config[f.key]"
+                :controls="false"
+                style="width:100%"
+              />
+              <el-input
+                v-else
+                v-model="a.config[f.key]"
+                :type="f.type === 'password' ? 'password' : 'text'"
+                :show-password="f.type === 'password'"
+              />
+            </el-form-item>
+            <div>
+              <el-button type="primary" @click="save(a)">保存配置</el-button>
+              <el-button @click="load">刷新</el-button>
+            </div>
+            <div class="dim small mt" v-if="a.restart_keys?.length">
+              {{ a.restart_keys.join(' / ') }} 改动需重启框架生效；其余字段立即生效。
+            </div>
+          </el-form>
+          <div v-else class="dim small">该接入端无本地可编辑连接配置。</div>
+          <div v-if="a.endpoint_hint" class="dim small mt mono">
+            接入地址：{{ a.endpoint_hint }}
           </div>
-          <el-empty v-if="!bots.length" description="暂无客户端连接" :image-size="50" />
+          <div v-if="a.guide" class="dim small mt" style="line-height:1.8">{{ a.guide }}</div>
+          <div class="mt">
+            <div v-for="b in (a.status?.connected_bots || [])" :key="b" class="bot-row">
+              <span class="mono">{{ b }}</span>
+              <el-tag size="small" type="success">在线</el-tag>
+            </div>
+            <el-empty
+              v-if="!(a.status?.connected_bots || []).length"
+              description="暂无客户端连接"
+              :image-size="40"
+            />
+          </div>
         </el-card>
+      </el-col>
+      <el-col v-if="!adapters.length" :span="24">
         <el-card shadow="never">
-          <template #header><div class="card-head">接入指引</div></template>
-          <div class="dim" style="line-height:2">
-            <div>反向 WS 服务端地址：<code class="mono">{{ wsScheme }}://{{ wsUrl }}/ws</code></div>
-            <div>OneBot 客户端（NapCat / Lagrange / LLOneBot 等）添加「反向 WebSocket」连接，填写上述地址即可接入。</div>
-            <div class="dim small">面板走 HTTPS 时此处自动显示 wss（需在「设置 → SSL / TLS」启用并配置证书）。</div>
-          </div>
+          <el-empty description="未加载任何协议接入端（请启用 onebot_adapter / http_inject 等）" />
         </el-card>
       </el-col>
     </el-row>
@@ -43,36 +62,28 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api, apiCall } from '../api'
 
-const form = ref({ host: '', port: 6830, token: '' })
-const bots = ref([])
-// 面板走 HTTPS 时反向 WS 用 wss（证书在「设置 → SSL / TLS」配置）
-const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws'
-
-const wsUrl = computed(() => {
-  const host = form.value.host === '0.0.0.0' || form.value.host === '::' ? '127.0.0.1' : form.value.host
-  return `${host}:${form.value.port}`
-})
+const adapters = ref([])
 
 async function load() {
   const r = await api('/api/connection').catch(() => null)
   if (!r) return
-  const c = r.data.config || {}
-  const st = r.data.status || {}
-  bots.value = st.connected_bots || []
-  form.value.host = c.listen_host || '0.0.0.0'
-  form.value.port = c.listen_port || st.ws_port || 6830
-  form.value.token = c.access_token || ''
+  const list = (r.data && r.data.adapters) || []
+  adapters.value = list.map(a => ({
+    ...a,
+    config: { ...(a.config || {}) },
+    fields: a.fields || [],
+    status: a.status || {},
+    restart_keys: a.restart_keys || [],
+  }))
 }
 
-async function save() {
-  const r = await apiCall('/api/connection', {
-    method: 'PUT',
-    body: { listen_host: form.value.host.trim(), listen_port: form.value.port, access_token: form.value.token },
-  })
+async function save(a) {
+  const body = { adapter: a.id, data: { ...(a.config || {}) } }
+  const r = await apiCall('/api/connection', { method: 'PUT', body })
   if (r) { ElMessage.success(r.msg); load() }
 }
 

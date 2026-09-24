@@ -8,7 +8,7 @@ config / dual_auth / 限速表 等）锁死在闭包里，导致无法拆分、�
 / commands.py / db_gateway.py 等，随 S4 迁移）注册时读取。
 """
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 @dataclass

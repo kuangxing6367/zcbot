@@ -120,6 +120,8 @@ class HttpInjectHandler(BaseHTTPRequestHandler):
 class HttpInjectAdapter(ProtocolAdapter):
     """实现 ProtocolAdapter 契约：HTTP 事件注入接入端"""
 
+    adapter_id = 'http_inject'
+
     def __init__(self, framework, host, port, path, token):
         self.framework = framework
         self.host = host
@@ -127,6 +129,23 @@ class HttpInjectAdapter(ProtocolAdapter):
         self.path = path
         self.token = token
         self._server = None
+
+    def get_connection_info(self) -> dict:
+        """连接自描述：供 WebUI /api/connection 动态渲染"""
+        return {
+            'id': 'http_inject',
+            'name': 'HTTP 事件注入',
+            'config_section': 'http_inject',
+            'fields': [
+                {'key': 'host', 'label': '监听地址', 'type': 'string'},
+                {'key': 'port', 'label': '监听端口', 'type': 'number'},
+                {'key': 'path', 'label': '注入路径', 'type': 'string'},
+                {'key': 'token', 'label': 'Token', 'type': 'password'},
+            ],
+            'restart_keys': ['host', 'port', 'path'],
+            'endpoint_hint': f"http://{self.host}:{self.port}{self.path}",
+            'guide': '外部系统 POST JSON 到上述地址即可注入消息/事件（不依赖任何 IM）。',
+        }
 
     def start(self):
         HttpInjectHandler.framework = self.framework

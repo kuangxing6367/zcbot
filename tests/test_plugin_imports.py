@@ -2,7 +2,7 @@
 """
 插件加载器导入机制回归测试
 ================================
-覆盖 framework/loader.py 的「合成包 + 三层模块名」机制：
+覆盖 framework/loader/ 的「合成包 + 三层模块名」机制：
 
 1. main.py 与子模块支持相对导入（from .x import Y / from . import x）；
 2. 子模块内部、嵌套包内部的多级相对导入可用（from ..x import Y）；

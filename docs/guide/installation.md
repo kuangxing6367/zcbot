@@ -33,6 +33,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+> `requirements.txt` 与 `pyproject.toml`（PEP 621）两处依赖保持同步：
+> 传统部署/启动自检用 `requirements.txt`；工具链读取元数据时用 `pyproject.toml`。
+> 二选一即可，改依赖请两处同步更新。
+
 核心依赖包括 `websockets`（协议连接）、`flask` + `waitress`（管理后台）、
 `apscheduler`（定时任务）、`bcrypt`（密码哈希）、`psutil`（内存监控）等。
 
@@ -49,6 +53,7 @@ MySQL 用户额外需要 `pymysql`、`DBUtils`（切换到 MySQL 时框架会提
 ```
 zcbot/
 ├── main.py                 # 启动入口（python main.py [自定义配置路径]）
+├── pyproject.toml          # 项目元数据/依赖（与 requirements.txt 同步）
 ├── config.yaml             # 全局配置（首次启动自动生成）
 ├── requirements.txt        # 核心依赖
 ├── framework/              # 极简内核（加载器/路由/事件/上下文/协议抽象/数据库…）
@@ -59,6 +64,10 @@ zcbot/
 │   ├── session/            #   多轮会话管理器（默认开）
 │   ├── scheduler/          #   定时任务调度器（默认开）
 │   ├── http_inject/        #   HTTP 事件注入接入端（默认关）
+│   ├── ws_client/          #   出站 WebSocket 接入端（默认关）
+│   ├── qq_official/        #   QQ 官方机器人接入端（默认关）
+│   ├── telegram/           #   Telegram 接入端（默认关）
+│   ├── discord/            #   Discord 接入端（默认关）
 │   └── http_api/           #   独立对外 HTTP API（默认关）
 ├── plugins/                # 用户插件（每个一个子目录，含 main.py）
 ├── data/                   # 运行数据（自动创建）
