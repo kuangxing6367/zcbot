@@ -1,0 +1,33 @@
+# 运行 Python 回归 + 冒烟（不编译原生扩展、不部署文档）
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install core dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Plugin import regression
+        run: python tests/test_plugin_imports.py
+      - name: Dual-core regression
+        run: python tests/test_dual_core.py
+      - name: Permission engine regression
+        run: python tests/test_perm.py
+      - name: Startup + dispatch smoke
+        run: python tests/test_smoke.py
