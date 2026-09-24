@@ -17,6 +17,7 @@ use image::{imageops, GenericImageView, RgbaImage};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
+use std::sync::Arc;
 
 use crate::{
     draw_text, encode_png, in_rounded, lerp_color, line_x, load_font, measure_text, parse_color,
@@ -85,7 +86,7 @@ pub(crate) struct Canvas {
     pub(crate) buf: Vec<u8>,
     pub(crate) width: u32,
     pub(crate) height: u32,
-    pub(crate) font: Option<Font>,
+    pub(crate) font: Option<Arc<Font>>,
 }
 
 impl Canvas {
@@ -112,9 +113,9 @@ impl Canvas {
         })
     }
 
-    /// 内部输出 PNG bytes（不经过 Python）
+    /// 内部输出 PNG bytes（不经过 Python）。直接对 buf 引用编码，避免整块画布 clone。
     pub(crate) fn to_png_bytes(&self) -> Result<Vec<u8>, String> {
-        encode_png(self.width, self.height, self.buf.clone())
+        encode_png(self.width, self.height, &self.buf)
     }
 }
 
@@ -524,8 +525,8 @@ impl Canvas {
         Ok(slf)
     }
 
-    /// 输出 PNG bytes
+    /// 输出 PNG bytes（直接引用 buf 编码，无 clone；避免输出时画布内存翻倍）
     fn to_png(&self) -> PyResult<Vec<u8>> {
-        encode_png(self.width, self.height, self.buf.clone()).map_err(PyRuntimeError::new_err)
+        encode_png(self.width, self.height, &self.buf).map_err(PyRuntimeError::new_err)
     }
 }
