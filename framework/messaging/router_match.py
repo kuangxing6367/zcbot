@@ -8,6 +8,7 @@ import logging
 import re
 from typing import Optional
 
+from framework.hooks import HookPoints
 from framework.log_broker import log_broker
 
 logger = logging.getLogger('zcbot')

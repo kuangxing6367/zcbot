@@ -208,7 +208,25 @@ def load_config(config_path: str = None) -> dict:
         _generate_default_config(config_path)
 
     with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+        try:
+            config = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            _get_logger().error(
+                f"配置文件语法错误: {config_path} - {e}\n"
+                f"已回退到默认配置启动，请修复配置后重启"
+            )
+            backup = config_path + '.bak'
+            try:
+                import shutil
+                shutil.copy(config_path, backup)
+                _get_logger().warning(f"损坏的配置文件已备份到: {backup}")
+            except Exception:
+                pass
+            _generate_default_config(config_path)
+            with open(config_path, 'r', encoding='utf-8') as f2:
+                config = yaml.safe_load(f2)
+    if config is None:
+        config = {}
 
     # 环境变量替换
     config = _env_replace(config)
