@@ -18,6 +18,7 @@
   Pillow>=10.0.0（PIL 回退用）
 """
 import importlib.util
+import io
 import logging
 import os
 import platform
@@ -36,13 +37,27 @@ __plugin_meta__ = {
 }
 
 _FONT_DIR = os.path.dirname(os.path.abspath(__file__))
-# 字体候选：插件目录 / help 插件自带字体
-_FONT_CANDIDATES = [
+# 多级子集字体（按渲染文本字符集按需加载，避免 fontdue 全量解析完整字体的内存开销）：
+#   common = 通用规范汉字表一级 3500 字 + ASCII + 常用标点（2.6MB，首渲约 +20MB）
+#   ext    = 一级+二级 6500 字 + ASCII + 常用标点（5.5MB）
+#   full   = 完整字体（插件自带 / 系统字体回退），仅当子集层级覆盖不全时加载
+_FONT_TIERS = [
+    ('common',
+     os.path.join(_FONT_DIR, 'msyh_subset_common.ttf'),
+     os.path.join(_FONT_DIR, 'charset_common.txt')),
+    ('ext',
+     os.path.join(_FONT_DIR, 'msyh_subset_ext.ttf'),
+     os.path.join(_FONT_DIR, 'charset_ext.txt')),
+]
+# 完整字体候选：插件目录 / help 插件自带字体
+_FULL_FONT_CANDIDATES = [
     os.path.join(_FONT_DIR, 'HarmonyOS_Sans_SC_Medium.ttf'),
     os.path.join(_FONT_DIR, 'HarmonyOS_Sans_SC_Regular.ttf'),
     os.path.join(_FONT_DIR, 'NotoSansCJK-Regular.ttc'),
     os.path.join(os.path.dirname(_FONT_DIR), 'help', 'DouyinSansBold.otf'),
 ]
+# 子集字体字符集懒加载缓存（仅在选择层级时读取一次）
+_FONT_CHARSET_CACHE = {}
 
 # 模块级缓存，避免重复加载字体（LRU 上限，防无限增长导致内存泄漏）
 _FONT_CACHE = {}
@@ -121,13 +136,57 @@ def _load_native_renderer():
 _NATIVE = _load_native_renderer()
 
 
-def _find_font_path():
-    """查找可用于原生渲染的字体文件路径（插件自带 → 系统字体回退）
+def _iter_text_parts(*texts):
+    """将任意嵌套文本/列表参数扁平化为字符串序列"""
+    for t in texts:
+        if isinstance(t, (list, tuple)):
+            for it in t:
+                if isinstance(it, (list, tuple)):
+                    for s in it:
+                        if isinstance(s, str):
+                            yield s
+                elif isinstance(it, str):
+                    yield it
+        elif isinstance(t, str):
+            yield t
 
-    此前只查插件目录，若未随包分发字体则永远返回 None，
-    导致原生扩展闲置、所有渲染回退 PIL（性能与内存问题来源之一）。
+
+def _font_tier_charset(charset_path):
+    """懒加载子集字体字符集；缺失或读取失败返回 None（不选用该层级）"""
+    if charset_path in _FONT_CHARSET_CACHE:
+        return _FONT_CHARSET_CACHE[charset_path]
+    cs = None
+    try:
+        if os.path.isfile(charset_path):
+            with io.open(charset_path, encoding='utf-8') as f:
+                cs = set(f.read())
+    except Exception:
+        cs = None
+    _FONT_CHARSET_CACHE[charset_path] = cs
+    return cs
+
+
+def _find_font_path(*texts):
+    """按渲染文本字符集选择最小够用的字体层级（常见/更多/完全）
+
+    先取最小子集层级，其字符集能覆盖全部文本则命中；否则逐级上升；
+    子集均无法覆盖时回退完整字体（插件自带 → 系统字体兜底）。
+    避免每次渲染都加载完整中文字体（fontdue 全量解析约 +170MB）。
     """
-    for p in _FONT_CANDIDATES:
+    need = set()
+    for part in _iter_text_parts(*texts):
+        need.update(part)
+    # 常见/更多 子集层级（按需加载字符集判断覆盖）
+    for _name, fp, cs_path in _FONT_TIERS:
+        if not os.path.isfile(fp):
+            continue
+        cs = _font_tier_charset(cs_path)
+        if cs is None:
+            continue  # 无字符集元数据，无法证明覆盖，保守跳过
+        if need <= cs:
+            return fp
+    # 完整字体候选
+    for p in _FULL_FONT_CANDIDATES:
         if os.path.isfile(p):
             return p
     # 系统字体回退（Windows / Linux），保证原生渲染可用
@@ -253,7 +312,7 @@ def _gradient_row(top, bottom, y, height):
 def _render_card_image(title, content, width=600, padding=30, options=None):
     """渲染信息卡片。原生可用返回 PNG bytes，否则返回 PIL Image"""
     if _NATIVE is not None:
-        font = _find_font_path()
+        font = _find_font_path(title, content)
         if font:
             try:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -266,7 +325,7 @@ def _render_card_image(title, content, width=600, padding=30, options=None):
 def _render_text_image(text, width=500, padding=20, options=None):
     """将文字渲染为图片。原生可用返回 PNG bytes，否则返回 PIL Image"""
     if _NATIVE is not None:
-        font = _find_font_path()
+        font = _find_font_path(text)
         if font:
             try:
                 return _NATIVE.render_text(text, font, width, 24, padding, options)
