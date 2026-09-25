@@ -40,6 +40,7 @@ class _RouteCommand:
         self.require_perm = require_perm  # 权限节点要求（节点式），空=不限制
         self.rx = rx          # 编译后的正则，或 None
         self.simple = simple  # 简单前缀匹配 pattern，或 None
+        self.aliases = aliases
 
 
 from framework.messaging.router_match import (  # noqa: E402
