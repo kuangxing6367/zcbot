@@ -26,10 +26,33 @@
 
 ---
 
-## 开发中（未发版）
+## v1.7.0（2026-09-26）
+
+> 主题：**事件三层缓冲（防丢失/防内存暴涨）+ 新官方插件 html_assembler + 全库文档去人群定位重写**。
+
+### 新增
+- **事件三层缓冲**：L1 内存主队列（512KB，消息流入直处理）→ L2 sqlite 持久化溢出
+  （`data/event_buffer.db`，独立文件独立连接，不阻塞主库，防内存暴涨、防事件丢失）
+  → L3 内存兜底（4MB，sqlite 写超时/失败时应急暂存）；全满日志告警并丢弃新事件
+  （保老弃新），丢弃计数经 `stats()` 可查。消费优先级 L1（最新热数据）→ L3 → L2
+  （已持久化历史积压最后消化）；`wait=True` 同步语义事件保持阻塞进 L1 不参与溢出，
+  保留 done future 契约。配置 `config.yaml → buffer`（l1_max_bytes / l1_max_items /
+  sqlite_enabled / sqlite_path / sqlite_write_timeout / sqlite_batch / l3_max_bytes /
+  full_action）。无新增三方依赖。
+- **官方插件 `html_assembler`（单文件 HTML 装配引擎）**：占位符替换
+  （`{{ key }}` 自动 HTML 转义、嵌套 `a.b.c` 与列表下标 `items.0.name`；
+  `{{ img:key }}` 图片转 base64 内嵌；`{{ raw:key }}` 原文插入）+ 缺失策略
+  `on_missing`（keep/empty/raise）。内存可控：模板/单图/输出字节上限 + 单次图片数
+  上限；模板 UTF-8/GBK 自适应；纯标准库零第三方依赖，`engine.py` 可脱离框架独立使用。
+  接入三通道：官方插件配置中心自动同步（`core_plugins.yaml → html_assembler`）、
+  框架服务 `fw.services.get('html_assembler')`、模块
+  `sys.modules['core_plugin_html_assembler']`（兼容别名 `plugin_html_assembler`）。
+  `/html_asm` 自测命令渲染内置 demo 页。官方插件清单（根 README / 文档站目录速查）补齐。
 
 ### 修复
-- **v1.6.0 预览体检硬伤（P0）**：
+- **官方插件 `get_data_dir()` 冒号路径**：ctx 名带 `core:` 前缀，冒号进入目录名在
+  Windows 非法，官方插件取数据目录即崩；替换为下划线（`core_html_assembler`）。
+- **v1.6.0 预览体检硬伤（P0，随 v1.6.0 标签入库，此处补录）**：
   - `framework/core/dispatch.py` 补 `log_broker` 等导入，消息分发不再 `NameError`；
   - `framework/core/runtime.py` / `base.py` 路径 `dirname` 由 2 层改为 3 层，`core_plugins` / `plugins` / `config.yaml` 指向仓库根，官方插件可被发现；`runtime` 补 `asyncio`/`gc`/`importlib.util`；
   - `framework/database/db_conn.py` 去掉顶层 `import pymysql`（干净 SQLite 环境可启动），重连常量下沉并由 `db.py` re-export；
@@ -40,9 +63,14 @@
 - **qq_official**：`msg_seq` 改进程内计数器（同秒多回复不碰撞）；本地图片读取经 `asyncio.to_thread`，不再阻塞事件循环。
 
 ### 测试
+- 新增 `tests/test_html_assembler.py` 23 例：引擎行为（占位符/转义/嵌套/图片/缺失策略/上限）+ 官方插件装载（register/服务/命令/配置生效）+ `core:` ctx 名数据目录 Windows 安全。
 - 新增 `tests/test_smoke.py`：路径解析、关键模块 import、分发+回复冒烟、按来源路由、适配器补丁断言。
 
 ### 文档
+- 删除「适合人群 / 按身份导路」定位写法，全部重写为形态化表述：README「三类目标用户」
+  →「三种典型形态」；文档站首页去「你的情况选路」改「解决什么问题/文档导航」；
+  guide 总入口去分人群三段路线改单一推荐阅读顺序；getting-started「选一条路线」
+  →「确定事件来源」。
 - 首页/对接 IM 诚实化：群管等协议专有动作按端能力说明，去掉「换接入端插件不用改」等超前概括。
 
 ---
