@@ -32,6 +32,7 @@ from framework.core.stats_writer import AsyncStatsWriter  # noqa: F401  向后�
 
 
 from framework.core.dispatch import FrameworkDispatchMixin
+from framework.core.event_buffer import EventBuffer
 from framework.core.runtime import FrameworkRuntimeMixin
 
 class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
@@ -99,6 +100,24 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 后台事件任务引用集
         self._pending_tasks = set()
 
+        # 事件分层缓冲（生产者-消费者：适配器入队即返，后台 worker 异步处理）
+        # 配置节 event_queue: maxsize / workers / drain_timeout / buffer
+        #  buffer: L1 512KB 内存主缓冲 → sqlite 持久化溢出 → L3 4MB 内存兜底 → 全满告警丢弃
+        eq_cfg = self.config.get('event_queue', {}) or {}
+        self._event_queue_maxsize = int(eq_cfg.get('maxsize', 2000))
+        self._event_workers_count = max(1, int(eq_cfg.get('workers', 1)))
+        self._event_drain_timeout = float(eq_cfg.get('drain_timeout', 5))
+        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self._event_buffer = EventBuffer(eq_cfg, os.path.join(_project_root, 'data'))
+        self._event_workers = []   # worker task 引用集（start() 填充）
+
+        # 群成员同步批量写库队列（notice 高频时合并落库，避免每条 to_thread + 单条 SQL）
+        self._member_sync_queue = asyncio.Queue(maxsize=20000)
+        self._member_sync_dropped = 0
+        self._member_sync_task = None
+        self._member_sync_interval = float(
+            (self.config.get('event_queue', {}) or {}).get('member_sync_interval', 2))
+
         # 心跳参数
         self._heartbeat_interval = self.config.get('plugin', {}).get('heartbeat_interval', 60)
         self._heartbeat_task = None
@@ -116,6 +135,11 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 启动时间
         import time
         self._start_time = time.time()
+
+        # 启动就绪标记（start(wait_ready=False) 异步加载插件时，可 await wait_ready 等待就绪）
+        self._ready = False
+        self._ready_event = asyncio.Event()
+        self._startup_load_task = None
 
         logger.info("框架核心引擎初始化完成")
 
@@ -240,8 +264,16 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), dat_dir)
         return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'plugins_dat')
 
-    async def start(self):
-        """启动框架（异步）"""
+    async def start(self, wait_ready: bool = True):
+        """启动框架（异步）
+
+        wait_ready=True ：等待核心/用户插件全部加载完成、路由表预热后才返回
+                         （默认，保持原同步启动行为）。
+        wait_ready=False：立即返回，不等待插件加载；核心/用户插件加载与路由
+                         预热在后台异步执行（事件队列/心跳/终端等基础服务
+                         已先就绪），可后续 await self.wait_ready(timeout=...)
+                         等待全部就绪。
+        """
         self.loop = asyncio.get_running_loop()
         self._running = True
 
@@ -252,8 +284,60 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 安全提示
         self._warn_insecure_config()
 
+        # 1. 启动路由表周期刷新任务（首次预热在插件加载完成后进行）
+        self.router.start(self.loop)
+
+        # 2. 启动事件队列消费者（接收入队事件，后台 worker 串行处理）
+        for i in range(self._event_workers_count):
+            self._event_workers.append(
+                asyncio.create_task(
+                    self._event_worker_loop(i), name=f"event-worker-{i}")
+            )
+
+        # 3. 启动统计批量写库器
+        self.stats_writer.start()
+
+        # 4. 启动群成员同步批量写库任务
+        self._member_sync_task = asyncio.create_task(
+            self._member_sync_loop(), name="member-sync")
+
+        # 5. 启动心跳
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="heartbeat")
+
+        # 6. 启动内存看门狗
+        self._memory_watchdog_task = asyncio.create_task(
+            self._memory_watchdog_loop(), name="memory-watchdog"
+        )
+
+        # 7. 终端命令注册（核心/宿主两个进程都注册，命令绑定到本进程的 fw，供跨进程转发执行）；
+        #    交互输入只在非宿主进程启动（宿主子进程无交互 stdin，避免与核心抢控制台）
+        register_builtins(self)
+        if getattr(self, '_role', 'standard') != 'host':
+            self.terminal.start()
+
+        # 8. 插件加载：wait_ready=True 同步等待（原行为）；False 后台异步执行不阻塞启动
+        if wait_ready:
+            loaded = await asyncio.to_thread(self._load_plugins_sync)
+            await self._finalize_startup(loaded)
+        else:
+            self._startup_load_task = asyncio.create_task(
+                self._background_startup_load(), name="startup-plugin-load")
+            logger.info(
+                "异步启动模式：插件加载已在后台执行，"
+                "可 await framework.wait_ready() 等待全部就绪")
+
+    def _load_plugins_sync(self) -> list:
+        """同步加载全部插件（core_plugins + 用户插件 + 依赖自愈 + register）。
+
+        独立成同步函数，供 start(wait_ready=False) 放入后台线程执行，
+        避免长时间 import/register 阻塞事件循环与启动返回。
+        """
+        import time
+        t0 = time.perf_counter()
+
         # 1. 加载官方插件（core_plugins/）— 必须最先加载，提供基础服务
         self._load_core_plugins()
+        t_core = time.perf_counter()
 
         # 2. 确保 plugins_dat 目录存在
         os.makedirs(self.plugin_loader.plugins_dat_dir, exist_ok=True)
@@ -262,8 +346,9 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 3. 加载用户插件（plugins/）
         loaded = self.plugin_loader.load_all()
         logger.info(f"已加载 {len(loaded)} 个用户插件: {loaded}")
+        t_user = time.perf_counter()
 
-        # 3.5 插件依赖自愈
+        # 4. 插件依赖自愈
         self._auto_heal_plugin_deps()
         if hasattr(self.plugin_loader, '_missing_deps'):
             with self.plugin_loader._lock:
@@ -274,45 +359,67 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                         loaded.append(plugin_name)
             if loaded:
                 logger.info(f"自愈后共加载 {len(loaded)} 个插件: {loaded}")
+        t_heal = time.perf_counter()
 
-        # 4. 对每个已加载的插件执行 register
+        # 5. 对每个已加载的插件执行 register
         for plugin_name in loaded:
             self.plugin_loader.register_commands(plugin_name)
+        t_reg = time.perf_counter()
 
-        # 5. 启动路由表后台刷新
-        self.router.start(self.loop)
+        logger.info(
+            f"插件加载耗时: core {t_core - t0:.2f}s / user {t_user - t_core:.2f}s "
+            f"/ 自愈 {t_heal - t_user:.2f}s / register {t_reg - t_heal:.2f}s / 合计 {t_reg - t0:.2f}s")
+        return loaded
+
+    async def _finalize_startup(self, loaded: list):
+        """插件加载完成后收尾：路由预热 + 系统事件 + 启动扩展点 + 置就绪标记"""
+        # 1. 路由表预热（重建热路径内存快照）
         try:
             await asyncio.to_thread(self.router._rebuild_routes)
         except Exception as e:
             logger.error(f"路由表预热失败: {e}")
 
-        # 6. 启动统计批量写库器
-        self.stats_writer.start()
-
-        # 7. 启动心跳
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="heartbeat")
-
-        # 8. 启动内存看门狗
-        self._memory_watchdog_task = asyncio.create_task(
-            self._memory_watchdog_loop(), name="memory-watchdog"
-        )
-
-        # 9. 触发系统事件
+        # 2. 触发系统事件
         await self.event_bus.aemit('system.plugin.loaded', {'plugins': loaded})
 
-        # 9.5 触发启动扩展点（插件可在此预热/注册后台任务/挂载资源）
+        # 3. 触发启动扩展点（插件可在此预热/注册后台任务/挂载资源）
         try:
             await self.hooks.trigger_async(HookPoints.LIFECYCLE_STARTUP)
         except Exception as e:
             logger.error(f"启动扩展点异常: {e}", exc_info=True)
 
-        # 10. 终端命令注册（核心/宿主两个进程都注册，命令绑定到本进程的 fw，供跨进程转发执行）；
-        #     交互输入只在非宿主进程启动（宿主子进程无交互 stdin，避免与核心抢控制台）
-        register_builtins(self)
-        if getattr(self, '_role', 'standard') != 'host':
-            self.terminal.start()
+        # 4. 就绪标记
+        self._ready = True
+        self._ready_event.set()
+        import time
+        logger.info(f"框架启动完成，等待消息...（总耗时 {time.time() - self._start_time:.2f}s）")
 
-        logger.info("框架启动完成，等待消息...")
+    async def _background_startup_load(self):
+        """异步启动模式的后台插件加载任务"""
+        try:
+            loaded = await asyncio.to_thread(self._load_plugins_sync)
+            await self._finalize_startup(loaded)
+        except asyncio.CancelledError:
+            logger.warning("后台插件加载被取消（框架停机）")
+            raise
+        except Exception as e:
+            logger.error(f"后台插件加载异常: {e}", exc_info=True)
+            self._ready = False
+            self._ready_event.set()  # 唤醒 wait_ready，避免等待方永久挂起
+
+    async def wait_ready(self, timeout: float | None = None) -> bool:
+        """等待框架完全就绪（插件加载 + 路由预热完成）。
+
+        start(wait_ready=False) 后调用；timeout 为 None 时无限等待。
+        返回 True 表示就绪，False 表示超时或后台加载失败。
+        """
+        if self._ready:
+            return True
+        try:
+            await asyncio.wait_for(self._ready_event.wait(), timeout)
+        except asyncio.TimeoutError:
+            return False
+        return self._ready
 
     async def terminal_exec(self, name: str, args: str = '') -> str:
         """执行一条终端命令并捕获其输出（供双进程另一侧经 IPC 调用）。
@@ -352,6 +459,15 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         logger.info("正在停止框架...")
         self._running = False
 
+        # 取消异步启动模式下仍在进行的后台插件加载任务
+        if self._startup_load_task:
+            self._startup_load_task.cancel()
+            try:
+                await self._startup_load_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._startup_load_task = None
+
         # 触发关闭扩展点（插件可在此释放资源/落盘/断开外部连接）
         try:
             await self.hooks.trigger_async(HookPoints.LIFECYCLE_SHUTDOWN)
@@ -361,11 +477,37 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 停止终端交互
         self.terminal.stop()
 
+        # 停止事件缓冲消费者（限时排空三层缓冲，超时丢弃并取消 worker）
+        if self._event_workers:
+            if not await self._event_buffer.wait_drained(self._event_drain_timeout):
+                logger.warning(
+                    f"事件缓冲排空超时，丢弃剩余 "
+                    f"L1={self._event_buffer.stats()['l1_items']}条 "
+                    f"sqlite={self._event_buffer.sqlite_count()}条")
+            for w in self._event_workers:
+                w.cancel()
+            await asyncio.gather(*self._event_workers, return_exceptions=True)
+            self._event_workers = []
+            self._event_buffer.close()
+
         # 停止统计批量写库器
         try:
             await self.stats_writer.stop()
         except Exception as e:
             logger.warning(f"统计写库器停止异常: {e}")
+
+        # 停止群成员同步批量写库任务（最后一次 flush 收尾）
+        if self._member_sync_task:
+            self._member_sync_task.cancel()
+            try:
+                await self._member_sync_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._member_sync_task = None
+        try:
+            await asyncio.to_thread(self._flush_member_sync)
+        except Exception as e:
+            logger.warning(f"群成员同步收尾落库异常: {e}")
 
         # 停止路由表刷新任务
         try:

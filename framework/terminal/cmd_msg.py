@@ -100,7 +100,7 @@ def register(fw):
                 'bot_name': 'terminal',
             }
 
-            await fw.dispatch_event(mock_event)
+            await fw.dispatch_event(mock_event, wait=True)
             print(f"已模拟接收消息: {message_type} user={user_id}, msg={message}")
 
         except ValueError:

@@ -292,7 +292,7 @@ def test_startup_and_dispatch_smoke():
             'raw_message': 'smoke-test-ping',
             'bot_name': 'smoke_bot',
             'sender': {'user_id': 12345, 'nickname': 'smoke'},
-        })
+        }, wait=True)
         return await fw.reply_text(
             {'bot_name': 'smoke_bot', 'group_id': 67890, 'is_group': True},
             'pong')

@@ -98,12 +98,15 @@ class FrameworkDispatchMixin:
             logger.error(f"message.after_send 扩展点异常: {e}")
         return result
 
-    async def dispatch_event(self, event: dict):
+    async def dispatch_event(self, event: dict, wait: bool = False):
         """
-        协议适配器入口：将转换后的内部事件分发到框架
-        适配器（如 onebot_adapter）调用此方法，框架处理路由/事件总线
+        协议适配器入口：将转换后的内部事件送入分层缓冲，由后台 worker 异步处理。
+        - 入队即返回，适配器回调不被慢处理阻塞；
+        - L1 512KB 内存主缓冲满 → 溢出到 sqlite 持久化缓冲（data/event_buffer.db）；
+          sqlite 写不过来 → L3 4MB 内存兜底；全满 → 日志告警并丢弃新事件（保老弃新）
+        - wait=True：等待该事件处理完成（测试 / 终端同步语义用，阻塞进 L1 保持背压）
+        - worker 未启动（单元测试直接调用 / 停机后新事件）时退化为同步处理，保持向后兼容
         """
-        event_type = event.get('type', '')
         bot_name = event.get('bot_name', 'default')
 
         # 事件进入内核前的扩展点（任何 handler 返回 False 即丢弃该事件）
@@ -115,8 +118,49 @@ class FrameworkDispatchMixin:
         except Exception as e:
             logger.error(f"event.before_dispatch 扩展点异常: {e}")
 
+        # worker 未启动（单元测试 / 停机收尾）→ 直接同步处理
+        if not self._event_workers or not self._running:
+            await self._process_event(event)
+            return
+
+        if wait:
+            done = asyncio.get_running_loop().create_future()
+            await self._event_buffer.put(event, done)
+            await done
+        else:
+            await self._event_buffer.put(event, None)
+
+    async def _event_worker_loop(self, worker_id: int):
+        """事件缓冲消费者：取事件并处理（单个事件异常不影响 worker 存活）"""
+        while True:
+            if not self._running and self._event_buffer.empty_all():
+                break  # 停机信号 + 三层缓冲已空 → 退出
+            try:
+                event, done, source = await self._event_buffer.get_async()
+            except asyncio.CancelledError:
+                raise
+            try:
+                await self._process_event(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"事件处理异常（worker {worker_id}）: {e}", exc_info=True)
+            finally:
+                if done is not None and not done.done():
+                    done.set_result(True)
+                self._event_buffer.task_done(source)
+
+    async def _process_event(self, event: dict):
+        """
+        事件处理主体：按类型分流 meta / message / notice / request。
+        （原 dispatch_event 核心逻辑，入队改造后由 worker 调用）
+        """
+        event_type = event.get('type', '') or event.get('post_type', '')
+        bot_name = event.get('bot_name', 'default')
+
         try:
-            logger.debug(f"dispatch_event: type={event_type} bot={bot_name} msg_type={event.get('message_type','')}")
+            logger.debug("dispatch_event: type=%s bot=%s msg_type=%s",
+                         event_type, bot_name, event.get('message_type', ''))
 
             # 元事件 → 广播
             if event_type == 'meta_event':
@@ -213,11 +257,71 @@ class FrameworkDispatchMixin:
         notice_type = data.get('notice_type', '')
         await self.event_bus.aemit(f'notice.{notice_type}', data)
 
-        # 群成员增加/减少时更新数据库（在线程中执行）
+        # 群成员增加/减少：进入批量同步队列（后台合并写库，热路径零线程切换零 DB）
         if notice_type == 'group_increase':
-            await asyncio.to_thread(self._sync_group_member_join, data)
+            self._enqueue_member_sync('join', data)
         elif notice_type == 'group_decrease':
-            await asyncio.to_thread(self._sync_group_member_leave, data)
+            self._enqueue_member_sync('leave', data)
+
+    def _enqueue_member_sync(self, kind: str, data: dict):
+        """群成员同步入队（非阻塞，队列满时丢弃并计数）"""
+        try:
+            self._member_sync_queue.put_nowait(
+                (kind, data.get('group_id'), data.get('user_id')))
+        except asyncio.QueueFull:
+            self._member_sync_dropped += 1
+            if self._member_sync_dropped % 1000 == 1:
+                logger.warning(
+                    f"群成员同步队列已满，已丢弃 {self._member_sync_dropped} 条同步请求")
+
+    async def _member_sync_loop(self):
+        """后台批量写库任务：周期性把队列中的群成员同步合并落库（DB 在线程中执行）"""
+        while True:
+            try:
+                await asyncio.sleep(self._member_sync_interval)
+                await asyncio.to_thread(self._flush_member_sync)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"群成员同步批量写库异常: {e}")
+                await asyncio.sleep(1)
+
+    def _flush_member_sync(self):
+        """合并队列中的群成员同步请求并批量落库（在线程中执行，语义同原来单条 SQL）"""
+        joins = {}   # (group_id, user_id) -> True（INSERT IGNORE 幂等）
+        leaves = set()
+        while True:
+            try:
+                kind, group_id, user_id = self._member_sync_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if not user_id:
+                continue
+            key = (group_id, user_id)
+            if kind == 'join':
+                joins[key] = True
+                leaves.discard(key)
+            elif kind == 'leave':
+                leaves.add(key)
+                joins.pop(key, None)
+        if joins:
+            try:
+                for group_id, user_id in joins:
+                    self.db.execute(
+                        "INSERT IGNORE INTO group_members (group_id, user_id) VALUES (%s, %s)",
+                        (group_id, user_id)
+                    )
+            except Exception as e:
+                logger.error(f"批量同步群成员加入失败: {e}")
+        if leaves:
+            try:
+                for group_id, user_id in leaves:
+                    self.db.execute(
+                        "DELETE FROM group_members WHERE group_id = %s AND user_id = %s",
+                        (group_id, user_id)
+                    )
+            except Exception as e:
+                logger.error(f"批量同步群成员离开失败: {e}")
 
     async def _handle_request(self, data: dict, bot_name: str = 'default'):
         """处理请求事件"""

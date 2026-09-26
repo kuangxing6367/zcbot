@@ -18,6 +18,7 @@ import threading
 from typing import Optional
 
 from framework.log_broker import log_broker
+from framework.hooks import HookPoints
 from framework.messaging.event import _has_text_segment
 from framework.messaging.router_keywords import KeywordReplyMixin, _KeywordRule  # noqa: F401
 
@@ -218,10 +219,22 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         1. 读取内存路由表（原子快照） → 遍历插件
         2. 每个插件内按 commands.priority 匹配命令
         3. 未命中 → 记录未匹配日志
+        扩展点：
+        - router.before_route  路由开始前（返回 False 跳过本次路由）
+        - router.after_route   路由完成后通知（携带命中结果，不短路）
+        - router.message_unmatched  未命中任何命令/关键词时兜底（返回 True 视为接管）
         """
         post_type = event.get('post_type') or event.get('type')
         if post_type != 'message':
             return
+
+        # 路由前扩展点（返回 False 跳过本次路由）
+        try:
+            if False in (await self.framework.hooks.trigger_async(
+                    HookPoints.ROUTER_BEFORE_ROUTE, {'event': event, 'bot_name': bot_name})):
+                return
+        except Exception as e:
+            logger.error(f"router.before_route 扩展点异常: {e}")
 
         # 纯富媒体消息（无文本段：纯分享卡片/图片/视频等）：
         # 不走命令匹配，直接广播 message.<类型> 事件（与 message 事件互不干扰）
@@ -241,52 +254,77 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         routes = self._routes
         plugin_order = self._plugin_order
 
-        logger.debug(
-            f'路由消息: "{message[:80]}" → 插件队列: {plugin_order}')
+        logger.debug('路由消息: "%s" → 插件队列: %s', message[:80], plugin_order)
 
         matched_any = False
-        for plugin_name in plugin_order:
-            entry = routes.get(plugin_name)
-            if entry is None:
-                continue
-            # 群级插件开关检查（私聊不限制，纯内存缓存）
-            if ev.is_group:
-                if not self.framework.plugin_loader.is_plugin_enabled_for_group_cached(
-                        plugin_name, ev.group_id):
-                    logger.debug(f"跳过 [{plugin_name}]：已在群 {ev.group_id} 中禁用")
+        handled_plugin = None   # 路由结果（供 router.after_route 通知）
+        try:
+            for plugin_name in plugin_order:
+                entry = routes.get(plugin_name)
+                if entry is None:
                     continue
-            matched = await self._match_plugin_commands(entry, ev, message, plugin_name)
-            if not matched:
-                continue
-            matched_any = True
-            # 插件处理了消息，记录 info 日志
-            log_broker.log_plugin(plugin_name, '处理消息', {
-                'user_id': ev.user_id,
-                'group_id': ev.group_id,
-                'message': message[:100],
-            })
-            # handler 已返回，检查事件传播控制
-            if ev.is_stopped():
-                log_broker.log_plugin(plugin_name, '终止传播', {
-                    'reason': '事件传播被终止',
+                # 群级插件开关检查（私聊不限制，纯内存缓存）
+                if ev.is_group:
+                    if not self.framework.plugin_loader.is_plugin_enabled_for_group_cached(
+                            plugin_name, ev.group_id):
+                        logger.debug("跳过 [%s]：已在群 %s 中禁用", plugin_name, ev.group_id)
+                        continue
+                matched = await self._match_plugin_commands(entry, ev, message, plugin_name)
+                if not matched:
+                    continue
+                matched_any = True
+                handled_plugin = plugin_name
+                # 插件处理了消息，记录 info 日志
+                log_broker.log_plugin(plugin_name, '处理消息', {
+                    'user_id': ev.user_id,
+                    'group_id': ev.group_id,
+                    'message': message[:100],
                 })
-                return
-            logger.debug(f"消息由 [{plugin_name}] 处理，事件继续传播给下一插件")
+                # handler 已返回，检查事件传播控制
+                if ev.is_stopped():
+                    log_broker.log_plugin(plugin_name, '终止传播', {
+                        'reason': '事件传播被终止',
+                    })
+                    return
+                logger.debug("消息由 [%s] 处理，事件继续传播给下一插件", plugin_name)
 
-        # ── 插件命令未命中 → 广播 message 事件（文本消息统一监听通道）──
-        if not matched_any:
-            if await self._broadcast_message_event(ev, message):
-                return
-            if not plugin_order:
-                log_broker.log_system('WARN', f'无可用插件处理消息: "{message[:50]}"')
+            # ── 插件命令未命中 → 广播 message 事件（文本消息统一监听通道）──
+            if not matched_any:
+                if await self._broadcast_message_event(ev, message):
+                    handled_plugin = 'message'
+                    return
+                if not plugin_order:
+                    log_broker.log_system('WARN', f'无可用插件处理消息: "{message[:50]}"')
 
-        # ── 系统级关键词自动回复（dynamic_commands 表，动态命令）──
-        # 插件未命中时触发；插件命中但 ev.continue_route() 声明"允许继续"时同样触发
-        if not matched_any or ev.is_continue_route():
-            if await self._try_keyword_reply(ev, message):
-                return
+            # ── 系统级关键词自动回复（dynamic_commands 表，动态命令）──
+            # 插件未命中时触发；插件命中但 ev.continue_route() 声明"允许继续"时同样触发
+            if not matched_any or ev.is_continue_route():
+                if await self._try_keyword_reply(ev, message):
+                    handled_plugin = 'keyword'
+                    return
 
-        log_broker.log_system('DEBUG', f'消息未匹配任何命令: "{message[:80]}"')
+            # ── 未命中兜底扩展点（插件可在此接管未匹配消息）──
+            if not matched_any and handled_plugin is None:
+                try:
+                    res = await self.framework.hooks.trigger_async(
+                        HookPoints.ROUTER_MESSAGE_UNMATCHED,
+                        {'event': ev, 'message': message, 'bot_name': bot_name})
+                    if any(r is True for r in res):
+                        handled_plugin = 'unmatched_handler'
+                        return
+                except Exception as e:
+                    logger.error(f"router.message_unmatched 扩展点异常: {e}")
+
+            log_broker.log_system('DEBUG', f'消息未匹配任何命令: "{message[:80]}"')
+        finally:
+            # 路由完成通知扩展点（无论命中与否、是否提前返回）
+            try:
+                await self.framework.hooks.trigger_async(
+                    HookPoints.ROUTER_AFTER_ROUTE,
+                    {'event': ev, 'message': message, 'bot_name': bot_name,
+                     'matched': matched_any, 'handler': handled_plugin})
+            except Exception as e:
+                logger.error(f"router.after_route 扩展点异常: {e}")
 
     async def _broadcast_message_event(self, ev, message: str) -> bool:
         """
