@@ -13,6 +13,8 @@
   command.before / command.after                命令执行前后（before 返回 False 跳过）
   message.before_send / message.after_send      框架主动发文本前后
   action.before / action.after                  任意协议动作调用前后（通知，不短路）
+  router.before_route / router.after_route      消息路由前后（before 返回 False 跳过路由；after 通知型）
+  router.message_unmatched                      消息未命中任何命令/关键词时兜底（返回 True 视为接管）
 
 插件侧用 `ctx.hook(point, handler, priority=50)` 注册；同名（插件内）重复注册自动去重。
 handler 既可以是普通函数，也可以是 `async def`：
@@ -42,6 +44,9 @@ class HookPoints:
     MESSAGE_AFTER_SEND = 'message.after_send'
     ACTION_BEFORE = 'action.before'
     ACTION_AFTER = 'action.after'
+    ROUTER_BEFORE_ROUTE = 'router.before_route'
+    ROUTER_AFTER_ROUTE = 'router.after_route'
+    ROUTER_MESSAGE_UNMATCHED = 'router.message_unmatched'
 
 
 # 各扩展点约定返回 False 时是否触发"短路"语义
@@ -50,6 +55,7 @@ _SHORT_CIRCUIT = {
     HookPoints.EVENT_BEFORE_DISPATCH: True,   # 返回 False 丢弃事件
     HookPoints.COMMAND_BEFORE: True,          # 返回 False 跳过该命令
     HookPoints.MESSAGE_BEFORE_SEND: True,     # 返回 False 取消发送
+    HookPoints.ROUTER_BEFORE_ROUTE: True,     # 返回 False 跳过本次路由
 }
 
 # 这些扩展点在无可用事件循环时，async handler 允许被跳过（避免阻塞）
@@ -60,12 +66,35 @@ _ALLOW_SKIP_ASYNC = {
 
 
 class HookRegistry:
-    """扩展点注册表：按扩展点收集 handler，按优先级触发。"""
+    """扩展点注册表：按扩展点收集 handler，按优先级触发。
+
+    性能：注册/注销低频、触发高频，采用"写时复制快照"——
+    注册变更时失效快照，触发热路径无锁读不可变 tuple，零拷贝。
+    """
 
     def __init__(self, framework=None):
         self._framework = framework
         self._hooks = {}                 # point -> list[[priority, name, handler]]
+        self._snapshots = {}             # point -> tuple((priority, name, handler))，写时复制
         self._lock = threading.Lock()
+
+    def _invalidate(self, point: str):
+        """失效指定扩展点快照（注册/注销后调用）"""
+        self._snapshots.pop(point, None)
+
+    def _snapshot(self, point: str) -> Tuple:
+        """读取扩展点处理器快照（无锁热路径；变更方负责失效重建）"""
+        snap = self._snapshots.get(point)
+        if snap is not None:
+            return snap
+        with self._lock:
+            entries = self._hooks.get(point)
+            if not entries:
+                self._snapshots[point] = ()
+                return ()
+            snap = tuple(tuple(e) for e in entries)
+            self._snapshots[point] = snap
+            return snap
 
     def register(self, point: str, name: str, handler: Callable, priority: int = 50):
         """注册一个扩展点处理器。同名（同一 name）重复注册自动覆盖（去重）。"""
@@ -80,6 +109,7 @@ class HookRegistry:
             else:
                 entries.append([priority, name, handler])
             entries.sort(key=lambda e: e[0])
+        self._invalidate(point)
 
     def unregister(self, point: str, name: str):
         """注销指定 name 的扩展点处理器。"""
@@ -87,6 +117,7 @@ class HookRegistry:
             entries = self._hooks.get(point)
             if entries:
                 self._hooks[point] = [e for e in entries if e[1] != name]
+        self._invalidate(point)
 
     def clear_plugin(self, plugin_name: str):
         """插件卸载时清除其全部扩展点（按 name 前缀 `plugin_name:` 识别）。"""
@@ -96,27 +127,39 @@ class HookRegistry:
                 kept = [e for e in entries if not e[1].startswith(prefix)]
                 if len(kept) != len(entries):
                     self._hooks[point] = kept
-
-    def _sorted(self, point: str) -> List[Tuple[int, str, Callable]]:
-        with self._lock:
-            return list(self._hooks.get(point, []))
+        # 涉及多个扩展点，简单起见全部失效
+        self._snapshots.clear()
 
     def has(self, point: str) -> bool:
         """该扩展点是否存在已注册处理器。"""
-        return bool(self._hooks.get(point))
+        return bool(self._snapshot(point))
+
+    def count(self, point: str) -> int:
+        """查询某扩展点已注册的处理器数量（调试/监控用）。"""
+        return len(self._snapshot(point))
+
+    def points(self) -> list:
+        """列出所有已注册的扩展点名称（调试/监控用）。"""
+        with self._lock:
+            return sorted(self._hooks.keys())
 
     async def trigger_async(self, point: str, *args, **kwargs):
         """
         在事件循环内触发（可安全 await async handler）。
         返回各 handler 的结果列表；调用方可用 `False in results` 判断是否短路。
+        短路扩展点（见 _SHORT_CIRCUIT）遇到首个 False 结果即提前终止，不再触发后续 handler
+        （结果列表语义不变，仍包含该 False）。
         """
+        short_circuit = point in _SHORT_CIRCUIT
         results = []
-        for _, name, handler in self._sorted(point):
+        for _, name, handler in self._snapshot(point):
             try:
                 if asyncio.iscoroutinefunction(handler):
                     results.append(await handler(*args, **kwargs))
                 else:
                     results.append(handler(*args, **kwargs))
+                if short_circuit and results[-1] is False:
+                    break
             except Exception as e:
                 logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}", exc_info=True)
         return results
@@ -129,7 +172,7 @@ class HookRegistry:
           若该扩展点不允许跳过且无可用 loop，则记告警并跳过。
         """
         loop = getattr(self._framework, 'loop', None) if self._framework else None
-        for _, name, handler in self._sorted(point):
+        for _, name, handler in self._snapshot(point):
             try:
                 if asyncio.iscoroutinefunction(handler):
                     if loop is not None and loop.is_running():
