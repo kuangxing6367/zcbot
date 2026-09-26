@@ -21,7 +21,9 @@ import itertools
 import json
 import logging
 import re
+import threading
 import time
+from collections import OrderedDict
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -103,6 +105,15 @@ def _sniff_image_mime(data: bytes) -> str:
     if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
         return 'image/webp'
     return 'image/png'
+
+
+_IMG_EXT = {'image/png': 'png', 'image/jpeg': 'jpg',
+            'image/gif': 'gif', 'image/webp': 'webp'}
+
+
+def _image_filename(mime: str) -> str:
+    """按嗅探到的 mime 定上传文件名扩展名（群/单聊上传统一用，不再硬编码 .png）"""
+    return f'image.{_IMG_EXT.get(mime, "png")}'
 
 
 def normalize_message(message):
@@ -258,6 +269,8 @@ def normalize_event(raw: dict, bot_name: str) -> Optional[dict]:
         'reply_msg_id': msg_id,
         'event_id': raw.get('id') or d.get('event_id') or '',
         'guild_id': guild_id,
+        # 附件结构化透传（content 仍是纯文本，插件可另读 attachments）
+        'attachments': attachments,
         'raw': d,
     }
     if event_t:
@@ -292,7 +305,10 @@ class QQOfficialAdapter(ProtocolAdapter):
         self._session_id = ''
         self._heartbeat_interval_ms = 41250
         self._last_msg_id = ''          # 最近入站消息 id（被动回复）
-        self._pending_reply = {}        # {(group|user): (msg_id, ts)}
+        self._pending_reply = {}        # {会话key: (msg_id, ts, kind)} kind=group/private
+        self._seen_events = OrderedDict()   # event_id 幂等去重（Resume 重放/服务重发）
+        self._boot_waiting = False
+        self._token_lock = threading.Lock()  # 双路径刷新共用（async / to_thread 同步）
         self._loop = None
         self._http = requests.Session()
 
@@ -328,22 +344,37 @@ class QQOfficialAdapter(ProtocolAdapter):
 
     # ── token / gateway ────────────────────────────────────────
 
-    async def _ensure_token(self) -> str:
-        now = time.time()
-        if self._access_token and now < self._token_expire_at - 60:
+    _TOKEN_REFRESH_MARGIN = 60   # 统一的提前刷新阈值（原 async 60s / sync 30s 不一致）
+
+    def _refresh_token_sync(self) -> str:
+        """同步刷新 access_token（线程内执行；带锁防 async/to_thread 双路径并发重复刷）"""
+        with self._token_lock:
+            now = time.time()
+            if self._access_token and now < self._token_expire_at - self._TOKEN_REFRESH_MARGIN:
+                return self._access_token     # 拿锁后复查，已被并发线程刷过
+            resp = self._http.post(_TOKEN_URL, json={
+                'appId': self.app_id, 'clientSecret': self.app_secret,
+            }, timeout=15)
+            body = resp.json() if resp.content else {}
+            token = body.get('access_token') or body.get('accessToken') or ''
+            if not token:
+                raise RuntimeError(f'获取 access_token 失败: HTTP {resp.status_code} {body}')
+            expires = int(body.get('expires_in') or body.get('expiresIn') or 7200)
+            self._access_token = token
+            self._token_expire_at = time.time() + max(60, expires)
+            logger.info('qq_official access_token 已刷新，有效期 %ss', expires)
+            return token
+
+    def _refresh_token_if_stale(self) -> str:
+        """已持有未过期 token 直接用，否则同步刷新（供 to_thread 线程内调用）"""
+        if self._access_token and time.time() < self._token_expire_at - self._TOKEN_REFRESH_MARGIN:
             return self._access_token
-        payload = {'appId': self.app_id, 'clientSecret': self.app_secret}
-        resp = await asyncio.to_thread(
-            self._http.post, _TOKEN_URL, json=payload, timeout=15)
-        data = resp.json() if resp.content else {}
-        token = data.get('access_token') or data.get('accessToken') or ''
-        if not token:
-            raise RuntimeError(f'获取 access_token 失败: HTTP {resp.status_code} {data}')
-        expires = int(data.get('expires_in') or data.get('expiresIn') or 7200)
-        self._access_token = token
-        self._token_expire_at = now + max(60, expires)
-        logger.info('qq_official access_token 已刷新，有效期 %ss', expires)
-        return token
+        return self._refresh_token_sync()
+
+    async def _ensure_token(self) -> str:
+        if self._access_token and time.time() < self._token_expire_at - self._TOKEN_REFRESH_MARGIN:
+            return self._access_token
+        return await asyncio.to_thread(self._refresh_token_sync)
 
     async def _fetch_gateway(self) -> str:
         token = await self._ensure_token()
@@ -374,14 +405,29 @@ class QQOfficialAdapter(ProtocolAdapter):
 
     def _schedule_connect(self):
         loop = getattr(self.framework, 'loop', None)
-        if loop is None or not loop.is_running():
-            try:
-                asyncio.get_event_loop().call_soon(self._schedule_connect)
-            except Exception:
-                pass
+        if loop is not None and loop.is_running():
+            if self._supervisor is None or self._supervisor.done():
+                self._supervisor = loop.create_task(self._supervise())
             return
-        if self._supervisor is None or self._supervisor.done():
-            self._supervisor = loop.create_task(self._supervise())
+        # loop 未就绪：起守护线程等就绪后线程安全地调度。旧的
+        # get_event_loop().call_soon 路径在 3.10+ 会静默失效，适配器可能永不启动
+        if self._boot_waiting:
+            return
+        self._boot_waiting = True
+
+        def _wait():
+            for _ in range(120):
+                lp = getattr(self.framework, 'loop', None)
+                if lp is not None and lp.is_running():
+                    self._boot_waiting = False
+                    lp.call_soon_threadsafe(self._schedule_connect)
+                    return
+                time.sleep(0.5)
+            self._boot_waiting = False
+            logger.error('qq_official 等待框架事件循环超时（60s），连接未启动')
+
+        threading.Thread(target=_wait, daemon=True,
+                         name='qq_official-boot-wait').start()
 
     async def _supervise(self):
         while not self._closing:
@@ -520,16 +566,28 @@ class QQOfficialAdapter(ProtocolAdapter):
             # 仅处理消息类事件
             if event_t not in (
                     'GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE',
-                    'C2C_MESSAGE_CREATE', 'MESSAGE_CREATE'):
+                    'C2C_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE',
+                    'MESSAGE_CREATE'):
                 continue
             wrapped = dict(d)
             wrapped['_t'] = event_t
             wrapped['id'] = d.get('id') or payload.get('id') or ''
-            # 被动回复缓存
+            # 幂等去重：Resume 重放 / 服务端重发时同一事件只进一次 dispatch
+            eid = wrapped['id'] or d.get('event_id') or ''
+            if eid:
+                if eid in self._seen_events:
+                    logger.debug('qq_official 重复事件已去重: %s', eid)
+                    continue
+                self._seen_events[eid] = 1
+                if len(self._seen_events) > 1024:
+                    self._seen_events.popitem(last=False)
+            # 被动回复缓存（kind 决定各自的被动窗口时长）
+            is_group = bool(d.get('group_openid') or d.get('channel_id'))
             key = d.get('group_openid') or d.get('channel_id') \
                 or (d.get('author') or {}).get('user_openid') or ''
             if key and d.get('id'):
-                self._pending_reply[key] = (d['id'], time.time())
+                self._pending_reply[key] = (d['id'], time.time(),
+                                            'group' if is_group else 'private')
                 self._last_msg_id = d['id']
             event = normalize_event(wrapped, self.bot_name)
             if event is None:
@@ -563,13 +621,14 @@ class QQOfficialAdapter(ProtocolAdapter):
 
     # ── OpenAPI 出站 ───────────────────────────────────────────
 
+    _REPLY_WINDOW = {'group': 300, 'private': 3600}   # 群 5 分钟 / 单聊 60 分钟（按各自窗口清理）
+
     def _reply_msg_id(self, group_id=None, user_id=None) -> str:
         now = time.time()
-        # 清理过期（群 5 分钟 / 单聊 60 分钟，统一按 5 分钟保守）
-        expired = [k for k, (_, ts) in self._pending_reply.items()
-                   if now - ts > 300]
-        for k in expired:
-            self._pending_reply.pop(k, None)
+        # 按会话类型各自的被动窗口清理（原实现统一 5 分钟，单聊窗口被无声缩短）
+        for key, (_, ts, kind) in list(self._pending_reply.items()):
+            if now - ts > self._REPLY_WINDOW.get(kind, 300):
+                self._pending_reply.pop(key, None)
         key = group_id or user_id or ''
         hit = self._pending_reply.get(key)
         if hit:
@@ -579,36 +638,31 @@ class QQOfficialAdapter(ProtocolAdapter):
     def _api_request(self, method: str, path: str, *,
                      json_body: dict = None, files=None, data=None,
                      timeout: int = 20) -> dict:
-        """同步 HTTP（在 to_thread 里调用）。"""
-        token = self._access_token
-        if not token or time.time() >= self._token_expire_at - 30:
-            # 同步刷新一次（to_thread 场景）
-            resp = self._http.post(_TOKEN_URL, json={
-                'appId': self.app_id, 'clientSecret': self.app_secret,
-            }, timeout=15)
-            body = resp.json() if resp.content else {}
-            token = body.get('access_token') or body.get('accessToken') or ''
-            if token:
-                self._access_token = token
-                self._token_expire_at = time.time() + int(
-                    body.get('expires_in') or body.get('expiresIn') or 7200)
-        headers = {'Authorization': f'QQBot {token}'}
+        """同步 HTTP（在 to_thread 里调用）。
+
+        非 2xx 抛 RuntimeError——调用方据此区分成败。旧实现不查状态码、
+        错误体被当正常响应返回，再叠一层 'ret' 子串判定，可把失败报成成功。
+        """
+        token = self._refresh_token_if_stale()
         url = f'{self.api_base}{path}'
+        headers = {'Authorization': f'QQBot {token}'}
         if files is not None:
-            h = {'Authorization': headers['Authorization']}
             resp = self._http.request(
-                method, url, headers=h, files=files, data=data, timeout=timeout)
+                method, url, headers=headers, files=files, data=data,
+                timeout=timeout)
         else:
+            if json_body is not None:
+                headers['Content-Type'] = 'application/json; charset=utf-8'
             resp = self._http.request(
-                method, url,
-                headers={**headers,
-                         'Content-Type': 'application/json; charset=utf-8'},
-                json=json_body, data=data, timeout=timeout)
+                method, url, headers=headers, json=json_body, data=data,
+                timeout=timeout)
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f'{method} {path} -> HTTP {resp.status_code}: {(resp.text or "")[:300]}')
         try:
             return resp.json() if resp.content else {}
         except Exception:
-            return {'_http_status': resp.status_code,
-                    '_text': (resp.text or '')[:500]}
+            return {}
 
     async def _upload_group_image(self, group_openid: str,
                                   image_data: dict) -> Optional[dict]:
@@ -622,9 +676,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 if not raw:
                     return None
                 mime = _sniff_image_mime(raw)
-                ext = {'image/png': 'png', 'image/jpeg': 'jpg',
-                       'image/gif': 'gif', 'image/webp': 'webp'}.get(mime, 'png')
-                files = {'file': (f'image.{ext}', raw, mime)}
+                files = {'file': (_image_filename(mime), raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
                 data = await asyncio.to_thread(
                     self._api_request, 'POST', path,
@@ -634,26 +686,15 @@ class QQOfficialAdapter(ProtocolAdapter):
                     self._api_request, 'POST', path,
                     json_body={'file_type': 1, 'url': file,
                                'srv_send_msg': False})
-            elif file.startswith('file://'):
-                local = file[7:]
-                raw = await asyncio.to_thread(_read_file_bytes, local)
-                if not raw:
-                    return None
-                mime = _sniff_image_mime(raw)
-                ext = {'image/png': 'png', 'image/jpeg': 'jpg',
-                       'image/gif': 'gif', 'image/webp': 'webp'}.get(mime, 'png')
-                files = {'file': (f'image.{ext}', raw, mime)}
-                form = {'file_type': '1', 'srv_send_msg': 'false'}
-                data = await asyncio.to_thread(
-                    self._api_request, 'POST', path,
-                    files=files, data=form)
             else:
-                # 本地路径
+                # 本地路径（file:// 前缀剥掉后同路径处理）
+                if file.startswith('file://'):
+                    file = file[7:]
                 raw = await asyncio.to_thread(_read_file_bytes, file)
                 if not raw:
                     return None
                 mime = _sniff_image_mime(raw)
-                files = {'file': ('image.png', raw, mime)}
+                files = {'file': (_image_filename(mime), raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
                 data = await asyncio.to_thread(
                     self._api_request, 'POST', path,
@@ -689,10 +730,14 @@ class QQOfficialAdapter(ProtocolAdapter):
         else:
             body.update({'msg_type': 0, 'content': text})
         path = f'/v2/groups/{group_openid}/messages'
-        data = await asyncio.to_thread(
-            self._api_request, 'POST', path, json_body=body)
-        return self._wrap(data, ok=bool(isinstance(data, dict) and (
-            data.get('id') or data.get('msg_id') or 'ret' not in str(data))))
+        try:
+            data = await asyncio.to_thread(
+                self._api_request, 'POST', path, json_body=body)
+        except Exception as e:
+            logger.warning('qq_official 群消息发送失败: %s', e)
+            return self._wrap({'error': str(e)}, ok=False)
+        # _api_request 只在 2xx 时返回——到此处即为成功，不再对响应体形状做猜测
+        return self._wrap(data, ok=True)
 
     async def _send_c2c(self, user_openid: str, message,
                         reply_msg_id: str = '') -> dict:
@@ -715,9 +760,13 @@ class QQOfficialAdapter(ProtocolAdapter):
         else:
             body.update({'msg_type': 0, 'content': text})
         path = f'/v2/users/{user_openid}/messages'
-        data = await asyncio.to_thread(
-            self._api_request, 'POST', path, json_body=body)
-        return self._wrap(data, ok=bool(isinstance(data, dict) and data.get('id')))
+        try:
+            data = await asyncio.to_thread(
+                self._api_request, 'POST', path, json_body=body)
+        except Exception as e:
+            logger.warning('qq_official 单聊消息发送失败: %s', e)
+            return self._wrap({'error': str(e)}, ok=False)
+        return self._wrap(data, ok=True)
 
     async def _upload_c2c_image(self, user_openid: str,
                                 image_data: dict) -> Optional[dict]:
@@ -730,7 +779,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 if not raw:
                     return None
                 mime = _sniff_image_mime(raw)
-                files = {'file': ('image.png', raw, mime)}
+                files = {'file': (_image_filename(mime), raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
                 data = await asyncio.to_thread(
                     self._api_request, 'POST', path,
@@ -747,7 +796,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 if not raw:
                     return None
                 mime = _sniff_image_mime(raw)
-                files = {'file': ('image.png', raw, mime)}
+                files = {'file': (_image_filename(mime), raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
                 data = await asyncio.to_thread(
                     self._api_request, 'POST', path,
@@ -778,8 +827,12 @@ class QQOfficialAdapter(ProtocolAdapter):
             message = normalize_message(message)
             group_id = params.get('group_id')
             user_id = params.get('user_id')
-            reply = params.get('reply_msg_id') or params.get('msg_id') \
-                or self._reply_msg_id(group_id, user_id)
+            if params.get('active'):
+                # 显式 active=True：不挂 msg_id，按主动消息发送（默认仍自动补被动 id）
+                reply = ''
+            else:
+                reply = params.get('reply_msg_id') or params.get('msg_id') \
+                    or self._reply_msg_id(group_id, user_id)
             if action == 'send_group_msg':
                 user_id = None
             elif action == 'send_private_msg':
@@ -855,9 +908,17 @@ def register(ctx):
 
 def unregister():
     global _adapter_instance
-    if _adapter_instance:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(_adapter_instance.stop())
-        _adapter_instance = None
+    inst, _adapter_instance = _adapter_instance, None
+    if inst is None:
+        return
+    loop = getattr(inst.framework, 'loop', None)
+    if loop is not None and loop.is_running():
+        loop.call_soon_threadsafe(loop.create_task, inst.stop())
+    else:
+        # loop 不可用（卸载时序早于循环/已停）：同步尽力收尾，防连接与线程残留
+        inst._closing = True
+        inst._connected = False
+        try:
+            inst._http.close()
+        except Exception:
+            pass
