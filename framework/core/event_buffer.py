@@ -37,25 +37,32 @@ class EventBuffer:
         self.l3_max_bytes = int(buf_cfg.get('l3_max_bytes', 4 * 1024 * 1024))
         self.full_action = buf_cfg.get('full_action', 'warn_drop')
 
-        self._l1 = asyncio.Queue(maxsize=self.l1_max_items)   # (event, done)
+        self._l1 = asyncio.Queue(maxsize=self.l1_max_items)   # (event, done, size)
         self._l1_bytes = 0
         self._l3 = asyncio.Queue()                            # 无条数上限，靠字节计数兜底
         self._l3_bytes = 0
         self._sqlite_pending = []                             # sqlite 批量取回、待 worker 处理
+        self._sqlite_rows = 0                                 # sqlite 表内待消化行数（免热路径查库）
         self._dropped = 0
         self._overflow_to_sqlite = 0
         self._sqlite_conn = None
         self._sqlite_lock = threading.Lock()
         if self.sqlite_enabled:
             self._init_sqlite()
+            self._sqlite_rows = self._count_rows()   # 承接上次进程遗留的持久化事件
 
     # ---------- 大小统计 ----------
     @staticmethod
     def _size_of(event) -> int:
+        """事件字节估算（入队时算一次，随条目携带，出队复用——不再每事件两次全量序列化）。
+
+        字节记账是软水位：±50% 误差不影响 512KB/4MB 预算的正确性，但要便宜且能抓住
+        重尾（base64 图片等超大字段）。repr 形状无关、比 json.dumps 快数倍。
+        """
         try:
-            return len(json.dumps(event, ensure_ascii=False, default=str).encode('utf-8'))
+            return len(repr(event)) + 64
         except Exception:
-            return 256  # 无法序列化时按保守默认估算
+            return 4096  # 无法估算时按保守值记账
 
     # ---------- sqlite 层 ----------
     def _init_sqlite(self):
@@ -82,13 +89,17 @@ class EventBuffer:
                     "INSERT INTO event_buffer (payload, created_at) VALUES (?, ?)",
                     (payload, time.time()))
                 self._sqlite_conn.commit()
+            self._sqlite_rows += 1
             return True
         except Exception as e:
             logger.warning(f"sqlite 缓冲写入失败: {e}")
             return False
 
     def _pop_sqlite_batch(self, n: int):
-        """线程内批量取出（取出即删除，语义同内存队列出队）"""
+        """线程内批量取出（取出即删除，语义同内存队列出队）。
+
+        返回 (event, done, size) 三元组；size 用持久化 payload 长度近似（仅水位记账用）。
+        """
         try:
             with self._sqlite_lock:
                 cur = self._sqlite_conn.execute(
@@ -100,20 +111,32 @@ class EventBuffer:
                 self._sqlite_conn.executemany(
                     "DELETE FROM event_buffer WHERE id = ?", [(i,) for i in ids])
                 self._sqlite_conn.commit()
+            self._sqlite_rows = max(0, self._sqlite_rows - len(rows))
             items = []
             for _, payload in rows:
                 try:
                     data = json.loads(payload)
                     if isinstance(data, list) and len(data) == 2:
-                        items.append((data[0], data[1]))  # (event, done=None)
+                        items.append((data[0], data[1], len(payload) + 64))
                     else:
-                        items.append((data, None))
+                        items.append((data, None, len(payload) + 64))
                 except Exception:
                     logger.warning("sqlite 缓冲中存在损坏事件，已跳过")
             return items
         except Exception as e:
             logger.warning(f"sqlite 缓冲读取失败: {e}")
             return []
+
+    def _count_rows(self) -> int:
+        """启动时清点 sqlite 表内遗留行数（仅初始化调用一次，非热路径）"""
+        if not self.sqlite_enabled or self._sqlite_conn is None:
+            return 0
+        try:
+            with self._sqlite_lock:
+                cur = self._sqlite_conn.execute("SELECT COUNT(*) FROM event_buffer")
+                return int(cur.fetchone()[0])
+        except Exception:
+            return 0
 
     def sqlite_count(self) -> int:
         if not self.sqlite_enabled or self._sqlite_conn is None:
@@ -133,17 +156,22 @@ class EventBuffer:
         """
         size = self._size_of(event)
         if done is not None:
-            await self._l1.put((event, done))
+            await self._l1.put((event, done, size))
             self._l1_bytes += size
             return True
-        # L1 内存主缓冲（字节 + 条数双限）
-        if self._l1_bytes + size <= self.l1_max_bytes:
-            try:
-                self._l1.put_nowait((event, None))
-                self._l1_bytes += size
-                return True
-            except asyncio.QueueFull:
-                pass
+        # L1 内存主缓冲（字节 + 条数双限）。突发注入（风暴 bench / 批量回调）不逐事件
+        # 让出事件循环，L1 一满就会把本可留在内存的事件全压进 sqlite 磁盘层——
+        # 所以满时先 sleep(0) 让消费者排空一次再重试，仍满才真正溢出
+        for attempt in (0, 1):
+            if self._l1_bytes + size <= self.l1_max_bytes:
+                try:
+                    self._l1.put_nowait((event, None, size))
+                    self._l1_bytes += size
+                    return True
+                except asyncio.QueueFull:
+                    pass
+            if attempt == 0:
+                await asyncio.sleep(0)
         # L1 满 → sqlite 持久化溢出层（短超时；写不过来转 L3 内存兜底）
         if self.sqlite_enabled:
             try:
@@ -160,7 +188,7 @@ class EventBuffer:
                 logger.warning(f"sqlite 缓冲写入异常: {e}")
         # L3 内存兜底（4MB）
         if self._l3_bytes + size <= self.l3_max_bytes:
-            self._l3.put_nowait((event, None))
+            self._l3.put_nowait((event, None, size))
             self._l3_bytes += size
             return True
         # 全满 → 告警 + 丢弃（保老弃新）
@@ -169,39 +197,40 @@ class EventBuffer:
             logger.error(
                 f"事件缓冲全满告警：L1={self._l1_bytes}/{self.l1_max_bytes}B "
                 f"L3={self._l3_bytes}/{self.l3_max_bytes}B "
-                f"sqlite={self.sqlite_count()}条，已累计丢弃 {self._dropped} 条事件")
+                f"sqlite={self._sqlite_rows}条，已累计丢弃 {self._dropped} 条事件")
         return False
 
     # ---------- 消费 ----------
     async def get_async(self):
         """取一条待处理事件，返回 (event, done, source)。
 
-        优先级 L1 → L3 → sqlite（批量回取）；全空时阻塞等 L1（停机时由 worker cancel 中断）。
+        优先级 L1 → L3 → sqlite（批量回取，仅当表内有已知积压时才发起线程查询，
+        空转不查库）；全空时阻塞等 L1（停机时由 worker cancel 中断）。
         """
         try:
-            item = self._l1.get_nowait()
-            self._l1_bytes -= self._size_of(item[0])
-            return item[0], item[1], 'l1'
+            event, done, size = self._l1.get_nowait()
+            self._l1_bytes -= size
+            return event, done, 'l1'
         except asyncio.QueueEmpty:
             pass
         try:
-            item = self._l3.get_nowait()
-            self._l3_bytes -= self._size_of(item[0])
-            return item[0], item[1], 'l3'
+            event, done, size = self._l3.get_nowait()
+            self._l3_bytes -= size
+            return event, done, 'l3'
         except asyncio.QueueEmpty:
             pass
         if self._sqlite_pending:
             item = self._sqlite_pending.pop(0)
             return item[0], item[1], 'sqlite'
-        if self.sqlite_enabled:
+        if self.sqlite_enabled and self._sqlite_rows > 0:
             batch = await asyncio.to_thread(self._pop_sqlite_batch, self.sqlite_batch)
             if batch:
                 self._sqlite_pending = batch
                 item = self._sqlite_pending.pop(0)
                 return item[0], item[1], 'sqlite'
-        item = await self._l1.get()
-        self._l1_bytes -= self._size_of(item[0])
-        return item[0], item[1], 'l1'
+        event, done, size = await self._l1.get()
+        self._l1_bytes -= size
+        return event, done, 'l1'
 
     def task_done(self, source: str):
         """worker 处理完一条后回执（join_memory 依赖 L1/L3 的计数）"""
@@ -214,7 +243,7 @@ class EventBuffer:
     # ---------- 停机 / 统计 ----------
     def empty_all(self) -> bool:
         return (self._l1.empty() and self._l3.empty()
-                and not self._sqlite_pending and self.sqlite_count() == 0)
+                and not self._sqlite_pending and self._sqlite_rows == 0)
 
     async def wait_drained(self, timeout: float) -> bool:
         """限时等待三层全部清空（供停机排空；返回是否排空完成）"""
@@ -224,7 +253,7 @@ class EventBuffer:
         except asyncio.TimeoutError:
             return False
         deadline = time.monotonic() + timeout
-        while self.sqlite_count() > 0 or self._sqlite_pending:
+        while self._sqlite_rows > 0 or self._sqlite_pending:
             if time.monotonic() >= deadline:
                 return False
             await asyncio.sleep(0.05)
@@ -247,7 +276,7 @@ class EventBuffer:
             'l3_items': self._l3.qsize(),
             'l3_bytes': self._l3_bytes,
             'l3_max_bytes': self.l3_max_bytes,
-            'sqlite_pending': self.sqlite_count(),
+            'sqlite_pending': self._sqlite_rows + len(self._sqlite_pending),
             'overflow_to_sqlite': self._overflow_to_sqlite,
             'dropped': self._dropped,
         }
