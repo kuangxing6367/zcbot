@@ -144,9 +144,11 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
         插件应在此目录下读写自己的配置文件、缓存数据等，而非 plugins/ 代码目录
         """
         import os
+        # 官方插件的 ctx 名带 "core:" 前缀，冒号在 Windows 路径非法，替换为下划线
+        safe_name = self._plugin_name.replace(':', '_')
         dat_dir = os.path.join(
             self._framework.plugin_loader.plugins_dat_dir,
-            self._plugin_name
+            safe_name
         )
         if not os.path.isdir(dat_dir):
             os.makedirs(dat_dir, exist_ok=True)
