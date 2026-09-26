@@ -83,7 +83,10 @@ async def amain():
             pass
 
     try:
-        await framework.start()
+        # 异步启动模式：config.yaml → startup.wait_ready: false 时不等待插件加载完成，
+        # 核心/用户插件在后台异步加载，启动立即返回（可后续 await framework.wait_ready()）
+        _startup_cfg = framework.config.get('startup', {}) or {}
+        await framework.start(wait_ready=_startup_cfg.get('wait_ready', True))
         # 等待停止信号 / Ctrl+C
         await stop_event.wait()
     finally:
