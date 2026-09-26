@@ -31,3 +31,9 @@ jobs:
         run: python tests/test_perm.py
       - name: Startup + dispatch smoke
         run: python tests/test_smoke.py
+      # pytest 用例与脚本式回归并存：显式列文件（其余 test_*.py 是模块级 sys.exit 的脚本，
+      # 被 pytest 收集会 INTERNALERROR），test_smoke.py 本身两种方式兼容
+      - name: Pytest suite (smoke + html_assembler)
+        run: |
+          pip install pytest
+          python -m pytest tests/test_smoke.py tests/test_html_assembler.py -q
