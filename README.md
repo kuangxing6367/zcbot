@@ -19,19 +19,19 @@
 
 ## 一、它是什么，不是什么
 
-### 一句话定位
+### 一句话概括
 
 ZCBOT 是一个**事件驱动的 IM 平台**：极小内核（加载、路由、公共服务、扩展点契约）+ 层层叠加的扩展。
 所有具体功能（接入平台、开网页后台、管会话、跑定时、做权限）都是可插拔的扩展，通过内核的**扩展点（hook）**
 挂到几乎每一个运行环节。
 
-### 它适合谁（三类目标用户）
+### 三种典型形态
 
-| 你是…… | 你能用 ZCBOT 做什么 | 从哪里开始 |
-| ------ | ------------------- | ---------- |
-| **① 想开箱搭一个机器人、不太会编程的使用者** | 默认扩展就是 OneBot，启动 + 连一个 NapCat/Lagrange 就能用；后台点点鼠标装插件、改配置、管权限 | [快速开始](#五快速开始约-5-分钟) |
-| **② 写业务功能的 Python 开发者** | 依赖注入、权限引擎、双方言数据库、多轮会话、定时任务、Web 扩展、**扩展点切面**都是现成的，只专注写 `register(ctx)` 里的业务 | [编写插件](docs/guide/writing-plugins.md) |
-| **③ 需要"事件→扩展→响应"可扩展 IM 平台的开发者** | 接非 IM 事件源：HTTP Webhook（内置 `http_inject`）、纯定时（`scheduler`）、或自写 `ProtocolAdapter` 接 Telegram/Discord/MQTT 等 | [协议适配器](docs/api/advanced/protocol_adapter.md)、[扩展点](docs/api/advanced/hooks.md) |
+| 形态 | 说明 | 入口 |
+| ---- | ---- | ---- |
+| **开箱即用的 QQ 机器人** | 默认接入端为 OneBot 11，启动后连一个 NapCat / Lagrange 即可收发消息；后台点选装插件、改配置、管权限 | [快速开始](#五快速开始约-5-分钟) |
+| **Python 插件开发平台** | 依赖注入、权限引擎、双方言数据库、多轮会话、定时任务、Web 扩展、**扩展点切面**均为内置，业务逻辑只写在 `register(ctx)` 里 | [编写插件](docs/guide/writing-plugins.md) |
+| **事件驱动的自动化宿主** | 不接 IM 也完整可用：HTTP Webhook（内置 `http_inject`）、纯定时（`scheduler`），或自写 `ProtocolAdapter` 接 Telegram / Discord / MQTT 等事件源 | [协议适配器](docs/api/advanced/protocol_adapter.md)、[扩展点](docs/api/advanced/hooks.md) |
 
 ### 它**不**是什么（非目标，避免选错工具）
 
@@ -60,7 +60,7 @@ ZCBOT 的能力分两层：**内核只负责"运转"**，其余都是"挂在运�
 | 层 | 内容 | 属于 |
 | ---- | ---- | ---- |
 | **内核（framework/）** | 加载器 · 事件总线 · 消息路由 · 服务注册表(DI) · **扩展点注册表** · ctx · 权限引擎 · 数据库抽象 · 运行时上下文 | 平台内核（不可关） |
-| **公共服务扩展（core_plugins/，可开关）** | Web 后台 / 接入端 / 会话 / 定时 / HTTP 注入 / 独立 API | 官方扩展 |
+| **公共服务扩展（core_plugins/，可开关）** | Web 后台 / 接入端 / 会话 / 定时 / HTTP 注入 / 独立 API / 图片渲染 / HTML 装配 | 官方扩展 |
 | **业务扩展（plugins/）** | 你的命令 / 定时任务 / 仪表盘 / WebUI / 切面 | 用户扩展 |
 
 五类公共能力由内核统一提供，扩展按需取用：
@@ -282,13 +282,30 @@ ctx.command("/ban", handle_ban, require_perm="myplugin.ban")   # 声明式，框
 
 ## 八、扩展从哪来
 
+### 官方内置扩展（core_plugins/，`core_plugins.yaml` 开关）
+
+随项目内置的基础能力，启动时自动扫描 `core_plugins/` 并在 `core_plugins.yaml` 补出配置块，每个可独立开关：
+
+| 扩展 | 作用 |
+| ---- | ---- |
+| **onebot_adapter** | OneBot 11 反向 WS 接入端（协议端连入） |
+| **ws_client** | 正向 WS 客户端接入端（主动连协议端） |
+| **qq_official** | QQ 官方机器人接入（默认关） |
+| **telegram** / **discord** | Telegram / Discord Bot 接入（默认关） |
+| **webui** | Web 管理后台（端口/仪表盘/插件市场） |
+| **session** | 多轮会话：`ctx.wait_for()` / `ctx.create_session()` |
+| **scheduler** | 定时任务调度（APScheduler cron） |
+| **http_api** | 独立对外 HTTP API（默认关） |
+| **http_inject** | HTTP 事件注入端（默认关） |
+| **image_renderer** | 通用图片渲染引擎（卡片/文字图，Rust 原生加速、缺失回退 PIL） |
+| **html_assembler** | 单文件 HTML 装配引擎：占位符替换 + 图片 base64 内嵌，输出浏览器直接打开的单文件 HTML（纯标准库，`/html_asm` 自测） |
+
 ### 随项目内置的用户扩展（plugins/）
 
 | 扩展 | 作用 |
 | ---- | ---- |
 | **echo** | `/echo 内容` 原样返回，链路自测 |
 | **help** | `/help` 生成图片帮助菜单 |
-| **image_renderer** | 通用图片渲染引擎（卡片、文字图，Rust 原生加速、缺失回退 PIL） |
 | **runtime_status** | `/status` `/info` 运行状态（含图片状态卡） |
 | **message_guard** | 消息防护：唤醒词/白名单/限流/敏感词 |
 | **plugin_depgraph** | 插件依赖关系扫描（`/依赖`、`/依赖图`） |
