@@ -68,6 +68,7 @@ packages/
 # ============================================================
 config.yaml
 config.yaml.bak.*
+core_plugins.yaml
 .env
 cookies.txt
 *.db
