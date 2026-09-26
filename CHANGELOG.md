@@ -26,6 +26,34 @@
 
 ---
 
+## v1.7.1（2026-09-26）
+
+> 主题：**事件缓冲热路径修复（净开销 ~173μs → 6.2μs/事件，端到端 no-op 5.6k → 82k msg/s）+ core_plugins.yaml 退出版本跟踪**。
+
+### 修复
+- **事件缓冲热路径（v1.7.0 引入的性能回归，`event_buffer.py`）**：
+  - 字节记账每事件两次全量 `json.dumps`（入队、出队各一次，~17μs）→ 改为入队时以
+    `repr` 估算一次（~4μs，形状无关且能抓住 base64 大图等重尾）、随条目携带、出队复用；
+  - `get_async` 每次空转都无条件发起一次 `asyncio.to_thread` sqlite 空查询
+    （wait=True 乒乓节奏下每事件白付 ~150μs）→ 维护 `_sqlite_rows` 内存计数，
+    仅表内有已知积压才发起批量回取；停机排空 / 统计不再在事件循环里做阻塞 COUNT；
+  - 突发注入（风暴 bench / 批量回调不逐事件 yield）下 L1 一满即把本可留内存的事件
+    全压进 sqlite 磁盘层（每条 ~200μs 磁盘往返）→ 溢出前先 `sleep(0)` 让消费者
+    排空一次再重试，仍满才落盘；wait=True 的阻塞背压语义不变；
+  - 启动时清点 sqlite 表内遗留行数，进程重启后持久化事件照常承接。
+- **`core_plugins.yaml` 退出版本跟踪**：该文件是启动扫描 / WebUI 开关会自动回写的
+  运行时状态，入库导致 fresh clone 继承开发机的「全关」状态（11 个 `enabled: false`），
+  与文档承诺的默认开关（onebot_adapter / webui / session / scheduler / html_assembler
+  开，其余关）矛盾，cloner 无所适从。改为 gitignore（与 config.yaml 同策略），首次
+  启动由配置中心按 schema 默认值自动生成；本机开发配置不受影响。
+
+### 测试
+- 新增 `tests/test_event_buffer.py` 7 例并纳入 CI pytest 步骤：L1 往返与记账清零、
+  wait=True done 契约、溢出承接与排空、重启遗留承接、无积压时不触 sqlite、全满丢弃、
+  重尾事件记账。
+
+---
+
 ## v1.7.0（2026-09-26）
 
 > 主题：**事件三层缓冲（防丢失/防内存暴涨）+ 新官方插件 html_assembler + 全库文档去人群定位重写**。
