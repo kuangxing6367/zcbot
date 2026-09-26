@@ -13,6 +13,7 @@
 
 - 项目地址：https://github.com/kuangxing6367/zcbot
 - 官方插件仓库：https://github.com/kuangxing6367/zcbot_plugins
+- **LLM / Agent 文档：[LLM.md](LLM.md)** —— 单文件项目上下文（架构·事件流·插件契约·API·高频坑），供 AI 编码助手与 `llm_plugin_gen` 直接引用
 - 反馈交流：群组 **1060129201**
 
 ---
