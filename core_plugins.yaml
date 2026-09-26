@@ -55,3 +55,11 @@ core_plugins:
     reconnect_interval: 5
     api_base: https://discord.com/api/v10
     gateway_url: wss://gateway.discord.gg/
+  html_assembler:
+    enabled: true
+    max_template_bytes: 4194304
+    max_image_bytes: 4194304
+    max_output_bytes: 16777216
+    max_images: 64
+    escape_html: true
+    on_missing: keep
