@@ -37,7 +37,8 @@ def register(ctx):
         try:
             return jsonify({'code': 0, 'data': perm_mod.list_groups(db)})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_list_groups 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/groups', methods=['POST'])
     @require_auth
@@ -55,7 +56,8 @@ def register(ctx):
         except ValueError as e:
             return jsonify({'code': 400, 'msg': str(e)}), 400
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_create_group 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/groups/<name>', methods=['PUT'])
     @require_auth
@@ -73,7 +75,8 @@ def register(ctx):
         except ValueError as e:
             return jsonify({'code': 400, 'msg': str(e)}), 400
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_update_group 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/groups/<name>', methods=['DELETE'])
     @require_auth
@@ -82,7 +85,8 @@ def register(ctx):
             perm_mod.delete_group(db, name, operator=_perm_operator())
             return jsonify({'code': 0, 'msg': '权限组已删除'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_delete_group 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/groups/<name>/nodes', methods=['GET'])
     @require_auth
@@ -93,7 +97,8 @@ def register(ctx):
                 "FROM perm_group_nodes WHERE group_name = %s ORDER BY id", (name,))
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_group_nodes 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/groups/<name>/nodes', methods=['POST'])
     @require_auth
@@ -109,7 +114,8 @@ def register(ctx):
         except ValueError as e:
             return jsonify({'code': 400, 'msg': str(e)}), 400
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_set_group_node 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/groups/<name>/nodes', methods=['DELETE'])
     @require_auth
@@ -122,7 +128,8 @@ def register(ctx):
                 operator=_perm_operator())
             return jsonify({'code': 0, 'msg': '节点已删除'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_unset_group_node 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/users/<int:user_id>', methods=['GET'])
     @require_auth
@@ -143,7 +150,8 @@ def register(ctx):
                          'snapshot': snapshot},
             })
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_user_detail 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/users/<int:user_id>/nodes', methods=['POST'])
     @require_auth
@@ -159,7 +167,8 @@ def register(ctx):
         except ValueError as e:
             return jsonify({'code': 400, 'msg': str(e)}), 400
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_set_user_node 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/users/<int:user_id>/nodes', methods=['DELETE'])
     @require_auth
@@ -172,7 +181,8 @@ def register(ctx):
                 operator=_perm_operator())
             return jsonify({'code': 0, 'msg': '节点已删除'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_unset_user_node 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/users/<int:user_id>/groups', methods=['POST'])
     @require_auth
@@ -185,7 +195,8 @@ def register(ctx):
                 expire_at=data.get('expire_at'), operator=_perm_operator())
             return jsonify({'code': 0, 'msg': '已加入权限组'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_add_user_group 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/users/<int:user_id>/groups', methods=['DELETE'])
     @require_auth
@@ -198,7 +209,8 @@ def register(ctx):
                 operator=_perm_operator())
             return jsonify({'code': 0, 'msg': '已移出权限组'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_remove_user_group 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/users/<int:user_id>/track', methods=['POST'])
     @require_auth
@@ -215,7 +227,8 @@ def register(ctx):
         except ValueError as e:
             return jsonify({'code': 400, 'msg': str(e)}), 400
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_track_step 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/tracks', methods=['GET'])
     @require_auth
@@ -223,7 +236,8 @@ def register(ctx):
         try:
             return jsonify({'code': 0, 'data': perm_mod.list_tracks(db)})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_list_tracks 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/tracks', methods=['POST'])
     @require_auth
@@ -238,7 +252,8 @@ def register(ctx):
         except ValueError as e:
             return jsonify({'code': 400, 'msg': str(e)}), 400
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_save_track 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/tracks/<name>', methods=['DELETE'])
     @require_auth
@@ -247,7 +262,8 @@ def register(ctx):
             perm_mod.delete_track(db, name, operator=_perm_operator())
             return jsonify({'code': 0, 'msg': '轨道已删除'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_delete_track 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/check', methods=['POST'])
     @require_auth
@@ -274,7 +290,8 @@ def register(ctx):
                 },
             })
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_check 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/audit', methods=['GET'])
     @require_auth
@@ -288,7 +305,8 @@ def register(ctx):
                 limit=min(limit, 500))
             return jsonify({'code': 0, 'data': data})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_audit_logs 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/perm/cleanup', methods=['POST'])
     @require_auth
@@ -298,4 +316,5 @@ def register(ctx):
             n = perm_mod.cleanup_expired(db)
             return jsonify({'code': 0, 'msg': f'已清理 {n} 条过期节点', 'data': {'removed': n}})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"perm_cleanup 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500

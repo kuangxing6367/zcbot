@@ -258,6 +258,10 @@ def test_startup_and_dispatch_smoke():
         fw._get_plugins_dir())
 
     # 核心插件加载路径：全部禁用时应安静扫过目录（真跑 _load_core_plugins）
+    # 注意：仓库根 core_plugins.yaml 的 autoload 会覆盖测试配置的 core_plugins 段，
+    # 必须先显式重置为全 false，否则插件会被真实注册并拉起 waitress/scheduler 等线程。
+    for _name in list(fw.config.get('core_plugins', {})):
+        fw.config['core_plugins'][_name] = False
     try:
         fw._load_core_plugins()
         chk("_load_core_plugins 全禁用不抛异常", True)
@@ -312,6 +316,13 @@ def test_startup_and_dispatch_smoke():
             repr(echo.sent))
     except Exception as e:
         chk("dispatch_event + reply_text 不抛异常", False, repr(e))
+    finally:
+        # 不关停框架会遗留 waitress/socketserver 非 daemon 线程，
+        # pytest 全部通过后进程也拒不退出（CI 上被拖到超时）。
+        try:
+            asyncio.run(fw.stop())
+        except Exception:
+            pass
 
 
 def test_adapter_for_source_routing():
@@ -496,12 +507,18 @@ def test_qq_official_msg_seq_and_async_read():
     finally:
         os.unlink(img_path)
 
-    # 缺文件 → 不发请求、返回 None
+    # 缺文件 → 不发请求、抛 FileNotFoundError（不再静默返回 None）
     api_calls.clear()
-    result = asyncio.run(adapter._upload_group_image(
-        'grp_openid', {'file': img_path + '.gone'}))
-    chk("缺文件上传返回 None 且不调 API",
-        result is None and api_calls == [], f"{result!r} {api_calls!r}")
+    try:
+        asyncio.run(adapter._upload_group_image(
+            'grp_openid', {'file': img_path + '.gone'}))
+        chk("缺文件上传抛 FileNotFoundError 且不调 API", False, "未抛异常")
+    except FileNotFoundError:
+        chk("缺文件上传抛 FileNotFoundError 且不调 API",
+            api_calls == [], f"{api_calls!r}")
+    except Exception as e:
+        chk("缺文件上传抛 FileNotFoundError 且不调 API",
+            False, f"抛了 {type(e).__name__}: {e}")
 
 
 def test_http_api_group_admin_behavior():
@@ -651,6 +668,83 @@ def test_terminal_ban_kick_result():
             repr(api.calls))
     except Exception as e:
         chk("终端 ban/kick 行为", False, repr(e))
+
+
+def test_qq_official_upload_failure_propagates():
+    """图片上传失败必须沿调用链传播，_send_group/_send_c2c 感知并返回 failed，
+    不再降级为 'msg_type:0' 伪装成功。"""
+    import core_plugins.qq_official.main as m
+    from core_plugins.qq_official.main import QQOfficialAdapter
+
+    calls = []
+
+    def _fake_api(method, path, **kw):
+        calls.append((method, path, kw.get('json_body')))
+        return {'file_info': 'FILE_INFO_FAKE'}
+
+    def _make_adapter(upload_err=None):
+        adapter = object.__new__(QQOfficialAdapter)
+        adapter._api_request = _fake_api
+        adapter.bot_name = 'qq_official'
+        if upload_err is not None:
+            async def _boom(*a, **kw):
+                raise upload_err
+            adapter._upload_group_image = _boom
+            adapter._upload_c2c_image = _boom
+        return adapter
+
+    def _msg(img_data):
+        # 段式消息：text + image
+        msg = [{'type': 'text', 'data': {'text': 'hi'}}]
+        if img_data is not None:
+            msg.append({'type': 'image', 'data': img_data})
+        return msg
+
+    # 1) 上传失败 → _send_group 返回 failed，不降级发纯文本
+    calls.clear()
+    adapter = _make_adapter(RuntimeError('test upload boom'))
+    r = asyncio.run(adapter._send_group('grp_openid', _msg({'file': 'x.png'})))
+    chk("群上传失败返回 failed", r.get('status') == 'failed', repr(r))
+    chk("群上传失败不带 msg_type 0 降级伪装",
+        not (r.get('status') == 'ok' and
+             r.get('data', {}).get('content') == 'hi'),
+        repr(r))
+    chk("群上传失败不调消息 API",
+        calls == [], repr(calls))
+
+    # 2) 上传成功 → 正常发 msg_type 7
+    calls.clear()
+    adapter = object.__new__(QQOfficialAdapter)
+    adapter._api_request = _fake_api
+
+    async def _ok_upload(group, img):
+        return {'file_info': 'FILE_INFO_FAKE'}
+    adapter._upload_group_image = _ok_upload
+    r = asyncio.run(adapter._send_group('grp_openid', _msg({'file': 'x.png'})))
+    chk("群上传成功返回 ok",
+        r.get('status') == 'ok', repr(r))
+    sent = calls[0][2] if calls else None
+    chk("群上传成功带 media 与 msg_type 7",
+        bool(sent) and sent.get('msg_type') == 7
+        and sent.get('media') == {'file_info': 'FILE_INFO_FAKE'}
+        and sent.get('content') == 'hi', repr(sent))
+
+    # 3) 单聊上传失败 → _send_c2c 返回 failed
+    calls.clear()
+    adapter = _make_adapter(RuntimeError('c2c boom'))
+    r = asyncio.run(adapter._send_c2c('user_openid', _msg({'file': 'x.png'})))
+    chk("单聊上传失败返回 failed", r.get('status') == 'failed', repr(r))
+    chk("单聊上传失败不调消息 API",
+        calls == [], repr(calls))
+
+    # 4) base64 解码失败（脏数据）→ 抛 ValueError 被发送层捕获
+    calls.clear()
+    adapter = object.__new__(QQOfficialAdapter)
+    adapter._api_request = _fake_api
+    r = asyncio.run(adapter._send_group(
+        'grp_openid', _msg({'file': 'data:image/png;base64,@@@not-base64@@@'})))
+    chk("base64 脏数据上传失败返回 failed 而非伪装成功",
+        r.get('status') == 'failed' and 'base64' in r.get('msg', ''), repr(r))
 
 
 if __name__ == '__main__':

@@ -49,7 +49,7 @@ def register(ctx):
             )
         except Exception as e:
             logger.error(f"登录查询失败: {e}")
-            return jsonify({'code': 500, 'msg': f'数据库错误: {e}'}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
         if not row:
             _record_login_failure(client_ip)
@@ -57,9 +57,10 @@ def register(ctx):
             return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
 
         if not row['is_active']:
+            # 与「用户不存在/密码错误」返回一致文案，防止用户名枚举
             _record_login_failure(client_ip)
             audit_log(row['id'], username, 'login', result='failure', error_message='账号已禁用')
-            return jsonify({'code': 403, 'msg': '账号已禁用'}), 403
+            return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
 
         # 验证密码
         try:

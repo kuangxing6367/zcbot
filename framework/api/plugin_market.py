@@ -113,7 +113,7 @@ def register(ctx):
             return jsonify({'code': 500, 'msg': 'GitHub API 请求超时'}), 500
         except Exception as e:
             logger.error(f"检查更新失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     def _version_gt(a, b):
         """语义化版本比较：a > b 返回 True（无法解析时按字符串比较）"""
@@ -174,9 +174,9 @@ def register(ctx):
             logger.warning(f"写回插件 github 元信息失败 {plugin_name}: {e}")
 
     @app.route('/api/plugins/<plugin_name>/update', methods=['POST'])
-    @require_auth
+    @require_super
     def update_plugin_from_github(plugin_name):
-        """从 GitHub 更新插件代码"""
+        """从 GitHub 更新插件代码（仅超级管理员）"""
         admin = request.admin
 
         if not plugin_name.replace('_', '').replace('-', '').isalnum():
@@ -241,7 +241,7 @@ def register(ctx):
             logger.error(f"GitHub 更新插件失败: {e}", exc_info=True)
             audit_log(admin['id'], admin['username'], 'update_plugin_github',
                       'plugin', plugin_name, None, 'failure', str(e))
-            return jsonify({'code': 500, 'msg': f'更新失败: {e}'}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 插件市场（Registry JSON）----
 
@@ -350,9 +350,9 @@ def register(ctx):
         return jsonify({'code': 0, 'msg': f'已保存 {len(cleaned)} 个自定义插件源'})
 
     @app.route('/api/plugins/market/install', methods=['POST'])
-    @require_auth
+    @require_super
     def plugin_market_install():
-        """从市场安装插件（下载 ZIP 到插件目录并加载）"""
+        """从市场安装插件（下载 ZIP 到插件目录并加载，仅超级管理员）"""
         admin = request.admin
         data = request.get_json(silent=True) or {}
         plugin_name = str(data.get('name') or '').strip()
@@ -401,5 +401,5 @@ def register(ctx):
             return jsonify({'code': 500, 'msg': '代码已下载但加载失败，请检查 main.py'}), 500
         except Exception as e:
             logger.error(f"市场安装插件失败: {e}", exc_info=True)
-            return jsonify({'code': 500, 'msg': f'安装失败: {e}'}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 

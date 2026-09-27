@@ -35,7 +35,8 @@ def register(ctx):
             rows = db.query("SELECT config_key, config_value, description, updated_by FROM system_config")
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_config 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/config/<key>', methods=['PUT'])
     @require_super
@@ -56,7 +57,8 @@ def register(ctx):
             audit_log(admin['id'], admin['username'], 'update_config', 'config', key, {'value': value})
             return jsonify({'code': 0, 'msg': '配置已更新'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"update_config 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 接入端连接设置（协议中立，由适配器 get_connection_info 自描述）----
 
@@ -228,7 +230,7 @@ def register(ctx):
             }})
         except Exception as e:
             logger.error(f"获取运行状态失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 系统配置（config.yaml 分组读写）----
 
@@ -246,7 +248,8 @@ def register(ctx):
                 doc = yaml.safe_load(f) or {}
             return jsonify({'code': 0, 'data': doc})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': f'解析失败: {e}'}), 500
+            logger.error(f"get_yaml_config 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/config/yaml/<section>', methods=['PUT'])
     @require_super

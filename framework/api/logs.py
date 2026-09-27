@@ -46,7 +46,8 @@ def register(ctx):
                 'size': size
             })
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_audit_logs 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 运行日志（消息/连接/插件/框架，支持 SSE 实时推送）----
 
@@ -74,7 +75,8 @@ def register(ctx):
                 'latest_seq': log_broker.get_stats().get('latest_seq', 0),
             })
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"get_runtime_logs 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/runtime_logs/stats', methods=['GET'])
     @require_auth
@@ -83,7 +85,8 @@ def register(ctx):
         try:
             return jsonify({'code': 0, 'data': log_broker.get_stats()})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"get_runtime_log_stats 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/runtime_logs/clear', methods=['POST'])
     @require_auth
@@ -96,7 +99,8 @@ def register(ctx):
                       'clear_runtime_logs', 'logs', None, None, 'success', None)
             return jsonify({'code': 0, 'msg': '已清空'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"clear_runtime_logs 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/logs/sse')
     def logs_sse():

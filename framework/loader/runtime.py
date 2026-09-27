@@ -113,12 +113,19 @@ class PluginRuntimeMixin:
             if snap == self._plugin_mtimes.get(name):
                 continue
             try:
-                self.register_commands(name)
-                self._plugin_mtimes[name] = snap
-                changed.append(name)
-                logger.debug(f"[{name}] 心跳增量注册完成")
+                ok = self.register_commands(name)
+                if ok:
+                    self._plugin_mtimes[name] = snap
+                    changed.append(name)
+                    logger.debug(f"[{name}] 心跳增量注册完成")
+                # register 失败时已写入 _failed_mtimes，交由 retry_failed_plugins 自愈，
+                # 不更新 mtime 快照，避免同快照下反复重试同一损坏文件
             except Exception as e:
                 logger.error(f"[{name}] 心跳注册异常: {e}")
+
+        # 失败插件自愈：曾加载/注册失败（含文件损坏、register 异常）的插件，
+        # 若文件快照发生变化（用户已修复），自动重新加载并注册，无需重启框架
+        self.retry_failed_plugins()
 
         # 心跳后使路由缓存失效（命令可能有变化）
         if changed:
@@ -206,3 +213,66 @@ class PluginRuntimeMixin:
         except Exception as e:
             logger.error(f"[自检] 异常: {e}")
 
+    def retry_failed_plugins(self):
+        """
+        失败插件自愈：周期（随心跳调用）检查曾加载/注册失败的插件，
+        若其源码文件快照已变化（用户修复了 main.py / 依赖补齐 / 代码修正），
+        自动重新加载并注册，使插件无需重启框架即可恢复。
+
+        判定依据：_failed_mtimes 记录失败时刻的 mtime 快照。
+        - 快照为 -1.0（目录不存在）或与当前一致 → 未修复，跳过；
+        - 当前快照更大（文件被改动）→ 尝试 load_plugin + register_commands，
+          成功则清除失败记录；再次失败则更新快照，等待下一次修复。
+        """
+        try:
+            with self._lock:
+                failed = list(self._failed_mtimes.items())
+            if not failed:
+                return
+            for name, failed_snap in failed:
+                try:
+                    # 插件已被禁用（is_active=0）：放弃自愈，不再自动重载
+                    if not self.is_plugin_active_in_db(name):
+                        logger.info(f"[{name}] 插件已禁用，取消自动自愈重试")
+                        with self._lock:
+                            self._failed_mtimes.pop(name, None)
+                        continue
+                    cur = self._snapshot_mtime(name)
+                    # 目录都不存在：无法修复，放弃记录（避免永久占用表项）
+                    if cur < 0:
+                        with self._lock:
+                            self._failed_mtimes.pop(name, None)
+                        continue
+                    # 文件未变化：用户还没修复，耐心等待
+                    if cur == failed_snap:
+                        continue
+                    logger.info(f"[{name}] 检测到文件变化（失败快照 {failed_snap} → {cur}），尝试自动恢复...")
+                    if self.load_plugin(name):
+                        if self.register_commands(name):
+                            with self._lock:
+                                self._failed_mtimes.pop(name, None)
+                            try:
+                                self.db.execute(
+                                    "UPDATE plugins SET status='running', has_register=1 "
+                                    "WHERE plugin_name=%s", (name,)
+                                )
+                            except Exception:
+                                pass
+                            logger.info(f"[{name}] 自修复成功：插件已自动重新加载并注册")
+                            try:
+                                self.framework.router._invalidate_cache()
+                            except Exception:
+                                pass
+                        else:
+                            # load 成功但 register 失败：登记新快照，下次文件再变化时重试
+                            # （load_plugin 成功会覆盖 _loaded_plugins；register 失败会更新 _failed_mtimes）
+                            with self._lock:
+                                self._failed_mtimes[name] = self._snapshot_mtime(name)
+                    else:
+                        # load 失败：更新失败快照为当前值，避免每次心跳重复无效加载
+                        with self._lock:
+                            self._failed_mtimes[name] = cur
+                except Exception as e:
+                    logger.error(f"[{name}] 失败插件自愈检查异常: {e}")
+        except Exception as e:
+            logger.error(f"[自愈] 失败插件自愈流程异常: {e}")

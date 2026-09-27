@@ -162,9 +162,15 @@ class SessionManager:
         handler = waiter.get('handler')
         if handler is not None:
             try:
-                import asyncio
                 if asyncio.iscoroutinefunction(handler):
-                    consume = asyncio.get_event_loop().run_until_complete(handler(raw_event))
+                    # 本方法由框架经 asyncio.to_thread 在工作线程调用，线程内无
+                    # 事件循环，异步 handler 须派发回主循环并同步等待结果
+                    loop = getattr(self.framework, 'loop', None)
+                    if loop is not None and loop.is_running():
+                        consume = asyncio.run_coroutine_threadsafe(
+                            handler(raw_event), loop).result(timeout=10)
+                    else:
+                        consume = True
                 else:
                     consume = handler(raw_event)
             except Exception:

@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 import re
+import threading
 from typing import Optional
 
 import requests
@@ -259,20 +260,21 @@ class TelegramAdapter(ProtocolAdapter):
         self._closing = False
         loop = getattr(self.framework, 'loop', None)
         if loop is None or not loop.is_running():
-            try:
-                asyncio.get_event_loop().call_soon(self._reschedule)
-            except Exception:
-                pass
+# 工作线程无事件循环（3.14 下 get_event_loop 直接抛错），线程定时器延后重试
+            if not self._closing:
+                _t = threading.Timer(0.5, self._reschedule)
+                _t.daemon = True  # 守护定时器：loop 永不就绪时不得阻塞进程退出
+                _t.start()
             return
         self._reschedule()
 
     def _reschedule(self):
         loop = getattr(self.framework, 'loop', None)
         if loop is None or not loop.is_running():
-            try:
-                asyncio.get_event_loop().call_soon(self._reschedule)
-            except Exception:
-                pass
+            if not self._closing:
+                _t = threading.Timer(0.5, self._reschedule)
+                _t.daemon = True  # 守护定时器：loop 永不就绪时不得阻塞进程退出
+                _t.start()
             return
         if self._task is None or self._task.done():
             self._task = loop.create_task(self._poll_loop())
@@ -493,8 +495,8 @@ def register(ctx):
 def unregister():
     global _adapter_instance
     if _adapter_instance:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(_adapter_instance.stop())
+        inst = _adapter_instance
         _adapter_instance = None
+        loop = getattr(inst.framework, 'loop', None)
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(inst.stop(), loop)

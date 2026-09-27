@@ -62,13 +62,31 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 扩展点注册表（内核契约：插件可挂载到几乎每个运行环节）
         self.hooks = HookRegistry(self)
 
-        # 数据库：宿主模式下用 RemoteDatabase（经 IPC RPC 到核心进程执行）；否则真实数据库
+# 数据库：宿主模式下用 RemoteDatabase（经 IPC RPC 到核心进程执行）；否则真实数据库
         if role == 'host' and ipc_client is not None:
             from framework.ipc.remote_db import RemoteDatabase
             self.db = RemoteDatabase(ipc_client)
             logger.info("数据库已切换为 RemoteDatabase（双进程宿主模式，RPC 到核心）")
         else:
             self.db = init_db(self.config['database'])
+
+        # 降级标志：数据库不可用时，框架以 data/db 文件存储（JSON/YAML）运行
+        self.db_degraded = bool(getattr(self.db, 'degraded', False))
+        if self.db_degraded:
+            logger.warning(
+                "框架处于数据库降级模式：持久化能力受限，使用 data/db 下 JSON/YAML 文件存储"
+            )
+
+        # 存储抽象层接入点：当前后端（sqlite/mysql/file/debug）与调试模式标志。
+        # debug = 调试模式（低性能模式）：config 显式配置 database.type: debug，
+        # 在本机以 JSON 行集本地模拟 SQL（查询有语义），见 framework/database/storage.py。
+        self.storage_mode = getattr(self.db, 'db_type', 'unknown')
+        self.db_debug_mode = bool(getattr(self.db, 'debug_mode', False))
+        if self.db_debug_mode:
+            logger.warning(
+                "框架处于调试模式（低性能本地 SQL 模拟，database.type=debug）："
+                "SQL 语义可用但性能低、无真实事务，仅限开发调试，生产请用 sqlite/mysql"
+            )
 
         # 数据库专用线程池
         self._db_executor = ThreadPoolExecutor(

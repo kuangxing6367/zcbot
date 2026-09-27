@@ -46,7 +46,8 @@ def register(ctx):
                 })
             return jsonify({'code': 0, 'data': items})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"apikeys_list 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/apikeys', methods=['POST'])
     @require_super
@@ -84,7 +85,8 @@ def register(ctx):
                 }
             })
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"apikeys_create 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/apikeys/<int:kid>/revoke', methods=['POST'])
     @require_super
@@ -99,4 +101,5 @@ def register(ctx):
                       'api_token', row['name'], {'id': kid})
             return jsonify({'code': 0, 'msg': '已吊销'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"apikeys_revoke 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500

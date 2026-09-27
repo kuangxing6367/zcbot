@@ -29,7 +29,8 @@ def register(ctx):
             )
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_tasks 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/tasks/<int:task_id>/toggle', methods=['POST'])
     @require_auth
@@ -60,7 +61,8 @@ def register(ctx):
                       {'plugin': row['plugin_name'], 'handler': row['handler']})
             return jsonify({'code': 0, 'msg': f'已{"启用" if is_active else "禁用"}'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"toggle_task 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/tasks/<int:task_id>/trigger', methods=['POST'])
     @require_auth
@@ -99,17 +101,19 @@ def register(ctx):
                     (task_id,)
                 )
             except Exception as e:
+                logger.error(f"trigger_task 内部错误: {e}")
                 db.execute(
                     "UPDATE tasks SET last_run_at=NOW(), run_count=run_count+1, last_status='failure' WHERE id=%s",
                     (task_id,)
                 )
-                return jsonify({'code': 500, 'msg': f'执行失败: {e}'}), 500
+                return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
             audit_log(admin['id'], admin['username'], 'trigger_task', 'task', str(task_id),
                       {'plugin': row['plugin_name'], 'handler': row['handler']})
             return jsonify({'code': 0, 'msg': '任务已触发'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"trigger_task 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/tasks', methods=['POST'])
     @require_auth
@@ -141,7 +145,8 @@ def register(ctx):
                       {'cron': cron_expression, 'description': description})
             return jsonify({'code': 0, 'msg': '任务已创建', 'data': {'id': task_id}})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"create_task 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/tasks/<int:task_id>', methods=['DELETE'])
     @require_auth
@@ -176,4 +181,5 @@ def register(ctx):
                       {'plugin': plugin_name, 'description': row['description']})
             return jsonify({'code': 0, 'msg': '任务已删除'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"delete_task 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500

@@ -58,7 +58,8 @@ def register(ctx):
                 'size': size
             })
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_users 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/users/<int:user_id>/role', methods=['PUT'])
     @require_super
@@ -82,7 +83,8 @@ def register(ctx):
                       {'role': role, 'nickname': row['nickname']})
             return jsonify({'code': 0, 'msg': f'用户 [{row["nickname"]}] 角色已设为 {label}'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"set_user_role 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/users/<int:user_id>/blacklist', methods=['POST'])
     @require_auth
@@ -98,7 +100,8 @@ def register(ctx):
             audit_log(admin['id'], admin['username'], action, 'user', str(user_id))
             return jsonify({'code': 0, 'msg': f'已{"拉黑" if is_blacklist else "取消拉黑"}'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"toggle_user_blacklist 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 群管理 ----
 
@@ -113,7 +116,8 @@ def register(ctx):
             )
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_groups 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/groups/<int:group_id>/blacklist', methods=['POST'])
     @require_auth
@@ -129,4 +133,5 @@ def register(ctx):
             audit_log(admin['id'], admin['username'], action, 'group', str(group_id))
             return jsonify({'code': 0, 'msg': f'已{"拉黑" if is_blacklist else "取消拉黑"}'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"toggle_group_blacklist 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500

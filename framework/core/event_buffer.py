@@ -48,6 +48,8 @@ class EventBuffer:
         self._overflow_to_sqlite = 0
         self._sqlite_conn = None
         self._sqlite_lock = threading.Lock()
+        self._sqlite_fail_streak = 0                      # 连续写失败计数（自愈降级用）
+        self._sqlite_fail_threshold = int(buf_cfg.get('sqlite_fail_threshold', 8))
         if self.sqlite_enabled:
             self._init_sqlite()
             self._sqlite_rows = self._count_rows()   # 承接上次进程遗留的持久化事件
@@ -91,9 +93,22 @@ class EventBuffer:
                     (payload, time.time()))
                 self._sqlite_conn.commit()
             self._sqlite_rows += 1
+            self._sqlite_fail_streak = 0                 # 写成功：重置连续失败计数
             return True
         except Exception as e:
             logger.warning(f"sqlite 缓冲写入失败: {e}")
+            self._sqlite_fail_streak += 1
+            if self._sqlite_fail_streak >= self._sqlite_fail_threshold:
+                logger.error(
+                    f"sqlite 缓冲连续失败 {self._sqlite_fail_streak} 次，"
+                    f"自动禁用溢出层，事件改走内存兜底（重启后自动恢复重试）")
+                self.sqlite_enabled = False
+                try:
+                    if self._sqlite_conn is not None:
+                        self._sqlite_conn.close()
+                except Exception:
+                    pass
+                self._sqlite_conn = None
             return False
 
     def _pop_sqlite_batch(self, n: int):

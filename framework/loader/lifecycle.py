@@ -296,6 +296,7 @@ class PluginLifecycleMixin:
                 if spec is None or spec.loader is None:
                     logger.error(f"[{plugin_name}] 导入失败: spec 为空")
                     self._purge_plugin_modules(plugin_name, plugin_path)
+                    self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                     return False
 
                 module.__spec__ = spec
@@ -306,12 +307,14 @@ class PluginLifecycleMixin:
                 if not hasattr(module, 'register'):
                     logger.error(f"[{plugin_name}] 缺少 register(ctx) 函数")
                     self._purge_plugin_modules(plugin_name, plugin_path)
+                    self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                     return False
 
                 register_func = getattr(module, 'register')
                 if not callable(register_func):
                     logger.error(f"[{plugin_name}] register 不可调用")
                     self._purge_plugin_modules(plugin_name, plugin_path)
+                    self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                     return False
 
                 # 读取元数据
@@ -349,6 +352,9 @@ class PluginLifecycleMixin:
                 self.init_plugin_configs(plugin_name)
                 # 记录文件快照，避免首个心跳周期重复注册
                 self._plugin_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
+                # 加载成功：清除历史失败记录（防残留）
+                with self._lock:
+                    self._failed_mtimes.pop(plugin_name, None)
 
                 logger.info(f"[{plugin_name}] 加载成功 v{plugin_meta['version']}")
                 return True
@@ -378,6 +384,8 @@ class PluginLifecycleMixin:
                         )
                     except Exception:
                         pass
+                    # 登记失败快照，供心跳检测到文件修复后自动重载
+                    self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                     return False
 
             except Exception as e:
@@ -392,6 +400,8 @@ class PluginLifecycleMixin:
                     )
                 except Exception:
                     pass
+                # 登记失败快照，供心跳检测到文件修复后自动重载
+                self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                 return False
 
     def _snapshot_mtime(self, plugin_name: str) -> float:
@@ -416,6 +426,10 @@ class PluginLifecycleMixin:
         with self._lock:
             info = self._loaded_plugins.pop(plugin_name, None)
             if not info:
+                # 插件从未加载成功（可能仅在 _failed_mtimes 有失败登记）：
+                # 卸载/禁用语义下同样清除自愈记录，避免心跳把已禁用的插件重新拉起
+                self._failed_mtimes.pop(plugin_name, None)
+                self._plugin_mtimes.pop(plugin_name, None)
                 return
 
         try:
@@ -479,9 +493,10 @@ class PluginLifecycleMixin:
         except Exception:
             pass
 
-        # 清理文件快照
+        # 清理文件快照（含失败自愈记录：卸载后不再尝试自动重载）
         with self._lock:
             self._plugin_mtimes.pop(plugin_name, None)
+            self._failed_mtimes.pop(plugin_name, None)
 
         # 强制清理模块引用，触发垃圾回收
         # 防御插件未关闭的文件句柄 / socket 连接 / 长连接残留
