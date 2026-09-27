@@ -194,6 +194,7 @@ class EventBuffer:
         if self._l3_bytes + size <= self.l3_max_bytes:
             self._l3.put_nowait((event, None, size))
             self._l3_bytes += size
+            self._wakeup.set()                  # 任一层入队都必须唤醒消费者
             return True
         # 全满 → 告警 + 丢弃（保老弃新）
         self._dropped += 1
