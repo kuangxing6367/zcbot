@@ -41,6 +41,7 @@ class EventBuffer:
         self._l1_bytes = 0
         self._l3 = asyncio.Queue()                            # 无条数上限，靠字节计数兜底
         self._l3_bytes = 0
+        self._wakeup = asyncio.Event()                        # 任一层入队信号（修溢出不唤醒）
         self._sqlite_pending = []                             # sqlite 批量取回、待 worker 处理
         self._sqlite_rows = 0                                 # sqlite 表内待消化行数（免热路径查库）
         self._dropped = 0
@@ -158,6 +159,7 @@ class EventBuffer:
         if done is not None:
             await self._l1.put((event, done, size))
             self._l1_bytes += size
+            self._wakeup.set()
             return True
         # L1 内存主缓冲（字节 + 条数双限）。突发注入（风暴 bench / 批量回调）不逐事件
         # 让出事件循环，L1 一满就会把本可留在内存的事件全压进 sqlite 磁盘层——
@@ -167,6 +169,7 @@ class EventBuffer:
                 try:
                     self._l1.put_nowait((event, None, size))
                     self._l1_bytes += size
+                    self._wakeup.set()
                     return True
                 except asyncio.QueueFull:
                     pass
@@ -180,6 +183,7 @@ class EventBuffer:
                     timeout=self.sqlite_write_timeout)
                 if ok:
                     self._overflow_to_sqlite += 1
+                    self._wakeup.set()          # sqlite 落盘也要唤醒阻塞中的消费者
                     return True
             except asyncio.TimeoutError:
                 logger.warning(
@@ -205,32 +209,39 @@ class EventBuffer:
         """取一条待处理事件，返回 (event, done, source)。
 
         优先级 L1 → L3 → sqlite（批量回取，仅当表内有已知积压时才发起线程查询，
-        空转不查库）；全空时阻塞等 L1（停机时由 worker cancel 中断）。
+        空转不查库）。全空时阻塞等待「任一层入队」信号—— sqlite/L3 溢出同样会
+        唤醒消费者（旧实现只阻塞在 L1.get()，溢出事件会静默滞留到下一条
+        L1 事件到来才被顺带吐出，表现为"有回显时有时无"）。
         """
-        try:
-            event, done, size = self._l1.get_nowait()
-            self._l1_bytes -= size
-            return event, done, 'l1'
-        except asyncio.QueueEmpty:
-            pass
-        try:
-            event, done, size = self._l3.get_nowait()
-            self._l3_bytes -= size
-            return event, done, 'l3'
-        except asyncio.QueueEmpty:
-            pass
-        if self._sqlite_pending:
-            item = self._sqlite_pending.pop(0)
-            return item[0], item[1], 'sqlite'
-        if self.sqlite_enabled and self._sqlite_rows > 0:
-            batch = await asyncio.to_thread(self._pop_sqlite_batch, self.sqlite_batch)
-            if batch:
-                self._sqlite_pending = batch
+        while True:
+            try:
+                event, done, size = self._l1.get_nowait()
+                self._l1_bytes -= size
+                return event, done, 'l1'
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                event, done, size = self._l3.get_nowait()
+                self._l3_bytes -= size
+                return event, done, 'l3'
+            except asyncio.QueueEmpty:
+                pass
+            if self._sqlite_pending:
                 item = self._sqlite_pending.pop(0)
                 return item[0], item[1], 'sqlite'
-        event, done, size = await self._l1.get()
-        self._l1_bytes -= size
-        return event, done, 'l1'
+            if self.sqlite_enabled and self._sqlite_rows > 0:
+                batch = await asyncio.to_thread(self._pop_sqlite_batch, self.sqlite_batch)
+                if batch:
+                    self._sqlite_pending = batch
+                    item = self._sqlite_pending.pop(0)
+                    return item[0], item[1], 'sqlite'
+            # 全空：清信号后复查一遍（闭合「清信号与入队 set 之间」的丢失唤醒竞态），
+            # 仍空才阻塞等信号
+            self._wakeup.clear()
+            if (not self._l1.empty() or not self._l3.empty()
+                    or self._sqlite_pending or self._sqlite_rows > 0):
+                continue
+            await self._wakeup.wait()
 
     def task_done(self, source: str):
         """worker 处理完一条后回执（join_memory 依赖 L1/L3 的计数）"""
