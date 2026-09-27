@@ -45,7 +45,8 @@ def register(ctx):
                 content = f.read()
             return jsonify({'code': 0, 'data': {'content': content, 'plugin_name': plugin_name}})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"get_plugin_readme 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/config', methods=['GET'])
     @require_auth
@@ -74,7 +75,7 @@ def register(ctx):
             })
         except Exception as e:
             logger.error(f"获取插件配置失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/file/<filename>', methods=['GET'])
     @require_auth
@@ -98,7 +99,8 @@ def register(ctx):
         except FileNotFoundError:
             return jsonify({'code': 404, 'msg': '文件不存在'}), 404
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"get_plugin_file 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 插件配置读写 API ----
 
@@ -133,7 +135,7 @@ def register(ctx):
             })
         except Exception as e:
             logger.error(f"获取插件配置 schema 失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/config_schema', methods=['PUT'])
     @require_auth
@@ -196,7 +198,7 @@ def register(ctx):
             return jsonify({'code': 0, 'msg': f'已更新 {len(updated_keys)} 项配置'})
         except Exception as e:
             logger.error(f"更新插件配置失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 插件命令查看（插件配置弹窗展示触发命令）----
 
@@ -240,7 +242,7 @@ def register(ctx):
             })
         except Exception as e:
             logger.error(f"获取插件命令失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 插件依赖图 ----
 
@@ -321,5 +323,5 @@ def register(ctx):
             }})
         except Exception as e:
             logger.error(f"获取依赖图数据失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 

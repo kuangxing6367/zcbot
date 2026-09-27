@@ -31,7 +31,8 @@ def register(ctx):
             )
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_commands 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/commands/dynamic', methods=['GET'])
     @require_auth
@@ -49,7 +50,8 @@ def register(ctx):
             )
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_dynamic_commands 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 关键词自动回复管理（dynamic_commands 表，系统级动态命令）----
 
@@ -114,7 +116,8 @@ def register(ctx):
             )
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_keyword_replies 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/dynamic-commands', methods=['POST'])
     @require_auth
@@ -140,7 +143,8 @@ def register(ctx):
             _refresh_router_keywords()
             return jsonify({'code': 0, 'msg': '关键词回复已添加', 'data': {'id': kw_id}})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"create_keyword_reply 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/dynamic-commands/<int:kw_id>', methods=['PUT'])
     @require_auth
@@ -168,7 +172,8 @@ def register(ctx):
             _refresh_router_keywords()
             return jsonify({'code': 0, 'msg': '关键词回复已更新'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"update_keyword_reply 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/dynamic-commands/<int:kw_id>/toggle', methods=['POST'])
     @require_auth
@@ -191,7 +196,8 @@ def register(ctx):
             _refresh_router_keywords()
             return jsonify({'code': 0, 'msg': f'已{"启用" if is_active else "禁用"}'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"toggle_keyword_reply 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/dynamic-commands/<int:kw_id>', methods=['DELETE'])
     @require_auth
@@ -209,7 +215,8 @@ def register(ctx):
             _refresh_router_keywords()
             return jsonify({'code': 0, 'msg': '已删除'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"delete_keyword_reply 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 静态命令管理（别名/启停）----
 
@@ -253,7 +260,8 @@ def register(ctx):
                        'require_level': require_level, 'require_perm': require_perm})
             return jsonify({'code': 0, 'msg': '命令已更新'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"update_command_alias 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/commands/<int:cmd_id>/toggle', methods=['POST'])
     @require_auth
@@ -275,4 +283,5 @@ def register(ctx):
                       {'plugin': row['plugin_name'], 'handler': row['handler']})
             return jsonify({'code': 0, 'msg': f'已{"启用" if is_active else "禁用"}'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"toggle_static_command 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500

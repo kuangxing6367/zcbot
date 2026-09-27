@@ -15,7 +15,7 @@ USE zcbot;
 -- ============================================================
 CREATE TABLE IF NOT EXISTS users (
     id              INT             AUTO_INCREMENT  PRIMARY KEY,
-    user_id         BIGINT          NOT NULL        COMMENT '用户 ID',
+    user_id         VARCHAR(64)          NOT NULL        COMMENT '用户 ID',
     nickname        VARCHAR(100)    DEFAULT NULL    COMMENT '昵称',
     avatar_url      VARCHAR(500)    DEFAULT NULL    COMMENT '头像URL',
     is_friend       TINYINT(1)      DEFAULT 0       COMMENT '是否为好友',
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS groups_info (
     id              INT             AUTO_INCREMENT  PRIMARY KEY,
-    group_id        BIGINT          NOT NULL        COMMENT '群号',
+    group_id        VARCHAR(64)          NOT NULL        COMMENT '群号',
     group_name      VARCHAR(200)    DEFAULT NULL    COMMENT '群名称',
     member_count    INT             DEFAULT 0       COMMENT '成员数',
     max_member_count INT            DEFAULT 0       COMMENT '最大成员数',
@@ -59,8 +59,8 @@ CREATE TABLE IF NOT EXISTS groups_info (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS group_members (
     id              INT             AUTO_INCREMENT  PRIMARY KEY,
-    group_id        BIGINT          NOT NULL        COMMENT '群号',
-    user_id         BIGINT          NOT NULL        COMMENT '用户 ID',
+    group_id        VARCHAR(64)          NOT NULL        COMMENT '群号',
+    user_id         VARCHAR(64)          NOT NULL        COMMENT '用户 ID',
     card            VARCHAR(100)    DEFAULT NULL    COMMENT '群名片/昵称',
     role            VARCHAR(20)     DEFAULT 'member' COMMENT '角色：owner/admin/member',
     title           VARCHAR(100)    DEFAULT NULL    COMMENT '群头衔',
@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS commands (
     is_active       TINYINT(1)      DEFAULT 1       COMMENT '启用/禁用',
     hit_count       INT             DEFAULT 0       COMMENT '命中次数统计',
     created_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP    COMMENT '注册时间',
+    UNIQUE KEY uk_plugin_handler (plugin_name, handler),
     INDEX idx_plugin (plugin_name),
     INDEX idx_priority (priority),
     INDEX idx_active (is_active),
@@ -298,7 +299,7 @@ CREATE TABLE IF NOT EXISTS perm_group_nodes (
 -- ============================================================
 CREATE TABLE IF NOT EXISTS perm_user_nodes (
     id              INT             AUTO_INCREMENT  PRIMARY KEY,
-    user_id         BIGINT          NOT NULL        COMMENT '用户 ID',
+    user_id         VARCHAR(64)          NOT NULL        COMMENT '用户 ID',
     node            VARCHAR(191)    NOT NULL        COMMENT '权限节点（group.xxx = 加入 xxx 组）',
     value           TINYINT(1)      DEFAULT 1       COMMENT '1=授予, 0=显式否决',
     context_key     VARCHAR(32)     DEFAULT NULL    COMMENT '上下文键: group/bot/msgtype，NULL=全局',

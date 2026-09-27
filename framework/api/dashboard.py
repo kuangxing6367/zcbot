@@ -116,7 +116,7 @@ def register(ctx):
             return jsonify({'code': 0, 'data': cards})
         except Exception as e:
             logger.error(f"获取仪表盘卡片失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- WebUI 群组/用户管理页插件扩展 ----
 
@@ -127,7 +127,8 @@ def register(ctx):
         try:
             return jsonify({'code': 0, 'data': framework.plugin_loader.get_ui_extensions('groups')})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"ui_ext_groups_meta 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/extensions/users', methods=['GET'])
     @require_auth
@@ -136,7 +137,8 @@ def register(ctx):
         try:
             return jsonify({'code': 0, 'data': framework.plugin_loader.get_ui_extensions('users')})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"ui_ext_users_meta 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/groups/extensions/data', methods=['POST'])
     @require_auth
@@ -150,7 +152,8 @@ def register(ctx):
                 out[str(gid)] = framework.plugin_loader.call_ui_extensions('groups', gid)
             return jsonify({'code': 0, 'data': out})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"ui_ext_groups_data 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/users/extensions/data', methods=['POST'])
     @require_auth
@@ -164,7 +167,8 @@ def register(ctx):
                 out[str(uid)] = framework.plugin_loader.call_ui_extensions('users', uid)
             return jsonify({'code': 0, 'data': out})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"ui_ext_users_data 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/groups/<int:gid>/extensions', methods=['GET'])
     @require_auth
@@ -173,7 +177,8 @@ def register(ctx):
         try:
             return jsonify({'code': 0, 'data': framework.plugin_loader.call_ui_extensions('groups', gid)})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"ui_ext_group_detail 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/users/<int:uid>/extensions', methods=['GET'])
     @require_auth
@@ -182,7 +187,8 @@ def register(ctx):
         try:
             return jsonify({'code': 0, 'data': framework.plugin_loader.call_ui_extensions('users', uid)})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"ui_ext_user_detail 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     # ---- 群级插件开关 ----
 
@@ -195,7 +201,7 @@ def register(ctx):
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
             logger.error(f"获取群级插件设置失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/group/<int:group_id>/toggle', methods=['POST'])
     @require_auth
@@ -218,4 +224,5 @@ def register(ctx):
                 'msg': f"插件 [{plugin_name}] 在群 {group_id} 已{'启用' if enabled else '禁用'}"
             })
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"toggle_group_plugin 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500

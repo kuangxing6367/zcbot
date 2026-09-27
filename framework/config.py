@@ -284,7 +284,8 @@ _CORE_PLUGIN_SCHEMA = {
                   'reconnect_interval': 5, 'max_queue': 256},
     'qq_official': {'enabled': False, 'app_id': '', 'app_secret': '',
                     'bot_name': 'qq_official', 'intents': 33554432,
-                    'reconnect_interval': 5, 'api_base': 'https://api.bot.qq.com'},
+                    'reconnect_interval': 5,
+                    'api_base': 'https://api.sgroup.qq.com'},
     'telegram': {'enabled': False, 'token': '', 'bot_name': 'telegram',
                  'polling_timeout': 30, 'api_base': 'https://api.telegram.org'},
     'discord': {'enabled': False, 'token': '', 'bot_name': 'discord',
@@ -313,6 +314,22 @@ def _default_core_plugin_enabled(name: str) -> bool:
     return name not in _CORE_PLUGIN_DEFAULT_DISABLED
 
 
+def _as_bool(value) -> bool:
+    """严格布尔解析：布尔、数字 0/1、常见字符串 true/false 均按语义解析。
+    避免 yaml 中 enabled: "false" / "0" 等字符串被 bool() 误判为 True。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ('1', 'true', 'yes', 'on', 'y'):
+            return True
+        if s in ('0', 'false', 'no', 'off', 'n'):
+            return False
+    return bool(value)
+
+
 def _autoload_core_plugins(config: dict) -> dict:
     """官方插件配置中心（core_plugins.yaml）自动同步 + 合并进主 config。
 
@@ -339,6 +356,14 @@ def _autoload_core_plugins(config: dict) -> dict:
                 data = yaml.safe_load(f) or {}
         except Exception as e:
             _get_logger().warning(f"读取 core_plugins.yaml 失败: {e}")
+            # 损坏现场保留为 .bak，供人工排查/恢复（随后自动重建新配置）
+            try:
+                bak_path = f"{yaml_path}.bak"
+                if os.path.isfile(yaml_path) and not os.path.exists(bak_path):
+                    os.replace(yaml_path, bak_path)
+                    _get_logger().warning(f"已备份损坏的 core_plugins.yaml → {bak_path}")
+            except Exception as be:
+                _get_logger().warning(f"备份损坏的 core_plugins.yaml 失败: {be}")
     cps = data.get('core_plugins') if isinstance(data, dict) else None
     cps = cps if isinstance(cps, dict) else {}
 
@@ -359,9 +384,16 @@ def _autoload_core_plugins(config: dict) -> dict:
             blk = dict(_CORE_PLUGIN_SCHEMA.get(name, {}))
             cps[name] = blk
             changed = True
-        if 'enabled' not in blk:
-            blk['enabled'] = bool(main_cp[name]) if name in main_cp \
-                else _default_core_plugin_enabled(name)
+# config.yaml 的 core_plugins 段是权威开关（模板注释与终端 enable/disable
+        # 均以此为准）：只要该插件键显式出现，就以它为准并同步回 yaml（含禁用态），
+        # 避免"用户已关闭却仍加载"。未在 config.yaml 段列出的插件维持 yaml 现值。
+        if name in main_cp:
+            want = bool(main_cp[name])
+            if blk.get('enabled') != want:
+                blk['enabled'] = want
+                changed = True
+        elif 'enabled' not in blk:
+            blk['enabled'] = _default_core_plugin_enabled(name)
             changed = True
         # 补默认配置键（不覆盖 yaml 已设的值；优先迁移主 config 对应段的值）
         for k, v in _CORE_PLUGIN_SCHEMA.get(name, {}).items():
@@ -397,7 +429,7 @@ def _autoload_core_plugins(config: dict) -> dict:
         else:
             merged = dict(blk)
         config[section] = merged
-        core_cfg[name] = bool(blk.get('enabled', False))
+        core_cfg[name] = _as_bool(blk.get('enabled', False))
     config['core_plugins'] = core_cfg
     return cps
 

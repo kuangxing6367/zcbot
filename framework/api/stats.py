@@ -36,7 +36,8 @@ def register(ctx):
                 'commands': rows,
             }})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"stats_commands 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/stats/messages', methods=['GET'])
     @require_auth
@@ -151,4 +152,4 @@ def register(ctx):
             }})
         except Exception as e:
             logger.error(f"获取环境信息失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500

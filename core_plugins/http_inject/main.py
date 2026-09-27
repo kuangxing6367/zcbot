@@ -206,8 +206,8 @@ def unregister():
     """卸载时停止"""
     global _adapter_instance
     if _adapter_instance:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(_adapter_instance.stop())
+        inst = _adapter_instance
         _adapter_instance = None
+        loop = getattr(inst.framework, 'loop', None)
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(inst.stop(), loop)

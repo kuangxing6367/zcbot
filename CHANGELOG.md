@@ -26,6 +26,65 @@
 
 ---
 
+## v1.7.3（2026-09-27）
+
+> 主题：**core 插件"全关却仍加载"根因修复 + 失败插件自动自愈 + 存储降级兜底（FileStore/调试模式）+ 7 项安全加固（WebUI 权限收敛）**。
+
+### 修复
+- **core 插件开关"全关却仍加载"（根因）**：`_autoload_core_plugins` 只在 yaml 块缺
+  `enabled` 键时才吸收 config.yaml 的 `core_plugins` 段；一旦 yaml 已有 `enabled: true`，
+  config.yaml 段的显式关闭（`false`）被静默丢弃 → 改为**config.yaml 的 core_plugins 段
+  是权威开关**：键显式出现即以它为准并回写 yaml（含禁用态），未列出的插件维持 yaml 现值。
+  新增 `_as_bool()` 严格布尔解析，修复 `bool("false")==True` 导致 `enabled: "false"`
+  字符串被误判为启用的隐患（5 例回归测试 `tests/test_core_plugin_switch.py`）。
+- **终端禁用/启用与 WebUI 同语义**：`disable_plugin`/`enable_plugin` 统一为
+  「写 `is_active` 状态 + 卸载/加载注册 + 路由缓存失效」，不再出现「终端关了、
+  WebUI 又拉起来」的分叉；禁用后 `_failed_mtimes` 一并清除，心跳自愈不会把
+  已禁用的插件重新拉起（`tests/test_disable_vs_selfheal_bug.py`）。
+- **QQ 官方接入域名迁移**（2026-09-18 官方指引）：取令牌迁移到
+  `bots.qq.com/app/getAppAccessToken`，正式 API 迁到 `api.sgroup.qq.com`
+  （沙箱 `sandbox.api.sgroup.qq.com`）；旧域名 `api.bot.qq.com` 保留作迁移窗口期回退，
+  新域名连不上/5xx 自动重试（qq_official / discord / telegram / ws_client 启动
+  线程化延后重试 + `run_coroutine_threadsafe` 停止，规避 3.14 无事件循环崩溃）。
+- **数据库初始化失败不再阻塞启动**：真实数据库不可用（缺驱动/连接失败/迁移失败）
+  时降级为 `data/db/` 下 JSON/YAML 文件存储（FileStore），框架照常启动；
+  新增调试模式 `database.type: debug`（SqlSimEngine 本地模拟 SQL，查询有语义），
+  无数据库的开发/联调/CI 环境可用（`tests/test_db_regression.py` /
+  `test_file_store_fallback.py` / `test_sql_sim_debug.py`）。
+- **event_buffer sqlite 连续写失败自愈**：写失败达阈值（缺省 8 次）自动禁用
+  溢出层、事件改走内存兜底，重启后自动恢复重试（不再因单点损坏静默丢事件）。
+- **终端非交互跳过**：stdin 非 TTY（CI/守护进程/重定向）不再启动输入线程，
+  消除对终端的硬依赖。
+
+### 安全加固（7 项，WebUI 权限收敛）
+- **敏感表保护（/api/db）**：`admin_users` / `api_tokens` 对普通管理员隐藏
+  （表列表不出现、schema/rows 直接 403），仅超级管理员可见，防经数据库网关
+  泄露登录令牌与凭据哈希。
+- **数据库文件下载拦截（/api/files/download）**：非超级管理员下载
+  `.db/.sqlite/.sqlite3/.db-wal/.db-shm` 返回 403（原本任何登录管理员均可整库下载）。
+- **高危写操作收紧为 super**：插件上传、pip 依赖安装、隔离 venv 创建、
+  GitHub 更新插件、市场安装插件、框架在线更新，均由 `require_auth` 收紧为
+  `require_super`（这些入口可执行任意代码/改源码，普通管理员不该触碰）。
+- **登录失败文案统一**：账号被禁用不再返回 403「账号已禁用」，与不存在/密码错误
+  一致返回 401「用户名或密码错误」（防用户名枚举；audit_log 保留真实原因）。
+- **500 回显收敛**：framework/api 全部 93 处 `str(e)`/`{e}` 错误回显收敛为
+  「服务器内部错误」，杜绝异常细节/文件路径/堆栈泄露给前端；无日志的 except
+  分支自动补 `logger.error`，排障不降级。
+- **ZIP 路径穿越与符号链接校验**：插件上传与框架更新 ZIP 拒绝 `..`、`/` 开头、
+  `\` 反斜杠条目；框架更新额外拒绝符号链接条目（防解压逃逸/链接指向敏感文件）。
+- **文件浏览符号链接防逃逸**：`_safe_file_path` 用 `os.path.realpath` 解析
+  真实路径后再做根目录包含校验，符号链接无法借道读出允许目录之外的文件。
+
+### 测试
+- 新增 `tests/test_security_hardening.py` 22 例（7 项安全修复逐项锁定）、
+  `tests/test_core_plugin_switch.py` 5 例、`tests/test_self_heal.py` 24 例
+  （插件损坏自愈 / yaml 备份重建 / FileStore 降级 / event_buffer 自愈），
+  CI workflow 接入 db_regression / loop_fix / file_store / sql_sim_debug 套件。
+- 全量回归：pytest 风格 58 例 + 9 组脚本式套件（self_heal 24、plugin_imports 25、
+  perm 43 等）全绿。
+
+---
+
 ## v1.7.2（2026-09-27）
 
 > 主题：**四框架横评（2026-09-26~27）暴露缺陷全部合入——qq_official 适配器六项修复 + 压测三行级 bug + scheduler 启动修复 + 接入端旋钮配置化**。

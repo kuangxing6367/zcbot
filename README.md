@@ -9,7 +9,7 @@
 > **OneBot 11 是它的一个默认扩展，但不是它的身份。** 换一个 `ProtocolAdapter`，它可以是 Telegram / Discord 机器人、
 > HTTP Webhook 接收器、纯定时任务服务，或任何"事件 → 扩展 → 响应"的程序。
 
-**当前正式版：v1.7.2** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
+**当前正式版：v1.7.3** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
 
 - 项目地址：https://github.com/kuangxing6367/zcbot
 - 官方插件仓库：https://github.com/kuangxing6367/zcbot_plugins
@@ -184,6 +184,13 @@ python main.py                 # 也可指定配置：python main.py D:\config\z
 - **`config.yaml`**：框架全局设置——数据库、日志、安全、插件目录等。
 - **`core_plugins.yaml`**：**官方扩展的开关与配置中心**。启动时自动扫描 `core_plugins/`：新装扩展补块、卸载扩展删块、自动回写，并合并进主配置（所以代码里 `fw.config.get('onebot')` 这类读法不变）。
 
+> **开关权威性（v1.7.3）**：`core_plugins.yaml` 内每块的 `enabled` 字段以 `config.yaml` 的
+> `core_plugins:` 段为准——**只要该插件键在 `config.yaml` 中出现，就以 `config.yaml` 的值为准
+> 并回写 yaml**（含禁用态）。两处全关即真不加载；`enabled: "false"` 等字符串按严格布尔解析，
+> 不会再被误判为开启。若 `core_plugins.yaml` 损坏，启动时自动备份为 `.bak` 并重建默认配置。
+> 插件加载/注册失败（如 `main.py` 损坏）后，**心跳会自动检测文件修复并重载插件，无需重启框架**；
+> 插件被禁用后自愈不会重新拉起。
+
 常用默认端口/账号：
 
 | 配置（编辑 `core_plugins.yaml`） | 默认值 | 作用 |
@@ -193,7 +200,7 @@ python main.py                 # 也可指定配置：python main.py D:\config\z
 | `webui.host` / `webui.port` | `127.0.0.1` / `8080` | Web 后台地址端口 |
 | `http_inject`（默认关） | `127.0.0.1:8901/hook` | HTTP 事件注入 |
 | `http_api`（默认关） | `127.0.0.1:1145` | 独立对外 HTTP API |
-| `config.yaml → database.type` | `sqlite`（`data/zcbot.db`） | `sqlite` 零配置（**仅小环境/开发**）或 `mysql`（**大环境**） |
+| `config.yaml → database.type` | `sqlite`（`data/zcbot.db`） | `sqlite` 零配置（**仅小环境/开发**）、`mysql`（**大环境**）、`file`（**数据库不可用时的降级文件存储**）或 `debug`（**无数据库的开发/联调，本地模拟 SQL，仅限调试**） |
 
 Web 后台默认登录账号 `admin` / `admin123`（**首次登录后立即改密**）。
 
@@ -348,6 +355,8 @@ __member(w0) ← __admin(w20) ← __owner(w30) ← __super(w100)
 
 后台「权限管理」页（`/permissions`）含权限组 / 用户 / 轨道 / 校验器 / 审计 5 个标签页，所有变更写入 `perm_audit`。节点命名建议：业务用 `插件名.动作.子项`，内置身份用 `zcbot.role.*`。完整机制见[权限系统文档](docs/advanced/permission.md)。
 
+**Web 后台的管理员分级（v1.7.3 安全收敛）**：除登录管理员（`admin` 角色）外，以下高危操作**仅 `super` 角色**可执行：插件上传 / pip 依赖安装 / 隔离 venv 创建 / 从 GitHub 更新插件 / 市场安装插件 / 框架在线更新；数据库网关中 `admin_users`、`api_tokens` 两张敏感表对普通管理员隐藏（列表不可见、结构/数据 403）；文件浏览禁止普通管理员下载 `.db/.sqlite` 等数据库文件；登录失败统一提示「用户名或密码错误」（不区分账号是否存在/是否禁用，防用户名枚举）。首次创建的默认账号为 `super`，可到「管理员管理」页添加受限的普通 `admin`。
+
 ---
 
 ## 十、接口令牌（API Key）与两类 HTTP 接口
@@ -402,7 +411,7 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
 │   ├── runtime.py          # 中立运行时上下文（current_source_var）
 │   ├── stats_writer.py     # 兼容 shim → framework.core.stats_writer
 │   ├── apis.py             # 兼容 shim：re-export create_web_app / WebServer
-│   ├── database/           # 数据库包：db.py · db_conn.py · dialect.py · schema.py · init_db.py
+│   ├── database/           # 数据库包：storage(后端工厂) · db · db_conn · dialect · schema · init_db · file_store(降级) · sql_sim(调试)
 │   ├── messaging/          # 消息事件包：event · event_bus · router · router_match · router_keywords · protocol
 │   ├── terminal/           # 终端包：builtins 编排 + cmd_{core,plugin,msg,info,update} + helper
 │   ├── api/                # 后台 REST：webapp · webserver · app_helpers · plugins/market/meta · framework_ops/update

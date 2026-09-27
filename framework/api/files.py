@@ -35,17 +35,23 @@ def register(ctx):
         return _FILE_BROWSER_ALLOWED_ROOTS
 
     def _safe_file_path(relative_path: str) -> str:
-        """将路径解析为绝对路径，并检查是否在允许的根目录内"""
+        """将路径解析为绝对路径，并检查是否在允许的根目录内（解析符号链接防穿越）"""
         roots = _get_file_browser_roots()
         # 如果已经是绝对路径，直接规范化
         if os.path.isabs(relative_path):
             abs_path = os.path.normpath(relative_path)
         else:
             abs_path = os.path.normpath(os.path.join(roots[0], relative_path))
+        # 解析符号链接后的真实路径必须仍在允许根目录内（防 symlink 逃逸）
+        try:
+            abs_real = os.path.realpath(abs_path)
+        except Exception:
+            abs_real = abs_path
         # 检查是否在任意允许的根目录下
         for root in roots:
             root_norm = os.path.normpath(root)
-            if os.path.commonpath([root_norm, abs_path]) == root_norm:
+            root_real = os.path.realpath(root_norm)
+            if os.path.commonpath([root_real, abs_real]) == root_real:
                 return abs_path
         return None
 
@@ -91,7 +97,8 @@ def register(ctx):
                 'entries': entries,
             }})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"file_browser_list 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/files/read', methods=['GET'])
     @require_auth
@@ -116,7 +123,8 @@ def register(ctx):
                 'size': os.path.getsize(abs_path),
             }})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"file_browser_read 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/files/write', methods=['PUT'])
     @require_super
@@ -141,7 +149,8 @@ def register(ctx):
                       {'size': len(content)})
             return jsonify({'code': 0, 'msg': '文件已保存'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"file_browser_write 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/files/mkdir', methods=['POST'])
     @require_super
@@ -162,7 +171,8 @@ def register(ctx):
             audit_log(admin['id'], admin['username'], 'file_mkdir', 'dir', abs_path)
             return jsonify({'code': 0, 'msg': '目录已创建'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"file_browser_mkdir 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/files/rename', methods=['POST'])
     @require_super
@@ -189,7 +199,8 @@ def register(ctx):
             audit_log(admin['id'], admin['username'], 'file_rename', 'file', f"{path} -> {new_name}")
             return jsonify({'code': 0, 'msg': '重命名成功'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"file_browser_rename 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/files/copy', methods=['POST'])
     @require_super
@@ -232,7 +243,8 @@ def register(ctx):
                       f"{src} -> {target}")
             return jsonify({'code': 0, 'msg': f'已复制为 {os.path.basename(target)}'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"file_browser_copy 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/files/delete', methods=['POST'])
     @require_super
@@ -256,7 +268,8 @@ def register(ctx):
             audit_log(admin['id'], admin['username'], 'file_delete', 'file', path)
             return jsonify({'code': 0, 'msg': '已删除'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"file_browser_delete 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/files/upload', methods=['POST'])
     @require_super
@@ -300,13 +313,19 @@ def register(ctx):
     @app.route('/api/files/download', methods=['GET'])
     @require_auth
     def file_browser_download():
-        """下载文件"""
+        """下载文件（数据库等敏感文件仅超级管理员）"""
         path = request.args.get('path', '').strip()
         if not path:
             return jsonify({'code': 400, 'msg': '缺少 path'}), 400
         abs_path = _safe_file_path(path)
         if not abs_path or not os.path.isfile(abs_path):
             return jsonify({'code': 400, 'msg': '文件不存在'}), 400
+        # 禁止普通管理员下载数据库文件（含 token / 密码哈希的全量登录态）
+        sensitive_exts = {'.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm'}
+        ext = os.path.splitext(abs_path)[1].lower()
+        admin = getattr(request, 'admin', None) or {}
+        if ext in sensitive_exts and admin.get('role') != 'super':
+            return jsonify({'code': 403, 'msg': '权限不足，需要超级管理员'}), 403
         return send_from_directory(
             os.path.dirname(abs_path),
             os.path.basename(abs_path),

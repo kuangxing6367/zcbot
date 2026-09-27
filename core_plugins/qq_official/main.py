@@ -51,8 +51,11 @@ __plugin_meta__ = {
     "process": "core",
 }
 
-_API_BASE = 'https://api.bot.qq.com'
-_TOKEN_URL = f'{_API_BASE}/app/getAppAccessToken'
+# 官方接入域名（2026-09-18 指引）：取令牌 bots.qq.com，正式 API api.sgroup.qq.com，
+# 沙箱 sandbox.api.sgroup.qq.com（旧域名 api.bot.qq.com 处于迁移窗口期，仅保留作回退）
+_API_BASE_FALLBACK = 'https://api.bot.qq.com'
+_API_BASE = 'https://api.sgroup.qq.com'
+_TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken'
 _GATEWAY_URL = f'{_API_BASE}/gateway/bot'
 
 # GROUP_AND_C2C_EVENT：群 @/全量 + 单聊
@@ -293,6 +296,10 @@ class QQOfficialAdapter(ProtocolAdapter):
         self.intents = int(intents) if intents else _DEFAULT_INTENTS
         self.reconnect_interval = max(1, int(reconnect_interval or 5))
         self.api_base = (api_base or _API_BASE).rstrip('/')
+        self._token_url = _TOKEN_URL
+        # 旧域名保留作回退（官方迁移窗口期）：新域名连不上/5xx 时自动重试
+        self.api_base_fallback = (_API_BASE_FALLBACK
+                                  if self.api_base != _API_BASE_FALLBACK else '')
 
         self._access_token = ''
         self._token_expire_at = 0.0
@@ -352,13 +359,24 @@ class QQOfficialAdapter(ProtocolAdapter):
             now = time.time()
             if self._access_token and now < self._token_expire_at - self._TOKEN_REFRESH_MARGIN:
                 return self._access_token     # 拿锁后复查，已被并发线程刷过
-            resp = self._http.post(_TOKEN_URL, json={
-                'appId': self.app_id, 'clientSecret': self.app_secret,
-            }, timeout=15)
-            body = resp.json() if resp.content else {}
+            # 官方 2026-09-18 起取令牌域名迁移到 bots.qq.com；旧地址保留作回退
+            token_urls = [self._token_url]
+            fallback_token_url = f'{_API_BASE_FALLBACK}/app/getAppAccessToken'
+            if fallback_token_url not in token_urls:
+                token_urls.append(fallback_token_url)
+            body = {}
+            resp = None
+            for tok_url in token_urls:
+                resp = self._http.post(tok_url, json={
+                    'appId': self.app_id, 'clientSecret': self.app_secret,
+                }, timeout=15)
+                body = resp.json() if resp.content else {}
+                if body.get('access_token') or body.get('accessToken'):
+                    break
             token = body.get('access_token') or body.get('accessToken') or ''
             if not token:
-                raise RuntimeError(f'获取 access_token 失败: HTTP {resp.status_code} {body}')
+                code = resp.status_code if resp is not None else 'N/A'
+                raise RuntimeError(f'获取 access_token 失败: HTTP {code} {body}')
             expires = int(body.get('expires_in') or body.get('expiresIn') or 7200)
             self._access_token = token
             self._token_expire_at = time.time() + max(60, expires)
@@ -379,23 +397,39 @@ class QQOfficialAdapter(ProtocolAdapter):
     async def _fetch_gateway(self) -> str:
         token = await self._ensure_token()
         headers = {'Authorization': f'QQBot {token}'}
-        resp = await asyncio.to_thread(
-            self._http.get, f'{self.api_base}/gateway/bot',
-            headers=headers, timeout=15)
-        data = resp.json() if resp.content else {}
-        url = data.get('url') or data.get('wss') or ''
-        if not url:
-            raise RuntimeError(f'获取 gateway 失败: HTTP {resp.status_code} {data}')
-        if '://' not in url:
-            url = f'wss://{url}'
-        if not url.startswith(('ws://', 'wss://')):
-            url = 'wss://' + url.lstrip('/')
-        # 去掉可能的 http(s) 前缀统一成 wss
-        if url.startswith('https://'):
-            url = 'wss://' + url[8:]
-        elif url.startswith('http://'):
-            url = 'ws://' + url[7:]
-        return url
+        base = self.api_base
+        fb = getattr(self, 'api_base_fallback', '')
+        hosts = [base, fb] if fb else [base]
+        last_exc = None
+        for host in hosts:
+            url = f'{host}/gateway/bot'
+            try:
+                resp = await asyncio.to_thread(
+                    self._http.get, url, headers=headers, timeout=15)
+            except Exception as e:
+                last_exc = e
+                continue
+            data = resp.json() if resp.content else {}
+            if resp.status_code >= 400:
+                last_exc = RuntimeError(
+                    f'HTTP {resp.status_code} {data}') if data else \
+                    RuntimeError(f'HTTP {resp.status_code}')
+                continue
+            ws_url = data.get('url') or data.get('wss') or ''
+            if not ws_url:
+                last_exc = RuntimeError(f'响应无 url: {data}')
+                continue
+            if '://' not in ws_url:
+                ws_url = f'wss://{ws_url}'
+            if not ws_url.startswith(('ws://', 'wss://')):
+                ws_url = 'wss://' + ws_url.lstrip('/')
+            # 去掉可能的 http(s) 前缀统一成 wss
+            if ws_url.startswith('https://'):
+                ws_url = 'wss://' + ws_url[8:]
+            elif ws_url.startswith('http://'):
+                ws_url = 'ws://' + ws_url[7:]
+            return ws_url
+        raise RuntimeError(f'获取 gateway 失败: {last_exc}')
 
     # ── 生命周期 ────────────────────────────────────────────────
 
@@ -642,31 +676,60 @@ class QQOfficialAdapter(ProtocolAdapter):
 
         非 2xx 抛 RuntimeError——调用方据此区分成败。旧实现不查状态码、
         错误体被当正常响应返回，再叠一层 'ret' 子串判定，可把失败报成成功。
+
+        域名兼容：默认走正式环境 api.sgroup.qq.com；迁移窗口期内若新域名
+        网络异常 / 404 / 5xx，自动用旧域名 api.bot.qq.com 重试一次
+        （仅当 api_base 与旧域名不同；4xx 业务错误不换域名直接抛出）。
         """
         token = self._refresh_token_if_stale()
-        url = f'{self.api_base}{path}'
         headers = {'Authorization': f'QQBot {token}'}
-        if files is not None:
-            resp = self._http.request(
-                method, url, headers=headers, files=files, data=data,
-                timeout=timeout)
-        else:
-            if json_body is not None:
-                headers['Content-Type'] = 'application/json; charset=utf-8'
-            resp = self._http.request(
-                method, url, headers=headers, json=json_body, data=data,
-                timeout=timeout)
-        if resp.status_code >= 400:
+        base = self.api_base
+        fb = getattr(self, 'api_base_fallback', '')
+        hosts = [base, fb] if fb else [base]
+        last_exc = None
+        last_resp = None
+        for host in hosts:
+            url = f'{host}{path}'
+            try:
+                if files is not None:
+                    resp = self._http.request(
+                        method, url, headers=headers, files=files, data=data,
+                        timeout=timeout)
+                else:
+                    if json_body is not None:
+                        headers['Content-Type'] = 'application/json; charset=utf-8'
+                    resp = self._http.request(
+                        method, url, headers=headers, json=json_body, data=data,
+                        timeout=timeout)
+            except Exception as e:
+                last_exc = e
+                continue
+            last_resp = resp
+            if resp.status_code < 400:
+                try:
+                    return resp.json() if resp.content else {}
+                except Exception:
+                    return {}
+            # 4xx 业务错误不换域名重试，直接抛
+            if resp.status_code < 500 and resp.status_code != 404:
+                raise RuntimeError(
+                    f'{method} {path} -> HTTP {resp.status_code}: '
+                    f'{(resp.text or "")[:300]}')
+            # 404/5xx：换域名再试一次
+            continue
+        if last_resp is not None:
             raise RuntimeError(
-                f'{method} {path} -> HTTP {resp.status_code}: {(resp.text or "")[:300]}')
-        try:
-            return resp.json() if resp.content else {}
-        except Exception:
-            return {}
+                f'{method} {path} -> HTTP {last_resp.status_code}: '
+                f'{(last_resp.text or "")[:300]}')
+        raise RuntimeError(f'{method} {path} 请求失败: {last_exc}')
 
     async def _upload_group_image(self, group_openid: str,
-                                  image_data: dict) -> Optional[dict]:
-        """上传图片到群，返回 media dict。"""
+                                  image_data: dict) -> dict:
+        """上传图片到群，返回 media dict。
+
+        失败抛异常（FileNotFoundError / ValueError / RuntimeError），
+        由 _send_group 感知并向调用方反馈，不再静默返回 None 伪装成功。
+        """
         file = str(image_data.get('file') or image_data.get('url') or '')
         b64 = image_data.get('base64') or _extract_b64(file)
         path = f'/v2/groups/{group_openid}/files'
@@ -674,7 +737,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             if b64:
                 raw = _b64_to_bytes(b64)
                 if not raw:
-                    return None
+                    raise ValueError(f'图片 base64 解码失败: {b64[:64]}...')
                 mime = _sniff_image_mime(raw)
                 files = {'file': (_image_filename(mime), raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
@@ -692,7 +755,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                     file = file[7:]
                 raw = await asyncio.to_thread(_read_file_bytes, file)
                 if not raw:
-                    return None
+                    raise FileNotFoundError(f'读取本地图片失败: {file}')
                 mime = _sniff_image_mime(raw)
                 files = {'file': (_image_filename(mime), raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
@@ -701,14 +764,10 @@ class QQOfficialAdapter(ProtocolAdapter):
                     files=files, data=form)
         except Exception as e:
             logger.warning('qq_official 图片上传失败: %s', e)
-            return None
-        if not isinstance(data, dict):
-            return None
-        file_info = data.get('file_info')
-        if not file_info:
-            logger.warning('qq_official 上传响应无 file_info: %s', data)
-            return None
-        return {'file_info': file_info}
+            raise
+        if not isinstance(data, dict) or not data.get('file_info'):
+            raise RuntimeError(f'qq_official 上传响应无 file_info: {data}')
+        return {'file_info': data['file_info']}
 
     async def _send_group(self, group_openid: str, message,
                           reply_msg_id: str = '') -> dict:
@@ -720,13 +779,14 @@ class QQOfficialAdapter(ProtocolAdapter):
             body['msg_id'] = reply_msg_id
             body['msg_seq'] = msg_seq
         if img:
-            media = await self._upload_group_image(group_openid, img)
-            if media:
-                body.update({'msg_type': 7, 'media': media})
-                if text:
-                    body['content'] = text
-            else:
-                body.update({'msg_type': 0, 'content': text or '[图片上传失败]'})
+            try:
+                media = await self._upload_group_image(group_openid, img)
+            except Exception as e:
+                logger.warning('qq_official 群图片上传失败，消息未发送: %s', e)
+                return self._wrap({'error': f'图片上传失败: {e}'}, ok=False)
+            body.update({'msg_type': 7, 'media': media})
+            if text:
+                body['content'] = text
         else:
             body.update({'msg_type': 0, 'content': text})
         path = f'/v2/groups/{group_openid}/messages'
@@ -750,13 +810,14 @@ class QQOfficialAdapter(ProtocolAdapter):
             body['msg_seq'] = msg_seq
         if img:
             # 单聊图片走 /v2/users/{openid}/files
-            media = await self._upload_c2c_image(user_openid, img)
-            if media:
-                body.update({'msg_type': 7, 'media': media})
-                if text:
-                    body['content'] = text
-            else:
-                body.update({'msg_type': 0, 'content': text or '[图片上传失败]'})
+            try:
+                media = await self._upload_c2c_image(user_openid, img)
+            except Exception as e:
+                logger.warning('qq_official 单聊图片上传失败，消息未发送: %s', e)
+                return self._wrap({'error': f'图片上传失败: {e}'}, ok=False)
+            body.update({'msg_type': 7, 'media': media})
+            if text:
+                body['content'] = text
         else:
             body.update({'msg_type': 0, 'content': text})
         path = f'/v2/users/{user_openid}/messages'
@@ -769,7 +830,12 @@ class QQOfficialAdapter(ProtocolAdapter):
         return self._wrap(data, ok=True)
 
     async def _upload_c2c_image(self, user_openid: str,
-                                image_data: dict) -> Optional[dict]:
+                                image_data: dict) -> dict:
+        """上传单聊图片，返回 media dict。
+
+        失败抛异常（FileNotFoundError / ValueError / RuntimeError），
+        由 _send_c2c 感知并向调用方反馈，不再静默返回 None 伪装成功。
+        """
         file = str(image_data.get('file') or image_data.get('url') or '')
         b64 = image_data.get('base64') or _extract_b64(file)
         path = f'/v2/users/{user_openid}/files'
@@ -777,7 +843,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             if b64:
                 raw = _b64_to_bytes(b64)
                 if not raw:
-                    return None
+                    raise ValueError(f'图片 base64 解码失败: {b64[:64]}...')
                 mime = _sniff_image_mime(raw)
                 files = {'file': (_image_filename(mime), raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
@@ -794,7 +860,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                     file = file[7:]
                 raw = await asyncio.to_thread(_read_file_bytes, file)
                 if not raw:
-                    return None
+                    raise FileNotFoundError(f'读取本地图片失败: {file}')
                 mime = _sniff_image_mime(raw)
                 files = {'file': (_image_filename(mime), raw, mime)}
                 form = {'file_type': '1', 'srv_send_msg': 'false'}
@@ -803,10 +869,10 @@ class QQOfficialAdapter(ProtocolAdapter):
                     files=files, data=form)
         except Exception as e:
             logger.warning('qq_official 单聊图片上传失败: %s', e)
-            return None
-        if isinstance(data, dict) and data.get('file_info'):
-            return {'file_info': data['file_info']}
-        return None
+            raise
+        if not isinstance(data, dict) or not data.get('file_info'):
+            raise RuntimeError(f'qq_official 单聊上传响应无 file_info: {data}')
+        return {'file_info': data['file_info']}
 
     def _wrap(self, data, ok: bool = True) -> dict:
         if ok and isinstance(data, dict):

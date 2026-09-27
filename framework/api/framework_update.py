@@ -19,6 +19,7 @@ def register(ctx):
     app = ctx.app
     framework = ctx.framework
     require_auth = ctx.require_auth
+    require_super = ctx.require_super
     audit_log = ctx.audit_log
     _project_root = ctx._project_root
     _get_framework_local_version = ctx._get_framework_local_version
@@ -166,10 +167,10 @@ def register(ctx):
             return jsonify({'code': 500, 'msg': 'GitHub API 请求超时'}), 500
         except Exception as e:
             logger.error(f"检查框架更新失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/framework/update', methods=['POST'])
-    @require_auth
+    @require_super
     def update_framework():
         """
         从 GitHub 更新框架源码到指定版本（默认最新 Release）
@@ -210,6 +211,15 @@ def register(ctx):
             tmp_dir = tempfile.mkdtemp(prefix='zcbot_fw_')
             try:
                 with zipfile.ZipFile(tmp_zip, 'r') as zf:
+                    # 安全校验：拒绝路径穿越（../、绝对路径、反斜杠）与符号链接条目
+                    for name in zf.namelist():
+                        if name.endswith('/'):
+                            continue
+                        if '..' in name or name.startswith('/') or '\\' in name:
+                            raise RuntimeError(f'框架更新 ZIP 含非法路径条目: {name}')
+                        info = zf.getinfo(name)
+                        if (info.external_attr >> 16) & 0xF000 == 0xA000:
+                            raise RuntimeError(f'框架更新 ZIP 拒绝符号链接条目: {name}')
                     zf.extractall(tmp_dir)
 
                 # GitHub ZIP 内含一层 repo-tag/ 目录
@@ -258,5 +268,5 @@ def register(ctx):
             logger.error(f"更新框架失败: {e}", exc_info=True)
             audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
                       {}, 'failure', str(e))
-            return jsonify({'code': 500, 'msg': f'更新失败: {e}'}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 

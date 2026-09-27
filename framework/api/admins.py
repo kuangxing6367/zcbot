@@ -29,7 +29,8 @@ def register(ctx):
             )
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"list_admins 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/admins', methods=['POST'])
     @require_super
@@ -61,7 +62,8 @@ def register(ctx):
             audit_log(admin['id'], admin['username'], 'add_admin', 'admin', username, {'role': role})
             return jsonify({'code': 0, 'msg': f'管理员 [{username}] 已添加'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"add_admin 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/admins/<int:admin_id>', methods=['DELETE'])
     @require_super
@@ -80,4 +82,5 @@ def register(ctx):
             audit_log(admin['id'], admin['username'], 'delete_admin', 'admin', row['username'])
             return jsonify({'code': 0, 'msg': '已删除'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"delete_admin 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500

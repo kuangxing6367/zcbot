@@ -1,10 +1,13 @@
 """终端输入监听
 
 在独立线程读取控制台输入，经事件循环执行已注册命令。
+非交互环境（stdin 非 TTY / 已重定向，如 CI、守护进程、测试）不启动输入线程，
+避免对终端交互的硬依赖。
 """
 
 import asyncio
 import logging
+import sys
 import threading
 
 from .command import terminal_commands
@@ -21,7 +24,17 @@ class TerminalInput:
         self._thread = None
 
     def start(self):
-        """启动终端监听"""
+        """启动终端监听（stdin 非交互时跳过，避免硬依赖终端）"""
+        try:
+            interactive = bool(sys.stdin) and sys.stdin.isatty()
+        except Exception:
+            interactive = False
+        if not interactive:
+            logger.info(
+                "终端交互已跳过：stdin 非交互终端（CI/守护进程/重定向环境），"
+                "终端命令仍可通过 API/IPC 触发"
+            )
+            return
         self._running = True
         self._thread = threading.Thread(target=self._read_loop, daemon=True, name="terminal-input")
         self._thread.start()

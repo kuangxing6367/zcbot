@@ -93,12 +93,12 @@ def register(ctx):
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
             logger.error(f"获取插件列表失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/upload', methods=['POST'])
-    @require_auth
+    @require_super
     def upload_plugin():
-        """上传 ZIP 插件包"""
+        """上传 ZIP 插件包（仅超级管理员，代码执行入口）"""
         admin = request.admin
 
         if 'file' not in request.files:
@@ -126,7 +126,7 @@ def register(ctx):
                     return jsonify({'code': 400, 'msg': 'ZIP 包中未找到 main.py'}), 400
 
                 for name in names:
-                    if '..' in name or name.startswith('/'):
+                    if '..' in name or name.startswith('/') or '\\' in name:
                         return jsonify({'code': 400, 'msg': f'非法路径: {name}'}), 400
 
                 for name in names:
@@ -198,7 +198,7 @@ def register(ctx):
             logger.error(f"上传插件失败: {e}", exc_info=True)
             audit_log(admin['id'], admin['username'], 'upload_plugin',
                       'plugin', plugin_name, None, 'failure', str(e))
-            return jsonify({'code': 500, 'msg': f'上传失败: {e}'}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/reload', methods=['POST'])
     @require_auth
@@ -219,7 +219,8 @@ def register(ctx):
             else:
                 return jsonify({'code': 500, 'msg': '加载失败'}), 500
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"reload_plugin 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/toggle', methods=['POST'])
     @require_auth
@@ -247,7 +248,8 @@ def register(ctx):
 
             return jsonify({'code': 0, 'msg': f'插件已{"启用" if is_active else "禁用"}'})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"toggle_plugin 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>', methods=['DELETE'])
     @require_auth
@@ -310,12 +312,13 @@ def register(ctx):
                 msg += f'（已清理业务表: {", ".join(dropped_tables)}）'
             return jsonify({'code': 0, 'msg': msg})
         except Exception as e:
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            logger.error(f"delete_plugin 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/install_deps', methods=['POST'])
-    @require_auth
+    @require_super
     def install_plugin_deps(plugin_name):
-        """一键安装插件缺失的 Python 依赖"""
+        """一键安装插件缺失的 Python 依赖（仅超级管理员）"""
         admin = request.admin
         if not plugin_name.replace('_', '').replace('-', '').isalnum():
             return jsonify({'code': 400, 'msg': '非法插件名'}), 400
@@ -343,12 +346,12 @@ def register(ctx):
                 return jsonify({'code': 500, 'msg': msg}), 500
         except Exception as e:
             logger.error(f"安装依赖失败 [{plugin_name}]: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/create_isolated_env', methods=['POST'])
-    @require_auth
+    @require_super
     def create_plugin_isolated_env(plugin_name):
-        """为插件创建隔离虚拟环境（解决版本冲突）"""
+        """为插件创建隔离虚拟环境（解决版本冲突，仅超级管理员）"""
         admin = request.admin
         if not plugin_name.replace('_', '').replace('-', '').isalnum():
             return jsonify({'code': 400, 'msg': '非法插件名'}), 400
@@ -371,7 +374,7 @@ def register(ctx):
                 return jsonify({'code': 500, 'msg': f"创建隔离环境失败: {result.get('error', '')}"}), 500
         except Exception as e:
             logger.error(f"创建隔离环境失败 [{plugin_name}]: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/venv_usage', methods=['GET'])
     @require_auth
@@ -382,7 +385,7 @@ def register(ctx):
             return jsonify({'code': 0, 'data': data})
         except Exception as e:
             logger.error(f"扫描 venv 占用失败: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>/isolated_env', methods=['DELETE'])
     @require_auth
@@ -415,5 +418,5 @@ def register(ctx):
                 }), 500
         except Exception as e:
             logger.error(f"删除隔离环境失败 [{plugin_name}]: {e}")
-            return jsonify({'code': 500, 'msg': str(e)}), 500
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 

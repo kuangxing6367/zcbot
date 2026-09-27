@@ -2,6 +2,22 @@
 
 本地 `python main.py` 跑通之后，下一步通常是把它放到服务器上长期运行：进程要能自拉起、端口要只对必要来源开放、数据要定期备份。按目标环境挑一条路径即可。
 
+## 上线前测试门禁
+
+发布到服务器前先跑测试，不要让回归靠线上日志暴露：
+
+```bash
+# 依赖安装完成后，跑完整 pytest 回归（CI 与本地同一条命令）
+python -m pip install pytest
+python -m pytest tests/test_smoke.py tests/test_html_assembler.py \
+  tests/test_event_buffer.py tests/test_qq_official.py \
+  tests/test_scheduler.py tests/test_db_regression.py tests/test_loop_fix_regression.py -q
+```
+
+- 仓库 `.github/workflows/tests.yml` 在每次 push / pull_request 时自动执行上述套件，未通过的分支不应合入主干；
+- 手动部署（服务器 `git pull`、Docker 构建、systemd 重启）前，在目标机器或 CI 上跑一遍 pytest 全绿后再切换流量；
+- 其余 `test_*.py`（如 `test_plugin_imports.py`、`test_dual_core.py`、`test_perm.py`）是模块级脚本式回归，CI 中单独执行，本地可在部署前一并跑完。
+
 ## 直接运行（开发/小规模）
 
 ```bash

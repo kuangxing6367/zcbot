@@ -79,8 +79,10 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         self._group_plugin_cache_time = 0
         self._group_cache_ttl = 30  # 缓存 30 秒
 
-        # ── 插件文件 mtime 快照（心跳增量注册用）──
+# ── 插件文件 mtime 快照（心跳增量注册用）──
         self._plugin_mtimes: Dict[str, float] = {}
+        # ── 加载失败插件自愈：失败插件名 → 失败时文件快照（mtime 变化后心跳自动重试加载）──
+        self._failed_mtimes: Dict[str, float] = {}
 
     # ── 依赖检查 / 自动安装 / 隔离 venv ──────────────────────
     # 已剥离到 framework/deps/ 的 PluginDepsMixin（混入本类），
@@ -232,6 +234,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
             info['register_func'](ctx)
         except Exception as e:
             logger.error(f"[{plugin_name}] register(ctx) 执行异常: {e}", exc_info=True)
+            # 自修复：记录失败时刻的文件快照，供心跳检测到文件修复后自动重试
+            self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
             return False
 
         # 获取注册的命令和任务
@@ -403,6 +407,38 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         if row is None:
             return True
         return bool(row.get('is_active', 1))
+
+    def disable_plugin(self, plugin_name: str):
+        """禁用插件：标记 is_active=0 并卸载（终端 disable 命令使用，与 WebUI toggle 同语义）"""
+        try:
+            self.db.execute(
+                "UPDATE plugins SET is_active = 0 WHERE plugin_name = %s", (plugin_name,)
+            )
+        except Exception as e:
+            logger.error(f"[{plugin_name}] 写入禁用状态失败: {e}")
+        self.unload_plugin(plugin_name)
+        try:
+            self.framework.router._invalidate_cache()
+        except Exception:
+            pass
+
+    def enable_plugin(self, plugin_name: str):
+        """启用插件：标记 is_active=1 并加载注册（终端 enable 命令使用，与 WebUI toggle 同语义）"""
+        try:
+            self.db.execute(
+                "UPDATE plugins SET is_active = 1 WHERE plugin_name = %s", (plugin_name,)
+            )
+        except Exception as e:
+            logger.error(f"[{plugin_name}] 写入启用状态失败: {e}")
+        if self.load_plugin(plugin_name):
+            self.register_commands(plugin_name)
+            try:
+                self.framework.router._invalidate_cache()
+            except Exception:
+                pass
+            logger.info(f"[{plugin_name}] 已启用")
+        else:
+            logger.warning(f"[{plugin_name}] 启用后加载失败（文件可能损坏，将在修复后自动自愈）")
 
     def load_all(self) -> list:
         """加载所有已发现插件，返回成功列表
