@@ -120,9 +120,18 @@ def _load_native_renderer():
             if not os.path.isfile(path):
                 continue
             try:
+                # PyO3 扩展每进程仅可初始化一次：先在 sys.modules 占位，
+                # 自愈/热重载二次调用直接复用首载实例（重跑 exec_module 必炸）
+                if 'zcbot_render' in sys.modules:
+                    return sys.modules['zcbot_render']
                 spec = importlib.util.spec_from_file_location('zcbot_render', path)
                 mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
+                sys.modules['zcbot_render'] = mod
+                try:
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    sys.modules.pop('zcbot_render', None)   # 允许尝试下一个候选
+                    raise
                 logger.info(f"[image_renderer] 原生渲染扩展已加载: {path}")
                 return mod
             except Exception as e:

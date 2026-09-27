@@ -101,9 +101,42 @@ def test_no_sqlite_poll_when_counter_zero(tmp_path):
         await buf.put(_ev(), None)
         ev, done, src = await buf.get_async()
         buf.task_done(src)
-        # 全空且 sqlite 计数为 0 → get_async 阻塞在 L1（不被空查询打断），超时即证明
+        # 全空且 sqlite 计数为 0 → get_async 阻塞在等待信号（不被空查询打断），超时即证明
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(buf.get_async(), timeout=0.15)
+        buf.close()
+    asyncio.run(run())
+
+
+def test_sqlite_overflow_wakes_blocked_consumer(tmp_path):
+    """复现压测 probe 场景：消费者睡在空 L1 上，超大事件落 sqlite 必须把它唤醒。
+    修复前 worker 阻塞在 L1.get()，溢出事件静默滞留到下一条小消息才被顺带吐出。"""
+    async def run():
+        buf = EventBuffer(_cfg(l1_max_bytes=600), str(tmp_path))
+        sleeper = asyncio.create_task(buf.get_async())
+        await asyncio.sleep(0.05)                 # 让消费者先睡进去
+        # 1MB 级事件进不了 600B 的 L1 → 落 sqlite；阻塞中的消费者应被信号唤醒
+        assert await buf.put(_ev(0, 'x' * 2000), None) is True
+        ev, done, src = await asyncio.wait_for(sleeper, timeout=2.0)
+        assert src == 'sqlite' and ev['seq'] == 0
+        buf.task_done(src)
+        assert buf.stats()['sqlite_pending'] == 0
+        buf.close()
+    asyncio.run(run())
+
+
+def test_overflow_then_small_event_order(tmp_path):
+    """probe 完整时序：大事件先落 sqlite，小事件后进 L1 → 大事件不再"有回显时有时无"。"""
+    async def run():
+        buf = EventBuffer(_cfg(l1_max_bytes=600), str(tmp_path))
+        assert await buf.put(_ev(0, 'x' * 2000), None) is True   # → sqlite
+        assert await buf.put(_ev(1, 'hi'), None) is True          # → L1
+        got = []
+        for _ in range(2):
+            ev, done, src = await asyncio.wait_for(buf.get_async(), timeout=2.0)
+            buf.task_done(src)
+            got.append((src, ev['seq']))
+        assert got == [('l1', 1), ('sqlite', 0)]                  # 优先级 L1→sqlite
         buf.close()
     asyncio.run(run())
 

@@ -53,7 +53,12 @@ _WS_VERSION = tuple(int(p) for p in websockets.__version__.split('.')[:2])
 _WS_MAJOR = _WS_VERSION[0] if _WS_VERSION else 0
 
 _MAX_CONCURRENT_EVENTS = 64
-_MAX_PENDING_EVENTS = 256
+# 有序分发链的积压上限：进 EventBuffer 分层缓冲前的最后一道闸。可经
+# core_plugins.yaml → onebot.max_pending_events 覆盖（此处仅为缺省值）
+_MAX_PENDING_EVENTS = 4096
+# WS 单帧上限：websockets 库默认 1MiB，大报文（base64 图等）会以 1009 断链。
+# 可经 onebot.max_frame_size 覆盖（缺省 16MB）
+_DEFAULT_MAX_FRAME_SIZE = 16 * 1024 * 1024
 
 _SENT_ACTIONS = ('send_msg', 'send_group_msg', 'send_private_msg')
 
@@ -283,6 +288,10 @@ class OneBotWebSocketServer:
         self.access_token = config.get('access_token', '')
         self.on_event_callback = on_event_callback
         self.api_caller = api_caller
+        self._max_pending_events = max(
+            256, int(config.get('max_pending_events') or _MAX_PENDING_EVENTS))
+        self.max_frame_size = max(
+            1024 * 1024, int(config.get('max_frame_size') or _DEFAULT_MAX_FRAME_SIZE))
         # 启用 SSL 后 WebSocket 走 wss（与 Web 后台共用 config['ssl'] 证书）
         self.ssl_context = ssl_context
 
@@ -302,16 +311,29 @@ class OneBotWebSocketServer:
     def loop(self):
         return self._loop
 
-    def start(self):
+    def start(self, loop=None):
         if self._running:
             return
         self._running = True
-        self._loop = asyncio.get_running_loop()
-        self._dispatch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_EVENTS)
-        self._server_task = asyncio.create_task(self._serve(), name="ws-server")
+        if loop is None:
+            loop = asyncio.get_running_loop()
+        self._loop = loop
+
+        def _boot():
+            # Semaphore/create_task 必须在事件循环线程上创建
+            self._dispatch_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_EVENTS)
+            self._server_task = asyncio.create_task(self._serve(), name="ws-server")
+
+        # 插件注册发生在工作线程（asyncio.to_thread），主循环运行在主线程，
+        # 必须把启动派发回事件循环线程执行
+        if loop.is_running():
+            loop.call_soon_threadsafe(_boot)
+        else:
+            _boot()
 
     async def _serve(self):
-        serve_kwargs = {'ping_interval': 30, 'ping_timeout': 10}
+        serve_kwargs = {'ping_interval': 30, 'ping_timeout': 10,
+                        'max_size': self.max_frame_size}
         # 启用 SSL 时走 wss（websockets 原生支持 ssl= 参数）
         if self.ssl_context is not None:
             serve_kwargs['ssl'] = self.ssl_context
@@ -396,9 +418,12 @@ class OneBotWebSocketServer:
                 post_type = data.get("post_type")
                 if post_type:
                     logger.debug(f"[{bot_name}] 收到事件 post_type={post_type} sub_type={data.get(f'{post_type}_type','')}")
-                    if self._dispatch_pending >= _MAX_PENDING_EVENTS:
+                    if self._dispatch_pending >= self._max_pending_events:
                         self._dispatch_dropped += 1
-                        logger.warning(f"[{bot_name}] 事件丢弃 pending={self._dispatch_pending} dropped={self._dispatch_dropped}")
+                        logger.warning(
+                            f"[{bot_name}] 事件丢弃 pending={self._dispatch_pending} "
+                            f"dropped={self._dispatch_dropped} "
+                            f"(可调 onebot.max_pending_events，当前 {self._max_pending_events})")
                         continue
                     self._dispatch_pending += 1
                     prev = self._conn_chains.get(bot_name)
@@ -518,8 +543,10 @@ class OneBotAdapter(ProtocolAdapter):
                 {'key': 'listen_host', 'label': '监听地址', 'type': 'string'},
                 {'key': 'listen_port', 'label': '监听端口', 'type': 'number'},
                 {'key': 'access_token', 'label': 'Access Token', 'type': 'password'},
+                {'key': 'max_pending_events', 'label': '分发积压上限', 'type': 'number'},
+                {'key': 'max_frame_size', 'label': 'WS 单帧上限(字节)', 'type': 'number'},
             ],
-            'restart_keys': ['listen_host', 'listen_port'],
+            'restart_keys': ['listen_host', 'listen_port', 'max_frame_size'],
             'endpoint_hint': f"{scheme}://{host}:{port}/ws",
             'guide': 'OneBot 客户端（NapCat / Lagrange / LLOneBot 等）添加「反向 WebSocket」连接，'
                      '填写反向 WS 服务端地址即可接入。',
@@ -545,7 +572,7 @@ class OneBotAdapter(ProtocolAdapter):
         return self.ws_server.get_connected_bots()
 
     def start(self):
-        self.ws_server.start()
+        self.ws_server.start(getattr(self.framework, 'loop', None))
 
     async def stop(self):
         await self.ws_server.stop()
@@ -613,8 +640,8 @@ def unregister():
     """卸载时停止"""
     global _adapter_instance
     if _adapter_instance:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(_adapter_instance.stop())
+        inst = _adapter_instance
         _adapter_instance = None
+        loop = getattr(inst.framework, 'loop', None)
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(inst.stop(), loop)
