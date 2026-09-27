@@ -23,6 +23,138 @@ import time
 logger = logging.getLogger('zcbot')
 
 
+class _FileL2Backend:
+    """自研 L2 溢出后端：append-only 日志文件，按行存取事件（不依赖 sqlite）。
+
+    - 写入：一条事件一行 JSON（与 sqlite payload 同构），追加 + flush；
+    - 读取：从 _read_offset 顺序读 n 行后推进偏移；读到文件尾即 truncate 复位
+      （语义同 sqlite 取出即删）；读指针越过一半时压缩一次，避免头部空洞无限膨胀；
+    - 内存记账：仅 _read_offset 与剩余行数两个整数，不缓存事件本体——O(1)，
+      不为内存而内存（不把积压事件全量加载进内存）。
+    """
+
+    def __init__(self, path: str):
+        self._path = path
+        self._lock = threading.Lock()
+        self._fh = None
+        self._read_offset = 0          # 已消费字节偏移
+        self._rows = 0                 # 剩余未消费行数
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        try:
+            self._fh = open(path, 'a+', encoding='utf-8', newline='')
+            self._rows = self._count_lines()
+        except Exception as e:
+            logger.error(f"L2 文件缓冲初始化失败，回落 L2 不可用: {e}")
+            self._fh = None
+            self._rows = 0
+
+    def _count_lines(self) -> int:
+        """启动时清点遗留行数（仅初始化一次，非热路径）"""
+        try:
+            self._fh.seek(0)
+            n = 0
+            for line in self._fh:
+                if line.strip():
+                    n += 1
+            self._fh.seek(0, os.SEEK_END)
+            return n
+        except Exception:
+            return 0
+
+    def _file_size(self) -> int:
+        try:
+            self._fh.flush()
+            return os.path.getsize(self._path)
+        except Exception:
+            return 0
+
+    def _compact(self):
+        """把未读部分（read_offset..EOF）重写进临时文件并原子替换，归还已读空洞"""
+        try:
+            tmp = self._path + '.tmp'
+            self._fh.flush()
+            with open(tmp, 'w', encoding='utf-8', newline='') as out:
+                self._fh.seek(self._read_offset)
+                while True:
+                    line = self._fh.readline()
+                    if not line:
+                        break
+                    out.write(line)
+            self._fh.close()
+            os.replace(tmp, self._path)
+            self._fh = open(self._path, 'a+', encoding='utf-8', newline='')
+            self._read_offset = 0
+        except Exception as e:
+            logger.warning(f"L2 文件缓冲压缩失败（忽略，继续顺序读）: {e}")
+
+    def write(self, event) -> bool:
+        """线程内追加一条（独立文件句柄 + 锁，不阻塞主库）"""
+        payload = json.dumps([event, None], ensure_ascii=False, default=str)
+        try:
+            with self._lock:
+                if self._fh is None:
+                    return False
+                self._fh.write(payload + '\n')
+                self._fh.flush()
+                self._rows += 1
+            return True
+        except Exception as e:
+            logger.warning(f"L2 文件缓冲写入失败: {e}")
+            return False
+
+    def pop_batch(self, n: int):
+        """线程内批量取出（取出即删语义，同 sqlite 批量取回）。
+
+        返回 (event, done, size) 三元组；size 用 payload 字节近似（仅水位记账用）。
+        """
+        try:
+            with self._lock:
+                if self._fh is None:
+                    return []
+                self._fh.seek(self._read_offset)
+                items = []
+                for _ in range(n):
+                    line = self._fh.readline()
+                    if not line:
+                        break
+                    line = line.rstrip('\n')
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if isinstance(data, list) and len(data) == 2:
+                            items.append((data[0], data[1], len(line) + 64))
+                        else:
+                            items.append((data, None, len(line) + 64))
+                    except Exception:
+                        logger.warning("L2 文件缓冲中存在损坏行，已跳过")
+                self._read_offset = self._fh.tell()
+                if self._read_offset >= self._file_size():
+                    # 已全部消化：截断复位，归还磁盘空间
+                    self._fh.truncate(0)
+                    self._fh.seek(0)
+                    self._read_offset = 0
+                elif self._read_offset > self._file_size() / 2:
+                    self._compact()
+                self._rows = max(0, self._rows - len(items))
+            return items
+        except Exception as e:
+            logger.warning(f"L2 文件缓冲读取失败: {e}")
+            return []
+
+    def rows(self) -> int:
+        return self._rows
+
+    def close(self):
+        try:
+            if self._fh is not None:
+                with self._lock:
+                    self._fh.close()
+                self._fh = None
+        except Exception:
+            pass
+
+
 class EventBuffer:
     """三层事件缓冲（单消费者语义由外部 worker 保证）"""
 
@@ -30,8 +162,15 @@ class EventBuffer:
         buf_cfg = cfg.get('buffer', {}) or {}
         self.l1_max_bytes = int(buf_cfg.get('l1_max_bytes', 512 * 1024))
         self.l1_max_items = int(cfg.get('maxsize', 2000))
-        self.sqlite_enabled = bool(buf_cfg.get('sqlite_enabled', True))
+        # L2 溢出后端：'sqlite'（原持久化层）| 'file'（自研 append 文件）| 'off'（禁用）。
+        # 显式给值则按值，未给时 sqlite_enabled=True 用 sqlite、否则自动用自研 file——
+        # 保证 sqlite 关闭时 L3 满仍能回落 L2，而不是直接丢弃。
+        self.l2_mode = buf_cfg.get('l2_backend')
+        if self.l2_mode not in ('sqlite', 'file', 'off'):
+            self.l2_mode = 'sqlite' if buf_cfg.get('sqlite_enabled', True) else 'file'
+        self.sqlite_enabled = self.l2_mode == 'sqlite'
         self.sqlite_path = buf_cfg.get('sqlite_path') or os.path.join(data_dir, 'event_buffer.db')
+        self.l2_path = buf_cfg.get('l2_path') or os.path.join(data_dir, 'event_buffer.l2.log')
         self.sqlite_write_timeout = float(buf_cfg.get('sqlite_write_timeout', 0.5))
         self.sqlite_batch = int(buf_cfg.get('sqlite_batch', 64))
         self.l3_max_bytes = int(buf_cfg.get('l3_max_bytes', 4 * 1024 * 1024))
@@ -42,17 +181,62 @@ class EventBuffer:
         self._l3 = asyncio.Queue()                            # 无条数上限，靠字节计数兜底
         self._l3_bytes = 0
         self._wakeup = asyncio.Event()                        # 任一层入队信号（修溢出不唤醒）
-        self._sqlite_pending = []                             # sqlite 批量取回、待 worker 处理
-        self._sqlite_rows = 0                                 # sqlite 表内待消化行数（免热路径查库）
+        self._l2_pending = []                             # L2 批量取回、待 worker 处理
         self._dropped = 0
         self._overflow_to_sqlite = 0
         self._sqlite_conn = None
         self._sqlite_lock = threading.Lock()
         self._sqlite_fail_streak = 0                      # 连续写失败计数（自愈降级用）
         self._sqlite_fail_threshold = int(buf_cfg.get('sqlite_fail_threshold', 8))
-        if self.sqlite_enabled:
+        self._sqlite_rows = 0                             # sqlite 表内待消化行数（免热路径查库）
+        self._l2_file = None                              # 自研 file 后端实例
+        if self.l2_mode == 'sqlite':
             self._init_sqlite()
             self._sqlite_rows = self._count_rows()   # 承接上次进程遗留的持久化事件
+        elif self.l2_mode == 'file':
+            self._l2_file = _FileL2Backend(self.l2_path)
+
+    # ---------- L2 统一入口（sqlite / 自研 file 一致语义） ----------
+    def _l2_rows(self) -> int:
+        """L2 待消化条数（免热路径查库）"""
+        if self.l2_mode == 'sqlite':
+            return self._sqlite_rows
+        if self.l2_mode == 'file':
+            return self._l2_file.rows() if self._l2_file else 0
+        return 0
+
+    async def _l2_write(self, event) -> bool:
+        """写一条到 L2 溢出层（统一超时与失败计数语义）"""
+        try:
+            if self.l2_mode == 'sqlite':
+                ok = await asyncio.wait_for(
+                    asyncio.to_thread(self._write_sqlite, event),
+                    timeout=self.sqlite_write_timeout)
+            elif self.l2_mode == 'file':
+                ok = await asyncio.wait_for(
+                    asyncio.to_thread(self._l2_file.write, event),
+                    timeout=self.sqlite_write_timeout)
+            else:
+                return False
+            if ok:
+                self._overflow_to_sqlite += 1
+                return True
+            return False
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"L2 缓冲写入超时（>{self.sqlite_write_timeout}s），转下一层")
+            return False
+        except Exception as e:
+            logger.warning(f"L2 缓冲写入异常: {e}")
+            return False
+
+    def _l2_pop_batch(self, n: int):
+        """从 L2 批量取回（取出即删语义）"""
+        if self.l2_mode == 'sqlite':
+            return self._pop_sqlite_batch(n)
+        if self.l2_mode == 'file':
+            return self._l2_file.pop_batch(n) if self._l2_file else []
+        return []
 
     # ---------- 大小统计 ----------
     @staticmethod
@@ -168,7 +352,7 @@ class EventBuffer:
     async def put(self, event, done=None) -> bool:
         """事件入队。返回 True=已承接；False=全满丢弃（已告警）。
 
-        done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保留背压契约。
+done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保留背压契约。
         """
         size = self._size_of(event)
         if done is not None:
@@ -176,6 +360,28 @@ class EventBuffer:
             self._l1_bytes += size
             self._wakeup.set()
             return True
+        # 单条超 L1 容量的超大事件（如 1MB 图片包）：L1 天然放不下，不浪费两次
+        # sleep(0) 重试，直接优先 L3 内存兜底，其次才落 L2（自研 file / sqlite）——
+        # 避免超大块每次都触发磁盘 IO（sqlite 单条 INSERT+commit 约 15ms/条）。
+        if size > self.l1_max_bytes:
+            if self._l3_bytes + size <= self.l3_max_bytes:
+                self._l3.put_nowait((event, None, size))
+                self._l3_bytes += size
+                self._wakeup.set()
+                return True
+            # L3 满 → 回落 L2（内存 O(1) 的自研 file 或 sqlite），不直接丢弃
+            if self.l2_mode != 'off':
+                if await self._l2_write(event):
+                    self._wakeup.set()          # L2 落盘也要唤醒阻塞中的消费者
+                    return True
+                logger.warning(
+                    f"L3 满且 L2 写失败：size={size}B，事件改走丢弃")
+            self._dropped += 1
+            logger.error(
+                f"超大事件丢弃：size={size}B 超 L1({self.l1_max_bytes}B)，"
+                f"且 L3({self._l3_bytes}/{self.l3_max_bytes}B) 已满"
+                f"{'、L2 不可用' if self.l2_mode == 'off' else ''}，累计丢弃 {self._dropped} 条")
+            return False
         # L1 内存主缓冲（字节 + 条数双限）。突发注入（风暴 bench / 批量回调）不逐事件
         # 让出事件循环，L1 一满就会把本可留在内存的事件全压进 sqlite 磁盘层——
         # 所以满时先 sleep(0) 让消费者排空一次再重试，仍满才真正溢出
@@ -190,44 +396,41 @@ class EventBuffer:
                     pass
             if attempt == 0:
                 await asyncio.sleep(0)
-        # L1 满 → sqlite 持久化溢出层（短超时；写不过来转 L3 内存兜底）
-        if self.sqlite_enabled:
-            try:
-                ok = await asyncio.wait_for(
-                    asyncio.to_thread(self._write_sqlite, event),
-                    timeout=self.sqlite_write_timeout)
-                if ok:
-                    self._overflow_to_sqlite += 1
-                    self._wakeup.set()          # sqlite 落盘也要唤醒阻塞中的消费者
-                    return True
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"sqlite 缓冲写入超时（>{self.sqlite_write_timeout}s），转入内存兜底")
-            except Exception as e:
-                logger.warning(f"sqlite 缓冲写入异常: {e}")
+# L1 满 → L2 溢出层（自研 file / sqlite，短超时；写不过来转 L3 内存兜底）
+        if self.l2_mode != 'off':
+            if await self._l2_write(event):
+                self._wakeup.set()          # L2 落盘也要唤醒阻塞中的消费者
+                return True
+            logger.warning(
+                f"L2 缓冲写入超时/失败（>{self.sqlite_write_timeout}s），转入内存兜底")
         # L3 内存兜底（4MB）
         if self._l3_bytes + size <= self.l3_max_bytes:
             self._l3.put_nowait((event, None, size))
             self._l3_bytes += size
             self._wakeup.set()                  # 任一层入队都必须唤醒消费者
             return True
+        # L3 满 → 再试一次回落 L2（上游瞬时抖动重试，避免直接丢弃）
+        if self.l2_mode != 'off':
+            if await self._l2_write(event):
+                self._wakeup.set()
+                return True
         # 全满 → 告警 + 丢弃（保老弃新）
         self._dropped += 1
         if self._dropped <= 3 or self._dropped % 100 == 1:
             logger.error(
                 f"事件缓冲全满告警：L1={self._l1_bytes}/{self.l1_max_bytes}B "
                 f"L3={self._l3_bytes}/{self.l3_max_bytes}B "
-                f"sqlite={self._sqlite_rows}条，已累计丢弃 {self._dropped} 条事件")
+                f"L2={self._l2_rows()}条，已累计丢弃 {self._dropped} 条事件")
         return False
 
-    # ---------- 消费 ----------
+# ---------- 消费 ----------
     async def get_async(self):
         """取一条待处理事件，返回 (event, done, source)。
 
-        优先级 L1 → L3 → sqlite（批量回取，仅当表内有已知积压时才发起线程查询，
-        空转不查库）。全空时阻塞等待「任一层入队」信号—— sqlite/L3 溢出同样会
-        唤醒消费者（旧实现只阻塞在 L1.get()，溢出事件会静默滞留到下一条
-        L1 事件到来才被顺带吐出，表现为"有回显时有时无"）。
+        优先级 L1 → L3 → sqlite。L1 为空时不会直接从 L2 逐条吐出，而是把 L2 批量
+        取回并回填进 L1（字节 + 条数双限内尽量回填），再走 L1 正常路径消费——
+        保证事件始终经内存热层消化，sqlite 只作为持久化暂存；回填放不下（超 L1
+        上限的遗留大块）才直接取出。全空时阻塞等待「任一层入队」信号。
         """
         while True:
             try:
@@ -242,20 +445,32 @@ class EventBuffer:
                 return event, done, 'l3'
             except asyncio.QueueEmpty:
                 pass
-            if self._sqlite_pending:
-                item = self._sqlite_pending.pop(0)
-                return item[0], item[1], 'sqlite'
-            if self.sqlite_enabled and self._sqlite_rows > 0:
-                batch = await asyncio.to_thread(self._pop_sqlite_batch, self.sqlite_batch)
+            # L2 → L1 回填：批量取回（取出即删），在 L1 剩余容量内回填；
+            # 填不下的（单条超 L1 上限的历史大块）暂存 _l2_pending 依次直出。
+            if self.l2_mode != 'off' and self._l2_rows() > 0:
+                batch = await asyncio.to_thread(self._l2_pop_batch, self.sqlite_batch)
                 if batch:
-                    self._sqlite_pending = batch
-                    item = self._sqlite_pending.pop(0)
-                    return item[0], item[1], 'sqlite'
+                    for item in batch:
+                        _e, _d, _s = item
+                        if self._l1_bytes + _s <= self.l1_max_bytes:
+                            try:
+                                self._l1.put_nowait(item)
+                                self._l1_bytes += _s
+                            except asyncio.QueueFull:
+                                self._l2_pending.append(item)
+                        else:
+                            self._l2_pending.append(item)
+                    self._wakeup.set()          # 回填 L1 也要唤醒消费者
+                    continue                    # 回填后回到顶部走 L1 正常路径
+            if self._l2_pending:
+                item = self._l2_pending.pop(0)
+                _src = 'sqlite' if self.l2_mode == 'sqlite' else 'l2'
+                return item[0], item[1], _src
             # 全空：清信号后复查一遍（闭合「清信号与入队 set 之间」的丢失唤醒竞态），
             # 仍空才阻塞等信号
             self._wakeup.clear()
             if (not self._l1.empty() or not self._l3.empty()
-                    or self._sqlite_pending or self._sqlite_rows > 0):
+                    or self._l2_pending or self._sqlite_rows > 0):
                 continue
             await self._wakeup.wait()
 
@@ -267,10 +482,10 @@ class EventBuffer:
             self._l3.task_done()
         # sqlite 层取出即删，无需计数
 
-    # ---------- 停机 / 统计 ----------
+# ---------- 停机 / 统计 ----------
     def empty_all(self) -> bool:
         return (self._l1.empty() and self._l3.empty()
-                and not self._sqlite_pending and self._sqlite_rows == 0)
+                and not self._l2_pending and self._l2_rows() == 0)
 
     async def wait_drained(self, timeout: float) -> bool:
         """限时等待三层全部清空（供停机排空；返回是否排空完成）"""
@@ -280,7 +495,7 @@ class EventBuffer:
         except asyncio.TimeoutError:
             return False
         deadline = time.monotonic() + timeout
-        while self._sqlite_rows > 0 or self._sqlite_pending:
+        while self._l2_rows() > 0 or self._l2_pending:
             if time.monotonic() >= deadline:
                 return False
             await asyncio.sleep(0.05)
@@ -294,6 +509,9 @@ class EventBuffer:
             except Exception:
                 pass
             self._sqlite_conn = None
+        if self._l2_file is not None:
+            self._l2_file.close()
+            self._l2_file = None
 
     def stats(self) -> dict:
         return {
@@ -303,7 +521,9 @@ class EventBuffer:
             'l3_items': self._l3.qsize(),
             'l3_bytes': self._l3_bytes,
             'l3_max_bytes': self.l3_max_bytes,
-            'sqlite_pending': self._sqlite_rows + len(self._sqlite_pending),
+            'l2_mode': self.l2_mode,
+            'l2_pending': self._l2_rows() + len(self._l2_pending),
+            'sqlite_pending': self._sqlite_rows + len(self._l2_pending),
             'overflow_to_sqlite': self._overflow_to_sqlite,
             'dropped': self._dropped,
         }
