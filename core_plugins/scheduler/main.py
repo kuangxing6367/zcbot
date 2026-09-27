@@ -4,6 +4,8 @@
 """
 import asyncio
 import logging
+import threading
+import time
 from typing import Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -29,8 +31,37 @@ class TaskScheduler:
         self.framework = framework
         self._scheduler = AsyncIOScheduler()
         self._plugin_tasks = {}
+        self._waiting_boot = False
 
     def start(self, loop=None):
+        """启动调度器；插件注册发生在工作线程（asyncio.to_thread），主循环
+        运行在主线程，AsyncIOScheduler.start 必须在事件循环线程上执行。
+        loop 未就绪时由守护线程等待就绪后线程安全地派发——原先的兜底直接在
+        当前线程 start，无运行循环时必报错（压测轮已实锤）。"""
+        if loop is None:
+            loop = getattr(self.framework, 'loop', None)
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(self._start)
+            return
+        if self._waiting_boot:
+            return
+        self._waiting_boot = True
+
+        def _wait():
+            for _ in range(120):
+                lp = getattr(self.framework, 'loop', None)
+                if lp is not None and lp.is_running():
+                    self._waiting_boot = False
+                    lp.call_soon_threadsafe(self._start)
+                    return
+                time.sleep(0.5)
+            self._waiting_boot = False
+            logger.error('scheduler 等待框架事件循环超时（60s），定时任务未启动')
+
+        threading.Thread(target=_wait, daemon=True,
+                         name='scheduler-boot-wait').start()
+
+    def _start(self):
         if not self._scheduler.running:
             self._scheduler.start()
             logger.info("定时任务调度器已启动")
@@ -131,7 +162,7 @@ def register(ctx):
     fw.services.register('scheduler', _scheduler)
     _scheduler.start()
 
-    ctx.log("调度器已启动")
+    ctx.log("调度器已注册")
 
 
 def unregister():
