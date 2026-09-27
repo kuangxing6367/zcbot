@@ -26,6 +26,46 @@
 
 ---
 
+## v1.7.2（2026-09-27）
+
+> 主题：**四框架横评（2026-09-26~27）暴露缺陷全部合入——qq_official 适配器六项修复 + 压测三行级 bug + scheduler 启动修复 + 接入端旋钮配置化**。
+
+### 修复
+- **qq_official 适配器（体检发现，六项）**：
+  - 发送成败判定：原把整个响应 `str()` 后查 `'ret'` 子串且不查 HTTP 状态码，失败可被
+    报成成功 → `_api_request` 非 2xx 抛错（带状态码与响应片段），2xx 才 ok，群/单聊统一；
+  - 主动消息出口：`call_api` 新增 `active=True` 不挂 msg_id（默认行为不变，仍自动补被动 id）；
+  - 被动窗口按会话类型清理：群 5 分钟 / 单聊 60 分钟（原统一 5 分钟，单聊窗口被无声缩短）；
+  - token 刷新加锁并统一提前阈值 60s（原 async 60s / sync 30s 不一致，可并发重刷）；
+  - 启动加固：loop 未就绪由守护线程等待后线程安全派发（旧 `get_event_loop().call_soon`
+    在 3.10+ 静默失效，适配器可能永不启动）；`unregister` 弃用 API 移除 + 同步收尾兜底；
+  - 事件幂等去重（Resume 重放/服务重发只进一次）、白名单补 `DIRECT_MESSAGE_CREATE`、
+    附件结构化透传 `event['attachments']`、c2c 图片上传按 mime 定扩展名（原硬编码 .png）、
+    Content-Type 仅在 JSON 请求时设置。base64:// 透传设计保持不变。
+- **EventBuffer 溢出不唤醒（压测 probe 实锤）**：`get_async` 全空时只阻塞在 `L1.get()`，
+  事件落 sqlite 不唤醒消费者，积压滞留到下一条 L1 事件才被顺带吐出（"有回显时有时无"）。
+  改为 `asyncio.Event` 入队信号，任一层（L1/L3/sqlite）落盘均唤醒；清信号后复查闭合
+  丢失唤醒竞态。回归测试复现压测 probe 时序 + 关 sqlite 强制走 L3 的确定性用例
+  （CI py3.10 曾暴露 L3 分支漏挂信号，已补）。
+- **官方 scheduler 启动必报错**：`fw.loop` 未就绪时兜底在当前线程
+  `AsyncIOScheduler.start()`，无运行循环必炸 → 守护线程等就绪后
+  `call_soon_threadsafe` 派发（register 工作线程时序的既有约定），两例回归测试。
+- **image_renderer PyO3 二次初始化崩溃**：原生扩展加载加每进程一次守卫
+  （`sys.modules` 占位 + 复用，失败摘除换候选），自愈/热重载不再触发
+  init-once 崩溃导致渲染静默回退 PIL（干净进程实测 3.1ms/张）。
+
+### 优化（配置化）
+- **接入端旋钮进配置中心**（`core_plugins.yaml`，原硬编码）：
+  `onebot.max_pending_events`（有序分发积压上限，256 → 缺省 4096，压测中
+  257 条瞬发静默丢的元凶）、`onebot.max_frame_size`（WS 单帧上限，websockets
+  默认 1MiB → 缺省 16MB，1MB 报文 1009 断链的根因）。WebUI 连接页同步露出。
+
+### 测试
+- 新增 `tests/test_qq_official.py` 11 例（全离线）、`tests/test_scheduler.py` 2 例、
+  `tests/test_event_buffer.py` 扩至 10 例（唤醒路径全覆盖），全部纳入 CI。
+
+---
+
 ## v1.7.1（2026-09-26）
 
 > 主题：**事件缓冲热路径修复（净开销 ~173μs → 6.2μs/事件，端到端 no-op 5.6k → 82k msg/s）+ core_plugins.yaml 退出版本跟踪**。
