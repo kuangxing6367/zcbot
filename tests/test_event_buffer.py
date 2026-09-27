@@ -125,6 +125,23 @@ def test_sqlite_overflow_wakes_blocked_consumer(tmp_path):
     asyncio.run(run())
 
 
+def test_l3_overflow_wakes_blocked_consumer(tmp_path):
+    """L3 兜底分支同样必须唤醒（CI 3.10 曾因 sqlite 写超时走 L3 而漏信号）：
+    关掉 sqlite，超大事件只能落 L3，睡着的消费者必须被唤醒。"""
+    async def run():
+        buf = EventBuffer({'maxsize': 2000,
+                           'buffer': {'l1_max_bytes': 600, 'sqlite_enabled': False}},
+                          str(tmp_path))
+        sleeper = asyncio.create_task(buf.get_async())
+        await asyncio.sleep(0.05)
+        assert await buf.put(_ev(0, 'x' * 2000), None) is True   # 只能落 L3
+        ev, done, src = await asyncio.wait_for(sleeper, timeout=2.0)
+        assert src == 'l3' and ev['seq'] == 0
+        buf.task_done(src)
+        buf.close()
+    asyncio.run(run())
+
+
 def test_overflow_then_small_event_order(tmp_path):
     """probe 完整时序：大事件先落 sqlite，小事件后进 L1 → 大事件不再"有回显时有时无"。"""
     async def run():
