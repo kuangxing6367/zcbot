@@ -76,18 +76,20 @@ def test_overflow_to_sqlite_and_drain(tmp_path):
 
 def test_restart_inherits_persisted_rows(tmp_path):
     async def run():
-        b1 = EventBuffer(_cfg(l1_max_bytes=600), str(tmp_path))
+        # l1_max_bytes 须大于单事件 size，使其走正常路径（满则溢 sqlite 落盘）；
+        # 若过小会命中"超大事件优先 L3"分支，不产生 sqlite 遗留，无法测重启承接。
+        b1 = EventBuffer(_cfg(l1_max_bytes=2500), str(tmp_path))
         for i in range(5):
             await b1.put(_ev(i, 'y' * 300), None)
         n_left = b1.stats()['sqlite_pending']
         assert n_left > 0
         b1.close()
 
-        b2 = EventBuffer(_cfg(l1_max_bytes=600), str(tmp_path))
+        b2 = EventBuffer(_cfg(l1_max_bytes=2500), str(tmp_path))
         assert b2.stats()['sqlite_pending'] == n_left   # 启动时清点上次进程遗留
         drained = 0
-        while b2.stats()['sqlite_pending'] > 0:
-            ev, done, src = await b2.get_async()
+        while not b2.empty_all():                        # 回填 L1 后 pending 计数先归零，
+            ev, done, src = await b2.get_async()         # 须排空内存层才能数全
             b2.task_done(src)
             drained += 1
         assert drained == n_left
@@ -109,13 +111,14 @@ def test_no_sqlite_poll_when_counter_zero(tmp_path):
 
 
 def test_sqlite_overflow_wakes_blocked_consumer(tmp_path):
-    """复现压测 probe 场景：消费者睡在空 L1 上，超大事件落 sqlite 必须把它唤醒。
-    修复前 worker 阻塞在 L1.get()，溢出事件静默滞留到下一条小消息才被顺带吐出。"""
+    """复现压测 probe 场景：消费者睡在空 L1 上，超大事件在 L3 也放不下、落 sqlite
+    必须把它唤醒。新契约：1MB 级事件优先 L3 内存兜底；此例 L3 极小（2KB），
+    事件只能落到 L2 sqlite，阻塞中的消费者应被信号唤醒。"""
     async def run():
-        buf = EventBuffer(_cfg(l1_max_bytes=600), str(tmp_path))
+        buf = EventBuffer(_cfg(l1_max_bytes=600, l3_max_bytes=2000), str(tmp_path))
         sleeper = asyncio.create_task(buf.get_async())
         await asyncio.sleep(0.05)                 # 让消费者先睡进去
-        # 1MB 级事件进不了 600B 的 L1 → 落 sqlite；阻塞中的消费者应被信号唤醒
+        # 事件 ~4KB：进不了 600B 的 L1，也进不了 2KB 的 L3 → 落 sqlite；阻塞中消费者应被唤醒
         assert await buf.put(_ev(0, 'x' * 2000), None) is True
         ev, done, src = await asyncio.wait_for(sleeper, timeout=2.0)
         assert src == 'sqlite' and ev['seq'] == 0
@@ -143,17 +146,18 @@ def test_l3_overflow_wakes_blocked_consumer(tmp_path):
 
 
 def test_overflow_then_small_event_order(tmp_path):
-    """probe 完整时序：大事件先落 sqlite，小事件后进 L1 → 大事件不再"有回显时有时无"。"""
+    """probe 完整时序：大事件先落溢出层，小事件后进 L1 → 大事件不再"有回显时有时无"。
+    新契约下 1MB 级事件优先 L3 内存兜底（sqlite 仅兜 L3 后），消费顺序不变。"""
     async def run():
         buf = EventBuffer(_cfg(l1_max_bytes=600), str(tmp_path))
-        assert await buf.put(_ev(0, 'x' * 2000), None) is True   # → sqlite
+        assert await buf.put(_ev(0, 'x' * 2000), None) is True   # 超大 → L3
         assert await buf.put(_ev(1, 'hi'), None) is True          # → L1
         got = []
         for _ in range(2):
             ev, done, src = await asyncio.wait_for(buf.get_async(), timeout=2.0)
             buf.task_done(src)
             got.append((src, ev['seq']))
-        assert got == [('l1', 1), ('sqlite', 0)]                  # 优先级 L1→sqlite
+        assert got == [('l1', 1), ('l3', 0)]                  # 优先级 L1→L3
         buf.close()
     asyncio.run(run())
 
@@ -161,8 +165,10 @@ def test_overflow_then_small_event_order(tmp_path):
 def test_drop_when_all_full(tmp_path):
     async def run():
         size = EventBuffer._size_of(_ev(0, 'a' * 300))
+        # 显式 l2_backend=off：没有任何 L2 可回落时，L1/L3 全满才真正丢弃
         buf = EventBuffer({'maxsize': 1,
                            'buffer': {'l1_max_bytes': 10_000_000, 'sqlite_enabled': False,
+                                      'l2_backend': 'off',
                                       'l3_max_bytes': int(size * 1.5)}}, str(tmp_path))
         assert await buf.put(_ev(0, 'a' * 300), None) is True    # → L1（条数满）
         assert await buf.put(_ev(1, 'a' * 300), None) is True    # → L3（1.5x 容一条）
