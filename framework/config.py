@@ -267,6 +267,7 @@ _CORE_PLUGIN_SCHEMA = {
     'onebot_adapter': {'enabled': True, 'listen_host': '0.0.0.0',
                        'listen_port': 6830, 'access_token': '',
                        'max_pending_events': 4096,
+                       'max_pending_bytes': 67108864,
                        'max_frame_size': 16777216},
     'webui': {'enabled': True, 'host': '127.0.0.1', 'port': 8080},
     'session': {'enabled': True},

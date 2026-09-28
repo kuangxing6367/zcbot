@@ -21,6 +21,18 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 双模式兼容：文件既支持 `python tests/test_self_heal.py` 直接执行（run_all 手动传 tmp 局部变量），
+# 也支持 pytest 收集。pytest 下 4 个 test_*(tmp) 需要 tmp fixture——转发到内置 tmp_path。
+# 用 try/except 保护「直接 python 执行」路径（届时 pytest 可能未安装，fixture 不存在也不影响 run_all）。
+try:
+    import pytest
+
+    @pytest.fixture
+    def tmp(tmp_path):
+        return tmp_path
+except ImportError:
+    pass
+
 PASS = 0
 FAIL = 0
 
