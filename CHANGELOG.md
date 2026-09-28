@@ -26,6 +26,54 @@
 
 ---
 
+## v1.7.4（2026-09-28）
+
+> 主题：**事件入队热路径 O(1) 尺寸记账（约 120ns，与事件大小无关）+ 分发层字节闸门 + L2 落盘瘦身**。
+> 延续 v1.7.3 的存储降级兜底，这一版把「每条事件入队都要做一次全量尺寸估算」的热点成本
+> 从毫秒级压到百纳秒级，并补上 onebot 分发层「条数未满、大事件却已撑爆内存」的缺口。
+
+### 性能
+- **入队尺寸记账改 O(1) 查表（热点路径）**：`EventBuffer._size_of` 原为 `len(repr(event)) + 64`
+  —— C 层递归拼整个 dict 字符串，超大事件（base64 图片）被迫拷贝几百 KB，单条 0.9~2ms。
+  现改为**构造时预算 + 入队查表**：onebot 归一化 `normalize_event` 一次性算好尺寸写入 `_est_size`，
+  `_size_of` 命中即返回值。四档实测（本机 managed Python 3.13，单位 ns）：
+  小事件 5368 → 121、中事件 15860 → 133、大事件（200 段 / 5KB）219524 → 126、
+  超大事件（1 段 / 200KB base64）2104939 → 122，**稳定约 120ns 且与事件大小无关**，
+  优于改造计划设定的 170ns 基线。9ns 属 C 扩展量级，纯 Python 不可达（已说明）。
+- **`_size_of` 回退路径轻量化**：无 `_est_size` 的事件（测试 fixture / 其它协议来源）不再走 `repr`，
+  改为内联浅层估算（只遍历顶层字段 + `message` 段 `data` 内字符串值），
+  中小事件 1.6~4.6x、超大事件 433x；估算口径与构造时预算逐字对齐，两类事件的水位判断无漂移。
+
+### 修复
+- **分发层大事件漏算（base64 大图）**：`_size_of` 与构造时预算原先只数 `message` 段的 `data.text`，
+  而 base64 图片走 `data.file`，导致超大事件被按小事件记账、字节闸门形同虚设。改为数 `data` 内
+  **所有字符串值**（text / file / url 等），1MB 重尾截断保留。
+
+### 加固
+- **onebot 分发层字节闸门**：`_dispatch_pending` 原本只有条数闸门（缺省 4096 条），而 onebot 原始
+  payload 单条可达数 MB，条数远未到就能吃光内存。新增 `max_pending_bytes`（缺省 64MB），
+  与条数闸门同时生效，超限丢弃并告警（pending / pending_bytes / dropped 一并打印）；
+  WebUI「OneBot 接入」设置页可调。
+
+### 优化
+- **去双携带**：onebot 归一化 dict 不再冗余携带 `raw_message`（CQ 串）。正文以 `message` 段数组为
+  唯一来源，`Event.raw_message` 已有 `_extract_text(message)` 回退（`framework/messaging/event.py`），
+  需要原文的消费方语义不变；单条事件的内存与序列化体积同步下降。
+- **L2 落盘瘦身**：溢出到 sqlite / 文件 L2 的事件在序列化前剥离冗余 `raw`（完整原始 payload 镜像，
+  事件本身已有 message / sender / user_id 等结构化字段）。**不修改内存事件**（L1/L3 与 session 备份
+  仍需 raw），只剥离落盘副本；回读侧补 `raw: {}` 占位，回读形态与内存保持一致。
+  磁盘占用与 IO 随事件大小同比下降。
+
+### 测试
+- `tests/test_self_heal.py` 补 pytest 双模式：新增 `tmp` fixture（转发内置 `tmp_path`），
+  此前 pytest 收集下 4 例报错，现与 `python tests/test_self_heal.py` 直接执行双通。
+- 全量回归：pytest 风格 **119 例**（db_regression / event_buffer / file_store / html_assembler /
+  loop_fix / qq_official / scheduler / sql_sim_debug / core_plugin_switch / dual_core /
+  security_hardening / self_heal / smoke）+ 脚本式套件 **129 例**
+  （buffer_l2_file 22、buffer_refill 15、self_heal 24、plugin_imports 25、perm 43）全绿。
+
+---
+
 ## v1.7.3（2026-09-27）
 
 > 主题：**core 插件"全关却仍加载"根因修复 + 失败插件自动自愈 + 存储降级兜底（FileStore/调试模式）+ 7 项安全加固（WebUI 权限收敛）**。
