@@ -9,7 +9,7 @@ import logging
 import threading
 import time
 import urllib.parse
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 logger = logging.getLogger('zcbot')
 
@@ -451,7 +451,7 @@ class HttpApiServer:
         ApiHandler.framework = self.framework
         ApiHandler.token = self.token
         ApiHandler.allow_db = self.allow_db
-        self._server = HTTPServer((self.host, self.port), ApiHandler)
+        self._server = ThreadingHTTPServer((self.host, self.port), ApiHandler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="http-api")
         self._thread.start()
 

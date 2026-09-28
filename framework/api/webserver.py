@@ -66,7 +66,7 @@ class WebServer:
             else:
                 logger.error(f"Web UI 异常: {e}")
 
-    def stop(self):
+def stop(self):
         """停止 Web 服务器（真正关闭监听，避免优雅停机后端口残留）"""
         self._running = False
         srv = self._server
@@ -83,3 +83,35 @@ class WebServer:
             self._thread.join(timeout=5)
         self._thread = None
         logger.info("Web UI 已停止")
+
+
+class WebServerStub:
+    """Web UI 假节点（占位实现，不创建真实 Flask 应用）
+
+    框架本体不依赖 flask：只有当启用 core_plugins/webui（web.enabled != false）
+    时才创建真实 WebServer；否则注册本假节点，保证服务注册表中
+    'web_server' 键恒非 None，调用方判空后即可安全使用，
+    且不会触发任何 flask 相关导入。
+    """
+
+    active = False
+
+    def __init__(self, framework):
+        self.framework = framework
+        self.app = None
+        web_cfg = framework.config.get('web', {})
+        self.host = web_cfg.get('host', '0.0.0.0')
+        self.port = web_cfg.get('port', 8080)
+        self._running = False
+
+    def start(self):
+        """假节点启动：仅记录日志，不监听端口"""
+        self._running = True
+        logger.info(
+            f"Web UI 假节点已注册（webui 未启用，不监听端口）: "
+            f"{self.host}:{self.port}")
+
+    def stop(self):
+        """假节点停止：仅记录日志"""
+        self._running = False
+        logger.info("Web UI 假节点已释放")

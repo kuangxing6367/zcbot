@@ -63,7 +63,7 @@
 | 路径 | 作用 |
 | ---- | ---- |
 | `framework/` | 平台内核：加载、路由、事件、上下文、权限、数据库（无具体 IM 实现） |
-| `core_plugins/` | 官方插件：`onebot_adapter` / `telegram` / `discord` / `qq_official` / `ws_client` / `http_inject` / `http_api` / `webui` / `session` / `scheduler` / `image_renderer` / `html_assembler` |
+| `core_plugins/` | 官方插件：`onebot_adapter` / `rust_accel` / `telegram` / `discord` / `qq_official` / `ws_client` / `http_inject` / `http_api` / `webui` / `session` / `scheduler` / `image_renderer` / `html_assembler` |
 | `core_plugins.yaml` | 官方插件开关与配置（启动自动同步） |
 | `plugins/` | 用户插件，每个一个子目录，入口 `main.py` |
 | `data/` | 日志、数据库、`plugins_dat/` 插件私有数据（长期保留） |

@@ -41,7 +41,8 @@ class AsyncStatsWriter:
         """记录关键词自动回复命中（内存聚合）"""
         self._kw_hits[kw_id] = self._kw_hits.get(kw_id, 0) + 1
 
-    def register_user(self, user_id: int, sender: dict, message_type: str, group_id: int = None):
+    def register_user(self, user_id: int, sender: dict, message_type: str,
+                      group_id: int | None = None):
         """排队用户/群自动注册（非阻塞，队列满时丢弃并计数）"""
         try:
             self._reg_queue.put_nowait((user_id, dict(sender), message_type, group_id))
@@ -97,18 +98,86 @@ class AsyncStatsWriter:
                 except Exception as e:
                     logger.error(f"关键词命中计数写库失败 [{kw_id}]: {e}")
 
-        # 2. 用户/群注册
+        # 2. 用户/群注册：聚合去重后单事务批量写（三条表各一次 executemany，
+        #    避免每条消息 1-3 次独立 execute + commit/fsync 拖垮落库吞吐）
         items = []
         while True:
             try:
                 items.append(self._reg_queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
-        for item in items:
-            try:
-                self._register_one(*item)
-            except Exception as e:
-                logger.error(f"自动注册用户失败: {e}")
+        if items:
+            self._batch_register(items)
+
+    def _batch_register(self, items):
+        """用户/群自动注册批量写库：按 (user / group / member) 聚合 + 单事务 executemany。
+
+        语义等价于原 _register_one 逐条 INSERT ... ON DUPLICATE KEY UPDATE：
+        - 同 user_id 聚合为一条（nickname 取最后状态，last_active_at 更新一次）；
+        - 同 (group_id, user_id) 聚合为一条，message_count 按消息数累加。
+        """
+        users = {}                          # user_id -> nickname（最后状态）
+        groups = {}                         # group_id -> group_name（最后状态）
+        members = {}                        # (group_id, user_id) -> [card, role, title, count]
+        for user_id, sender, message_type, group_id in items:
+            if not user_id:
+                continue
+            nickname = sender.get('nickname', '') or sender.get('card', '') or str(user_id)
+            users[user_id] = nickname
+            if group_id and message_type == 'group':
+                groups[group_id] = sender.get('group_name', '')
+                key = (group_id, user_id)
+                m = members.get(key)
+                if m is None:
+                    members[key] = [sender.get('card', ''),
+                                    sender.get('role', 'member'),
+                                    sender.get('title', ''), 1]
+                else:
+                    # 同批多条消息：保留最后 card/role/title，消息数累加
+                    if sender.get('card', '') != '':
+                        m[0] = sender.get('card', '')
+                    if sender.get('role', '') != '':
+                        m[1] = sender.get('role', '')
+                    if sender.get('title', '') != '':
+                        m[2] = sender.get('title', '')
+                    m[3] += 1
+        try:
+            with self.db.transaction():
+                if users:
+                    self.db.execute_many(
+                        "INSERT INTO users (user_id, nickname, first_seen_at, last_active_at) "
+                        "VALUES (%s, %s, NOW(), NOW()) "
+                        "ON DUPLICATE KEY UPDATE "
+                        "nickname = IF(VALUES(nickname) != '', VALUES(nickname), nickname), "
+                        "last_active_at = NOW()",
+                        [(uid, nick) for uid, nick in users.items()]
+                    )
+                if groups:
+                    self.db.execute_many(
+                        "INSERT INTO groups_info (group_id, group_name, is_active, join_at) "
+                        "VALUES (%s, %s, 1, NOW()) "
+                        "ON DUPLICATE KEY UPDATE "
+                        "is_active = 1, "
+                        "group_name = IF(VALUES(group_name) != '', VALUES(group_name), group_name)",
+                        [(gid, gname) for gid, gname in groups.items()]
+                    )
+                if members:
+                    self.db.execute_many(
+                        "INSERT INTO group_members (group_id, user_id, card, role, title, "
+                        "last_active_at, message_count) "
+                        "VALUES (%s, %s, %s, %s, %s, NOW(), %s) "
+                        "ON DUPLICATE KEY UPDATE "
+                        "card = IF(VALUES(card) != '', VALUES(card), card), "
+                        "role = VALUES(role), "
+                        "title = IF(VALUES(title) != '', VALUES(title), title), "
+                        "last_active_at = NOW(), "
+                        "message_count = message_count + VALUES(message_count)",
+                        [(gid, uid, m[0], m[1], m[2], m[3])
+                         for (gid, uid), m in members.items()]
+                    )
+        except Exception as e:
+            logger.error(f"批量自动注册写库失败（{len(users)} 用户/{len(groups)} 群/"
+                         f"{len(members)} 群成员）: {e}")
 
     def _register_one(self, user_id: int, sender: dict, message_type: str, group_id: int):
         """单条用户/群自动注册"""

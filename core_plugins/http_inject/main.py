@@ -21,7 +21,7 @@ ProtocolAdapter：把 HTTP 请求当作事件源，交给 framework.dispatch_eve
 import asyncio
 import json
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from framework.messaging.protocol import ProtocolAdapter
 
@@ -151,7 +151,7 @@ class HttpInjectAdapter(ProtocolAdapter):
         HttpInjectHandler.framework = self.framework
         HttpInjectHandler.path_prefix = self.path
         HttpInjectHandler.token = self.token
-        self._server = HTTPServer((self.host, self.port), HttpInjectHandler)
+        self._server = ThreadingHTTPServer((self.host, self.port), HttpInjectHandler)
         threading.Thread(target=self._server.serve_forever,
                          daemon=True, name="http-inject").start()
 

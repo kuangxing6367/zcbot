@@ -152,7 +152,12 @@ class HookRegistry:
         """
         short_circuit = point in _SHORT_CIRCUIT
         results = []
-        for _, name, handler in self._snapshot(point):
+        snap = self._snapshot(point)
+        if not snap:
+            # 无订阅者的扩展点是热路径最常见形态（每事件 5 次 trigger，
+            # 多数点位无人注册），直接返回空结果，省去循环与短路判断
+            return results
+        for _, name, handler in snap:
             try:
                 if asyncio.iscoroutinefunction(handler):
                     results.append(await handler(*args, **kwargs))

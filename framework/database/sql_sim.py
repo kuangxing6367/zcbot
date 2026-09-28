@@ -413,6 +413,20 @@ class SqlSimEngine(FileStore):
         cols = self._parse_select_cols(col_tokens)
         has_agg = any(c.get('agg') for c in cols)
 
+        # 列存在性校验：表 schema 非空时，SELECT 显式引用的列必须存在，否则
+        # 视为生产 SQLite 的 "no such column"（查询失败 → 上层安全降级），
+        # 避免缺列行被投影成 {'col': None} 值行，把「列不存在」误当成
+        # 「列值为 NULL」——这是插件 is_active 在 debug 新库被误判禁用的根因。
+        if schema:
+            known = {c['name'] for c in schema}
+            missing = [c['name'] for c in cols
+                       if c['name'] != '*' and not c.get('const')
+                       and c['name'] not in known]
+            if missing:
+                raise _UnsupportedSQL(
+                    f"列不存在: {missing[0]}（表 {table} "
+                    f"schema: {sorted(known) if known else '空'}）")
+
         if has_agg and (group_tokens or len(group_tokens) == 0 and False):
             pass
         if has_agg and group_tokens:
@@ -463,7 +477,8 @@ class SqlSimEngine(FileStore):
                 for c in cols:
                     if c['name'] == '*':
                         continue
-                    row2[c['alias']] = r.get(c['name'])
+                    row2[c['alias']] = (
+                        c['name'] if c.get('const') else r.get(c['name']))
                 proj.append(row2)
             rows = proj
 
@@ -557,8 +572,10 @@ class SqlSimEngine(FileStore):
                              'agg': None, 'distinct': True})
                 continue
             name = _unquote_ident(g[0])
+            is_const = g[0].kind in ('num', 'str', 'val')
             cols.append({'name': name, 'alias': alias or name,
-                         'agg': None, 'distinct': False})
+                         'agg': None, 'distinct': False,
+                         'const': is_const})
         return cols
 
     @staticmethod
@@ -857,10 +874,12 @@ class SqlSimEngine(FileStore):
                 row = {}
                 for name, t in zip(names, vals):
                     row[name] = self._tok_value(t)
-            # 缺列补 None（id 除外，id 走自增）
+            # 缺列补列默认值（CREATE 声明了 DEFAULT 时落默认值，否则 None；
+            # id 除外，id 走自增）。对齐真实 SQLite 语义，避免 is_active 等
+            # 带 DEFAULT 1 的列被 NULL 误判。
             for c in schema:
                 if row.get(c['name']) is None:
-                    row[c['name']] = None
+                    row[c['name']] = c.get('default')
             # 自增 id
             if has_id_col and row.get('id') is None:
                 row['id'] = data.get('next_id', 1)
@@ -1061,7 +1080,16 @@ class SqlSimEngine(FileStore):
                     ctype = 'TEXT'
                     if len(s) >= 2 and s[1].kind in ('ident', 'kw') and s[1].upper in _TYPES:
                         ctype = s[1].upper
-                    cols.append({'name': name, 'type': ctype})
+                    # DEFAULT 字面量（对齐真实 SQLite：INSERT 缺列时落默认值而非 NULL）
+                    default = None
+                    for j, t in enumerate(s):
+                        if t.upper == 'DEFAULT' and j + 1 < len(s):
+                            default = self._tok_value(s[j + 1])
+                            break
+                    col = {'name': name, 'type': ctype}
+                    if default is not None:
+                        col['default'] = default
+                    cols.append(col)
         data = self._read_tbl(table)
         existing = {c['name'] for c in data['schema']}
         for c in cols:

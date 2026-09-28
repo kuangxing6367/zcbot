@@ -9,7 +9,7 @@
 > **OneBot 11 是它的一个默认扩展，但不是它的身份。** 换一个 `ProtocolAdapter`，它可以是 Telegram / Discord 机器人、
 > HTTP Webhook 接收器、纯定时任务服务，或任何"事件 → 扩展 → 响应"的程序。
 
-**当前正式版：v1.7.4** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
+**当前正式版：v1.7.5** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
 
 - 项目地址：https://github.com/kuangxing6367/zcbot
 - 官方插件仓库：https://github.com/kuangxing6367/zcbot_plugins
@@ -163,6 +163,7 @@ pip install -r requirements.txt
 ```
 
 > 提示：依赖缺了不用慌：启动时会自检 `requirements.txt`，缺失依赖走内置镜像源自动补装；插件自己的依赖在加载时也会自动安装。
+> Web 管理后台（flask）默认**不随框架安装**：纯机器人部署零 web 依赖，API 层注册假节点；启用 `core_plugins/webui`（`web.enabled != false`）后由插件加载器自动补装 flask / flask-cors / waitress。
 
 ### 第 3 步：启动
 
@@ -297,6 +298,7 @@ ctx.command("/ban", handle_ban, require_perm="myplugin.ban")   # 声明式，框
 | 扩展 | 作用 |
 | ---- | ---- |
 | **onebot_adapter** | OneBot 11 反向 WS 接入端（协议端连入） |
+| **rust_accel** | OneBot 反向 WS 的 **Rust 加速接入端**（默认关；收发/解析热路径全在 Rust，启用前先停 onebot_adapter，详见 `core_plugins/rust_accel/README.md`） |
 | **ws_client** | 正向 WS 客户端接入端（主动连协议端） |
 | **qq_official** | QQ 官方机器人接入（默认关） |
 | **telegram** / **discord** | Telegram / Discord Bot 接入（默认关） |
@@ -418,6 +420,7 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
 │   └── ipc/                # core/host 双进程 JSON-RPC（dual_process 门控）
 ├── core_plugins/           # 官方扩展（可在 core_plugins.yaml 开关）
 │   ├── onebot_adapter/     #   OneBot 11 接入端（反向 WS + onebot_api.py 动作封装）
+│   ├── rust_accel/         #   OneBot 反向 WS 的 Rust 加速接入端（默认关，Python 壳 + Rust 子进程）
 │   ├── http_inject/        #   HTTP 事件注入接入端（默认关）
 │   ├── http_api/           #   独立对外 HTTP API（默认关）
 │   ├── webui/              #   Web 管理后台

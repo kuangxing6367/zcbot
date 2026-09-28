@@ -57,7 +57,9 @@ def host_entry(config_path, address, token, core_pid):
     for _h in list(_root_logger.handlers):
         if isinstance(_h, logging.handlers.RotatingFileHandler):
             _root_logger.removeHandler(_h)
-    _root_logger.addHandler(IpcLogHandler(client))
+    _ipc_log_handler = IpcLogHandler(client)
+    _ipc_log_handler.start()
+    _root_logger.addHandler(_ipc_log_handler)
 
     # 父进程死亡自检：核心退出则优雅关闭宿主
     stop_event = asyncio.Event()
@@ -93,6 +95,11 @@ def host_entry(config_path, address, token, core_pid):
             await stop_event.wait()
         finally:
             await fw.stop()
+            # 冲刷剩余日志（避免丢最后一批 host 日志），再关闭 IPC
+            try:
+                _ipc_log_handler.flush_logs()
+            except Exception:
+                pass
             client.close()
 
     try:

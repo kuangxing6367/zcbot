@@ -37,7 +37,8 @@ pip install -r requirements.txt
 > 依赖也写在 `pyproject.toml` 里，两处保持同步：日常启动自检读 `requirements.txt`，工具链读 `pyproject.toml`。
 > **改依赖时两处都要改**；只使用的话装 `requirements.txt` 就够了。
 
-常用核心包：`websockets`（连接）、`flask` + `waitress`（后台）、`apscheduler`（定时）、`bcrypt`（密码）、`psutil`（监控）。
+常用核心包：`websockets`（连接）、`apscheduler`（定时）、`bcrypt`（密码）、`psutil`（监控）。
+`flask` + `waitress`（Web 管理后台）**默认不装**：纯机器人部署下 API 层注册假节点；启用 `core_plugins/webui` 后由插件加载器自动补装。
 
 :::tip 跳过这步也行
 `python main.py` 启动时会自检 `requirements.txt`，缺包会走内置镜像（清华→阿里→豆瓣→官方）自动装。

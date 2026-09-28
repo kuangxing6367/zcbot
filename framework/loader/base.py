@@ -312,7 +312,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
                     existing_overrides[r['handler']] = {
                         'alias': r.get('alias'),
                         'description': r.get('description'),
-                        'is_active': r.get('is_active', 1),
+                        # 键缺失/缺列投影 None（debug 引擎、旧库）不覆盖默认启用
+                        'is_active': 1 if r.get('is_active') is None else r.get('is_active'),
                     }
             except Exception:
                 pass
@@ -393,6 +394,7 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
 
         except Exception as e:
             logger.error(f"[{plugin_name}] 同步任务失败: {e}")
+
     def is_plugin_active_in_db(self, plugin_name: str) -> bool:
         """
         检查插件在数据库中是否处于「启用」状态
@@ -406,7 +408,12 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
             return True
         if row is None:
             return True
-        return bool(row.get('is_active', 1))
+        # 键缺失或缺列投影为 None（如 debug 模拟引擎、旧库未迁移）均视为启用——
+        # 与上方"无记录视为启用"语义一致，避免历史数据被误判为禁用。
+        v = row.get('is_active')
+        if v is None:
+            return True
+        return bool(v)
 
     def disable_plugin(self, plugin_name: str):
         """禁用插件：标记 is_active=0 并卸载（终端 disable 命令使用，与 WebUI toggle 同语义）"""
