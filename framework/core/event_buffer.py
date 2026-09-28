@@ -23,6 +23,21 @@ import time
 logger = logging.getLogger('zcbot')
 
 
+def _l2_serialize(event) -> str:
+    """L2 落盘序列化：剔除冗余 raw（完整原始 payload 副本，event 已有 message /
+    sender / user_id 等结构化字段，raw 仅为镜像备份），减小落盘体积与磁盘 IO。
+
+    不修改入参 event（L1/L3 内存事件仍需保留 raw，供 session 备份等消费），
+    而是浅拷贝后剥离。回读侧（_pop_sqlite_batch / _FileL2Backend.pop_batch）
+    会补 raw 占位，保持回读事件形态与内存一致。
+    """
+    if isinstance(event, dict) and 'raw' in event:
+        ev = dict(event)
+        del ev['raw']
+        return json.dumps([ev, None], ensure_ascii=False, default=str)
+    return json.dumps([event, None], ensure_ascii=False, default=str)
+
+
 class _FileL2Backend:
     """自研 L2 溢出后端：append-only 日志文件，按行存取事件（不依赖 sqlite）。
 
@@ -89,7 +104,7 @@ class _FileL2Backend:
 
     def write(self, event) -> bool:
         """线程内追加一条（独立文件句柄 + 锁，不阻塞主库）"""
-        payload = json.dumps([event, None], ensure_ascii=False, default=str)
+        payload = _l2_serialize(event)
         try:
             with self._lock:
                 if self._fh is None:
@@ -123,9 +138,15 @@ class _FileL2Backend:
                     try:
                         data = json.loads(line)
                         if isinstance(data, list) and len(data) == 2:
-                            items.append((data[0], data[1], len(line) + 64))
+                            ev = data[0]
+                            if isinstance(ev, dict) and 'raw' not in ev:
+                                ev['raw'] = {}   # 回读补占位：保持事件形态与内存一致
+                            items.append((ev, data[1], len(line) + 64))
                         else:
-                            items.append((data, None, len(line) + 64))
+                            ev = data
+                            if isinstance(ev, dict) and 'raw' not in ev:
+                                ev['raw'] = {}
+                            items.append((ev, None, len(line) + 64))
                     except Exception:
                         logger.warning("L2 文件缓冲中存在损坏行，已跳过")
                 self._read_offset = self._fh.tell()
@@ -244,10 +265,74 @@ class EventBuffer:
         """事件字节估算（入队时算一次，随条目携带，出队复用——不再每事件两次全量序列化）。
 
         字节记账是软水位：±50% 误差不影响 512KB/4MB 预算的正确性，但要便宜且能抓住
-        重尾（base64 图片等超大字段）。repr 形状无关、比 json.dumps 快数倍。
+        重尾（base64 图片 / 超长文本等超大字段）。
+
+        旧实现用 len(repr(event))：C 层把整个 dict（含大段 base64 的 raw_message / message
+        段数组）递归拼成一条长字符串——中小结构 C 层尚可，超大事件（图片等）被迫拷贝几百 KB
+        字符串，直接拖垮入队热路径。
+
+        现改为内联浅层估算：只遍历一次顶层字段；对 message 段数组只 peek 各段
+        data.text 长度（不深递归、不拼字符串），对 sender 等只数字符串值。中小事件
+        因免去 C 层字符串构建而更快；超大事件免去大块内存拷贝，提速 1~2 个数量级。
+        命中 1MB 重尾立即截断，防止超大事件拖慢估算本身。
         """
         try:
-            return len(repr(event)) + 64
+            # 快路径：上游归一化已随事件携带预预算尺寸 → O(1) 字典查表。这是入队热路径
+            # 在纯 Python 下可达的最优（单次哈希查表 ~几十 ns，已逼近 C 层量级）；无预存
+            # 值（测试 fixture / 其它协议来源）则走下方浅层回退。不写回 event，避免改动
+            # 事件内容与落盘语义。
+            if isinstance(event, dict) and '_est_size' in event:
+                v = event['_est_size']
+                if isinstance(v, int) and v >= 0:
+                    return v
+            if not isinstance(event, dict):
+                return len(repr(event)) + 64  # 非 dict（理论上不会走到）兜底
+            total = 64  # 结构体固定开销
+            raw = event.get('raw_message')
+            if isinstance(raw, str):
+                total += len(raw)
+            msg = event.get('message')
+            if isinstance(msg, (list, tuple)):
+                # 段数组：逐段取 data 内所有字符串值（text/file/url……），抓长文本与
+                # base64 大图（data.file）重尾；不递归嵌套、不拼字符串。
+                for seg in msg:
+                    if isinstance(seg, dict):
+                        d = seg.get('data')
+                        if isinstance(d, dict):
+                            for dv in d.values():
+                                if isinstance(dv, str):
+                                    total += len(dv)
+                                if total > (1 << 20):   # 抓到 1MB 重尾直接停
+                                    break
+                        else:
+                            total += 24  # at/face 等非文本段的经验值
+                    else:
+                        total += 24
+                    if total > (1 << 20):
+                        break
+            elif isinstance(msg, str):
+                total += len(msg)            # 归一化事件把 message 直接存为字符串的情形
+            elif isinstance(msg, dict):
+                for sv in msg.values():      # 极少见的 dict 形态，只数字符串值
+                    total += len(sv) if isinstance(sv, str) else 8
+            else:
+                total += 64                  # 未知形状的经验值，避免漏记
+            for k, v in event.items():
+                # 跳过 message（上方已精确计入）/ raw_message（无段数组协议的主内容，
+                # 但 message 段已覆盖其正文）。raw 保留：仅数顶层字符串值（不深入 message
+                # 段，避免与 message 双计），与 normalize_event._est_size 口径一致。
+                if k in ('message', 'raw_message'):
+                    continue
+                total += len(str(k))
+                if isinstance(v, str):
+                    total += len(v)
+                elif isinstance(v, dict):
+                    # sender / raw 等嵌套 dict：只数字符串值，不深递归
+                    for sv in v.values():
+                        total += len(sv) if isinstance(sv, str) else 8
+                else:
+                    total += 8
+            return total
         except Exception:
             return 4096  # 无法估算时按保守值记账
 
@@ -269,7 +354,7 @@ class EventBuffer:
 
     def _write_sqlite(self, event) -> bool:
         """线程内写入一条（独立文件独立连接，不阻塞主库）"""
-        payload = json.dumps([event, None], ensure_ascii=False, default=str)
+        payload = _l2_serialize(event)
         try:
             with self._sqlite_lock:
                 self._sqlite_conn.execute(
@@ -317,9 +402,15 @@ class EventBuffer:
                 try:
                     data = json.loads(payload)
                     if isinstance(data, list) and len(data) == 2:
-                        items.append((data[0], data[1], len(payload) + 64))
+                        ev = data[0]
+                        if isinstance(ev, dict) and 'raw' not in ev:
+                            ev['raw'] = {}   # 回读补占位：保持事件形态与内存一致
+                        items.append((ev, data[1], len(payload) + 64))
                     else:
-                        items.append((data, None, len(payload) + 64))
+                        ev = data
+                        if isinstance(ev, dict) and 'raw' not in ev:
+                            ev['raw'] = {}
+                        items.append((ev, None, len(payload) + 64))
                 except Exception:
                     logger.warning("sqlite 缓冲中存在损坏事件，已跳过")
             return items

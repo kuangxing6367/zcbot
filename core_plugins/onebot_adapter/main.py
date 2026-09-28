@@ -21,6 +21,7 @@ from urllib.parse import urlparse, parse_qs
 
 import websockets
 
+from framework.core.event_buffer import EventBuffer
 from framework.messaging.protocol import ProtocolAdapter
 
 logger = logging.getLogger('zcbot')
@@ -56,6 +57,10 @@ _MAX_CONCURRENT_EVENTS = 64
 # 有序分发链的积压上限：进 EventBuffer 分层缓冲前的最后一道闸。可经
 # core_plugins.yaml → onebot.max_pending_events 覆盖（此处仅为缺省值）
 _MAX_PENDING_EVENTS = 4096
+# 分发层字节闸门：与条数闸门配套，防「条数未满但大事件（base64 图等）撑爆内存」。
+# onebot 原始 payload 单条可达数 MB，4096 条条数未到即可吃光内存。缺省 64MB 足够兜底
+# 瞬态积压（下游卡住时）又不会误伤正常小消息突发。可经 onebot.max_pending_bytes 覆盖。
+_MAX_PENDING_BYTES = 64 * 1024 * 1024
 # WS 单帧上限：websockets 库默认 1MiB，大报文（base64 图等）会以 1009 断链。
 # 可经 onebot.max_frame_size 覆盖（缺省 16MB）
 _DEFAULT_MAX_FRAME_SIZE = 16 * 1024 * 1024
@@ -86,12 +91,55 @@ def normalize_event(raw: dict, bot_name: str) -> Optional[dict]:
         'group_id': raw.get('group_id'),
         'message_id': raw.get('message_id'),
         'message': raw.get('message', ''),
-        'raw_message': raw.get('raw_message', ''),
         'sender': raw.get('sender', {}),
         'bot_name': bot_name,
         'adapter': 'onebot',
         'raw': raw,
     }
+    # 预算事件尺寸并随事件携带：入队热路径（EventBuffer._size_of）将直接 O(1) 取该值，
+    # 不再每条事件重复做浅层估算。算法与 framework.core.event_buffer.EventBuffer._size_of
+    # 的浅层回退逐字对齐（message 段 / sender / 顶层字段含 raw），保证带预存值与不预存两种
+    # 事件的水位判断一致；命中 1MB 重尾即截断，防超大事件拖慢预算本身。
+    # 注：onebot 归一化不再携带冗余的 raw_message（段数组 + 完整 raw 已包含全部信息），
+    # 故此处仅计 message / sender / 顶层字段；其他仍产出 raw_message 的适配器由 _size_of 回退计入。
+    _sz = 64  # 结构体固定开销
+    _msg = event.get('message')
+    if isinstance(_msg, (list, tuple)):
+        for _seg in _msg:
+            if isinstance(_seg, dict):
+                _d = _seg.get('data')
+                if isinstance(_d, dict):
+                    # 数 data 内所有字符串值（text/file/url……），抓 base64 大图重尾
+                    for _dv in _d.values():
+                        if isinstance(_dv, str):
+                            _sz += len(_dv)
+                        if _sz > (1 << 20):
+                            break
+                else:
+                    _sz += 24
+            else:
+                _sz += 24
+            if _sz > (1 << 20):
+                break
+    elif isinstance(_msg, str):
+        _sz += len(_msg)
+    elif isinstance(_msg, dict):
+        for _sv in _msg.values():
+            _sz += len(_sv) if isinstance(_sv, str) else 8
+    else:
+        _sz += 64
+    for _k, _v in event.items():
+        if _k in ('message', 'raw_message', '_est_size'):
+            continue
+        _sz += len(_k)
+        if isinstance(_v, str):
+            _sz += len(_v)
+        elif isinstance(_v, dict):
+            for _sv in _v.values():
+                _sz += len(_sv) if isinstance(_sv, str) else 8
+        else:
+            _sz += 8
+    event['_est_size'] = _sz
     return event
 
 
@@ -290,6 +338,9 @@ class OneBotWebSocketServer:
         self.api_caller = api_caller
         self._max_pending_events = max(
             256, int(config.get('max_pending_events') or _MAX_PENDING_EVENTS))
+        self._max_pending_bytes = max(
+            1024 * 1024,
+            int(config.get('max_pending_bytes') or _MAX_PENDING_BYTES))
         self.max_frame_size = max(
             1024 * 1024, int(config.get('max_frame_size') or _DEFAULT_MAX_FRAME_SIZE))
         # 启用 SSL 后 WebSocket 走 wss（与 Web 后台共用 config['ssl'] 证书）
@@ -304,6 +355,7 @@ class OneBotWebSocketServer:
         self._lock = threading.Lock()
         self._dispatch_semaphore = None
         self._dispatch_pending = 0
+        self._dispatch_pending_bytes = 0
         self._dispatch_dropped = 0
         self._conn_chains = {}
 
@@ -418,18 +470,13 @@ class OneBotWebSocketServer:
                 post_type = data.get("post_type")
                 if post_type:
                     logger.debug(f"[{bot_name}] 收到事件 post_type={post_type} sub_type={data.get(f'{post_type}_type','')}")
-                    if self._dispatch_pending >= self._max_pending_events:
-                        self._dispatch_dropped += 1
-                        logger.warning(
-                            f"[{bot_name}] 事件丢弃 pending={self._dispatch_pending} "
-                            f"dropped={self._dispatch_dropped} "
-                            f"(可调 onebot.max_pending_events，当前 {self._max_pending_events})")
+                    accepted, ev_size = self._try_enqueue_dispatch(bot_name, data)
+                    if not accepted:
                         continue
-                    self._dispatch_pending += 1
                     prev = self._conn_chains.get(bot_name)
                     task = asyncio.create_task(self._dispatch_ordered(prev, data, bot_name))
                     self._conn_chains[bot_name] = task
-                    task.add_done_callback(lambda t: setattr(self, '_dispatch_pending', self._dispatch_pending - 1))
+                    task.add_done_callback(lambda t: self._on_dispatch_done(ev_size))
                 else:
                     logger.debug(f"[{bot_name}] 收到无 post_type 的消息: {str(data)[:200]}")
 
@@ -446,6 +493,35 @@ class OneBotWebSocketServer:
             self._conn_chains.pop(bot_name, None)
             conn.set_ws(None)
             logger.info(f"[{bot_name}] OneBot 客户端已断开")
+
+    def _try_enqueue_dispatch(self, bot_name: str, data: dict):
+        """分发层闸门：条数 + 字节双限。返回 (accepted, ev_size)。
+
+        - 字节闸门类同条数闸门，防大事件（base64 图等）在「WS 收到 → 进 EventBuffer
+          前」的瞬态积压把内存吃爆（单条可达数 MB，4096 条文数未到已超百 MB）。
+        - ev_size 复用 EventBuffer._size_of：onebot 主来源事件已带 _est_size（O(1) 取值），
+          其它来源走浅层回退；纯估算成本可忽略。
+        - 该方法在事件循环线程执行，无并发竞争，记账直接增减。
+        """
+        ev_size = EventBuffer._size_of(data)
+        if (self._dispatch_pending >= self._max_pending_events
+                or self._dispatch_pending_bytes + ev_size > self._max_pending_bytes):
+            self._dispatch_dropped += 1
+            logger.warning(
+                f"[{bot_name}] 事件丢弃 pending={self._dispatch_pending} "
+                f"pending_bytes={self._dispatch_pending_bytes + ev_size} "
+                f"dropped={self._dispatch_dropped} "
+                f"(可调 onebot.max_pending_events/max_pending_bytes，"
+                f"当前 {self._max_pending_events}/{self._max_pending_bytes})")
+            return False, ev_size
+        self._dispatch_pending += 1
+        self._dispatch_pending_bytes += ev_size
+        return True, ev_size
+
+    def _on_dispatch_done(self, ev_size: int):
+        """分发完成回调：递减瞬态积压（条数 + 字节），事件循环线程执行，无并发竞争。"""
+        self._dispatch_pending -= 1
+        self._dispatch_pending_bytes -= ev_size
 
     async def _dispatch_ordered(self, prev, data: dict, bot_name: str):
         if prev is not None and not prev.done():
@@ -543,7 +619,8 @@ class OneBotAdapter(ProtocolAdapter):
                 {'key': 'listen_host', 'label': '监听地址', 'type': 'string'},
                 {'key': 'listen_port', 'label': '监听端口', 'type': 'number'},
                 {'key': 'access_token', 'label': 'Access Token', 'type': 'password'},
-                {'key': 'max_pending_events', 'label': '分发积压上限', 'type': 'number'},
+                {'key': 'max_pending_events', 'label': '分发积压上限(条)', 'type': 'number'},
+                {'key': 'max_pending_bytes', 'label': '分发层字节上限(字节)', 'type': 'number'},
                 {'key': 'max_frame_size', 'label': 'WS 单帧上限(字节)', 'type': 'number'},
             ],
             'restart_keys': ['listen_host', 'listen_port', 'max_frame_size'],
