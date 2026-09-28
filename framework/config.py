@@ -90,14 +90,11 @@ http_inject:
   token: ""                  # 可选；留空则不校验（建议仅内网使用）
 
 # ── 官方插件开关（core_plugins/） ─────────────────────────────
-# ZCBOT 内置的官方插件，每个都可独立开关（true 加载 / false 禁用）
-# 启动时会自动扫描 core_plugins/ 目录，把「已安装但下方未列出」的官方插件
-# 自动补进本段（缺省值：onebot_adapter/webui/session/scheduler=true，
-# http_api/http_inject=false），无需手动维护；false 表示禁用。
-# 说明：
-#   - http_api / http_inject 需「此处开启」且「下方对应段自身 enabled」都满足才生效
-#   - 双进程模式下（dual_process.enabled: true），这些插件全部跑在进程1（核心），
-#     进程2（宿主）只加载 plugins/ 下的用户插件
+# 【已弃用】config.yaml 不再管理官方插件启停——官方插件的启停与配置
+# 统一由 core_plugins.yaml 决定（该文件由独立扫描进程
+# tools/scan_core_plugins.py 生成/维护，本段内容不再生效）。
+# 用法：python tools/scan_core_plugins.py --enable <name>  即可启用某插件。
+# 下方段仅为历史兼容占位（值不再参与判定），可整体删除。
 core_plugins:
   onebot_adapter: true       # OneBot 11 WebSocket 协议接入
   webui: true                # Web 管理后台
@@ -245,13 +242,6 @@ def get_config() -> dict:
     return _config
 
 
-# 默认禁用（需显式开启）的官方插件——安全/端口/外连相关，避免误开
-_CORE_PLUGIN_DEFAULT_DISABLED = (
-    'http_api', 'http_inject', 'ws_client',
-    'qq_official', 'telegram', 'discord',
-)
-
-
 # 官方插件配置中心：独立 yaml，由启动时自动扫描 core_plugins/ 目录同步
 CORE_PLUGINS_YAML = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), 'core_plugins.yaml')
@@ -261,8 +251,9 @@ CORE_PLUGINS_YAML = os.path.join(
 _CORE_PLUGIN_SECTION = {'onebot_adapter': 'onebot', 'webui': 'web'}
 
 
-# 官方插件默认配置（含 enabled 与主要配置项），自动写入 core_plugins.yaml。
-# 未列出的已安装插件也会被扫描加入（enabled 按 _default_core_plugin_enabled）。
+# 官方插件默认配置（含主要配置项），自动写入 core_plugins.yaml。
+# 新发现（yaml 缺失）的插件补块时 enabled 一律强制 False，绝不自动启用。
+# 启停与配置的唯一权威是 core_plugins.yaml（tools/scan_core_plugins.py 维护）。
 _CORE_PLUGIN_SCHEMA = {
     'onebot_adapter': {'enabled': True, 'listen_host': '0.0.0.0',
                        'listen_port': 6830, 'access_token': '',
@@ -276,6 +267,7 @@ _CORE_PLUGIN_SCHEMA = {
                        'max_image_bytes': 4194304, 'max_output_bytes': 16777216,
                        'max_images': 64, 'escape_html': True,
                        'on_missing': 'keep'},
+    'ops': {'enabled': False, 'shell_timeout': 10, 'max_output': 4000},
     'http_api': {'enabled': False, 'host': '127.0.0.1', 'port': 1145,
                  'token': '', 'allow_db': False},
     'http_inject': {'enabled': False, 'host': '127.0.0.1', 'port': 8901,
@@ -293,6 +285,12 @@ _CORE_PLUGIN_SCHEMA = {
                 'intents': 37377, 'reconnect_interval': 5,
                 'api_base': 'https://discord.com/api/v10',
                 'gateway_url': 'wss://gateway.discord.gg/'},
+    'rust_accel': {'enabled': False, 'ws_host': '0.0.0.0', 'ws_port': 6831,
+                   'access_token': '', 'max_frame_size': 16777216,
+                   'max_pending_events': 4096, 'max_pending_bytes': 67108864,
+                   'stats_interval_secs': 5, 'ipc_strip_raw': False,
+                   'inherit_onebot': False, 'binary_path': '',
+                   'auto_build': False},
 }
 
 
@@ -308,11 +306,6 @@ def _scan_core_plugins() -> list:
             if os.path.isfile(os.path.join(plugins_dir, name, 'main.py')):
                 names.append(name)
     return sorted(names)
-
-
-def _default_core_plugin_enabled(name: str) -> bool:
-    """官方插件缺省开关：http_api/http_inject 默认 false，其余默认 true"""
-    return name not in _CORE_PLUGIN_DEFAULT_DISABLED
 
 
 def _as_bool(value) -> bool:
@@ -334,11 +327,16 @@ def _as_bool(value) -> bool:
 def _autoload_core_plugins(config: dict) -> dict:
     """官方插件配置中心（core_plugins.yaml）自动同步 + 合并进主 config。
 
+    单一权威：core_plugins.yaml 是官方插件启停与配置的唯一来源，由独立的
+    扫描进程（tools/scan_core_plugins.py）维护；主 config.yaml 的
+    core_plugins 段**不再管理官方插件**（历史权威覆盖行为已移除）。
+
     流程：
       1. 扫描 core_plugins/ 目录得到已安装官方插件；
-      2. 读 core_plugins.yaml，为「已安装但缺失」的插件补默认配置块；
+      2. 读 core_plugins.yaml，为「已安装但缺失」的插件补默认配置块，
+         **enabled 一律 False（发现即禁用，绝不静默启用）**；
       3. 移除 yaml 中已不再安装的插件块（卸载自动删除）；
-      4. 有变化则回写 yaml（自动更新，用户无需手动维护）；
+      4. 有变化则回写 yaml；
       5. 把每个插件的 enabled 合并进 config['core_plugins']，把插件配置块
          合并进对应 section（onebot/web/http_api/...），插件现有
          `fw.config.get('onebot')` 等读取方式无需改动。
@@ -368,13 +366,9 @@ def _autoload_core_plugins(config: dict) -> dict:
     cps = data.get('core_plugins') if isinstance(data, dict) else None
     cps = cps if isinstance(cps, dict) else {}
 
-    # 主 config 中已有的官方插件开关（用于首次生成时迁移，向后兼容不丢设置）
-    main_cp = config.get('core_plugins')
-    if not isinstance(main_cp, dict):
-        main_cp = {}
-
     changed = False
-    # 2. 已安装缺失插件 → 补默认配置块；优先迁移主 config 已有值
+    # 2. 已安装缺失插件 → 补默认配置块（enabled 强制 False：发现即禁用，
+    #    需用户/扫描工具显式启用后才加载）；并迁移主 config 对应段已有值
     for name in installed:
         section = _CORE_PLUGIN_SECTION.get(name, name)
         main_sec = config.get(section)
@@ -383,18 +377,13 @@ def _autoload_core_plugins(config: dict) -> dict:
         blk = cps.get(name)
         if not isinstance(blk, dict):
             blk = dict(_CORE_PLUGIN_SCHEMA.get(name, {}))
+            blk['enabled'] = False   # 新发现插件一律禁用，绝不静默启用
             cps[name] = blk
             changed = True
-# config.yaml 的 core_plugins 段是权威开关（模板注释与终端 enable/disable
-        # 均以此为准）：只要该插件键显式出现，就以它为准并同步回 yaml（含禁用态），
-        # 避免"用户已关闭却仍加载"。未在 config.yaml 段列出的插件维持 yaml 现值。
-        if name in main_cp:
-            want = bool(main_cp[name])
-            if blk.get('enabled') != want:
-                blk['enabled'] = want
-                changed = True
-        elif 'enabled' not in blk:
-            blk['enabled'] = _default_core_plugin_enabled(name)
+        # config.yaml 段已不再管理启停；缺失 enabled 一律按禁用处理，
+        # 避免"未列出自动启用"（历史 bug：缺省 True 曾致误加载）。
+        if 'enabled' not in blk:
+            blk['enabled'] = False
             changed = True
         # 补默认配置键（不覆盖 yaml 已设的值；优先迁移主 config 对应段的值）
         for k, v in _CORE_PLUGIN_SCHEMA.get(name, {}).items():

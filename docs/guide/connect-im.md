@@ -2,7 +2,7 @@
 
 你想让 ZCBOT 连上一个真实的聊天软件，让机器人能收发消息——这就是这篇要解决的问题。
 
-框架本身协议无关：「消息怎么来、怎么发」全由**接入端插件**负责。默认开的是 `onebot_adapter`（OneBot 11，常用来接 QQ）；另外还有 QQ 官方、Telegram、Discord、出站 WS 等，默认关闭，填好凭证再开。
+框架本身协议无关：「消息怎么来、怎么发」全由**接入端插件**负责。默认开的是 `onebot_adapter`（OneBot 11，常用来接 QQ）；热路径性能敏感时可换 `rust_accel`（同一协议的 Rust 加速接入端，默认关，见下表）；另外还有 QQ 官方、Telegram、Discord、出站 WS 等，默认关闭，填好凭证再开。
 
 :::tip 先确认要不要读完
 框架能启动、命令能注册、定时任务能跑——**都不需要**接聊天平台。
@@ -30,6 +30,7 @@
 | 插件 | 平台 | 怎么开（`core_plugins.yaml`） |
 | ---- | ---- | ------------------------------ |
 | `onebot_adapter` | QQ（经 NapCat 等） | 默认已开；设 `access_token` 更安全 |
+| `rust_accel` | QQ（同上，OneBot 11） | Rust 加速接入端（默认关）：`enabled: true`；启用前先停 `onebot_adapter`，监听独立端口 6831 |
 | `qq_official` | QQ 官方机器人 | `enabled: true` + `app_id` / `app_secret` |
 | `telegram` | Telegram | `enabled: true` + `token`（找 @BotFather 要） |
 | `discord` | Discord | `enabled: true` + `token`（开发者门户；`MESSAGE_CONTENT` Intent 需开） |

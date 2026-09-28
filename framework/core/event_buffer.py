@@ -337,6 +337,73 @@ class EventBuffer:
             return 4096  # 无法估算时按保守值记账
 
     # ---------- sqlite 层 ----------
+    def _fallback_to_file(self, reason: str):
+        """sqlite 后端不可用/持续失败时自动降级到自研 file 后端。
+
+        降级只发生在 sqlite 路径异常（初始化失败或连续写失败达阈值），
+        保证任何环境下（含 debug 模式、只读磁盘、sqlite 驱动异常）L2 溢出层
+        仍可用，而不是静默失效让事件直接冲进 L3/丢弃。
+        降级前尽力把 sqlite 中尚未消费的遗留行迁移到 file，避免丢事件；
+        迁移失败只告警、不阻塞切换。
+        """
+        if self.l2_mode != 'sqlite':
+            return
+        migrated = 0
+        bak = None
+        # 1) 尽力迁移 sqlite 遗留行到 file 后端（取出即删语义由 file 继承）
+        migrated_ids = []
+        try:
+            if self._sqlite_conn is not None:
+                with self._sqlite_lock:
+                    cur = self._sqlite_conn.execute(
+                        "SELECT id, payload FROM event_buffer ORDER BY id ASC")
+                    rows = cur.fetchall()
+                if rows:
+                    bak = _FileL2Backend(self.l2_path)
+                    for row_id, payload in rows:
+                        try:
+                            data = json.loads(payload) if isinstance(payload, str) else payload
+                            ev = data[0] if (isinstance(data, list) and len(data) == 2) else data
+                            if isinstance(ev, dict) and 'raw' not in ev:
+                                ev = dict(ev)
+                                ev['raw'] = {}   # 回读补占位：保持事件形态与内存一致
+                            if bak.write(ev):
+                                migrated += 1
+                                migrated_ids.append(row_id)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.warning(f"L2 sqlite→file 降级迁移异常（忽略，继续降级）: {e}")
+        # 1.5) 删除已迁移成功的行，避免 sqlite 恢复后与 file 重复消费
+        if migrated_ids:
+            try:
+                with self._sqlite_lock:
+                    self._sqlite_conn.executemany(
+                        "DELETE FROM event_buffer WHERE id = ?",
+                        [(rid,) for rid in migrated_ids])
+                    self._sqlite_conn.commit()
+            except Exception as e:
+                logger.warning(
+                    f"降级后清理已迁移 sqlite 行失败（可能重复消费）: {e}")
+        # 2) 关闭 sqlite 连接并切换到 file 后端
+        try:
+            if self._sqlite_conn is not None:
+                with self._sqlite_lock:
+                    self._sqlite_conn.close()
+        except Exception:
+            pass
+        self._sqlite_conn = None
+        if bak is not None:
+            self._l2_file = bak
+        elif self._l2_file is None:
+            self._l2_file = _FileL2Backend(self.l2_path)
+        self.l2_mode = 'file'
+        self.sqlite_enabled = False
+        self._sqlite_rows = 0
+        logger.error(
+            f"L2 sqlite 后端自动降级为自研 file（原因: {reason}）"
+            + (f"，已迁移 {migrated} 条遗留事件到 file" if migrated else ""))
+
     def _init_sqlite(self):
         try:
             os.makedirs(os.path.dirname(self.sqlite_path) or '.', exist_ok=True)
@@ -349,8 +416,8 @@ class EventBuffer:
                     " created_at REAL NOT NULL)")
                 self._sqlite_conn.commit()
         except Exception as e:
-            logger.error(f"事件 sqlite 缓冲初始化失败，禁用溢出层: {e}")
-            self.sqlite_enabled = False
+            logger.error(f"事件 sqlite 缓冲初始化失败，自动降级为 file 后端: {e}")
+            self._fallback_to_file(f"sqlite 初始化失败（{type(e).__name__}）")
 
     def _write_sqlite(self, event) -> bool:
         """线程内写入一条（独立文件独立连接，不阻塞主库）"""
@@ -370,14 +437,9 @@ class EventBuffer:
             if self._sqlite_fail_streak >= self._sqlite_fail_threshold:
                 logger.error(
                     f"sqlite 缓冲连续失败 {self._sqlite_fail_streak} 次，"
-                    f"自动禁用溢出层，事件改走内存兜底（重启后自动恢复重试）")
-                self.sqlite_enabled = False
-                try:
-                    if self._sqlite_conn is not None:
-                        self._sqlite_conn.close()
-                except Exception:
-                    pass
-                self._sqlite_conn = None
+                    f"自动降级为自研 file 后端（事件不再丢失，重启后仍优先恢复 sqlite）")
+                self._fallback_to_file(
+                    f"连续写失败 {self._sqlite_fail_streak} 次（{type(e).__name__}）")
             return False
 
     def _pop_sqlite_batch(self, n: int):

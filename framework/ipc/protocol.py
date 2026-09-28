@@ -17,6 +17,9 @@
 线程模型：
 - call() 是同步阻塞（供 executor 线程 / 同步 handler 使用）
 - acall() 内部转 to_thread 执行 call，不阻塞事件循环
+- 发送侧异步化：所有出站帧（req/res/event/ping/pong）经 _outbox 队列
+  由独立 writer 线程串行 pickle + socket 写。调用线程（含事件循环）
+  只做 O(1) 入队，零 socket IO、零序列化、零锁竞争。
 - req 到达后：
     * 若本端已 set_loop(loop)（有事件循环），用 run_coroutine_threadsafe 调度，
       async handler 直接 await，同步 handler 转 to_thread
@@ -24,6 +27,7 @@
 """
 import asyncio
 import logging
+import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -36,6 +40,10 @@ class IpcClosed(Exception):
 
 class RemoteError(Exception):
     """对端方法执行抛出异常（携带对端错误信息）"""
+
+
+# writer 线程哨兵：收到即退出
+_WRITER_STOP = object()
 
 
 class JsonRpcConnection:
@@ -52,9 +60,12 @@ class JsonRpcConnection:
         self._events = events if events is not None else {}
         self._read_thread = threading.Thread(
             target=self._read_loop, daemon=True, name='ipc-read')
+        # 发送队列 + 独立 writer 线程：调用线程不直接触碰 socket
+        self._outbox = queue.Queue()
+        self._writer_thread = threading.Thread(
+            target=self._write_loop, daemon=True, name='ipc-writer')
         self._executor = ThreadPoolExecutor(
             max_workers=8, thread_name_prefix='ipc-handler')
-        self._send_lock = threading.Lock()   # multiprocessing.Connection.send 非线程安全
         self._closed = False
         self._loop = None       # 由外部 set_loop 指定事件循环（异步 handler 调度）
 
@@ -96,7 +107,20 @@ class JsonRpcConnection:
         return await asyncio.to_thread(self.call, method, params, timeout)
 
     def close(self):
+        if self._closed:
+            return
         self._closed = True
+        # 快速失败：唤醒所有等待中的 call 调用方（不再干等超时）
+        for msg_id, ev in list(self._pending.items()):
+            self._results[msg_id] = (False, "IPC 通道已关闭")
+            ev.set()
+        self._pending.clear()
+        try:
+            self._outbox.put_nowait(_WRITER_STOP)
+        except Exception:
+            pass
+        # 给 writer 短时间把已入队帧（如日志最后一批）写出
+        self._writer_thread.join(timeout=0.3)
         try:
             self._conn.close()
         except Exception:
@@ -114,21 +138,43 @@ class JsonRpcConnection:
         if self._closed:
             raise IpcClosed("IPC 通道已关闭")
         try:
-            with self._send_lock:
-                self._conn.send(msg)
+            self._outbox.put_nowait(msg)
         except Exception as e:
             self._closed = True
             raise IpcClosed(f"IPC 发送失败: {e}") from e
 
     def _safe_send(self, msg):
+        if self._closed:
+            return
         try:
-            with self._send_lock:
-                self._conn.send(msg)
+            self._outbox.put_nowait(msg)
         except Exception:
             pass
 
+    def _write_loop(self):
+        """独立 writer 线程：串行 pickle + socket 写（multiprocessing.Connection.send 非线程安全）。
+
+        退出只以哨兵为准（FIFO 保证哨兵前的帧都先发出）；对端断开时
+        send 抛异常自然退出。不检查 _closed，避免关闭时丢弃已入队帧。
+        """
+        while True:
+            msg = self._outbox.get()
+            if msg is _WRITER_STOP:
+                break
+            try:
+                self._conn.send(msg)
+            except Exception as e:
+                self._closed = True
+                # 发送失败：唤醒所有 wait 中的 call，避免调用方干等超时
+                for msg_id, ev in list(self._pending.items()):
+                    self._results[msg_id] = (False, f"IPC 发送失败: {e}")
+                    ev.set()
+                self._pending.clear()
+                break
+
     def start(self):
-        """启动读线程"""
+        """启动读线程 + writer 线程"""
+        self._writer_thread.start()
         self._read_thread.start()
 
     def _read_loop(self):
@@ -142,6 +188,11 @@ class JsonRpcConnection:
                 if not self._closed:
                     logger.info(f"IPC 连接关闭（对端断开）: {e}")
                 self._closed = True
+                # 快速失败：唤醒所有 wait 中的 call，避免调用方干等超时
+                for msg_id, ev in list(self._pending.items()):
+                    self._results[msg_id] = (False, f"IPC 连接关闭（对端断开）: {e}")
+                    ev.set()
+                self._pending.clear()
                 break
             try:
                 self._dispatch(msg)

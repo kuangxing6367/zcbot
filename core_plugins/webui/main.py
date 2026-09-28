@@ -26,15 +26,18 @@ def register(ctx):
     global _web_server
     fw = ctx._framework
 
-    # 检查配置是否启用
+# 检查配置是否启用
     web_cfg = fw.config.get('web', {})
     if web_cfg.get('enabled') is False:
-        ctx.log("WebUI 已禁用 (web.enabled: false)")
-        # 注册空服务，防止其他插件调用时报错
-        fw.services.register('web_server', None)
+        ctx.log("WebUI 已禁用 (web.enabled: false)，注册 API 假节点")
+        # 注册假节点（非 None）：不创建真实 Flask 应用，调用方判空后安全
+        from framework.api.webserver import WebServerStub
+        _web_server = WebServerStub(fw)
+        fw.services.register('web_server', _web_server)
         return
 
     # 延迟导入，只在启用时加载 Flask 等重依赖
+    # （依赖由 core_plugins/webui/requirements.txt 声明，缺失时加载器自动补装）
     from framework.apis import create_web_app
     from framework.apis import WebServer
 

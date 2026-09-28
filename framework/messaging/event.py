@@ -100,13 +100,18 @@ class Event:
         self.self_id = raw.get('self_id', 0)             # 机器人用户 ID
 
         # 消息内容（提取纯文本用于命令匹配）
-        _msg_text = _extract_text(raw.get('message', ''))
+        # 热路径优化：dispatch 层已预提取文本并随事件携带时直接复用（_msg_text），
+        # 避免同一消息段数组被遍历两次；否则按原路径提取。
+        _raw_msg = raw.get('message', '')
+        if isinstance(raw.get('_msg_text'), str):
+            _msg_text = raw['_msg_text']
+        else:
+            _msg_text = _extract_text(_raw_msg)
         self.message = _msg_text
         # 群内被 @机器人 触发时，OneBot 会把 @ 段编码为 [@self_id] 前缀拼进文本，
         # 导致命令前缀匹配（如 "@bot 查订单"）被污染成 "[@bot]查订单" 而失效。
         # 此处仅从【匹配文本】剥离 leading [@self_id]，原始 segments 不动，
         # 插件仍可通过 ev.has_at_bot / ev.at_list 读取艾特信息。
-        _raw_msg = raw.get('message', '')
         if isinstance(_raw_msg, list) and _raw_msg and \
                 _raw_msg[0].get('type') == 'at' and \
                 str(_raw_msg[0].get('data', {}).get('qq', '')) == str(self.self_id):

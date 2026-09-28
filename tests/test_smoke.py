@@ -202,6 +202,59 @@ def test_db_conn_import_without_pymysql():
             sys.modules['framework.database.db_conn'] = saved
 
 
+def test_web_deps_lazy_with_stub():
+    """flask 按需化：API 假节点不依赖 flask，Web 依赖必须延迟"""
+    import ast
+
+    import framework.api.webserver as ws
+    tree = ast.parse(open(ws.__file__, encoding='utf-8').read())
+    top_names = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            top_names.extend(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            top_names.append(node.module or '')
+    chk("webserver 顶层无 flask import",
+        not any(n == 'flask' or n.startswith('flask.') for n in top_names),
+        top_names)
+
+    # 行为：拦掉 flask 后，WebServerStub 仍可导入、启动、停止（不依赖该可选包）
+    class _BlockFlask:
+        def find_spec(self, name, path=None, target=None):
+            if name == 'flask' or name.startswith('flask.'):
+                raise ImportError('flask blocked for smoke test')
+            return None
+
+    class _Cfg:
+        def __init__(self):
+            self.w = {'host': '127.0.0.1', 'port': 8080}
+
+        def get(self, key, default=None):
+            return self.w if key == 'web' else default
+
+    class _FW:
+        config = _Cfg()
+
+    blocker = _BlockFlask()
+    sys.meta_path.insert(0, blocker)
+    try:
+        saved = sys.modules.pop('framework.api.webserver', None)
+        import importlib as _il
+        ws2 = _il.import_module('framework.api.webserver')
+        stub = ws2.WebServerStub(_FW())
+        stub.start()
+        stub.stop()
+        chk("屏蔽 flask 后 stub 可导入并 start/stop",
+            stub.app is None and stub.active is False,
+            f"app={stub.app} active={stub.active}")
+    except ImportError as e:
+        chk("屏蔽 flask 后 stub 可导入并 start/stop", False, repr(e))
+    finally:
+        sys.meta_path.remove(blocker)
+        if saved is not None:
+            sys.modules['framework.api.webserver'] = saved
+
+
 def test_config_file_exts_location():
     from framework.loader import base as lb
     from framework.loader import config as lc

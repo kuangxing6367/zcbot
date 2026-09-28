@@ -26,6 +26,36 @@
 
 ---
 
+## v1.7.5（2026-09-28）
+
+> 主题：**core_plugins 官方插件线路的终端扩展点（ops）+ 双进程 IPC 性能优化（发送 O(1) 化 + 宿主日志批量）+ L2 文件后端 + http 适配器并发修复 + Rust 加速接入端 rust_accel（OneBot 反向 WS 热路径原生化）+ 依赖按需化（flask 移出主依赖，API 真假节点）**。
+
+### 新功能
+- **终端扩展点（官方插件线路）**：新增 `core_plugins/ops/`（`official: True`），注册 `restart / reload(rl) / shell(sh) / dbdump` 四个命令，经框架扩展点接入，不直接侵入终端核心；handler 一律同步函数（与 `/api/terminal/exec` 同步调用约定对齐）；shell 语法错误 / 超时（`shell_timeout=10`）一律容错返回错误文本，**不卡死终端、不导致线程崩溃**；输出按 `max_output`（缺省 4000）截断。
+- **Rust 加速接入端 `rust_accel`（官方插件线路）**：新增 `core_plugins/rust_accel/`（Python 壳 + Rust 子进程，`official: True`，默认 `enabled: false`）。OneBot 反向 WS 的**接收（事件）与广播（动作）**两条热路径从 Python 搬进 Rust 原生实现（tokio + tokio-tungstenite + serde_json）；Python 侧仅保留进程管理、IPC 桥接（本地 TCP + JSON Lines）与监控观测。启用前须先停用 `onebot_adapter`（双接入互斥，防 6830 端口竞争），监听独立端口 6831。构建、配置与基准详见 `core_plugins/rust_accel/README.md` 与《Rust加速_架构设计_rust_accel_20260928.md》。
+- **修复存量 bug**：`framework/loader/base.py` 的 `PluginLoader` 此前缺失 `reload_plugin` / `reload_all` 方法，内置 `reload` 命令一直静默失败；补齐后热重载可用。
+
+### 性能
+- **IPC 发送 O(1) 化（热点路径）**：`JsonRpcConnection` 引入无锁 `_outbox` 队列 + 独立 `ipc-writer` 线程串行 pickle/socket 写；`_send / _safe_send` 从「持锁同步 send」改为 `put_nowait` 入队，事件循环零 socket IO。事件 3000 条 caller-side **78.5ms → 3.2ms（约 24x）**、e2e 82.3ms（吞吐 ~3.6 万 ev/s 持平）；RPC 单呼叫 ~112us 量级。
+- **宿主日志批量合并**：`IpcLogHandler` 攒批（`MAX_BATCH=200` / `FLUSH_INTERVAL=0.05` + 后台 flush 线程），500 条日志压缩为 **3 帧**（原 500 帧）；`host_entry` 关闭前冲刷，核心侧 `_on_host_log` 兼容单条/批量两种格式。
+- **rust_accel 端到端基准（N=2000，Windows / release 二进制）**：事件注入（WS→Rust 解析→IPC→Python 分发落点）**~30K ev/s / 33.6us**，低于 Python 框架内部单 worker 端到端 143.9us（fw_end2end 6,951 ev/s）——「Rust 收 + Python 分发」整条链路快于纯 Python 的「分发」本身，收包与 JSON 解析开销完全移出事件循环；广播并发 acall **8,894 qps**（2000/2000 成功，含 echo 回执）、串行 P50 136us / P95 272us，广播路径不阻塞事件循环。
+
+### 修复
+- **http 适配器卡死（并发串行阻塞）**：`http_api` / `http_inject` 均用单线程 `HTTPServer` 且 handler 内同步 `future.result(timeout=10)`——任一慢请求占住整条 HTTP 服务，其它请求全部排队。改为 `ThreadingHTTPServer`（每请求独立线程），真并发冒烟：slow 0.8s 挂起时 fast 0.05s 独立返回。
+- **断线快速失败**：挂起中的 IPC call 在对端断开 / `close()` 时立即以 `RemoteError` / `IpcClosed` 唤醒（不再干等 30s 超时）；writer 线程退出只以哨兵为准，关闭时不丢弃已入队帧。
+
+### 加固
+- **依赖按需化：web 后台降为可选组**：flask / flask-cors / waitress 从框架主依赖移出（`pyproject.toml` `[project.dependencies]` 与 `requirements.txt` 核心段仅剩 6 项：websockets / apscheduler / pyyaml / bcrypt / requests / psutil），归入 `[project.optional-dependencies].web` 组并在 `requirements.txt` 注释可选段；`core_plugins/webui/requirements.txt` 声明插件级依赖，**启用 webui（web.enabled != false）时才由插件加载器自动补装**——未启用时框架零 flask 加载。
+- **API 真假节点**：`framework/api/webserver.py` 新增 `WebServerStub` 假节点（同接口 start/stop/app/active/host/port，不创建 Flask 应用、不监听端口）；webui 停用或 flask 缺失时注册假节点而非 `None`，`services.get('web_server')` 恒非 None，调用方判空逻辑不变。
+- **官方插件清单驱动加载**：新增独立扫描进程 `tools/scan_core_plugins.py`（dry-run / --write / --enable / --disable），`core_plugins.yaml` 成为官方插件启停与配置的**唯一权威**；config.yaml 的 `core_plugins` 段废弃（不再参与判定），**新发现插件一律 `enabled: false`（绝不自动启用）**，消除「未列出自动启用 / 权威段静默覆盖」两类误加载路径。
+- **L2 文件后端**：`EventBuffer` 支持 `l2_backend: sqlite|file|off`，sqlite 关闭时自动落自研 append-only 文件后端（一行一事件、取出即删语义、读指针过半压缩、损坏行跳过）——debug/sim 下 L3 满仍能回落 L2，不直接丢事件。
+
+### 测试
+- 新增 `tests/test_ipc_perf.py`（5 项：notify 调用侧不阻塞、并发 RPC、批量日志少帧、断线快速失败、close 唤醒等待者）。
+- 重写 `tests/test_core_plugin_switch.py` 覆盖清单驱动加载；新增 `tools/bench_ipc.py` 可复跑基准。
+- 回归：主套件 **136 passed**（`-o asyncio_mode=auto`，含新增 `test_web_deps_lazy_with_stub`——flask 按需化回归：API 假节点屏蔽 flask 后仍可导入/启动/停止）；独立脚本 `test_buffer_refill.py` 15、`test_buffer_l2_file.py` 22、`test_perm.py` 43/43、`test_plugin_imports.py` 25 全过。
+- rust_accel 专项：`cargo test` 单测全过、`it_smoke.py`（IPC 双向 + WS 收发）PASS、`plugin_smoke.py`（生命周期 + 事件注入 + 广播回执 + 监控，优雅停机 0 残留进程）PASS、`bench.py` 快速档 PASS。
+
 ## v1.7.4（2026-09-28）
 
 > 主题：**事件入队热路径 O(1) 尺寸记账（约 120ns，与事件大小无关）+ 分发层字节闸门 + L2 落盘瘦身**。

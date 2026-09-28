@@ -5,7 +5,7 @@
 四种后端：
     sqlite  → Database（默认，零配置单文件数据库）
     mysql   → Database（大环境，多写高并发）
-    file    → FileStore（降级文件存储，数据库不可用时的"最垃计划"兜底）
+    file    → FileStore（降级文件存储，数据库不可用时的兜底）
     debug   → SqlSimEngine（调试模式 / 低性能模式：本地模拟 SQL，行集
               JSON 落盘，查询有语义而非空值——见 sql_sim.py）
 

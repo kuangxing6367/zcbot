@@ -53,10 +53,26 @@ class FrameworkRuntimeMixin:
                 if _role == 'host' and _core_side:
                     continue
 
-            # 检查配置开关（默认启用）
-            enabled = core_cfg.get(name, True)
-            if enabled is False:
-                logger.info(f"官方插件 [{name}] 已禁用 (core_plugins.{name}: false)")
+            # 检查配置开关。core_plugins.yaml（经 _autoload_core_plugins 合并）
+            # 是唯一权威：未在清单中列出的插件视为未配置——一律禁用并提示
+            # 运行扫描工具，杜绝"未列出自动启用"的误加载（历史缺省 True 之坑）。
+            enabled = core_cfg.get(name)
+            if enabled is None:
+                logger.warning(
+                    f"官方插件 [{name}] 未在 core_plugins.yaml 中配置，不加载；"
+                    "如需启用请运行: python tools/scan_core_plugins.py --enable "
+                    f"{name}")
+                continue
+            # 兼容两种配置形态：{name: bool}（_autoload_core_plugins 合并产物）
+            # 与 {name: {enabled: ...}}（手写配置块 / 非标准注入路径），
+            # 以及 'false'/'0'/None 等非布尔值——缺失一律按禁用处理，
+            # 避免 enabled:false 的插件被 eager import 白白占用内存（约 10MB/个）。
+            if isinstance(enabled, dict):
+                enabled = enabled.get('enabled', True)
+            if isinstance(enabled, str):
+                enabled = enabled.strip().lower() in ('1', 'true', 'yes', 'on', 'y')
+            if not enabled:
+                logger.info(f"官方插件 [{name}] 已禁用 (core_plugins.{name}: {enabled!r})")
                 continue
 
             try:

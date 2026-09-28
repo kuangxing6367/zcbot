@@ -324,7 +324,7 @@ def init_db(config: dict):
 
     硬依赖解除：真实数据库初始化失败（缺驱动、连接失败、迁移失败等）时，
     不阻塞框架启动 —— 降级为 data/db/ 下的 JSON/YAML 文件存储
-    （最垃计划，见 framework/database/file_store.py）。
+    （FileStore 降级后端，见 framework/database/file_store.py）。
     """
     global db
 
@@ -349,7 +349,7 @@ def init_db(config: dict):
     except Exception as e:
         logger.error(
             f"数据库初始化失败（{type(e).__name__}: {e}），"
-            f"降级为 JSON/YAML 文件存储（最垃计划），框架以最低限度功能继续启动"
+            f"降级为 JSON/YAML 文件存储（FileStore），框架以最低限度功能继续启动"
         )
         db = FileStore(db_config)
     return db

@@ -175,6 +175,9 @@ class FrameworkDispatchMixin:
 
                 from framework.messaging.event import _extract_text
                 raw_message = _extract_text(event.get('message', ''))
+                # 预提取文本随事件携带：router 构造 Event 时直接复用，
+                # 避免同一消息段数组被遍历两次（热路径优化）
+                event['_msg_text'] = raw_message
                 message_type = event.get('message_type', 'unknown')
                 user_id = event.get('user_id', 0)
                 group_id = event.get('group_id')

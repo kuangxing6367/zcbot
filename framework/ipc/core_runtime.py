@@ -56,17 +56,23 @@ class CoreRuntime:
         self._tx = RemoteTxManager(fw.db)
         self._register_tx_handlers()
 
-        # 日志合并：宿主日志经 IPC 'log' 事件 → 核心 log_broker（WebUI 可见）
+# 日志合并：宿主日志经 IPC 'log' 事件 → 核心 log_broker（WebUI 可见）
         from framework.log_broker import log_broker
 
         def _on_host_log(payload):
-            try:
-                log_broker.log(
-                    'host', str(payload.get('level', 'INFO')),
-                    str(payload.get('msg', '')),
-                    {'source': str(payload.get('logger', 'host'))})
-            except Exception:
-                pass
+            # 兼容两种格式：单条 dict（旧宿主）与批量 {'batch': [...]}（新宿主）
+            batch = payload.get('batch') if isinstance(payload, dict) else None
+            entries = batch if isinstance(batch, list) else [payload]
+            for p in entries:
+                if not isinstance(p, dict):
+                    continue
+                try:
+                    log_broker.log(
+                        'host', str(p.get('level', 'INFO')),
+                        str(p.get('msg', '')),
+                        {'source': str(p.get('logger', 'host'))})
+                except Exception:
+                    pass
 
         self.server.on('log', _on_host_log)
 

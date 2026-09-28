@@ -1,0 +1,9 @@
+# ============================================================
+# core_plugins/webui 插件专属依赖
+# 启用 webui（web.enabled != false）时由插件加载器自动安装；
+# 未启用时框架本体不安装 flask 相关依赖（API 层仅注册假节点）。
+# 与 pyproject.toml [project.optional-dependencies].web 组保持一致。
+# ============================================================
+flask>=2.3.0
+flask-cors>=4.0.0
+waitress>=3.0.0
