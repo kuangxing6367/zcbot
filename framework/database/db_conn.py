@@ -111,8 +111,12 @@ class DatabaseConnMixin:
             )
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
+            # WAL 下 synchronous=NORMAL 即安全：仅断电极端场景可能丢失最后一个事务，
+            # 但完全免去每次写都 fsync 的开销，写入吞吐显著提升（事件缓冲 / 高频统计写受益最大）。
+            conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA wal_autocheckpoint=2000")  # 调大 checkpoint 间隔，降低写放大
             self._local.conn = conn
         return conn
 

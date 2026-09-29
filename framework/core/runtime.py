@@ -7,6 +7,9 @@ import importlib.util
 import logging
 import os
 import sys
+import time
+
+from framework.memory import trim_memory, log_malloc_hint
 
 logger = logging.getLogger('zcbot')
 
@@ -89,6 +92,12 @@ class FrameworkRuntimeMixin:
 
                 if hasattr(module, 'register'):
                     module.register(ctx)
+                    # 应用官方插件模块级装饰器登记的注册项（@command/@on/@hook/...）
+                    try:
+                        from framework.plugin import flush as _flush_plugin
+                        _flush_plugin(module.__name__, ctx)
+                    except Exception as e:
+                        logger.warning(f"官方插件 [{name}] 装饰器 flush 失败: {e}")
                     logger.info(f"官方插件 [{name}] 已加载")
 
                     # 存入 plugin_loader，使调度器能通过 get_plugin_module 获取模块
@@ -181,7 +190,15 @@ class FrameworkRuntimeMixin:
                 logger.error(f"插件注册心跳异常: {e}")
 
     async def _memory_watchdog_loop(self):
-        """内存看门狗：周期检查 RSS，超限时清理框架级缓存并强制 GC"""
+        """内存看门狗：自动内存回收策略（无需任何手动配置）。
+
+        三层防御，全部后台自动运行：
+        1. 超限硬清：RSS 超过 memory_limit_mb 时清框架级缓存 + GC + trim；
+        2. 峰值回落主动 trim：大峰值（如解闸 50w）排空后趁释放窗口把空闲块还 OS；
+        3. 自动回收模式：跟踪运行基线，一旦检测到「内存地板」（RSS 持续高于基线且
+           不回落），进入持续回收模式，周期性 GC + trim 直到内存回到基线附近，
+           全程无需人工干预。
+        """
         import psutil  # 延迟导入：psutil 导入较慢，仅在启用看门狗时加载
         process = psutil.Process()
         while self._running:
@@ -190,26 +207,93 @@ class FrameworkRuntimeMixin:
                 if not self._running:
                     break
                 rss_mb = process.memory_info().rss / 1024 / 1024
+                # 懒初始化：基线 / 峰值 / 节流时间戳 / 回收状态机 / 分配器提示
+                if not hasattr(self, '_baseline_rss'):
+                    self._baseline_rss = rss_mb
+                    self._baseline_until = time.monotonic() + 120.0  # 基线采样窗口 120s
+                    self._peak_rss = rss_mb
+                    self._last_trim = 0.0
+                    self._reclaim_mode = False
+                    self._reclaim_since = 0.0
+                    self._reclaim_cooldown = 0.0
+                    self._last_reclaim = 0.0
+                    log_malloc_hint(logger)
+                now = time.monotonic()
+                self._peak_rss = max(self._peak_rss, rss_mb)
+                # 基线采样：启动后前 120s 取 RSS 滚动最低值作为「健康基线」
+                if now < self._baseline_until:
+                    self._baseline_rss = min(self._baseline_rss, rss_mb)
+                # 内存地板阈值：高于基线 1.5 倍 或 高出 100MB 即视为异常残留
+                floor = max(self._baseline_rss * 1.5, self._baseline_rss + 100.0)
+
+                # —— 层 3：自动回收模式（地板检测 + 持续回收）——
+                if not self._reclaim_mode:
+                    if rss_mb > floor:
+                        if self._reclaim_since == 0.0:
+                            self._reclaim_since = now
+                        elif now - self._reclaim_since > 30.0:  # 持续 30s 高于地板才判定
+                            self._reclaim_mode = True
+                            logger.info(
+                                f"[内存看门狗] 检测到内存地板（基线 {self._baseline_rss:.0f}MB，"
+                                f"当前 {rss_mb:.0f}MB），进入自动回收模式"
+                            )
+                    else:
+                        self._reclaim_since = 0.0
+                else:
+                    # 回收模式：每 60s 强制 GC + trim，持续把空闲内存还 OS
+                    if now - self._last_reclaim > 60.0:
+                        collected = gc.collect()
+                        trimmed = trim_memory()
+                        after_rss = process.memory_info().rss / 1024 / 1024
+                        self._last_reclaim = now
+                        logger.info(
+                            f"[内存看门狗] 自动回收中：GC {collected} 对象，trim={trimmed}，"
+                            f"RSS {rss_mb:.1f}→{after_rss:.1f}MB"
+                        )
+                    # 退出条件：RSS 回落到基线 1.2 倍内持续 60s
+                    if rss_mb < self._baseline_rss * 1.2:
+                        if self._reclaim_cooldown == 0.0:
+                            self._reclaim_cooldown = now
+                        elif now - self._reclaim_cooldown > 60.0:
+                            self._reclaim_mode = False
+                            self._reclaim_cooldown = 0.0
+                            logger.info("[内存看门狗] 内存已回落到基线，退出自动回收模式")
+                    else:
+                        self._reclaim_cooldown = 0.0
+
+                # —— 层 1：超限硬清（独立于回收模式的兜底）——
                 if rss_mb > self._memory_limit_mb:
                     logger.warning(
                         f"[内存看门狗] RSS {rss_mb:.1f}MB 超过限制 {self._memory_limit_mb}MB，触发清理"
                     )
-                    # 1. 清理框架级角色缓存
                     from framework.messaging.event import _user_role_cache, _group_role_cache
                     cache_before = len(_user_role_cache) + len(_group_role_cache)
                     _user_role_cache.clear()
                     _group_role_cache.clear()
-                    # 2. 清理 stats_writer 聚合计数（高频但不关键）
                     if hasattr(self, 'stats_writer'):
                         self.stats_writer._cmd_hits.clear()
                         self.stats_writer._kw_hits.clear()
-                    # 3. 强制 GC 回收循环引用
                     collected = gc.collect()
+                    trimmed = trim_memory()
                     after_rss = process.memory_info().rss / 1024 / 1024
+                    self._last_trim = now
                     logger.info(
                         f"[内存看门狗] 清理完成：缓存 {cache_before} 条，GC 回收 {collected} 对象，"
-                        f"RSS {rss_mb:.1f}→{after_rss:.1f}MB（节省 {rss_mb - after_rss:.1f}MB）"
+                        f"trim={trimmed}，RSS {rss_mb:.1f}→{after_rss:.1f}MB（节省 {rss_mb - after_rss:.1f}MB）"
                     )
+                else:
+                    # —— 层 2：峰值回落后主动归还（趁释放窗口）——
+                    fallen = self._peak_rss - rss_mb
+                    if (fallen > max(50.0, self._peak_rss * 0.25)
+                            and rss_mb > self._memory_limit_mb * 0.6
+                            and now - self._last_trim > 60.0):
+                        trimmed = trim_memory()
+                        self._last_trim = now
+                        after_rss = process.memory_info().rss / 1024 / 1024
+                        logger.debug(
+                            f"[内存看门狗] 峰值回落主动 trim：{trimmed}，"
+                            f"RSS {rss_mb:.1f}→{after_rss:.1f}MB"
+                        )
             except asyncio.CancelledError:
                 break
             except Exception as e:

@@ -38,8 +38,7 @@ from framework.database.db_conn import (  # noqa: F401
 # ── 数据库引擎 ──────────────────────────────────────────────────────
 
 from .db_conn import DatabaseConnMixin
-from .file_store import FileStore
-from .storage import create_storage  # noqa: F401  存储抽象层工厂（file/debug/sqlite/mysql）
+from .storage import create_storage  # noqa: F401  存储抽象层工厂（debug/sqlite/mysql）
 
 class Database(DatabaseConnMixin):
     """
@@ -51,7 +50,6 @@ class Database(DatabaseConnMixin):
         self.config = config
         self.db_type = config.get('type', 'sqlite').lower()
         self._local = local()
-        self._lock = __import__('threading').Lock()
         # MySQL 连接保活/重连配置
         self._ping_interval = float(config.get('ping_interval', 5.0))   # 空闲多久 ping 一次检测连接是否存活
         self._connect_timeout = float(config.get('connect_timeout', 10))  # 建立连接超时（秒）
@@ -319,12 +317,11 @@ def init_db(config: dict):
 
     存储抽象层：framework/database/storage.py 按 database.type 选择后端。
     - sqlite / mysql → Database（真实数据库，含自动建表与迁移）
-    - file           → FileStore（降级文件存储）
     - debug          → SqlSimEngine（调试模式 / 低性能模式：本地模拟 SQL）
 
     硬依赖解除：真实数据库初始化失败（缺驱动、连接失败、迁移失败等）时，
-    不阻塞框架启动 —— 降级为 data/db/ 下的 JSON/YAML 文件存储
-    （FileStore 降级后端，见 framework/database/file_store.py）。
+    不阻塞框架启动 —— 自动降级为本地 SQL 模拟引擎（SqlSimEngine，同 debug
+    模式实现，data/db/ 下 JSON 行集落盘），框架以最低限度功能继续启动。
     """
     global db
 
@@ -332,8 +329,15 @@ def init_db(config: dict):
     db_config = _parse_sqlite_type(config)
     dtype = db_config.get('type', 'sqlite').lower()
 
-    # 非真实数据库后端（file 降级存储 / debug 调试模拟）直接经抽象层创建
-    if dtype in ('file', 'debug'):
+    # 已移除的存储类型：database.type: file 无实际 SQL 能力，显式报错而非静默降级
+    if dtype == 'file':
+        raise ValueError(
+            "database.type 'file' 已移除：该降级文件存储无实际 SQL 能力。"
+            "请改用 sqlite / mysql（常规/生产）或 debug（无数据库的开发联调）。"
+        )
+
+    # 非真实数据库后端（debug 调试模拟）直接经抽象层创建
+    if dtype == 'debug':
         db = create_storage(db_config)
         logger.info(f"存储后端启动：{type(db).__name__}（database.type={dtype}）")
         return db
@@ -349,9 +353,11 @@ def init_db(config: dict):
     except Exception as e:
         logger.error(
             f"数据库初始化失败（{type(e).__name__}: {e}），"
-            f"降级为 JSON/YAML 文件存储（FileStore），框架以最低限度功能继续启动"
+            f"降级为本地 SQL 模拟引擎（SqlSimEngine / debug 模式实现），"
+            f"框架以最低限度功能继续启动"
         )
-        db = FileStore(db_config)
+        from .sql_sim import SqlSimEngine
+        db = SqlSimEngine(db_config)
     return db
 
 

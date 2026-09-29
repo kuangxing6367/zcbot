@@ -9,7 +9,7 @@
 > **OneBot 11 是它的一个默认扩展，但不是它的身份。** 换一个 `ProtocolAdapter`，它可以是 Telegram / Discord 机器人、
 > HTTP Webhook 接收器、纯定时任务服务，或任何"事件 → 扩展 → 响应"的程序。
 
-**当前正式版：v1.7.5** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
+**当前正式版：v1.8.0** ｜ 版本演进见 [CHANGELOG.md](CHANGELOG.md)
 
 - 项目地址：https://github.com/kuangxing6367/zcbot
 - 官方插件仓库：https://github.com/kuangxing6367/zcbot_plugins
@@ -201,7 +201,7 @@ python main.py                 # 也可指定配置：python main.py D:\config\z
 | `webui.host` / `webui.port` | `127.0.0.1` / `8080` | Web 后台地址端口 |
 | `http_inject`（默认关） | `127.0.0.1:8901/hook` | HTTP 事件注入 |
 | `http_api`（默认关） | `127.0.0.1:1145` | 独立对外 HTTP API |
-| `config.yaml → database.type` | `sqlite`（`data/zcbot.db`） | `sqlite` 零配置（**仅小环境/开发**）、`mysql`（**大环境**）、`file`（**数据库不可用时的降级文件存储**）或 `debug`（**无数据库的开发/联调，本地模拟 SQL，仅限调试**） |
+| `config.yaml → database.type` | `sqlite`（`data/zcbot.db`） | `sqlite` 零配置（**仅小环境/开发**）、`mysql`（**大环境**）或 `debug`（**无数据库的开发/联调，本地模拟 SQL，仅限调试**） |
 
 Web 后台默认登录账号 `admin` / `admin123`（**首次登录后立即改密**）。
 
@@ -413,7 +413,7 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
 │   ├── runtime.py          # 中立运行时上下文（current_source_var）
 │   ├── stats_writer.py     # 兼容 shim → framework.core.stats_writer
 │   ├── apis.py             # 兼容 shim：re-export create_web_app / WebServer
-│   ├── database/           # 数据库包：storage(后端工厂) · db · db_conn · dialect · schema · init_db · file_store(降级) · sql_sim(调试)
+│   ├── database/           # 数据库包：storage(后端工厂) · db · db_conn · dialect · schema · init_db · sql_sim(调试/降级兜底)
 │   ├── messaging/          # 消息事件包：event · event_bus · router · router_match · router_keywords · protocol
 │   ├── terminal/           # 终端包：builtins 编排 + cmd_{core,plugin,msg,info,update} + helper
 │   ├── api/                # 后台 REST：webapp · webserver · app_helpers · plugins/market/meta · framework_ops/update
@@ -428,7 +428,7 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
 │   └── scheduler/          #   定时任务
 ├── plugins/                # 用户扩展（每个一个目录，含 main.py）
 ├── webui/                  # 后台前端源码（Vue 3 + Vite + Element Plus）
-├── web/                    # 前端构建产物（由 webui/ 构建）
+├── core_plugins/webui/web/ # 前端构建产物（由 webui/ 构建，随 webui 插件自包含）
 ├── sql/                    # 建表 SQL（init.sql / init_mysql55.sql）
 ├── data/                   # 运行数据：zcbot.db、logs/、plugins_dat/（扩展私有数据）
 └── docs/                   # 开发文档（见下方导航）
@@ -443,12 +443,12 @@ curl -H "Authorization: Bearer <你的API_KEY>" \
 
 ### 11.3 前端构建
 
-后台前端源码在 `webui/`，产物输出到 `web/`：
+后台前端源码在 `webui/`，产物输出到 `core_plugins/webui/web/`：
 
 ```bash
 cd webui
 npm install
-npm run build      # 产物输出到 ../web/
+npm run build      # 产物输出到 ../core_plugins/webui/web/
 ```
 
 数据库表结构见 `sql/init.sql`（MySQL 方言 DDL，运行时自动翻译给 SQLite/MySQL 双方使用）与 `sql/init_mysql55.sql`（MySQL 5.5 兼容），启动时自动建表补缺。

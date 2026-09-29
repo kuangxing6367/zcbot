@@ -34,9 +34,14 @@ import threading
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from .file_store import FileStore, _ensure_dir
-
 logger = logging.getLogger('zcbot')
+
+
+def _ensure_dir(path: str):
+    """确保目录存在（不存在则创建）"""
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
 
 # ── 迷你 SQL tokenizer ──────────────────────────────────────
 
@@ -113,7 +118,7 @@ class _UnsupportedSQL(Exception):
 
 # ── 调试模式 SQL 模拟引擎 ──────────────────────────────────
 
-class SqlSimEngine(FileStore):
+class SqlSimEngine:
     """调试模式 SQL 模拟引擎（低性能本地模拟，行集 JSON 落盘）"""
 
     db_type = 'debug'
@@ -121,7 +126,18 @@ class SqlSimEngine(FileStore):
     debug_mode = True       # 标志：本地 SQL 模拟（低性能模式）
 
     def __init__(self, config: Optional[dict] = None):
-        super().__init__(config or {})
+        # 自包含初始化（不依赖外部基类）：仅取目录与锁，
+        # 不再打印「降级为文件存储」的误导警告（debug 是显式调试模式，非故障降级）
+        config = config or {}
+        base = config.get('path', 'data/zcbot.db')
+        default_dir = os.path.join(os.path.dirname(base) or '.', 'db')
+        self._dir = config.get('fallback_dir') or default_dir
+        self._lock = threading.RLock()
+        self._db_path = self._dir
+        try:
+            _ensure_dir(os.path.join(self._dir, '.keep'))
+        except Exception as e:
+            logger.error(f"调试模式存储目录创建失败（{self._dir}）: {e}")
         self._sql_dir = os.path.join(self._dir, 'sql')
         try:
             _ensure_dir(os.path.join(self._sql_dir, '.keep'))
@@ -177,7 +193,7 @@ class SqlSimEngine(FileStore):
         except Exception as e:
             logger.warning(f"删除模拟表 {table} 失败: {e}")
 
-    # ── SQL 兼容接口（与 Database / FileStore 同构）────────
+    # ── SQL 兼容接口（与 Database 同构）────────────────
 
     def query(self, sql: str, params=None) -> list:
         """SELECT → list[dict]；不支持的 SQL 安全返回 []"""

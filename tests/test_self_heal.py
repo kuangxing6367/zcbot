@@ -2,12 +2,11 @@
 """
 内核自修复能力故障注入验证。
 
-覆盖四个缺口：
+覆盖三个缺口：
   1. 插件 main.py 损坏 → load_plugin 失败登记 _failed_mtimes；
      修复后 heartbeat_register 自动重新加载并注册（无需重启框架）。
   2. core_plugins.yaml 损坏 → 备份 .bak 留证 + 自动重建默认配置。
-  3. FileStore 表文件损坏 → 改名 .corrupt 留证 + 返回 {}，不崩溃。
-  4. event_buffer sqlite 写连续失败达阈值 → 自动禁用溢出层，事件转走内存兜底。
+  3. event_buffer sqlite 写连续失败达阈值 → 自动禁用溢出层，事件转走内存兜底。
 
 运行：python tests/test_self_heal.py  （直接 python 执行，非 pytest）
 """
@@ -169,29 +168,6 @@ def test_core_plugins_yaml_backup(tmp):
     check("重建后 http_api enabled 为默认值 false", out.get('http_api', {}).get('enabled') is False)
 
 
-def test_filestore_corrupt(tmp):
-    """场景3：FileStore 表文件损坏 → .corrupt 留证 + 返回 {}"""
-    print("场景3: FileStore 表文件损坏留证")
-    from framework.database.file_store import FileStore
-
-    store_dir = os.path.join(tmp, 'filestore')
-    os.makedirs(store_dir)
-    tbl = os.path.join(store_dir, 'plugins.json')
-    with open(tbl, 'w', encoding='utf-8') as f:
-        f.write("{ broken json !!!")
-
-    store = FileStore({'fallback_dir': store_dir})
-    data = store._read_table('plugins')
-    check("损坏表读取返回 {}", data == {})
-    check("损坏文件已改为 .corrupt", os.path.isfile(f"{tbl}.corrupt"))
-    check("原文件已移走（不再反复报错）", not os.path.isfile(tbl))
-    # 再次读取应稳定返回 {} 且不抛异常
-    data2 = store._read_table('plugins')
-    check("重复读取稳定 {} 不崩溃", data2 == {})
-
-    # 写入应能在留证后重新建立新表
-    store.put('plugins', 'k1', {'a': 1})
-    check("留证后写入重建新表", store.get('plugins', 'k1') == {'a': 1})
 
 
 def test_event_buffer_sqlite_downgrade(tmp):
@@ -216,10 +192,16 @@ def test_event_buffer_sqlite_downgrade(tmp):
     import asyncio
 
     async def drive():
-        # 6 个事件：第 1 个占 L1，第 2-6 个溢出触达 sqlite 连续失败（5 次 ≥ 阈值 4）
-        for i in range(6):
-            await buf.put({'e': i})
-        await asyncio.sleep(0.05)
+        # L4 设计下，L1 溢出先进 L4 攒批，由 flush 批次落 L2 才算一次写操作；
+        # 故以「轮次灌事件→强制 flush」制造连续写失败（失败计数逐批次挂钩），
+        # 而非旧设计的逐条直写。每轮 3 条（1 占 L1、2 溢出进 L4）→ 1 次 flush 失败。
+        for _round in range(8):
+            if not buf.sqlite_enabled:
+                break
+            for i in range(3):
+                await buf.put({'e': (_round, i)})
+            await buf._l4_do_flush()      # 强制把 L4 批次落 L2（故障 → 失败计数 +1）
+        await asyncio.sleep(0.02)
 
     asyncio.run(drive())
     check("连续写失败后 sqlite 溢出层自动禁用", buf.sqlite_enabled is False)
@@ -245,8 +227,6 @@ def main():
         test_plugin_self_reload(tmp)
         print()
         test_core_plugins_yaml_backup(tmp)
-        print()
-        test_filestore_corrupt(tmp)
         print()
         test_event_buffer_sqlite_downgrade(tmp)
     finally:

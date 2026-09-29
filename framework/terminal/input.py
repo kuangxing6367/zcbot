@@ -61,6 +61,13 @@ class TerminalInput:
                 break
             except KeyboardInterrupt:
                 break
+            except (ValueError, OSError):
+                # 外部杀进程瞬间 stdin/stdout/stderr 被拔，input() 抛
+                # ValueError/OSError（如 "lost sys.stdin" / "I/O operation on
+                # closed file"）。此时再调 logger.error 写 stderr 会再次失败
+                # 并触发微秒级死循环（bug#9）。直接停止线程，避免刷屏与轮转。
+                self._running = False
+                break
             except Exception as e:
                 logger.error(f"终端输入读取异常: {e}")
 

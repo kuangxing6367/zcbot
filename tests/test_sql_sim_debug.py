@@ -3,7 +3,7 @@
 调试模式（低性能模式 / 本地模拟 SQL）测试
 
 覆盖 storage.py 抽象层 + SqlSimEngine：
-  T1: 抽象层工厂选型（file / debug / sqlite 按配置选择后端）。
+  T1: 抽象层工厂选型（debug / sqlite 按配置选择后端；file 类型已移除应报错）。
   T2: 调试模式 SQL 模拟引擎核心语句：
       建表、INSERT/INSERT IGNORE、WHERE 过滤、COUNT/scalar/exists、
       空表聚合、UPDATE 自增、ORDER+LIMIT+OFFSET、DISTINCT、
@@ -27,7 +27,6 @@ if ROOT not in sys.path:
 import pytest
 
 from framework.database import db as db_module
-from framework.database.file_store import FileStore
 from framework.database.sql_sim import SqlSimEngine
 from framework.database.storage import create_storage, normalize_config
 
@@ -42,13 +41,13 @@ def test_normalize_config_string_to_sqlite():
     assert normalize_config({})['type'] == 'sqlite'
 
 
-def test_create_storage_selects_backend(tmp_path, monkeypatch):
-    # file → FileStore（降级存储）
-    store = create_storage({'type': 'file', 'fallback_dir': str(tmp_path)})
-    assert isinstance(store, FileStore)
-    assert not isinstance(store, SqlSimEngine)
-    assert store.db_type == 'file'
+def test_create_storage_rejects_removed_file_type(tmp_path):
+    # file 类型已移除：显式配置应清晰报错，而非静默落到别的后端
+    with pytest.raises(ValueError):
+        create_storage({'type': 'file', 'fallback_dir': str(tmp_path)})
 
+
+def test_create_storage_selects_debug(tmp_path):
     # debug → SqlSimEngine（调试模式，SQL 有语义）
     eng = create_storage({'type': 'debug', 'fallback_dir': str(tmp_path)})
     assert isinstance(eng, SqlSimEngine)
@@ -56,6 +55,8 @@ def test_create_storage_selects_backend(tmp_path, monkeypatch):
     assert eng.degraded is False
     assert eng.debug_mode is True
 
+
+def test_create_storage_sqlite(monkeypatch):
     # sqlite → Database（真实库；构造后行为断言由既有 Database 测试覆盖）
     from framework.database.db import Database
     monkeypatch.setattr(db_module, 'Database', _FakeDatabase)

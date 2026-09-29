@@ -58,6 +58,21 @@ def host_entry(config_path, address, token, core_pid):
         if isinstance(_h, logging.handlers.RotatingFileHandler):
             _root_logger.removeHandler(_h)
     _ipc_log_handler = IpcLogHandler(client)
+    # 宿主进程同样启用日志合并，避免高并发重复错误经 IPC 刷屏
+    try:
+        if fw.config.get('log', {}).get('coalesce', True):
+            from framework.coalesce_log import LogCoalescer
+            _lvl = getattr(
+                logging,
+                str(fw.config.get('log', {}).get('coalesce_level', 'WARNING')).upper(),
+                logging.WARNING,
+            )
+            _ipc_log_handler.addFilter(LogCoalescer(
+                window=float(fw.config.get('log', {}).get('coalesce_window', 10)),
+                min_level=_lvl,
+            ))
+    except Exception:
+        pass
     _ipc_log_handler.start()
     _root_logger.addHandler(_ipc_log_handler)
 

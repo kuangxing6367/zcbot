@@ -15,6 +15,7 @@ import asyncio
 import logging
 import re
 import threading
+import time
 from typing import Optional
 
 from framework.log_broker import log_broker
@@ -64,6 +65,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         self._refresh_interval = 5.0  # 路由表刷新间隔（秒）
         self._refresh_task = None
         self._force_refresh = False   # 外部置位后立即重建（插件变更等）
+        self._routes_signature = None  # 路由表轻量签名，未变动则跳过重建
+        self._last_group_cache_refresh = 0.0  # 群级插件开关缓存刷新时间戳（30s 节流）
 
     def start(self, loop):
         """启动后台路由表刷新任务（在主事件循环内调用）"""
@@ -97,13 +100,43 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                 continue
             await asyncio.sleep(self._refresh_interval)
 
+    def _compute_signature(self):
+        """轻量签名：捕获路由表变化的几种来源（避免每 5s 全量重编译正则）。
+
+        commands 表无 updated_at 列，故用 COUNT(*)/SUM(is_active)/MAX(id) 组合判定；
+        插件启用集用 COUNT + MAX(created_at)；关键词规则同理。三者任一变化即触发重建。
+        """
+        try:
+            p = self.db.query_one(
+                "SELECT COUNT(*) AS n, COALESCE(MAX(created_at), 0) AS m FROM plugins "
+                "WHERE is_active = 1 AND has_register = 1 AND status = 'running'")
+            c = self.db.query_one(
+                "SELECT COUNT(*) AS n, COALESCE(SUM(is_active), 0) AS a, "
+                "COALESCE(MAX(id), 0) AS m FROM commands WHERE is_dynamic = 0")
+            k = self.db.query_one(
+                "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS m FROM dynamic_commands")
+            return (p['n'], p['m'], c['n'], c['a'], c['m'], k['n'], k['m'])
+        except Exception:
+            return None
+
     def _rebuild_routes(self):
         """从 DB 构建纯内存路由表（在 to_thread 中执行）"""
         # 1. 群级插件开关缓存刷新（最多 30s 一次，热路径无需再查库）
-        try:
-            self.framework.plugin_loader._refresh_group_plugin_cache()
-        except Exception:
-            pass
+        now = time.monotonic()
+        if now - self._last_group_cache_refresh >= 30.0:
+            try:
+                self.framework.plugin_loader._refresh_group_plugin_cache()
+            except Exception:
+                pass
+            self._last_group_cache_refresh = now
+
+        # 2. 轻量签名：路由表未变动则跳过完整重建（省去命令全量加载 + 正则重编译）。
+        #    外部变更经 _invalidate_cache() 置 _force_refresh，仍会强制重建。
+        sig = self._compute_signature()
+        if (sig is not None and sig == self._routes_signature
+                and not self._force_refresh):
+            return
+        self._routes_signature = sig
 
         loaded = self.framework.plugin_loader.get_loaded_plugins()
 
@@ -131,7 +164,7 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             order.append(name)
 
         if table:
-            # 2. 一次性加载全部已启用命令（is_dynamic 仅展示，不路由）
+            # 3. 一次性加载全部已启用命令（is_dynamic 仅展示，不路由）
             base_where = (
                 "WHERE is_dynamic = 0 "
                 "AND (is_active = 1 OR (is_active = 0 AND alias IS NOT NULL AND alias != '')) "
@@ -164,7 +197,7 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                 if name in by_plugin:
                     table[name].commands = by_plugin[name]
 
-        # 3. 加载系统关键词自动回复（dynamic_commands 表，插件未命中时兜底）
+        # 4. 加载系统关键词自动回复（dynamic_commands 表，插件未命中时兜底）
         keyword_rules = self._load_keyword_rules()
 
         with self._routes_lock:

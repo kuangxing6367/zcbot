@@ -238,6 +238,15 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
             self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
             return False
 
+        # 应用模块级装饰器登记的注册项（@command/@on/@hook/@task/@api/@dashboard_card
+        # 等在导入期收集，此处统一落到 ctx；等价于在 register 体内调用 ctx.xxx(...)）。
+        # 未使用装饰器 API 的旧插件：该模块待注册表为空，flush 为空操作，无副作用。
+        try:
+            from framework.plugin import flush as _flush_plugin
+            _flush_plugin(module.__name__, ctx)
+        except Exception as e:
+            logger.warning(f"[{plugin_name}] 插件装饰器 flush 失败: {e}")
+
         # 获取注册的命令和任务
         commands = ctx._get_commands()
         tasks = ctx._get_tasks()

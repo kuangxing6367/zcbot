@@ -31,7 +31,7 @@ def register(ctx):
 
     # 框架源码更新白名单：只覆盖这些代码/配置文件，用户数据一律跳过
     _FW_UPDATE_INCLUDE = {
-        'framework', 'core_plugins', 'web', 'webui', 'sql', 'main.py', 'requirements.txt',
+        'framework', 'core_plugins', 'core_plugins/webui/web', 'webui', 'sql', 'main.py', 'requirements.txt',
         'start.sh', '.gitignore', 'README.md', 'LICENSE', 'VERSION', 'CHANGELOG.md',
     }
 
@@ -174,7 +174,7 @@ def register(ctx):
     def update_framework():
         """
         从 GitHub 更新框架源码到指定版本（默认最新 Release）
-        只覆盖框架代码（framework/web/sql/main.py 等），
+        只覆盖框架代码（framework/core_plugins/webui/web/sql/main.py 等），
         保留用户数据（plugins/、data/、config.yaml、*.db 等），
         更新后需重启生效。
         请求体可选 version 指定目标版本号（如 1.0.0）。

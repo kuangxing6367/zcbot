@@ -36,6 +36,7 @@
 10. [定时任务](#十定时任务)
 11. [仪表盘与 WebUI](#十一仪表盘与-webui)
 12. [工具类：日志 / 异步执行 / 审计 / 数据目录](#十二工具类)
+13. [场景选型：哪个 ctx 函数适合做什么](#十三场景选型哪个-ctx-函数适合做什么)
 
 ---
 
@@ -79,6 +80,26 @@ def register(ctx):
     ctx.command("/admin", handle_admin, require_admin=True)
     ctx.command("/god", handle_god, require_superuser=True)
 ```
+
+### 静态命令与动态命令（dynamic 参数）
+
+`ctx.command()` 的 `dynamic` 参数（默认 `False`）决定命令走哪条路径，二者用途完全不同：
+
+| 维度 | 静态命令（dynamic=False，默认） | 动态命令（dynamic=True） |
+| ---- | ---- | ---- |
+| 落库表 | `commands`（`is_dynamic=0`） | `commands`（`is_dynamic=1`） |
+| 是否参与路由匹配 | 是，由内存路由表按前缀 / 正则匹配，命中即触发 handler | 否，不会参与命令路由 |
+| 典型用途 | 真正要响应、要执行的逻辑 | 仅在「动态命令」面板展示给用户的命令清单 / 说明 |
+| handler 是否必须 | 是，必须有处理函数 | 一般只填 `pattern` + `description` 做展示，可不挂 handler |
+
+```python
+ctx.command("/签到", handle_sign, alias="/sign", description="每日签到")   # 静态：会执行
+ctx.command("/菜单说明", None, dynamic=True, description="展示用，不执行")  # 动态：仅展示
+```
+
+要点：
+- 动态命令只进「动态命令」展示面板，消息路由不经过它们。一个命令既想展示又想执行，写**静态命令**即可——它本身就会出现在帮助 / 命令列表里。
+- `dynamic=True` 与「系统关键词自动回复」是两回事：后者写在 `dynamic_commands` 表，作为静态路由表无命中时的兜底，不通过 `ctx.command` 注册。
 
 匹配规则：普通命令名做前缀匹配；含正则元字符的模式走 `re.search()`，
 命令后参数统一用 `match.group(1)` 捕获。
@@ -378,6 +399,38 @@ ctx.audit_log("reset_data", target_type="data", detail={"by": event.user_id})
 
 返回（不存在则创建）插件私有数据目录 `data/plugins_dat/<插件名>/` 的绝对路径。
 配置缓存、下载的资源、SQLite 文件等都应写在这里，而不是代码目录。
+
+---
+
+## 十三、场景选型：哪个 ctx 函数适合做什么
+
+按「想做什么」查对应的 ctx 能力；命令类进一步区分静态 / 动态。
+
+| 你想实现的能力 | 用哪个 ctx 能力 | 说明 |
+| ---- | ---- | ---- |
+| 固定指令（`/签到`、`/help`） | `command`（静态） | 走路由，必须 handler |
+| 只在面板展示的命令说明 | `command`（dynamic=True） | 不参与路由，仅展示 |
+| 监听所有文本（关键词 / 反垃圾 / 统计） | `on("message")` 或 `on_message` | 命令未命中时也会触发 |
+| 原始消息接管（风控 / 转译 / 审计） | `on_raw_message` | 命令匹配之前触发，可 `return True` 接管整条消息 |
+| 入群 / 退群 / 撤回等通知 | `on("notice.xxx")` | payload 为 dict |
+| 插件间解耦通信 | `emit` / `on` | 自定义事件名 |
+| 回复消息 | `send_msg` / `asend_msg` | 群私自动 |
+| 禁言 / 踢人 / 查成员 | `ban` / `kick` / `get_member_*` | 群管快捷方法 |
+| 读可在 Web 面板改的配置 | `get_config` | 热生效，带默认 |
+| 持久化（建表 / 增删改查） | `create_table` / `db_query` / `db_execute` | `%s` 占位符 |
+| 定时跑（每日报告 / 心跳） | `task` | 无参函数 |
+| 仪表盘卡片 | `dashboard_card` | handler 返回卡片数据 |
+| 后台页面 | `webui` | `sidebar=True` 在侧边栏独立入口 |
+| 整体接管后台前端 | `override_webui` | 卸载自动回退 |
+| 管理页扩展列 / 面板 | `register_group_extension` / `register_user_extension` | WebUI 扩展 |
+| 自定义 REST 接口 | `register_api` | Flask 视图 |
+| 多轮会话（问答式交互） | `wait_for` / `create_session` | 需启用 session 插件 |
+| 权限判断 | `has_perm` / `is_superuser` / `is_group_admin` | 见 [权限与身份](#八权限与身份) |
+| 扩展内核（启动 / 分发 / 协议钩子） | `hook` | 见 [Hook 系统](../advanced/hooks.md) |
+| 后台跑耗时任务 | `run_async` | 提交线程池，不阻塞 |
+| 写审计日志 | `audit_log` | 以插件身份记录 |
+
+> 想用更简洁的声明式写法（把注册写在函数定义处）？见 [插件装饰器 API](../advanced/plugin-decorators.md)：与上面的 `ctx.xxx(...)` 完全等价，只是少写样板。
 
 ---
 

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""验证 v1.7.3+ 新缓冲语义：
-1. 超大事件（> L1 上限）优先 L3，其次才落 L2 sqlite；
-2. L1 为空时从 L2 回填进 L1 再按 L1 路径消费（source='l1'），而非直接吐 sqlite；
-3. 回填放不下（超 L1 上限的历史大块）才直接吐 sqlite。
+"""验证事件缓冲分层语义（v1.7.3+，含 v1.8 L4 攒批层）：
+1. L1 装不下的中等事件（> L1 上限、< L4 上限）优先进 L4 攒批层，由后台 flush 批量落 L2；
+2. 超大事件（> L4 上限）或 L2 写失败才回落 L3 内存兜底，其次落 L2；
+3. L1 为空时从 L2 回填进 L1 再按 L1 路径消费（source='l1'），而非直接吐 sqlite；
+4. 回填放不下（超 L1 上限的历史大块）才直接吐 sqlite。
 """
 import asyncio
 import os
@@ -55,20 +56,20 @@ def make_buf(sqlite_on=True):
     return EventBuffer(cfg, tmp)
 
 
-async def test_big_event_prefers_l3():
-    """超大事件（1MB）优先 L3，不落 L2"""
+async def test_big_event_prefers_l4():
+    """中等事件（1MB，> L1 上限且 < L4 上限）溢出进 L4 攒批层，不落 L2"""
     buf = make_buf(sqlite_on=True)
     ev = BigEvent()
     ok = await buf.put(ev, None)
     st = buf.stats()
     check("1MB 事件入队成功", ok)
-    check("1MB 事件落 L3（l3_items=1）", st['l3_items'] == 1, f"l3_items={st['l3_items']}")
+    check("1MB 事件落 L4 攒批层（l4_items=1）", st['l4_items'] == 1, f"l4_items={st['l4_items']}")
     check("1MB 事件未落 L2（overflow_to_sqlite=0）", st['overflow_to_sqlite'] == 0,
           f"overflow={st['overflow_to_sqlite']}")
     check("sqlite 行数为 0", buf.sqlite_count() == 0, f"rows={buf.sqlite_count()}")
-    # 消费应走 L3
+    # 消费优先从 L4 取走（防事件滞留 L4 丢失）
     e, done, src = await buf.get_async()
-    check("消费 source='l3'", src == 'l3', f"src={src}")
+    check("消费 source='l4'", src == 'l4', f"src={src}")
     buf.close()
 
 
@@ -96,36 +97,36 @@ async def test_l2_big_leftover_direct_out():
     buf.close()
 
 
-async def test_sqlite_off_big_goes_l3():
-    """sqlite 关闭时 1MB 事件仍走 L3 内存兜底"""
+async def test_sqlite_off_big_goes_l4():
+    """sqlite 关闭时 1MB 事件仍溢出进 L4（L2 关闭也不丢，后台 flush 落 file）"""
     buf = make_buf(sqlite_on=False)
     ok = await buf.put(BigEvent(), None)
     st = buf.stats()
     check("sqlite 关闭时 1MB 入队成功", ok)
-    check("落 L3", st['l3_items'] == 1, f"l3_items={st['l3_items']}")
+    check("落 L4 攒批层", st['l4_items'] == 1, f"l4_items={st['l4_items']}")
     e, done, src = await buf.get_async()
-    check("消费 source='l3'", src == 'l3', f"src={src}")
+    check("消费 source='l4'", src == 'l4', f"src={src}")
     buf.close()
 
 
 async def test_mixed_fifo_order():
-    """混合流：小事件填 L1 直出；超大事件走 L3——消费顺序应保持 L1 先、L3 后"""
+    """混合流：小事件填 L1 直出；中等事件走 L4——消费顺序应保持 L1 先、L4 后"""
     buf = make_buf(sqlite_on=False)
     await buf.put(SmallEvent(1), None)     # 小 → L1
-    await buf.put(BigEvent(), None)        # 大 → L3
+    await buf.put(BigEvent(), None)        # 中(1MB) → L4
     e1, _, s1 = await buf.get_async()
     e2, _, s2 = await buf.get_async()
     check("第 1 条来自 L1（小事件）", s1 == 'l1' and getattr(e1, 'n', None) == 1, f"{s1} {e1!r}")
-    check("第 2 条来自 L3（大事件）", s2 == 'l3', f"{s2}")
+    check("第 2 条来自 L4（中等事件）", s2 == 'l4', f"{s2}")
     buf.close()
 
 
 async def main():
     cases = [
-        ("超大事件优先 L3", test_big_event_prefers_l3),
+        ("中等事件溢出进 L4 攒批层", test_big_event_prefers_l4),
         ("L2 回填 L1 消费", test_l2_refills_l1_when_l1_empty),
         ("超 L1 遗留大块直出", test_l2_big_leftover_direct_out),
-        ("sqlite 关超大走 L3", test_sqlite_off_big_goes_l3),
+        ("sqlite 关中等事件走 L4", test_sqlite_off_big_goes_l4),
         ("混合流 FIFO", test_mixed_fifo_order),
     ]
     for name, fn in cases:
