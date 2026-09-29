@@ -73,7 +73,7 @@ def register(fw):
                 src_root = os.path.join(tmp_dir, entries[0]) if entries[0] else tmp_dir
 
                 root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                include = {'framework', 'core_plugins', 'web', 'webui', 'sql', 'main.py', 'requirements.txt', 'VERSION', 'CHANGELOG.md', 'README.md', 'start.sh'}
+                include = {'framework', 'core_plugins', 'core_plugins/webui/web', 'webui', 'sql', 'main.py', 'requirements.txt', 'VERSION', 'CHANGELOG.md', 'README.md', 'start.sh'}
                 updated = []
                 for name in os.listdir(src_root):
                     if name not in include:

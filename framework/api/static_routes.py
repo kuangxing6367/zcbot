@@ -16,8 +16,8 @@ def register(ctx):
     _project_root = ctx._project_root
 
     def _web_root_dir():
-        """前端根目录（框架默认 web/ 目录）"""
-        return os.path.join(_project_root(), 'web')
+        """前端根目录（框架默认 core_plugins/webui/web/ 目录，由 webui 插件构建产出）"""
+        return os.path.join(_project_root(), 'core_plugins', 'webui', 'web')
 
     def _override_entry_url() -> str:
         """
@@ -62,7 +62,7 @@ def register(ctx):
     @app.route('/reset')
     def serve_reset():
         """前端恢复页：若插件接管了前端则返回其 reset.html；
-        无接管页时回退框架默认 web/reset.html（不存在则返回默认 index.html）。"""
+        无接管页时回退框架默认 core_plugins/webui/web/reset.html（不存在则返回默认 index.html）。"""
         web_static = _web_root_dir()
         reset_file = os.path.join(web_static, 'reset.html')
         if os.path.isfile(reset_file):

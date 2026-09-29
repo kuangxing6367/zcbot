@@ -13,29 +13,24 @@ SQL 能不能跑，解决不了 SQLite 的并发与扩展上限。
 - 数据库封装：`framework/database/db.py` 的 `Database` 类；
 - SQL 方言翻译：`framework/database/dialect.py`（纯函数）；
 - 自动建表/迁移：`framework/database/schema.py` + `framework/database/init_db.py` 的 `auto_init_database(db)`；
-- 降级文件存储：`framework/database/file_store.py`（数据库不可用时的兜底）；
+- 调试模式引擎：`framework/database/sql_sim.py` 的 `SqlSimEngine`（无数据库时本地 SQL 模拟）；
 - 配置见 [配置系统](../guide/configuration.md#数据库)。
 
-## 降级文件存储（数据库不可用兜底）
+## 存储降级兜底（数据库不可用）
 
 数据库存储不再构成框架的硬依赖：初始化失败（缺 MySQL 驱动、连接失败、
-SQLite 路径不可写等）时框架不会因此无法启动，而是自动降级为
-`data/db/` 目录下的 JSON/YAML 文件存储（最低限度可用）：
+SQLite 路径不可写等）时框架不会因此无法启动，而是自动降级为**本地 SQL 模拟引擎**
+（`SqlSimEngine`，与 `database.type: debug` 同款实现，`data/db/sql/` 下 JSON
+行集落盘，查询有语义且重启不丢）：
 
-- `database.type: file` 可显式强制使用文件存储；`fallback_dir` 可覆盖
-  存储目录（默认取 `database.path` 同目录下的 `db/` 子目录，即 `data/db`）；
-- FileStore 与 `Database` 公开接口同构：SQL 类调用（`query`/`query_one`/
-  `execute`/`execute_many`/`insert`/`scalar`/`count`/`exists`/
-  `table_exists`/`table_info`/`table_has_column`）一律返回安全默认值
-  （空/假/0）且不抛异常，内核已容错的所有调用点自然降级；
-- 真正的数据读写走文档 API：`put`/`get`/`delete`/`list`（别名
-  `save_doc`/`load_doc`/`delete_doc`/`list_docs`），每张"表"一个
-  JSON（默认）或 YAML 文件，原子写入（临时文件 + rename）；
-- `get_connection` / `transaction` 等强依赖真实 SQL 的能力在降级模式
-  下抛 `NotImplementedError`（明确降级语义，不静默伪造成功）；
-- 框架可通过 `framework.db_degraded` 与 `db.pool_status` 感知降级状态。
-  降级仅供"数据库没了框架还能起来"的兜底，持久化能力受限；
-  正常部署请配置 SQLite 或 MySQL。
+- 降级兜底仅供"数据库没了框架还能起来"，数据以本地 JSON 行集存储，性能低、无真实事务；
+  正常部署请配置 SQLite 或 MySQL；
+- 显式调试模式配置 `database.type: debug` 走同一套 `SqlSimEngine`（见下节），
+  适合无数据库的开发/联调环境；
+- 旧版 `database.type: file`（降级文件存储）**已移除**：该模式 SQL 调用一律返回空值、
+  无实际持久化能力，现已不可用；若配置中仍写 `type: file`，框架启动将明确报错提示改用
+  `sqlite` / `mysql` / `debug`；
+- 框架可通过 `db.pool_status`（`type` 字段为 `debug`）感知当前处于调试/降级兜底模式。
 
 ## 调试模式（低性能模式 / 本地模拟 SQL）
 
@@ -44,7 +39,7 @@ SQLite 路径不可写等）时框架不会因此无法启动，而是自动降�
 
 - 存储抽象层：`framework/database/storage.py` 的 `create_storage(config)`
   按 `database.type` 选后端 —— `sqlite/mysql → Database`、
-  `file → FileStore`、`debug → SqlSimEngine`；上层访问接口完全同构，
+  `debug → SqlSimEngine`；上层访问接口完全同构，
   插件与内核无需改动；
 - 模拟引擎：`framework/database/sql_sim.py` 的 `SqlSimEngine`，在本机
   用 JSON 行集文件"假扮"数据库（`data/db/sql/<表>.json`，原子写、重启不丢），
@@ -56,8 +51,8 @@ SQLite 路径不可写等）时框架不会因此无法启动，而是自动降�
   - INSERT [IGNORE]、UPDATE（`NOW()`、`col=col+N` 自增）、DELETE、CREATE TABLE；
   - 不支持的语法（JOIN/子查询/复杂表达式/ALTER）安全兜底：查询返回 `[]`、
     写返回 `0`，绝不抛异常，保证框架可启动；
-- 与降级模式（file）的区别：file 的 SQL 调用一律返回空值，只能靠文档
-  API 存取；debug 则真实模拟 SQL 语义，适合联调查询/写入逻辑；
+- 调试模式适合无数据库的开发/联调环境，可真实验证查询/写入逻辑；
+  生产或常规部署请使用 SQLite / MySQL（性能、事务、并发能力均更强）。
   但它性能低、无真实事务与并发保证，**仅限开发调试，生产必须用 sqlite/mysql**；
 - 框架感知：`framework.storage_mode`（`sqlite/mysql/file/debug`）与
   `framework.db_debug_mode`（True 表示调试模式）暴露当前后端。

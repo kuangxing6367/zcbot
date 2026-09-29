@@ -64,6 +64,7 @@ export default defineConfig({
         {
           text: '进阶扩展',
           items: [
+            { text: '插件装饰器 API', link: '/api/advanced/plugin-decorators' },
             { text: '扩展点（Hook 系统）', link: '/api/advanced/hooks' },
             { text: '协议适配器', link: '/api/advanced/protocol_adapter' }
           ]

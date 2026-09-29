@@ -5,7 +5,6 @@
 四种后端：
     sqlite  → Database（默认，零配置单文件数据库）
     mysql   → Database（大环境，多写高并发）
-    file    → FileStore（降级文件存储，数据库不可用时的兜底）
     debug   → SqlSimEngine（调试模式 / 低性能模式：本地模拟 SQL，行集
               JSON 落盘，查询有语义而非空值——见 sql_sim.py）
 
@@ -42,14 +41,16 @@ def create_storage(config):
 
     返回对象提供统一的 SQL 兼容接口（见模块 docstring）。
     sqlite/mysql 分支返回 Database（未执行 auto_init，由 init_db 负责
-    建表与迁移流程，并在失败时降级 FileStore）。
+    建表与迁移流程，并在失败时降级为本地 SQL 模拟引擎（SqlSimEngine）。
     """
     cfg = normalize_config(config)
     dtype = cfg['type']
 
     if dtype == 'file':
-        from .file_store import FileStore
-        return FileStore(cfg)
+        raise ValueError(
+            "database.type 'file' 已移除：该降级文件存储无实际 SQL 能力。"
+            "请改用 sqlite / mysql（常规/生产）或 debug（无数据库的开发联调）。"
+        )
 
     if dtype == 'debug':
         from .sql_sim import SqlSimEngine

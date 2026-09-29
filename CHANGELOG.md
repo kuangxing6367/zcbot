@@ -26,6 +26,30 @@
 
 ---
 
+## v1.8.0（2026-09-29）
+
+> 主题：**事件缓冲引入 L4 攒批写缓冲（缓解 sqlite 单写者瓶颈）+ SQLite 写锁收敛 + 删除 file_store 冗余后端 + 声明式装饰器 API + 前端产物收归 webui 插件 + 全官方插件补文档**。
+
+### 新功能
+- **声明式装饰器 API**：新增 `framework/plugin.py`，支持 `from framework.plugin import command, on, on_message, on_raw_message, hook, task, api, dashboard_card, webui, override_webui, group_extension, user_extension` 的模块级声明式写法；装饰器在 `import` 时登记到当前模块的延迟缓冲区，`register(ctx)` 时一次性应用，行为与原 `ctx.*` 调用完全一致（同一套扩展点契约）。文档见 `docs/api/advanced/plugin-decorators.md` 与 `docs/guide/writing-plugins.md`「进阶写法」。
+- **官方插件全量文档**：为全部 `core_plugins` 补齐 `README.md`（onebot_adapter / qq_official / telegram / discord / ws_client / http_inject / http_api / image_renderer / rust_accel / scheduler / session / ops / html_assembler / webui），覆盖协议接入、配置项、命令/事件/API/WebUI 能力与端口，均基于真实源码、无臆造数字。
+
+### 性能 / 架构
+- **L4 攒批写缓冲（4MB）**：`EventBuffer` 在 L1 与 L2 之间插入 L4 内存攒批层。L1 满时小包先进 L4 聚合，后台 flush 任务（每 0.05s 检查，达到字节/条数阈值或空闲 0.1s 兜底）以 `executemany` 一次 `commit` 批量落 L2，把「逐条 commit」降为「攒一批一次 commit」，显著缓解 sqlite 单写者瓶颈下的磁盘 fsync 次数。分层：L1 满→L4 攒批→（后台 flush）L2；大包（size > l4_max_bytes，攒批无意义）绕过 L4 直写 L2；L4 满直写 L2；L2 写失败/超时回落 L3 内存兜底，L3 满才丢弃。
+- **SQLite 写锁收敛**：移除 `framework/database/db.py` 中已无实际作用的全局 `_lock`（WAL + `busy_timeout=5000` 已具备并发保护），并新增 `synchronous=NORMAL` 提升写入吞吐；L2 sqlite 连续写失败达阈值（默认 8，可配 `sqlite_fail_threshold`）仍自动降级为自研 file 后端。
+- **删除 file_store 冗余后端**：移除 `framework/database/file_store.py`（FileStore），debug/sim 模式统一由 `SqlSimEngine` 承接，避免两套近似实现长期分歧；`type: file` 现启动即硬报错，不再静默歧义。
+
+### 重构
+- **前端产物收归 webui 插件**：构建产物从根目录 `web/` 移入 `core_plugins/webui/web/`，`webui/` 自包含前端；同步更新 `framework/api/static_routes.py`（`_web_root_dir`）、`framework/api/framework_update.py`、`framework/terminal/cmd_update.py` 的更新白名单、以及 `webui/vite.config.js` 的 `outDir`、`README.md` 目录树与构建说明共 5 处引用，并重新构建验证。
+
+### 文档
+- **API 文档增强**：`docs/api/basic/ctx.md` 增补「静态命令与动态命令（dynamic 参数）」小节与「场景选型：哪个 ctx 函数适合做什么」决策表；`docs/.vitepress/config.mjs` 侧边栏新增「插件装饰器 API」入口。
+- debug / sim 存储模式新增 1MB 预读与可选索引（`config.json` 开关）。
+
+### 测试
+- 对齐 L4 分层语义：`test_self_heal.py`（sqlite 连续写失败降级改为按 flush 批次计数）、`test_buffer_refill.py`（中等事件溢出进 L4 攒批层）、`test_buffer_l2_file.py`（屏蔽 L4 以精准验证 L3→L2(file) 回落）。
+- 回归：主套件 pytest 全过 + 直跑脚本 `test_self_heal 19`、`test_perm 43/43`、`test_plugin_imports 25`、`test_buffer_refill 15`、`test_buffer_l2_file 22`、`test_smoke 87 项` 全过；`test_core_plugin_switch 6`、`test_dual_core 4`、`test_security_hardening 22` 全过。
+
 ## v1.7.5（2026-09-28）
 
 > 主题：**core_plugins 官方插件线路的终端扩展点（ops）+ 双进程 IPC 性能优化（发送 O(1) 化 + 宿主日志批量）+ L2 文件后端 + http 适配器并发修复 + Rust 加速接入端 rust_accel（OneBot 反向 WS 热路径原生化）+ 依赖按需化（flask 移出主依赖，API 真假节点）**。

@@ -11,7 +11,7 @@ export default defineConfig({
   },
   base: './',
   build: {
-    outDir: '../web',
+    outDir: '../core_plugins/webui/web',
     emptyOutDir: true,
     sourcemap: false,
     rollupOptions: {

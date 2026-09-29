@@ -343,6 +343,56 @@ def on_new_member(payload):
 - 插件之间也能用 `ctx.emit(name, payload)` / `await ctx.aemit(...)` 自定义事件通信。
 - 常用内置事件见 [架构详解 · 事件总线](../advanced/architecture.md)。具体有哪些事件（消息、通知、成员变动等）取决于你启用的接入端，见 [对接 IM 平台](./connect-im.md)。
 
+## 进阶写法：声明式装饰器
+
+除了在 `register(ctx)` 里逐一调用 `ctx.xxx(...)`，框架还提供原生的声明式 API：把注册信息直接写在函数定义处，由框架在加载插件时统一落库。它与 `ctx.command(...)` 等实例方法**完全等价**，只是少写样板、可读性更好。
+
+```python
+from framework.plugin import (
+    command, on, on_message, on_raw_message, hook,
+    task, api, dashboard_card,
+)
+
+@command("/签到", alias="/sign", description="每日签到")
+def handle_sign(event, match):
+    ...
+
+@command("/我的积分", description="查看积分")
+def handle_score(event, match):
+    ...
+
+@task("0 0 * * *", description="每日清理过期标记")
+def reset_daily():
+    ...
+
+@on("notice.group_increase")
+def on_new_member(payload):
+    ...
+```
+
+装饰器与 `ctx` 实例方法的等价关系：
+
+| 装饰器 | 等价 ctx 调用 |
+| ---- | ---- |
+| `@command(...)` | `ctx.command(pattern, handler, ...)` |
+| `@on(event)` | `ctx.on(event, handler)` |
+| `@on_message` | `ctx.on("message", handler)` |
+| `@on_raw_message` | `ctx.on_raw_message(handler)` |
+| `@hook(point)` | `ctx.hook(point, handler, ...)` |
+| `@task(cron)` | `ctx.task(cron, executor, ...)` |
+| `@api(...)` | `ctx.register_api(handler, ...)` |
+| `@dashboard_card(...)` | `ctx.dashboard_card(handler, ...)` |
+
+机制要点：
+- 装饰器在**模块导入期只登记、不触碰框架**；框架加载插件、完成 `register(ctx)` 时通过内部 `flush` 把登记项统一应用到当前插件的 `ctx`。
+- 因此可**省略 `def register(ctx):`**：只要用了装饰器，框架自动注册。但保留 `register` 也完全可以，二者共存时 `register` 里的逻辑（建表、权限初始化等）照常执行。
+- 不接收 `ctx` / `event` 的函数（如定时任务、WebUI 页注册）同样可装饰或直接调用。
+- 未使用本 API 的旧插件完全不受影响。
+
+> 建表等一次性初始化仍建议放在 `register` 或 `on_loaded(ctx)` 钩子里，不要放进被装饰的命令处理函数（它在每次命中时都会执行）。
+
+`webui` / `override_webui` / `group_extension` / `user_extension` 也都在 `framework.plugin` 里；完整签名与示例见 [插件装饰器 API](../api/advanced/plugin-decorators)。
+
 ## 排错速查
 
 | 现象 | 原因与处理 |

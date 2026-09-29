@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-降级文件存储回归测试（去硬依赖）
+存储降级 / 调试模式回归测试（去硬依赖）
 
-覆盖"数据库不可用框架仍可启动"的降级方案（最垃计划）：
-  T1: FileStore 在 data/db 下 JSON/YAML 文件读写、列表、删除、原子写。
-  T2: FileStore 与 Database 公开接口同构 —— SQL 类调用返回安全默认值不抛异常。
-  T3: init_db 在数据库驱动缺失/初始化失败时降级 FileStore，框架可初始化。
-  T4: 终端交互在非 TTY 环境（CI/守护进程）不启动输入线程。
+覆盖"数据库不可用框架仍可启动"的降级方案（最低限度可用）：
+  T1: init_db 在数据库驱动缺失/初始化失败时降级为 SqlSimEngine（本地 SQL 模拟），
+      框架可初始化、SQL 调用安全不崩。
+  T2: 显式配置 database.type: file 已被移除 → 清晰报错而非静默落到其他后端。
+  T3: 终端交互在非 TTY 环境（CI/守护进程）不启动输入线程。
+  T4: Framework 级降级启动（数据库不可用框架仍可初始化并暴露调试模式标志）。
 
 纯 pytest 用例（无模块级 sys.exit），与 CI 的显式 pytest 文件列表配合。
 运行：python -m pytest tests/test_file_store_fallback.py -q
 """
+import asyncio
 import os
 import sys
 
@@ -18,123 +20,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.database.file_store import FileStore
+from framework.database.sql_sim import SqlSimEngine
 from framework.database import db as db_module
 
 
-# ── T1: 文件存储读写 ----------------------------------------
+# ── T1: init_db 降级为 SqlSimEngine ─────────────────────────
 
-def test_file_store_put_get_list_delete(tmp_path):
-    store = FileStore({'fallback_dir': str(tmp_path)})
-    assert store.db_type == 'file'
-    assert store.degraded is True
-    assert os.path.isdir(str(tmp_path))
-
-    store.put('t_meta', 'name', 'zcbot')
-    store.put('t_meta', 'tags', ['a', 'b'])
-    assert store.get('t_meta', 'name') == 'zcbot'
-    assert store.get('t_meta', 'missing', 'dft') == 'dft'
-    assert 'name' in store.keys('t_meta')
-
-    # 落盘为 JSON 文件且可被独立读取
-    jpath = os.path.join(str(tmp_path), 't_meta.json')
-    assert os.path.isfile(jpath)
-    import json
-    with open(jpath, 'r', encoding='utf-8') as f:
-        raw = json.load(f)
-    assert raw['name'] == 'zcbot'
-
-    # list 返回副本
-    data = store.list('t_meta')
-    data['name'] = 'hacked'
-    assert store.get('t_meta', 'name') == 'zcbot'
-
-    assert store.delete('t_meta', 'name') is True
-    assert store.delete('t_meta', 'name') is False
-    assert store.get('t_meta', 'name') is None
-
-
-def test_file_store_yaml_and_save_doc_alias(tmp_path):
-    store = FileStore({'fallback_dir': str(tmp_path)})
-    store.save_doc('t_cfg', 'group:99', {'enabled': True, 'level': 3, '别名': '测试'})
-    assert store.load_doc('t_cfg', 'group:99')['level'] == 3
-    assert store.load_doc('t_cfg', 'group:99')['别名'] == '测试'
-
-    # 显式 yaml 写入：文件以 .yaml 结尾，内容可用 pyyaml 读取
-    store.put('t_cfg', 'y_doc', {'k': 1}, fmt='yaml')
-    ypath = os.path.join(str(tmp_path), 't_cfg.yaml')
-    assert os.path.isfile(ypath)
-    try:
-        import yaml
-    except ImportError:
-        return  # 环境未装 pyyaml 时跳过 YAML 内容断言
-    with open(ypath, 'r', encoding='utf-8') as f:
-        doc = yaml.safe_load(f)
-    assert doc.get('y_doc', {}).get('k') == 1
-
-    # 列表删除全家桶
-    assert store.list_docs('t_cfg').get('group:99')
-    assert store.delete_doc('t_cfg', 'group:99') is True
-    assert 'group:99' not in store.keys('t_cfg')
-
-
-def test_file_store_clear_and_invalid_fmt(tmp_path):
-    store = FileStore({'fallback_dir': str(tmp_path)})
-    store.put('t_a', 'x', 1)
-    store.clear('t_a')
-    assert store.list('t_a') == {}
-    assert not os.path.exists(os.path.join(str(tmp_path), 't_a.json'))
-
-    import pytest
-    with pytest.raises(ValueError):
-        store.put('t_b', 'x', 1, fmt='xml')
-
-
-def test_file_store_table_files_isolated(tmp_path):
-    store = FileStore({'fallback_dir': str(tmp_path)})
-    store.put('t1', 'k', 'v1')
-    store.put('t2', 'k', 'v2')
-    assert store.get('t1', 'k') == 'v1'
-    assert store.get('t2', 'k') == 'v2'
-    assert os.path.isfile(os.path.join(str(tmp_path), 't1.json'))
-    assert os.path.isfile(os.path.join(str(tmp_path), 't2.json'))
-
-
-# ── T2: SQL 兼容接口安全默认 -------------------------------
-
-def test_file_store_sql_api_safe_defaults(tmp_path):
-    store = FileStore({'fallback_dir': str(tmp_path)})
-    assert store.query("SELECT * FROM t") == []
-    assert store.query_one("SELECT * FROM t") is None
-    assert store.execute("INSERT INTO t VALUES (%s)", (1,)) == 0
-    assert store.execute_many("INSERT INTO t VALUES (%s)", [(1,), (2,)]) == 0
-    assert store.insert("INSERT INTO t VALUES (%s)", (1,)) == 0
-    assert store.scalar("SELECT COUNT(*) FROM t") is None
-    assert store.count("SELECT COUNT(*) FROM t") == 0
-    assert store.exists("SELECT 1 FROM t") is False
-    assert store.table_exists('t') is False
-    assert store.table_info('t') == []
-    assert store.table_has_column('t', 'id') is False
-
-    import pytest
-    with pytest.raises(NotImplementedError):
-        store.get_connection()
-    with pytest.raises(NotImplementedError):
-        with store.transaction():
-            pass
-
-    status = store.pool_status
-    assert status['type'] == 'file'
-    assert status['degraded'] is True
-    # 幂等关闭不抛
-    store.close()
-    store.close()
-
-
-# ── T3: init_db 降级 ----------------------------------------
-
-def test_init_db_degrades_on_missing_driver(tmp_path, monkeypatch):
-    """数据库驱动缺失（Database 构造抛 ImportError）→ init_db 降级 FileStore"""
+def test_init_db_degrades_on_missing_driver(monkeypatch):
+    """数据库驱动缺失（Database 构造抛 ImportError）→ init_db 降级 SqlSimEngine"""
     def _boom(config):
         raise ImportError("No module named 'pymysql'")
 
@@ -146,22 +39,21 @@ def test_init_db_degrades_on_missing_driver(tmp_path, monkeypatch):
         'password': 'x',
         'name': 'x',
     })
-    assert isinstance(db, FileStore)
-    assert db.degraded is True
+    assert isinstance(db, SqlSimEngine)
+    assert db.db_type == 'debug'
+    # SQL 调用安全（不支持语法走安全默认，不抛）
     assert db.query("SELECT 1") == []
     assert db.execute("DROP TABLE x") == 0
+    db.close()
 
 
-def test_init_db_explicit_file_type(tmp_path):
-    """显式配置 database.type: file → 直接走文件存储"""
-    import framework.database.db as d
-    db = d.init_db({'type': 'file', 'fallback_dir': str(tmp_path)})
-    assert isinstance(db, FileStore)
-    db.put('t', 'k', 'v')
-    assert db.get('t', 'k') == 'v'
+def test_init_db_explicit_file_type_raises():
+    """database.type: file 已移除 → 显式配置应清晰报错"""
+    with __import__('pytest').raises(ValueError):
+        db_module.init_db({'type': 'file', 'fallback_dir': 'data/db'})
 
 
-# ── T4: 终端交互非 TTY 不启动 ---------------------------------
+# ── T3: 终端交互非 TTY 不启动 ──────────────────────────────
 
 def test_terminal_input_skips_non_tty(monkeypatch):
     import io
@@ -169,8 +61,6 @@ def test_terminal_input_skips_non_tty(monkeypatch):
 
     class _NullFw:
         loop = None
-
-    captured = {}
 
     class _FakeStdin(io.StringIO):
         def isatty(self):
@@ -204,13 +94,11 @@ def test_terminal_input_starts_on_tty(monkeypatch):
     assert term._thread.daemon is True
 
 
-# ── T5: Framework 级降级启动（数据库不可用框架仍可初始化） ──
+# ── T4: Framework 级降级启动 ───────────────────────────────
 
 def test_framework_init_with_degraded_db(tmp_path, monkeypatch):
-    """Database 构造失败（缺驱动/连不上）时 Framework 仍可初始化并暴露降级标志"""
-    import asyncio
+    """Database 构造失败（缺驱动/连不上）时 Framework 仍可初始化（兜底为 SqlSimEngine）"""
     from framework.core import Framework
-    from framework.database.file_store import FileStore
 
     def _boom(config):
         raise ImportError("No module named 'pymysql'")
@@ -249,9 +137,9 @@ def test_framework_init_with_degraded_db(tmp_path, monkeypatch):
             "  image_renderer: false\n"
         )
     fw = Framework(config_path=cfg_path, role='standard')
-    assert isinstance(fw.db, FileStore)
-    assert fw.db_degraded is True
-    assert fw.db.query("SELECT 1") == []   # 内核 SQL 面安全降级
+    assert isinstance(fw.db, SqlSimEngine)
+    assert fw.db_debug_mode is True
+    assert fw.db.query("SELECT 1") == []   # 内核 SQL 面安全
 
     # 全禁用插件加载不抛异常
     for _name in list(fw.config.get('core_plugins', {})):

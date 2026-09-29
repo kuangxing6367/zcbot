@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """验证自研文件 L2 溢出后端（sqlite 关闭时自动启用）：
 
+本文件聚焦 L2 文件后端与「L3 满回落 L2」链路；为隔离该层，make_buf 将 L4 攒批层容量
+设为极小（1KB），使事件绕过 L4 直走 L3→L2，从而精确验证 L3→L2(file) 回落语义。
+
 1. sqlite 关闭时 l2_mode 自动解析为 'file'，L3 满回落 L2 不丢弃；
 2. L2 文件写盘后可回填 L1 消费（source='l1'），放不下的遗留大块直出（source='l2'）；
 3. 重启后承接文件遗留行（_count_lines）；
@@ -57,6 +60,7 @@ def make_buf(sqlite_on=False, l2_backend=None, **over):
             'sqlite_write_timeout': 1.0,
             'l3_max_bytes': 4 * 1024 * 1024,
             'sqlite_batch': 8,
+        'l4_max_bytes': 1024,      # 本文件聚焦 L3→L2(file) 回落，屏蔽 L4 攒批层（事件直落 L3）
         },
     }
     if l2_backend is not None:

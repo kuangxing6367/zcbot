@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
-"""事件分层缓冲：内存主队列(L1) → sqlite 持久化溢出(L2) → 内存兜底(L3) → 全满告警丢弃。
+"""事件分层缓冲：内存主队列(L1) → 写缓冲(L4) → sqlite 持久化溢出(L2) → 内存兜底(L3) → 全满告警丢弃。
 
-对应消息流入缓冲设想（总量约 4.5MB 内存预算 + sqlite 磁盘层）：
+对应消息流入缓冲设想（总量约 8.5MB 内存预算 + sqlite 磁盘层）：
 - L1  512KB 内存队列（文字消息为主）：消息流入先入此层直接处理；字节超限即溢出
+- L4  4MB 写缓冲（L1 与 L2 之间的批量写聚合层）：L1 满时小包先进 L4 攒批，后台任务
+      周期 / 阈值触发后 executemany 一次性落 L2，把「逐条 INSERT+commit」降为
+      「攒一批一次 commit」，缓解 sqlite 单写者瓶颈。大包（size > l4_max_bytes，装不下
+      攒批）绕过 L4 直写 L2；L4 满（缓不过来）直接塞 L2
 - L2  sqlite 持久化缓冲（data/event_buffer.db，独立文件独立连接，不阻塞主库）：
-      L1 堆积满时承接，防内存暴涨、防事件丢失
-- L3  4MB 内存兜底队列：sqlite 写入不过来（超时/失败）时的应急暂存
+      L4 批量承接 / 大包直写，防内存暴涨、防事件丢失
+- L3  4MB 内存兜底队列：L2 写入不过来（超时/失败）时的应急暂存
 - 全满  日志告警并丢弃新事件（保老弃新），丢弃计数可经 stats() 查看
 
-消费优先级：L1（最新热数据）→ L3（内存兜底，及时释放）→ L2 sqlite（批量回取，
-已持久化的历史积压最后消化）。wait=True 的同步语义事件保持阻塞进 L1，不参与溢出，
-以保留 done future 契约（测试 / 终端同步）。
+消费优先级：L1（最新热数据）→ L3（内存兜底）→ L4（写缓冲，未及 flush 时消费者直接取走，
+不丢事件）→ L2 sqlite（flush 落盘后的历史积压最后回取）。L4 常态由后台 flush 任务批量落 L2
+（攒批 commit 缓解 sqlite 写压力），消费者空闲或单测未启动 flush 时也可直接取走 L4 中事件。
+wait=True 的同步语义事件保持阻塞进 L1，不参与溢出，以保留 done future 契约（测试 / 终端同步）。
 """
 import asyncio
 import json
@@ -117,6 +122,25 @@ class _FileL2Backend:
             logger.warning(f"L2 文件缓冲写入失败: {e}")
             return False
 
+    def write_batch(self, events: list) -> bool:
+        """线程内批量追加多条（一次 flush，L4 flush 路径用）"""
+        if not events:
+            return True
+        try:
+            lines = []
+            for ev, _ in events:
+                lines.append(_l2_serialize(ev) + '\n')
+            with self._lock:
+                if self._fh is None:
+                    return False
+                self._fh.write(''.join(lines))
+                self._fh.flush()
+                self._rows += len(lines)
+            return True
+        except Exception as e:
+            logger.warning(f"L2 文件缓冲批量写入失败: {e}")
+            return False
+
     def pop_batch(self, n: int):
         """线程内批量取出（取出即删语义，同 sqlite 批量取回）。
 
@@ -195,6 +219,22 @@ class EventBuffer:
         self.sqlite_write_timeout = float(buf_cfg.get('sqlite_write_timeout', 0.5))
         self.sqlite_batch = int(buf_cfg.get('sqlite_batch', 64))
         self.l3_max_bytes = int(buf_cfg.get('l3_max_bytes', 4 * 1024 * 1024))
+        # L4 写缓冲（4MB）：L1 与 L2 之间的批量写聚合层。L1 满时小包先进 L4 攒批，
+        # 后台 flush 任务周期 / 阈值触发后 executemany 一次性落 L2，把「逐条 commit」
+        # 降为「攒一批一次 commit」，缓解 sqlite 单写者瓶颈。
+        #   大包(size > l4_max_bytes，攒批无意义) 绕过 L4 直写 L2；
+        #   L4 满（缓不过来）直接塞 L2；
+        #   L2 写失败 / 超时 再回落 L3 兜底（见 _l4_do_flush）。
+        self.l4_max_bytes = int(buf_cfg.get('l4_max_bytes', 4 * 1024 * 1024))
+        self.l4_flush_bytes = int(buf_cfg.get('l4_flush_bytes', max(1, int(self.l4_max_bytes * 0.5))))
+        self.l4_flush_items = int(buf_cfg.get('l4_flush_items', 256))
+        self.l4_max_idle = float(buf_cfg.get('l4_max_idle', 0.1))   # 最长空闲（秒）也触发 flush，保低延迟
+        self._l4 = []                                  # 攒批列表 [(event, size), ...]
+        self._l4_bytes = 0
+        self._l4_lock = threading.Lock()
+        self._l4_task = None
+        self._l4_stop = asyncio.Event()
+        self._l4_flushing = False
         self.full_action = buf_cfg.get('full_action', 'warn_drop')
 
         self._l1 = asyncio.Queue(maxsize=self.l1_max_items)   # (event, done, size)
@@ -250,6 +290,74 @@ class EventBuffer:
         except Exception as e:
             logger.warning(f"L2 缓冲写入异常: {e}")
             return False
+
+    async def _l2_write_batch(self, events: list) -> bool:
+        """批量写多条到 L2 溢出层（统一超时与失败计数语义，L4 flush 路径用）"""
+        if not events:
+            return True
+        try:
+            if self.l2_mode == 'sqlite':
+                ok = await asyncio.wait_for(
+                    asyncio.to_thread(self._write_sqlite_batch, events),
+                    timeout=self.sqlite_write_timeout)
+            elif self.l2_mode == 'file':
+                ok = await asyncio.wait_for(
+                    asyncio.to_thread(self._l2_file.write_batch, events),
+                    timeout=self.sqlite_write_timeout)
+            else:
+                return False
+            if ok:
+                self._overflow_to_sqlite += len(events)
+                return True
+            return False
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"L2 缓冲批量写入超时（>{self.sqlite_write_timeout}s），转下一层")
+            return False
+        except Exception as e:
+            logger.warning(f"L2 缓冲批量写入异常: {e}")
+            return False
+
+    def _l4_append(self, event, size: int) -> bool:
+        """入队一条到 L4 攒批缓冲（线程安全）。L4 装不下返回 False（调用方改直写 L2）。"""
+        with self._l4_lock:
+            if self._l4_bytes + size > self.l4_max_bytes:
+                return False
+            self._l4.append((event, size))
+            self._l4_bytes += size
+            return True
+
+    async def _l4_do_flush(self) -> int:
+        """把 L4 攒批内容一次性批量落 L2（executemany 一次 commit）。
+
+        返回本次 flush 的条数；L2 写失败则回落 L3 兜底，L3 满则丢弃（告警）。
+        """
+        with self._l4_lock:
+            if not self._l4:
+                return 0
+            batch = self._l4
+            self._l4 = []
+            self._l4_bytes = 0
+        if await self._l2_write_batch(batch):
+            self._wakeup.set()          # 落 L2 也要唤醒消费者取回
+            return len(batch)
+        # L2 写失败 → 回落 L3 兜底（内存），L3 也满才丢弃（压力给适配器）
+        spilled = 0
+        for ev, size in batch:
+            if self._l3_bytes + size <= self.l3_max_bytes:
+                self._l3.put_nowait((ev, None, size))
+                self._l3_bytes += size
+                spilled += 1
+            else:
+                self._dropped += 1
+                if self._dropped <= 3 or self._dropped % 100 == 1:
+                    logger.error(
+                        f"L4 flush 回落 L3 仍满，事件丢弃："
+                        f"L3({self._l3_bytes}/{self.l3_max_bytes}B) "
+                        f"已累计丢弃 {self._dropped} 条")
+        if spilled:
+            self._wakeup.set()
+        return 0
 
     def _l2_pop_batch(self, n: int):
         """从 L2 批量取回（取出即删语义）"""
@@ -442,6 +550,36 @@ class EventBuffer:
                     f"连续写失败 {self._sqlite_fail_streak} 次（{type(e).__name__}）")
             return False
 
+    def _write_sqlite_batch(self, events: list) -> bool:
+        """线程内批量写入多条（executemany 一次 commit，L4 flush 路径用）。
+
+        把 N 条事件的「N 次 INSERT + N 次 commit」合并为「1 次 executemany + 1 次
+        commit」，显著降低 sqlite 单写者瓶颈下的磁盘 fsync 次数，是高并发溢出落盘的
+        关键提速点（L4 攒批 → 此处一次性落 L2）。
+        """
+        if not events:
+            return True
+        try:
+            payloads = [(_l2_serialize(ev), time.time()) for ev, _ in events]
+            with self._sqlite_lock:
+                self._sqlite_conn.executemany(
+                    "INSERT INTO event_buffer (payload, created_at) VALUES (?, ?)",
+                    payloads)
+                self._sqlite_conn.commit()
+            self._sqlite_rows += len(payloads)
+            self._sqlite_fail_streak = 0
+            return True
+        except Exception as e:
+            logger.warning(f"sqlite 缓冲批量写入失败: {e}")
+            self._sqlite_fail_streak += 1
+            if self._sqlite_fail_streak >= self._sqlite_fail_threshold:
+                logger.error(
+                    f"sqlite 缓冲连续失败 {self._sqlite_fail_streak} 次，"
+                    f"自动降级为自研 file 后端")
+                self._fallback_to_file(
+                    f"连续写失败 {self._sqlite_fail_streak} 次（{type(e).__name__}）")
+            return False
+
     def _pop_sqlite_batch(self, n: int):
         """线程内批量取出（取出即删除，语义同内存队列出队）。
 
@@ -459,6 +597,10 @@ class EventBuffer:
                     "DELETE FROM event_buffer WHERE id = ?", [(i,) for i in ids])
                 self._sqlite_conn.commit()
             self._sqlite_rows = max(0, self._sqlite_rows - len(rows))
+            # 缓冲彻底清空时收缩 sqlite 文件（见 _try_vacuum_sqlite）。
+            # 只在「刚消费完最后一批、剩余归零」时触发，避免热路径每次重写大文件。
+            if self._sqlite_rows == 0 and rows:
+                self._try_vacuum_sqlite()
             items = []
             for _, payload in rows:
                 try:
@@ -479,6 +621,30 @@ class EventBuffer:
         except Exception as e:
             logger.warning(f"sqlite 缓冲读取失败: {e}")
             return []
+
+    def _try_vacuum_sqlite(self):
+        """事件缓冲清空后收缩 sqlite 文件（防磁盘空占）。
+
+        L2 用 DELETE 消费事件，DELETE 只把行标记为空闲页、文件大小不变；
+        一次 50w 突发灌入后文件可膨胀到数百 MB，排空后若不 VACUUM 则磁盘
+        居高不下。此处事件已消费完（_sqlite_rows==0）才重写文件缩容，
+        频率极低（仅清空瞬间），且经 db 线程执行不阻塞事件循环。
+        """
+        try:
+            with self._sqlite_lock:
+                cur = self._sqlite_conn.execute(
+                    "SELECT COUNT(*) FROM event_buffer")
+                if int(cur.fetchone()[0]) != 0:
+                    return  # 并发取回下又有新事件写入，跳过本次
+                self._sqlite_conn.execute("VACUUM")
+                self._sqlite_conn.commit()
+            logger.debug("L2 sqlite 已 VACUUM 收缩（事件缓冲清空）")
+            # 趁事件缓冲刚清空、内存已释放，尽力把空闲块归还 OS，
+            # 压低大峰值后的 RSS 地板（见 framework/memory.trim_memory）。
+            from framework.memory import trim_memory
+            trim_memory()
+        except Exception as e:
+            logger.warning(f"L2 sqlite VACUUM 收缩失败（忽略，下次清空再试）: {e}")
 
     def _count_rows(self) -> int:
         """启动时清点 sqlite 表内遗留行数（仅初始化调用一次，非热路径）"""
@@ -513,31 +679,28 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
             self._l1_bytes += size
             self._wakeup.set()
             return True
-        # 单条超 L1 容量的超大事件（如 1MB 图片包）：L1 天然放不下，不浪费两次
-        # sleep(0) 重试，直接优先 L3 内存兜底，其次才落 L2（自研 file / sqlite）——
-        # 避免超大块每次都触发磁盘 IO（sqlite 单条 INSERT+commit 约 15ms/条）。
-        if size > self.l1_max_bytes:
+        # 大包（size > 整个 L4 容量，如 16MB）装不下攒批缓冲，跳过 L1/L4 直接走
+        # L3→L2 兜底链（攒批无意义）；其余事件先试 L1，L1 满落 L4 攒批，L4 满直写 L2。
+        if size > self.l4_max_bytes:
             if self._l3_bytes + size <= self.l3_max_bytes:
                 self._l3.put_nowait((event, None, size))
                 self._l3_bytes += size
                 self._wakeup.set()
                 return True
-            # L3 满 → 回落 L2（内存 O(1) 的自研 file 或 sqlite），不直接丢弃
             if self.l2_mode != 'off':
                 if await self._l2_write(event):
-                    self._wakeup.set()          # L2 落盘也要唤醒阻塞中的消费者
+                    self._wakeup.set()
                     return True
                 logger.warning(
-                    f"L3 满且 L2 写失败：size={size}B，事件改走丢弃")
+                    f"超大事件 L3 满且 L2 写失败：size={size}B，事件改走丢弃")
             self._dropped += 1
             logger.error(
-                f"超大事件丢弃：size={size}B 超 L1({self.l1_max_bytes}B)，"
+                f"超大事件丢弃：size={size}B 超 L4({self.l4_max_bytes}B)，"
                 f"且 L3({self._l3_bytes}/{self.l3_max_bytes}B) 已满"
                 f"{'、L2 不可用' if self.l2_mode == 'off' else ''}，累计丢弃 {self._dropped} 条")
             return False
-        # L1 内存主缓冲（字节 + 条数双限）。突发注入（风暴 bench / 批量回调）不逐事件
-        # 让出事件循环，L1 一满就会把本可留在内存的事件全压进 sqlite 磁盘层——
-        # 所以满时先 sleep(0) 让消费者排空一次再重试，仍满才真正溢出
+        # L1 内存主缓冲（字节 + 条数双限）。L1 一满就溢出到 L4 攒批（而非直写 L2），
+        # 由后台 flush 任务批量落 L2，把逐条 commit 降为攒批 commit，缓解 sqlite 写压力。
         for attempt in (0, 1):
             if self._l1_bytes + size <= self.l1_max_bytes:
                 try:
@@ -549,18 +712,22 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
                     pass
             if attempt == 0:
                 await asyncio.sleep(0)
-# L1 满 → L2 溢出层（自研 file / sqlite，短超时；写不过来转 L3 内存兜底）
+        # L1 满 → L4 攒批写缓冲（纯内存追加，极快，不阻塞 put）
+        if self._l4_append(event, size):
+            self._wakeup.set()
+            return True
+        # L4 满（缓不过来）→ 直接塞 L2（sqlite / file，短超时；写不过来转 L3 内存兜底）
         if self.l2_mode != 'off':
             if await self._l2_write(event):
-                self._wakeup.set()          # L2 落盘也要唤醒阻塞中的消费者
+                self._wakeup.set()
                 return True
             logger.warning(
-                f"L2 缓冲写入超时/失败（>{self.sqlite_write_timeout}s），转入内存兜底")
+                f"L4 满且 L2 缓冲写入超时/失败（>{self.sqlite_write_timeout}s），转入内存兜底")
         # L3 内存兜底（4MB）
         if self._l3_bytes + size <= self.l3_max_bytes:
             self._l3.put_nowait((event, None, size))
             self._l3_bytes += size
-            self._wakeup.set()                  # 任一层入队都必须唤醒消费者
+            self._wakeup.set()
             return True
         # L3 满 → 再试一次回落 L2（上游瞬时抖动重试，避免直接丢弃）
         if self.l2_mode != 'off':
@@ -572,6 +739,7 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
         if self._dropped <= 3 or self._dropped % 100 == 1:
             logger.error(
                 f"事件缓冲全满告警：L1={self._l1_bytes}/{self.l1_max_bytes}B "
+                f"L4={self._l4_bytes}/{self.l4_max_bytes}B "
                 f"L3={self._l3_bytes}/{self.l3_max_bytes}B "
                 f"L2={self._l2_rows()}条，已累计丢弃 {self._dropped} 条事件")
         return False
@@ -598,6 +766,12 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
                 return event, done, 'l3'
             except asyncio.QueueEmpty:
                 pass
+            # L4 写缓冲：若后台 flush 尚未落 L2，消费者直接取走（防事件滞留 L4 丢失）；
+            # 常态由 flush 批量落 L2 后走统一回取路径，此处分支仅作安全回退与单测友好路径。
+            with self._l4_lock:
+                if self._l4:
+                    ev, sz = self._l4.pop(0)
+                    return ev, None, 'l4'
             # L2 → L1 回填：批量取回（取出即删），在 L1 剩余容量内回填；
             # 填不下的（单条超 L1 上限的历史大块）暂存 _l2_pending 依次直出。
             if self.l2_mode != 'off' and self._l2_rows() > 0:
@@ -622,8 +796,10 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
             # 全空：清信号后复查一遍（闭合「清信号与入队 set 之间」的丢失唤醒竞态），
             # 仍空才阻塞等信号
             self._wakeup.clear()
+            with self._l4_lock:
+                l4_nonempty = bool(self._l4)
             if (not self._l1.empty() or not self._l3.empty()
-                    or self._l2_pending or self._sqlite_rows > 0):
+                    or self._l2_pending or self._sqlite_rows > 0 or l4_nonempty):
                 continue
             await self._wakeup.wait()
 
@@ -637,14 +813,23 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
 
 # ---------- 停机 / 统计 ----------
     def empty_all(self) -> bool:
+        with self._l4_lock:
+            l4_empty = not self._l4
         return (self._l1.empty() and self._l3.empty()
-                and not self._l2_pending and self._l2_rows() == 0)
+                and not self._l2_pending and self._l2_rows() == 0 and l4_empty)
 
     async def wait_drained(self, timeout: float) -> bool:
-        """限时等待三层全部清空（供停机排空；返回是否排空完成）"""
+        """限时等待全部清空（供停机排空；返回是否排空完成）。
+
+        先确保 L4 攒批全部落 L2（否则 L2 永远有残留、循环不退），再等三层排空。
+        """
         try:
             await asyncio.wait_for(self._l1.join(), timeout=timeout)
             await asyncio.wait_for(self._l3.join(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+        try:
+            await asyncio.wait_for(self._l4_do_flush(), timeout=timeout)
         except asyncio.TimeoutError:
             return False
         deadline = time.monotonic() + timeout
@@ -658,6 +843,12 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
         if self._sqlite_conn is not None:
             try:
                 with self._sqlite_lock:
+                    # 已无遗留事件则收缩文件，避免关机后磁盘仍空占峰值体积
+                    cur = self._sqlite_conn.execute(
+                        "SELECT COUNT(*) FROM event_buffer")
+                    if int(cur.fetchone()[0]) == 0:
+                        self._sqlite_conn.execute("VACUUM")
+                        self._sqlite_conn.commit()
                     self._sqlite_conn.close()
             except Exception:
                 pass
@@ -674,9 +865,68 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
             'l3_items': self._l3.qsize(),
             'l3_bytes': self._l3_bytes,
             'l3_max_bytes': self.l3_max_bytes,
+            'l4_items': len(self._l4),
+            'l4_bytes': self._l4_bytes,
+            'l4_max_bytes': self.l4_max_bytes,
             'l2_mode': self.l2_mode,
             'l2_pending': self._l2_rows() + len(self._l2_pending),
             'sqlite_pending': self._sqlite_rows + len(self._l2_pending),
             'overflow_to_sqlite': self._overflow_to_sqlite,
             'dropped': self._dropped,
         }
+
+    # ---------- L4 flush 后台任务 ----------
+    async def _l4_flush_loop(self):
+        """后台周期 flush：每 0.05s 检查，达到阈值（字节/条数）或空闲上限即批量落 L2。
+
+        触发条件（覆盖「满了写入 + 自动写入 + 定时尝试」）：
+          - L4 字节 ≥ l4_flush_bytes（默认一半容量）或 条数 ≥ l4_flush_items → 立即 flush
+          - 否则空闲持续 ≥ l4_max_idle（默认 0.1s）也兜底 flush，避免小数据长期滞留内存
+        """
+        try:
+            while not self._l4_stop.is_set():
+                try:
+                    await asyncio.wait_for(self._l4_stop.wait(), timeout=0.05)
+                    break  # 被显式 stop，退出前由 stop_l4 做一次收尾 flush
+                except asyncio.TimeoutError:
+                    pass
+                with self._l4_lock:
+                    n = len(self._l4)
+                    b = self._l4_bytes
+                if n == 0:
+                    continue
+                flush = (b >= self.l4_flush_bytes or n >= self.l4_flush_items)
+                if not flush:
+                    idle = time.monotonic() - getattr(self, '_l4_last_flush', time.monotonic())
+                    if idle >= self.l4_max_idle:
+                        flush = True
+                if flush:
+                    self._l4_last_flush = time.monotonic()
+                    await self._l4_do_flush()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"L4 flush 后台任务异常: {e}")
+
+    def start_l4(self, loop=None):
+        """启动 L4 后台 flush 任务（在事件循环内调用，如 base.start）"""
+        if self._l4_task is not None:
+            return
+        self._l4_stop.clear()
+        self._l4_last_flush = time.monotonic()
+        self._l4_task = asyncio.get_running_loop().create_task(
+            self._l4_flush_loop(), name="event-buffer-l4-flush")
+
+    async def stop_l4(self):
+        """停止 L4 后台任务并收尾 flush 剩余数据到 L2（供停机排空）"""
+        if self._l4_task is None:
+            await self._l4_do_flush()   # 未启动也要保证残留 L4 落盘
+            return
+        self._l4_stop.set()
+        try:
+            await asyncio.wait_for(self._l4_task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            self._l4_task.cancel()
+        self._l4_task = None
+        # 收尾：把剩余（可能 stop 后刚入队的）全部 flush 到 L2
+        await self._l4_do_flush()

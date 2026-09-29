@@ -77,7 +77,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 "框架处于数据库降级模式：持久化能力受限，使用 data/db 下 JSON/YAML 文件存储"
             )
 
-        # 存储抽象层接入点：当前后端（sqlite/mysql/file/debug）与调试模式标志。
+        # 存储抽象层接入点：当前后端（sqlite/mysql/debug）与调试模式标志。
         # debug = 调试模式（低性能模式）：config 显式配置 database.type: debug，
         # 在本机以 JSON 行集本地模拟 SQL（查询有语义），见 framework/database/storage.py。
         self.storage_mode = getattr(self.db, 'db_type', 'unknown')
@@ -260,6 +260,28 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 桥接框架日志到 LogBroker
         root.addHandler(FrameworkLogHandler(log_broker))
 
+        # 日志合并（自动止刷屏）：对归一化后相同的 WARNING+ 日志在滑动窗口内合并计数，
+        # 只发首条、窗口到期再发一条「该错误重复 N 次」汇总；INFO/DEBUG 不参与合并。
+        # 高并发下同一错误被每条消息/连接重复触发，不合并会直接刷爆日志文件与 WebUI。
+        log_cfg = self.config.get('log', {})
+        if log_cfg.get('coalesce', True):
+            from framework.coalesce_log import LogCoalescer
+            lvl_name = str(log_cfg.get('coalesce_level', 'WARNING')).upper()
+            lvl = getattr(logging, lvl_name, logging.WARNING)
+            coalescer = LogCoalescer(
+                window=float(log_cfg.get('coalesce_window', 10)),
+                min_level=lvl,
+            )
+            # 挂在每个下游 handler 上（logging 的 logger.filter 不会作用于 ancestor，
+            # 只有 handler.filter 会对流经的每条记录生效）；同一 record 实例经多个 handler
+            # 时由合并器内部缓存决策，保证 console / 文件 / WebUI 三端一致。
+            for _h in root.handlers:
+                _h.addFilter(coalescer)
+            logger.info(
+                f"[日志] 已启用日志合并（窗口 {coalescer.window:.0f}s，级别 >= {lvl_name}）："
+                f"高并发重复错误将自动汇总，防止刷屏"
+            )
+
         # 降低第三方库日志级别
         logging.getLogger('apscheduler').setLevel(logging.WARNING)
         logging.getLogger('websocket').setLevel(logging.WARNING)
@@ -311,6 +333,12 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 asyncio.create_task(
                     self._event_worker_loop(i), name=f"event-worker-{i}")
             )
+
+        # 2.5 启动 L4 写缓冲后台 flush 任务（事件溢出层批量落 L2 的驱动）
+        try:
+            self._event_buffer.start_l4(self.loop)
+        except Exception as e:
+            logger.warning(f"L4 写缓冲 flush 任务启动失败（事件溢出将直写 L2）: {e}")
 
         # 3. 启动统计批量写库器
         self.stats_writer.start()
@@ -494,6 +522,12 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 停止终端交互
         self.terminal.stop()
+
+        # 停止 L4 写缓冲后台任务并收尾 flush（先于事件缓冲排空，确保 L4 残留落 L2）
+        try:
+            await self._event_buffer.stop_l4()
+        except Exception as e:
+            logger.warning(f"L4 写缓冲停止异常: {e}")
 
         # 停止事件缓冲消费者（限时排空三层缓冲，超时丢弃并取消 worker）
         if self._event_workers:
