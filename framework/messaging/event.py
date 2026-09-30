@@ -5,6 +5,11 @@ Event 对象
 import re
 import time
 
+from framework.messaging.segments import (
+    data_list, first as first_seg, is_media_only, media_ref, media_segments,
+    normalize_message, pick, segments_to_text,
+)
+
 # 权限查询 TTL 缓存（热路径性能：避免每个事件反复查库）
 # 用户：user_id -> (role, is_blacklist, ts) ；群成员：(`group_id`,`user_id`) -> (role, ts)
 _ROLE_CACHE_TTL = 60.0
@@ -124,18 +129,20 @@ class Event:
         _orig_raw = raw.get('raw_message')
         self.raw_message = _msg_text if _orig_raw is None else _extract_text(_orig_raw)
 
-        # 保留原始消息段（供插件处理富媒体：图片/语音/视频/文件/回复等）
+        # 消息段：一律归一为规范形态 [{'type':..., 'data':...}]
+        # 各协议对"语音"的叫法不同（OneBot=record / Telegram=voice+audio /
+        # QQ官方=独立 file_type），这里统一成 `voice`，插件按规范名读取即可。
         raw_msg = raw.get('message', '')
-        if isinstance(raw_msg, list):
-            self.segments = raw_msg  # 数组格式：每个元素是 {type, data}
-        elif isinstance(raw_msg, str) and raw_msg:
-            self.segments = [{'type': 'text', 'data': {'text': raw_msg}}]
-        else:
-            self.segments = []
+        seg_src = raw.get('segments') if isinstance(raw.get('segments'), list) \
+            else raw_msg
+        self.segments = normalize_message(seg_src)
+
+        # 接入端标识（telegram / discord / qq_official / onebot …）
+        self.adapter = raw.get('adapter', '') or ''
 
         # 发送者信息
         self.user_id = raw.get('user_id', 0)
-        self.sender = raw.get('sender', {})
+        self.sender = raw.get('sender', {}) or {}
 
         # 群聊信息
         self.group_id = raw.get('group_id', 0)
@@ -349,39 +356,59 @@ class Event:
     # ===== 富媒体辅助属性 =====
 
     @property
+    def text(self) -> str:
+        """消息的纯文本（与 self.message 同义，命名更直白）"""
+        return self.message
+
+    @property
+    def media(self) -> list:
+        """全部内容型段（图片/语音/视频/文件/贴纸），元素为规范段"""
+        return media_segments(self.segments)
+
+    @property
+    def is_media_only(self) -> bool:
+        """是否"只有媒体没有文字"（纯图片/纯语音消息）"""
+        return is_media_only(self.segments)
+
+    @property
     def has_image(self) -> bool:
         """消息是否包含图片"""
-        return any(s.get('type') == 'image' for s in self.segments)
+        return bool(pick(self.segments, 'image'))
 
     @property
     def has_reply(self) -> bool:
         """消息是否包含回复"""
-        return any(s.get('type') == 'reply' for s in self.segments)
+        return bool(pick(self.segments, 'reply'))
 
     @property
     def has_voice(self) -> bool:
-        """消息是否包含语音"""
-        return any(s.get('type') == 'record' for s in self.segments)
+        """消息是否包含语音（OneBot 的 record / 各家 audio 均归为此类）"""
+        return bool(pick(self.segments, 'voice'))
 
     @property
     def has_video(self) -> bool:
         """消息是否包含视频"""
-        return any(s.get('type') == 'video' for s in self.segments)
+        return bool(pick(self.segments, 'video'))
 
     @property
     def has_file(self) -> bool:
         """消息是否包含文件"""
-        return any(s.get('type') == 'file' for s in self.segments)
+        return bool(pick(self.segments, 'file'))
+
+    @property
+    def has_sticker(self) -> bool:
+        """消息是否包含贴纸（Telegram / Discord 有，QQ 系没有）"""
+        return bool(pick(self.segments, 'sticker'))
 
     @property
     def has_face(self) -> bool:
         """消息是否包含表情"""
-        return any(s.get('type') == 'face' for s in self.segments)
+        return bool(pick(self.segments, 'face'))
 
     @property
     def has_share(self) -> bool:
         """消息是否包含分享卡片"""
-        return any(s.get('type') == 'share' for s in self.segments)
+        return bool(pick(self.segments, 'share'))
 
     @property
     def share(self) -> dict:
@@ -411,32 +438,79 @@ class Event:
     def reply_id(self):
         """
         获取回复的消息 ID（如果消息是回复）
+        能转成 int 就返回 int；接入端用字符串 ID（如 QQ 官方）时返回原字符串。
         没有回复则返回 None
         """
-        for s in self.segments:
-            if s.get('type') == 'reply':
-                try:
-                    return int(s.get('data', {}).get('id', 0))
-                except (ValueError, TypeError):
-                    return None
-        return None
+        data = first_seg(self.segments, 'reply')
+        raw_id = data.get('id')
+        if raw_id in (None, ''):
+            return None
+        try:
+            return int(raw_id)
+        except (ValueError, TypeError):
+            return str(raw_id)
 
     @property
     def images(self) -> list:
         """
         获取消息中所有图片信息
-        返回 [{file, url, ...}]，每项取决于 OneBot 实现提供的数据
+        返回 [{file, url, file_id, ...}]，取决于接入端提供的数据；
+        取"文件引用"请用 image_ref（跨协议统一）。
         """
-        return [
-            s.get('data', {}) for s in self.segments
-            if s.get('type') == 'image'
-        ]
+        return data_list(self.segments, 'image')
+
+    @property
+    def voices(self) -> list:
+        """获取消息中所有语音的 data（跨协议统一，OneBot 的 record 也在此列）"""
+        return data_list(self.segments, 'voice')
+
+    @property
+    def videos(self) -> list:
+        """获取消息中所有视频的 data"""
+        return data_list(self.segments, 'video')
+
+    @property
+    def files(self) -> list:
+        """获取消息中所有文件的 data（QQ/OneBot 的 file 段）"""
+        return data_list(self.segments, 'file')
+
+    @property
+    def stickers(self) -> list:
+        """获取消息中所有贴纸的 data（Telegram / Discord）"""
+        return data_list(self.segments, 'sticker')
 
     @property
     def first_image(self) -> dict:
         """获取第一张图片的数据（没有返回空 dict）"""
         imgs = self.images
         return imgs[0] if imgs else {}
+
+    @property
+    def first_voice(self) -> dict:
+        """获取第一条语音的数据（没有返回空 dict）"""
+        got = self.voices
+        return got[0] if got else {}
+
+    @property
+    def first_video(self) -> dict:
+        """获取第一个视频的数据（没有返回空 dict）"""
+        got = self.videos
+        return got[0] if got else {}
+
+    @property
+    def first_file(self) -> dict:
+        """获取第一个文件的数据（没有返回空 dict）"""
+        got = self.files
+        return got[0] if got else {}
+
+    def media_url(self, segment: dict) -> str:
+        """
+        取某个内容型段的文件引用（URL / 本地路径 / file_id / base64://…）。
+
+        各协议把文件放在不同字段（OneBot `file`、Telegram `file_id`、
+        Discord `url`、QQ 官方 `file_info`），用本方法不用关心差异。
+        """
+        return media_ref(segment)
 
     @property
     def at_list(self) -> list:

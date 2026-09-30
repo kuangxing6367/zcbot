@@ -128,6 +128,12 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self._event_buffer = EventBuffer(eq_cfg, os.path.join(_project_root, 'data'))
         self._event_workers = []   # worker task 引用集（start() 填充）
+        # 会话分片并行（event_queue.workers > 1 时启用）：单一分发器从缓冲取事件、
+        # 盖内部唯一代号 _seq（0~9_999_999 轮转）后按会话键投入对应 worker 队列；
+        # 同群/同用户事件保序，跨会话并行。workers=1 时为 None，worker 直连缓冲。
+        self._shard_queues = None
+        self._event_distributor_task = None
+        self._event_seq = 0
 
         # 群成员同步批量写库队列（notice 高频时合并落库，避免每条 to_thread + 单条 SQL）
         self._member_sync_queue = asyncio.Queue(maxsize=20000)
@@ -295,6 +301,11 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), plugin_dir)
         return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'plugins')
 
+    def _get_core_plugins_dir(self) -> str:
+        """获取官方插件目录路径（core_plugins/，与 framework 同级）"""
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                            'core_plugins')
+
     def _get_plugins_dat_dir(self) -> str:
         """获取插件数据/配置目录路径（与 plugins 同级，统一存放于 data/ 下）"""
         dat_dir = self.config.get('plugin', {}).get('dat_dir', '')
@@ -327,7 +338,14 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 1. 启动路由表周期刷新任务（首次预热在插件加载完成后进行）
         self.router.start(self.loop)
 
-        # 2. 启动事件队列消费者（接收入队事件，后台 worker 串行处理）
+        # 2. 启动事件队列消费者。workers=1 → worker 直连事件缓冲（零额外开销）；
+        #    workers>1 → 按会话分片并行（同群/同用户事件保序、跨会话并行处理）
+        if self._event_workers_count > 1:
+            self._shard_queues = [
+                asyncio.Queue(maxsize=max(64, self._event_queue_maxsize))
+                for _ in range(self._event_workers_count)]
+            self._event_distributor_task = asyncio.create_task(
+                self._event_distributor_loop(), name="event-distributor")
         for i in range(self._event_workers_count):
             self._event_workers.append(
                 asyncio.create_task(
@@ -529,17 +547,26 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         except Exception as e:
             logger.warning(f"L4 写缓冲停止异常: {e}")
 
-        # 停止事件缓冲消费者（限时排空三层缓冲，超时丢弃并取消 worker）
+        # 停止事件缓冲消费者（限时排空三层缓冲，超时丢弃并取消 worker）。
+        # 分片模式下 wait_drained 的 join 语义已覆盖分片在途事件（worker 处理完
+        # 才 task_done），返回后分片队列必空，此时才取消分发器与 worker。
         if self._event_workers:
             if not await self._event_buffer.wait_drained(self._event_drain_timeout):
                 logger.warning(
                     f"事件缓冲排空超时，丢弃剩余 "
                     f"L1={self._event_buffer.stats()['l1_items']}条 "
                     f"sqlite={self._event_buffer.sqlite_count()}条")
+            if self._event_distributor_task is not None:
+                self._event_distributor_task.cancel()
             for w in self._event_workers:
                 w.cancel()
-            await asyncio.gather(*self._event_workers, return_exceptions=True)
+            cancel_tasks = list(self._event_workers)
+            if self._event_distributor_task is not None:
+                cancel_tasks.append(self._event_distributor_task)
+            await asyncio.gather(*cancel_tasks, return_exceptions=True)
             self._event_workers = []
+            self._event_distributor_task = None
+            self._shard_queues = None
             self._event_buffer.close()
 
         # 停止统计批量写库器

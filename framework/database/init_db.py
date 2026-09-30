@@ -219,6 +219,35 @@ def _init_sqlite(database):
     logger.info(f"SQLite 建表完成，执行 {executed} 条语句")
 
 
+def _init_debug(database):
+    """调试模式（SqlSimEngine）建表：执行原生 init.sql 里的 CREATE TABLE（MySQL 方言）。
+
+    SqlSimEngine 本就是 MySQL 方言模拟器，无需 SQLite 翻译，喂原生 CREATE 即可，
+    并据其中的 UNIQUE KEY 记录冲突键，使 INSERT..ON DUPLICATE KEY UPDATE 真正去重
+    （否则表由 INSERT 惰性建出、无唯一键，重复同步会累积脏行）。CREATE TABLE IF NOT
+    EXISTS 幂等；种子 INSERT（默认管理员等）不在此重复执行，避免每次启动写脏数据。
+    """
+    sql_file = _find_sql_file('init.sql')
+    if not sql_file:
+        logger.warning("未找到 sql/init.sql，调试模式跳过自动建表")
+        return
+
+    with open(sql_file, 'r', encoding='utf-8') as f:
+        sql_content = f.read()
+
+    created = 0
+    for stmt in _split_sql_statements(sql_content):
+        stmt = _strip_leading_comments(stmt)
+        if not stmt.upper().startswith('CREATE TABLE'):
+            continue
+        try:
+            database.execute(stmt)
+            created += 1
+        except Exception as e:
+            logger.debug(f"调试模式建表跳过: {str(e)[:80]}")
+    logger.info(f"调试模式建表完成，执行 {created} 条 CREATE")
+
+
 # ── 工具函数 ──────────────────────────────────────────────────
 
 def _strip_leading_comments(stmt: str) -> str:

@@ -14,9 +14,10 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import threading
-from typing import Optional
+from typing import List, Optional
 
 import requests
 
@@ -137,6 +138,59 @@ def _first_image(message) -> Optional[dict]:
     return None
 
 
+#: Telegram 附件字段 → 规范段类型
+_TG_MEDIA_FIELDS = (
+    ('voice', 'voice'), ('audio', 'voice'), ('video_note', 'video'),
+    ('video', 'video'), ('animation', 'video'), ('document', 'file'),
+    ('sticker', 'sticker'),
+)
+
+
+def build_segments(msg: dict) -> list:
+    """
+    Telegram Message → 规范消息段。
+
+    Telegram 把附件挂在 message 对象的各个字段上（photo[] / voice /
+    document / sticker …），这里统一翻成规范段，插件用 ev.images /
+    ev.voices / ev.files 就能拿到，不用再去 raw 里掏。
+    """
+    if not isinstance(msg, dict):
+        return []
+    segs: List[dict] = []
+
+    reply = msg.get('reply_to_message')
+    if isinstance(reply, dict) and reply.get('message_id') is not None:
+        segs.append({'type': 'reply', 'data': {'id': reply.get('message_id')}})
+
+    content = msg.get('text') or msg.get('caption') or ''
+    if content:
+        segs.append({'type': 'text', 'data': {'text': content}})
+
+    photos = msg.get('photo')
+    if isinstance(photos, list) and photos:
+        best = photos[-1] if isinstance(photos[-1], dict) else {}
+        if best.get('file_id'):
+            segs.append({'type': 'image', 'data': {
+                'file_id': best.get('file_id'),
+                'width': best.get('width'), 'height': best.get('height'),
+                'size': best.get('file_size'),
+            }})
+
+    for field, seg_type in _TG_MEDIA_FIELDS:
+        obj = msg.get(field)
+        if not isinstance(obj, dict) or not obj.get('file_id'):
+            continue
+        data = {'file_id': obj.get('file_id'), 'size': obj.get('file_size')}
+        for src, dst in (('duration', 'duration'), ('file_name', 'name'),
+                         ('mime_type', 'mime'), ('width', 'width'),
+                         ('height', 'height')):
+            if obj.get(src) is not None:
+                data[dst] = obj.get(src)
+        data['tg_type'] = field
+        segs.append({'type': seg_type, 'data': data})
+    return segs
+
+
 def normalize_event(update: dict, bot_name: str) -> Optional[dict]:
     """Telegram Update → 内部事件 dict。"""
     if not isinstance(update, dict):
@@ -170,19 +224,9 @@ def normalize_event(update: dict, bot_name: str) -> Optional[dict]:
     chat_type = chat.get('type') or 'private'
     is_group = chat_type in ('group', 'supergroup', 'channel')
 
-    # 文本：caption 兜底
+    # 文本：caption 兜底。附件不再塞进文本（旧版会拼 [photo:xxx]），
+    # 改为规范消息段承载，插件用 ev.images / ev.voices / ev.files 读取。
     text = msg.get('text') or msg.get('caption') or ''
-    # 附件 URL 提示
-    for key in ('photo', 'document', 'video', 'audio', 'voice', 'sticker'):
-        arr = msg.get(key)
-        if isinstance(arr, list) and arr:
-            # photo 是尺寸数组，取最大
-            best = arr[-1] if isinstance(arr[-1], dict) else {}
-            file_id = best.get('file_id')
-            if file_id:
-                text = (text + '\n' if text else '') + f'[{key}:{file_id}]'
-        elif isinstance(arr, dict) and arr.get('file_id'):
-            text = (text + '\n' if text else '') + f'[{key}:{arr["file_id"]}]'
 
     event = {
         'type': 'message',
@@ -194,6 +238,7 @@ def normalize_event(update: dict, bot_name: str) -> Optional[dict]:
         'message_id': msg.get('message_id'),
         'message': text,
         'raw_message': text,
+        'segments': build_segments(msg),
         'sender': {
             'user_id': user.get('id', 0),
             'nickname': user.get('username')
@@ -253,6 +298,64 @@ class TelegramAdapter(ProtocolAdapter):
                 'username': (self._me or {}).get('username', ''),
             },
         }
+
+    # ── 消息契约 ────────────────────────────────────────────────
+
+    def capabilities(self):
+        from framework.messaging.contract import (
+            CAP_FILE, CAP_IMAGE, CAP_NOTICE, CAP_STICKER, CAP_TEXT,
+            CAP_VIDEO, CAP_VOICE, Capabilities,
+        )
+        return Capabilities(
+            inbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
+                     CAP_STICKER, CAP_NOTICE],
+            outbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
+                      CAP_STICKER],
+        )
+
+    def normalize_incoming(self, raw_message) -> list:
+        """Telegram Message / 段数组 → 规范消息段"""
+        if isinstance(raw_message, dict):
+            return build_segments(raw_message)
+        from framework.messaging.segments import normalize_message
+        return normalize_message(raw_message)
+
+    def to_native(self, segments: list):
+        """
+        规范段 → Telegram 发送指令序列。
+
+        返回 [{method, field, data, caption}]，由 send 路径逐条执行；
+        文本段合并成 caption 挂在首条媒体上，多余的纯文本另发一条。
+        """
+        from framework.messaging.segments import (
+            canonical_type, media_ref, segments_to_text,
+        )
+        _METHOD = {'image': ('sendPhoto', 'photo'),
+                   'voice': ('sendVoice', 'voice'),
+                   'video': ('sendVideo', 'video'),
+                   'file': ('sendDocument', 'document'),
+                   'sticker': ('sendSticker', 'sticker')}
+        ops = []
+        text = segments_to_text(segments)
+        for s in segments or []:
+            if not isinstance(s, dict):
+                continue
+            stype = canonical_type(s.get('type'))
+            if stype not in _METHOD:
+                continue
+            method, field = _METHOD[stype]
+            if not media_ref(s):
+                continue
+            ops.append({'method': method, 'field': field, 'type': stype,
+                        'data': s.get('data') or {},
+                        'caption': text if not ops else ''})
+        if not ops:
+            ops.append({'method': 'sendMessage', 'field': 'text',
+                        'data': {'text': text}, 'caption': ''})
+        elif text and not ops[0]['caption']:
+            ops.append({'method': 'sendMessage', 'field': 'text',
+                        'data': {'text': text}, 'caption': ''})
+        return ops
 
     # ── 生命周期 ────────────────────────────────────────────────
 
@@ -368,6 +471,68 @@ class TelegramAdapter(ProtocolAdapter):
             return {'status': 'ok', 'retcode': 0, 'data': data.get('result')}
         return {'status': 'failed', 'retcode': -1, 'msg': str(data)}
 
+    def _send_media(self, chat_id, op: dict, reply_to=None) -> dict:
+        """
+        通用媒体发送：sendPhoto / sendVoice / sendVideo / sendDocument / sendSticker。
+
+        引用形态自动识别：base64:// 走 multipart、http(s) 直传、本地读盘上传、
+        其余按 Telegram file_id 直接引用（ uploads 已在 bot 侧存在时零带宽）。
+        """
+        from framework.messaging.segments import media_ref
+        method = op.get('method') or 'sendDocument'
+        field = op.get('field') or 'document'
+        data = op.get('data') or {}
+        ref = media_ref({'type': op.get('type'), 'data': data})
+        if not ref:
+            return {'status': 'failed', 'retcode': -2,
+                    'msg': f'{method} 缺少文件引用'}
+
+        body = {'chat_id': chat_id}
+        caption = op.get('caption') or ''
+        if caption:
+            body['caption'] = caption
+        if reply_to:
+            body['reply_parameters'] = json.dumps({'message_id': reply_to})
+
+        name = str(data.get('name') or '')
+        files = None
+        b64 = _extract_b64(ref)
+        if b64:
+            try:
+                raw = base64.b64decode(re.sub(r'\s+', '', b64))
+            except Exception as e:  # noqa: BLE001
+                return {'status': 'failed', 'retcode': -3,
+                        'msg': f'base64 解码失败: {e}'}
+            files = {field: (name or f'{field}.bin', raw,
+                             'application/octet-stream')}
+        elif ref.startswith(('http://', 'https://')):
+            body[field] = ref
+        else:
+            path = ref[7:] if ref.startswith('file://') else ref
+            if os.path.isfile(path):
+                with open(path, 'rb') as f:
+                    raw = f.read()
+                fname = name or os.path.basename(path) or f'{field}.bin'
+                files = {field: (fname, raw, 'application/octet-stream')}
+            else:
+                # 不是本地文件 → 当作 Telegram file_id 直接引用
+                body[field] = ref
+
+        try:
+            if files is None:
+                resp = self._http.post(
+                    self._url(method), json=body, timeout=60,
+                    headers={'Content-Type': 'application/json; charset=utf-8'})
+            else:
+                resp = self._http.post(
+                    self._url(method), data=body, files=files, timeout=60)
+            payload = resp.json() if resp.content else {}
+        except Exception as e:  # noqa: BLE001
+            return {'status': 'failed', 'retcode': -4, 'msg': f'{method} 失败: {e}'}
+        if payload.get('ok'):
+            return {'status': 'ok', 'retcode': 0, 'data': payload.get('result')}
+        return {'status': 'failed', 'retcode': -1, 'msg': str(payload)}
+
     def _send_photo(self, chat_id, image: dict, caption: str = '',
                     reply_to: int = None) -> dict:
         file = str(image.get('file') or image.get('url') or '')
@@ -422,13 +587,19 @@ class TelegramAdapter(ProtocolAdapter):
                 return {'status': 'failed', 'retcode': -2,
                         'msg': 'send_msg 需要 chat_id/user_id/group_id'}
             reply_to = params.get('reply_to') or params.get('message_id')
-            img = _first_image(message)
-            text = _message_to_text(message)
-            if img:
-                return await asyncio.to_thread(
-                    self._send_photo, chat_id, img, text, reply_to)
-            return await asyncio.to_thread(
-                self._send_message, chat_id, text, reply_to)
+            # 规范消息段 → Telegram 发送指令（支持图/语音/视频/文件/贴纸）
+            from framework.messaging.segments import normalize_message as _canon
+            ops = self.to_native(_canon(message))
+            last = None
+            for op in ops:
+                if op.get('method') == 'sendMessage':
+                    last = await asyncio.to_thread(
+                        self._send_message, chat_id,
+                        (op.get('data') or {}).get('text', ''), reply_to)
+                else:
+                    last = await asyncio.to_thread(
+                        self._send_media, chat_id, op, reply_to)
+            return last or {'status': 'failed', 'retcode': -1, 'msg': '发送无内容'}
 
         if action == 'get_me':
             return {'status': 'ok', 'retcode': 0, 'data': self._me}

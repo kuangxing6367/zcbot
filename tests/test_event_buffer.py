@@ -203,3 +203,120 @@ def test_size_of_catches_heavy_tail():
     assert 0 < EventBuffer._size_of(small) < 4096
     assert EventBuffer._size_of(big) > 50_000       # base64 大图必须被记账抓住
     assert EventBuffer._size_of(object()) > 0       # 异常形状有保守回退
+
+
+# ── 会话分片并行（v1.8.x：分发器 + 每 worker 分片队列）──────────
+
+from framework.core.dispatch import FrameworkDispatchMixin
+
+
+class _ShardStub(FrameworkDispatchMixin):
+    """最小宿主：_event_distributor_loop / _shard_of / _event_pipeline_empty
+    只依赖 _event_buffer / _shard_queues / _event_seq 三个实例字段（mixin 无 __init__）"""
+    _event_buffer = None
+    _shard_queues = None
+    _event_seq = 0
+
+
+def _msg_ev(group_id=None, user_id=None, seq=0):
+    ev = {'type': 'message', 'bot_name': 'b', 'message': 'hi',
+          'raw_message': 'hi', 'seq': seq}
+    if group_id is not None:
+        ev['group_id'] = group_id
+    if user_id is not None:
+        ev['user_id'] = user_id
+    return ev
+
+
+def test_shard_of_same_session_same_shard(tmp_path):
+    stub = _ShardStub()
+    stub._shard_queues = [None] * 4
+    for _ in range(50):
+        gid = 100000 + _
+        assert stub._shard_of(_msg_ev(group_id=gid)) == \
+            stub._shard_of(_msg_ev(group_id=gid))
+        assert stub._shard_of(_msg_ev(user_id=gid)) == \
+            stub._shard_of(_msg_ev(user_id=gid))
+    # 不同会话应分布到多个分片（不完全坍缩）
+    shards = {stub._shard_of(_msg_ev(group_id=200000 + i)) for i in range(50)}
+    assert len(shards) > 1
+    # 同余群号不得坍缩到同一分片（回归：裸 hash(int)=int，111/222/333 % 4 全等
+    # 会让并行退化回单 worker）
+    congruent = {stub._shard_of(_msg_ev(group_id=g))
+                 for g in (111, 222, 333, 444, 555, 666, 777, 888)}
+    assert len(congruent) > 1, congruent
+    # 非法形状安全回退分片 0
+    stub._shard_of(object())
+
+
+def test_distributor_preserves_session_order_and_stamps_seq(tmp_path):
+    """同会话事件 FIFO 保序 + 每事件盖内部唯一代号 _seq（轮转）"""
+    async def run():
+        buf = EventBuffer(_cfg(), str(tmp_path))
+        stub = _ShardStub()
+        stub._event_buffer = buf
+        stub._shard_queues = [asyncio.Queue() for _ in range(4)]
+        groups = [11, 22, 33, 44]
+        for i in range(40):  # 4 个群各 10 条，交错入队
+            await buf.put(_msg_ev(group_id=groups[i % 4], seq=i), None)
+        dist = asyncio.create_task(
+            FrameworkDispatchMixin._event_distributor_loop(stub))
+        await asyncio.sleep(0.1)
+        dist.cancel()
+        try:
+            await dist
+        except asyncio.CancelledError:
+            pass
+        assert buf.empty_all()  # 已全部出 L1
+        # 按分片回收：同群事件必须保持入队顺序，_seq 已盖戳且全局唯一
+        collected = {}
+        all_seqs = []
+        for q in stub._shard_queues:
+            while not q.empty():
+                ev, _done, _src = q.get_nowait()
+                collected.setdefault(ev['group_id'], []).append(ev['seq'])
+                assert isinstance(ev.get('_seq'), int)
+                all_seqs.append(ev['_seq'])
+        for g in groups:
+            assert collected[g] == [i for i in range(40) if groups[i % 4] == g]
+        assert len(set(all_seqs)) == len(all_seqs)  # _seq 唯一
+        buf.close()
+    asyncio.run(run())
+
+
+def test_distributor_backpressure_not_lost(tmp_path):
+    """分片队列满时分发器背压等待而非丢弃；最终全部可达"""
+    async def run():
+        buf = EventBuffer(_cfg(), str(tmp_path))
+        stub = _ShardStub()
+        stub._event_buffer = buf
+        stub._shard_queues = [asyncio.Queue(maxsize=2) for _ in range(2)]
+        # 同一群 10 条 → 全进同一分片（容量 2）→ 分发器必然 await put 背压
+        for i in range(10):
+            await buf.put(_msg_ev(group_id=77, seq=i), None)
+        dist = asyncio.create_task(
+            FrameworkDispatchMixin._event_distributor_loop(stub))
+        await asyncio.sleep(0.05)
+        # 背压生效：分片队列满（2 条在途），其余 8 条仍留在 L1（不丢弃）
+        q = stub._shard_queues[stub._shard_of(_msg_ev(group_id=77))]
+        assert q.qsize() == 2
+        assert dist.done() is False
+        # 其余留在 L1（可能有一条已被取出、正阻塞在 put 上的在途事件）
+        assert 0 < buf.stats()['l1_items'] <= 8
+        # 边消费边放行：分发器跟随投递，最终 10 条全部按序可达
+        got = []
+        while len(got) < 10:
+            try:
+                ev, _d, _s = q.get_nowait()
+                got.append(ev['seq'])
+            except asyncio.QueueEmpty:
+                await asyncio.sleep(0.005)
+        assert got == list(range(10))        # 顺序不乱、一条不少
+        assert buf.empty_all()
+        dist.cancel()
+        try:
+            await dist
+        except asyncio.CancelledError:
+            pass
+        buf.close()
+    asyncio.run(run())

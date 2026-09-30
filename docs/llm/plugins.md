@@ -38,6 +38,19 @@ def unregister(): ...                # 可选
 event 字段:`message`(提取后文本)、`raw_message`、`user_id/group_id/is_group`、`sender`、
 `role`、`is_admin`、`segments`、`reply_text()`、`stop_propagation()`。
 
+## LLM 子系统（可选）
+
+`core_plugins.llm_load`（装载器）+ `plugins/llm_core`（对话核心）。后者释放自 zip 载荷，
+**运行时目录内的改动会被 manifest 抹平**，改代码请改 `core_plugins/llm_load/src/llm_core/`
+并 `python tools/build_llm_payload.py --write`。
+
+- 取服务：`fw.services.get('llm_core')`
+- 注册函数：`@svc.tool(description=...)` 或 `svc.register_tool(FunctionTool(...))`
+- 注册模型提供商：`svc.register_provider(Provider 子类实例)`（provider id 要各不相同）
+- 函数契约：描述写给模型看；参数是 JSON Schema（也可按类型注解推导）；返回 str 回灌、
+  返回 None 不回灌；参数校验失败会回灌错误信息让模型自纠
+- 详见 [docs/guide/llm-chat.md](../guide/llm-chat.md)
+
 ## 跨插件访问
 
 `sys.modules.get("plugin_<id>")`(官方插件 `core_plugin_<name>`;html_assembler 兼容别名

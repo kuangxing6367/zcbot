@@ -16,9 +16,10 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import threading
-from typing import Optional
+from typing import List, Optional
 
 import requests
 import websockets
@@ -153,6 +154,65 @@ def _first_image(message) -> Optional[dict]:
     return None
 
 
+def build_segments(d: dict) -> list:
+    """
+    Discord MESSAGE_CREATE d → 规范消息段。
+
+    Discord 把附件放在 `attachments[]`（每个带 content_type/url），
+    贴纸在 `sticker_items[]`，回复在 `message_reference`。这里统一翻成规范段，
+    插件用 ev.images / ev.videos / ev.files / ev.reply_id 读取即可。
+    """
+    if not isinstance(d, dict):
+        return []
+    segs = []
+
+    ref = d.get('message_reference')
+    if isinstance(ref, dict) and ref.get('message_id'):
+        segs.append({'type': 'reply', 'data': {'id': ref.get('message_id')}})
+
+    content = d.get('content') or ''
+    if content:
+        segs.append({'type': 'text', 'data': {'text': content}})
+
+    for att in d.get('attachments') or []:
+        if not isinstance(att, dict):
+            continue
+        url = att.get('url')
+        if not url:
+            continue
+        ctype = str(att.get('content_type') or '')
+        name = att.get('filename') or ''
+        if ctype.startswith('image/'):
+            stype = 'image'
+        elif ctype.startswith('video/'):
+            stype = 'video'
+        elif ctype.startswith('audio/'):
+            stype = 'voice'
+        else:
+            stype = 'file'
+        # 没给 content_type 时按扩展名兜底
+        if not ctype:
+            low = str(name).lower()
+            if low.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp')):
+                stype = 'image'
+            elif low.endswith(('.mp4', '.mov', '.webm', '.mkv')):
+                stype = 'video'
+            elif low.endswith(('.ogg', '.mp3', '.wav', '.m4a', '.flac')):
+                stype = 'voice'
+        segs.append({'type': stype, 'data': {
+            'url': url, 'name': name, 'mime': ctype,
+            'size': att.get('size'),
+            'width': att.get('width'), 'height': att.get('height'),
+        }})
+
+    for st in d.get('sticker_items') or []:
+        if isinstance(st, dict) and st.get('id'):
+            segs.append({'type': 'sticker', 'data': {
+                'file_id': st.get('id'), 'name': st.get('name') or '',
+            }})
+    return segs
+
+
 def normalize_event(d: dict, bot_name: str,
                     self_id: str = '') -> Optional[dict]:
     """Discord MESSAGE_CREATE d → 内部事件 dict。"""
@@ -165,12 +225,6 @@ def normalize_event(d: dict, bot_name: str,
         return None
 
     content = d.get('content') or ''
-    attachments = d.get('attachments') or []
-    if attachments:
-        urls = [a.get('url') for a in attachments
-                if isinstance(a, dict) and a.get('url')]
-        if urls:
-            content = (content + '\n' if content else '') + '\n'.join(urls)
 
     guild_id = d.get('guild_id') or ''
     channel_id = str(d.get('channel_id') or '')
@@ -187,6 +241,7 @@ def normalize_event(d: dict, bot_name: str,
         'message_id': d.get('id'),
         'message': content,
         'raw_message': content,
+        'segments': build_segments(d),
         'sender': {
             'user_id': user_id,
             'nickname': author.get('global_name')
@@ -481,33 +536,94 @@ class DiscordAdapter(ProtocolAdapter):
                     'msg': str(body)}
         return {'status': 'ok', 'retcode': 0, 'data': body}
 
-    async def _send_to_channel(self, channel_id: str, message) -> dict:
-        message = normalize_message(message)
-        text = _message_to_text(message)
-        img = _first_image(message)
-        path = f'/channels/{channel_id}/messages'
-        if img:
-            file = str(img.get('file') or img.get('url') or '')
-            b64 = img.get('base64') or _extract_b64(file)
-            if b64:
-                raw = base64.b64decode(re.sub(r'\s+', '', b64))
-                name = 'image.png'
-            elif file.startswith(('http://', 'https://')):
-                # Discord 不支持远程 url attachments，退化为文本链接
-                content = (text + '\n' if text else '') + file
-                return await asyncio.to_thread(
-                    self._rest_post, path, json_body={'content': content})
+    # ── 消息契约 ────────────────────────────────────────────────
+
+    def capabilities(self):
+        from framework.messaging.contract import (
+            CAP_FILE, CAP_IMAGE, CAP_STICKER, CAP_TEXT, CAP_VIDEO,
+            CAP_VOICE, Capabilities,
+        )
+        return Capabilities(
+            inbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_VOICE, CAP_FILE,
+                     CAP_STICKER],
+            # 出站只能带附件（本地/base64），远程 URL 会退化成文本链接
+            outbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_VOICE, CAP_FILE],
+        )
+
+    def normalize_incoming(self, raw_message) -> list:
+        if isinstance(raw_message, dict):
+            return build_segments(raw_message)
+        from framework.messaging.segments import normalize_message
+        return normalize_message(raw_message)
+
+    def to_native(self, segments: list):
+        """
+        规范段 → Discord 发送指令：{'content': 文本, 'files': [(name, bytes)]}
+
+        Discord 一条消息只能带一个正文，附件以 files[0..n] 上传；
+        远程 URL 无法作为附件，退化为正文里的链接（在此标注 remote=True）。
+        """
+        from framework.messaging.segments import (
+            canonical_type, media_ref, segments_to_text,
+        )
+        text = segments_to_text(segments)
+        files, remote = [], []
+        for s in segments or []:
+            if not isinstance(s, dict):
+                continue
+            stype = canonical_type(s.get('type'))
+            if stype not in ('image', 'video', 'voice', 'file'):
+                continue
+            ref = media_ref(s)
+            if not ref:
+                continue
+            if ref.startswith(('http://', 'https://')):
+                remote.append(ref)
             else:
-                if file.startswith('file://'):
-                    file = file[7:]
-                with open(file, 'rb') as f:
-                    raw = f.read()
-                name = file.rsplit('/', 1)[-1].rsplit('\\', 1)[-1] or 'image.png'
-            files = {'files[0]': (name, raw, 'application/octet-stream')}
-            form = {'payload_json': json.dumps({'content': text},
-                                               ensure_ascii=False)}
-            return await asyncio.to_thread(
-                self._rest_post, path, files=files, data=form)
+                files.append({'ref': ref, 'name': (s.get('data') or {}).get('name') or ''})
+        if remote:
+            text = (text + '\n' if text else '') + '\n'.join(remote)
+        return {'content': text, 'files': files}
+
+    async def _send_to_channel(self, channel_id: str, message) -> dict:
+        from framework.messaging.segments import normalize_message as _canon
+        native = self.to_native(_canon(message))
+        text = native.get('content') or ''
+        files = native.get('files') or []
+        path = f'/channels/{channel_id}/messages'
+
+        if files:
+            multipart = []
+            for item in files[:10]:  # Discord 单条最多 10 个附件
+                ref = item['ref']
+                name = item['name'] or 'file.bin'
+                b64 = _extract_b64(ref)
+                try:
+                    if b64:
+                        raw = base64.b64decode(re.sub(r'\s+', '', b64))
+                    elif ref.startswith('file://'):
+                        p = ref[7:]
+                        with open(p, 'rb') as f:
+                            raw = f.read()
+                        name = item['name'] or os.path.basename(p) or 'file.bin'
+                    elif os.path.isfile(ref):
+                        with open(ref, 'rb') as f:
+                            raw = f.read()
+                        name = item['name'] or os.path.basename(ref) or 'file.bin'
+                    else:
+                        continue
+                except Exception as e:  # noqa: BLE001
+                    logger.warning('discord 附件读取失败: %s', e)
+                    continue
+                multipart.append((name, raw))
+            if multipart:
+                form_files = {f'files[{i}]': (name, raw, 'application/octet-stream')
+                              for i, (name, raw) in enumerate(multipart)}
+                form = {'payload_json': json.dumps({'content': text},
+                                                   ensure_ascii=False)}
+                return await asyncio.to_thread(
+                    self._rest_post, path, files=form_files, data=form)
+
         return await asyncio.to_thread(
             self._rest_post, path, json_body={'content': text})
 

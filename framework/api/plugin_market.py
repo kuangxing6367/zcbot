@@ -173,6 +173,46 @@ def register(ctx):
         except Exception as e:
             logger.warning(f"写回插件 github 元信息失败 {plugin_name}: {e}")
 
+
+    def _core_plugins_dir(plugins_dir: str) -> str:
+        """framework 根目录下的 core_plugins/（与 plugins/ 同级）"""
+        return os.path.join(os.path.dirname(os.path.abspath(plugins_dir.rstrip(os.sep))), 'core_plugins')
+
+    def _framework_official_names() -> set:
+        """框架自带官方插件名（config._CORE_PLUGIN_SCHEMA 的键），市场插件不得占用"""
+        try:
+            from framework.config import _CORE_PLUGIN_SCHEMA
+            return set(_CORE_PLUGIN_SCHEMA.keys())
+        except Exception:
+            return set()
+
+    def _declares_core_target(plugin_dir: str) -> bool:
+        """插件 plugin.yaml 是否声明「可安装到 core_plugins」。
+
+        必须同时显式声明 install_target: core_plugins 且 official: true 才算——
+        单一自我声明不足以拿到写官方目录的权限（防止任意市场插件写一句
+        install_target 就被搬进 core_plugins/）。
+        """
+        try:
+            ypath = os.path.join(plugin_dir, 'plugin.yaml')
+            if not os.path.isfile(ypath):
+                return False
+            with open(ypath, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+            return (str(data.get('install_target', '')).strip().lower() == 'core_plugins'
+                    and data.get('official') is True)
+        except Exception:
+            return False
+
+    def _core_install_allowed(plugin_name: str, plugin_dir: str):
+        """能否把该插件装入 core_plugins/ —— 返回 (ok, 拒绝原因)。"""
+        if not _declares_core_target(plugin_dir):
+            return False, ''
+        if plugin_name in _framework_official_names():
+            return False, (f'插件名 [{plugin_name}] 与框架自带官方插件同名，'
+                           f'拒绝写入 core_plugins/（防止覆盖框架内核插件）')
+        return True, ''
+
     @app.route('/api/plugins/<plugin_name>/update', methods=['POST'])
     @require_super
     def update_plugin_from_github(plugin_name):
@@ -197,7 +237,11 @@ def register(ctx):
             elif repo.startswith('http://github.com/'):
                 repo = repo.replace('http://github.com/', '').rstrip('/')
 
-            target_dir = os.path.join(plugins_dir, plugin_name)
+            # 已装在 core_plugins 的声明式插件原地更新；其余默认 plugins/
+            if os.path.isdir(os.path.join(_core_plugins_dir(plugins_dir), plugin_name)):
+                target_dir = os.path.join(_core_plugins_dir(plugins_dir), plugin_name)
+            else:
+                target_dir = os.path.join(plugins_dir, plugin_name)
 
             framework.plugin_loader.unload_plugin(plugin_name)
 
@@ -366,7 +410,17 @@ def register(ctx):
             return jsonify({'code': 400, 'msg': '缺少仓库地址（repo）'}), 400
 
         try:
-            target_dir = os.path.join(plugins_dir, plugin_name)
+            core_dir = _core_plugins_dir(plugins_dir)
+            core_existing = os.path.join(core_dir, plugin_name)
+            # 目标是 core_plugins 安装位时，先过安全闸门：不得覆盖框架自带官方插件
+            if os.path.isdir(core_existing):
+                if plugin_name in _framework_official_names():
+                    return jsonify({'code': 403, 'msg':
+                                    f'[{plugin_name}] 是框架自带官方插件，禁止经市场覆盖 '
+                                    f'core_plugins/'}), 403
+                target_dir = core_existing  # 已是市场声明式 core 安装位，原地更新
+            else:
+                target_dir = os.path.join(plugins_dir, plugin_name)
             backup_dir = None
             if os.path.isdir(target_dir) and os.listdir(target_dir):
                 framework.plugin_loader.unload_plugin(plugin_name)
@@ -381,9 +435,42 @@ def register(ctx):
                     logger.warning(f"[{plugin_name}] 安装下载失败，已恢复旧代码")
                 return jsonify({'code': 500, 'msg': f'下载失败: {msg}'}), 500
 
+            # 声明式安装位：plugin.yaml 同时声明 install_target: core_plugins 且 official: true
+            # 的插件装进 core_plugins/，其余默认装 plugins/。搬迁后把完整 plugin.yaml 复制进
+            # plugins_dat 供依赖检查/配置迁移使用。
+            install_path = None
+            relocated_core_dir = None
+            allowed, why = _core_install_allowed(plugin_name, target_dir)
+            if why:
+                # 名字撞框架官方插件：拒绝搬迁，回滚已下载内容并恢复备份
+                shutil.rmtree(target_dir, ignore_errors=True)
+                if backup_dir and os.path.isdir(backup_dir):
+                    shutil.move(backup_dir, target_dir)
+                return jsonify({'code': 403, 'msg': why}), 403
+            if allowed:
+                final_dir = os.path.join(core_dir, plugin_name)
+                os.makedirs(os.path.dirname(final_dir), exist_ok=True)
+                if os.path.abspath(final_dir) != os.path.abspath(target_dir):
+                    # 下载落在 plugins/，声明式搬迁进 core_plugins/
+                    if os.path.isdir(final_dir) and os.listdir(final_dir):
+                        shutil.rmtree(final_dir, ignore_errors=True)
+                    shutil.move(target_dir, final_dir)
+                    relocated_core_dir = final_dir
+                # 无论搬迁还是原地更新，代码此刻都在 core 目录，加载须指向它
+                install_path = final_dir
+                dat_dir = os.path.join(framework.plugin_loader.plugins_dat_dir, plugin_name)
+                os.makedirs(dat_dir, exist_ok=True)
+                shutil.copy2(os.path.join(final_dir, 'plugin.yaml'),
+                             os.path.join(dat_dir, 'plugin.yaml'))
+                logger.info(f"[{plugin_name}] 声明 install_target=core_plugins，已安装到 {final_dir}")
+            elif os.path.abspath(target_dir) == os.path.abspath(
+                    os.path.join(core_dir, plugin_name)):
+                # 原地更新一个已在 core_plugins 的插件：加载同样须指向 core 目录
+                install_path = target_dir
+
             framework.plugin_loader.split_installed_files(plugin_name)
 
-            if framework.plugin_loader.load_plugin(plugin_name):
+            if framework.plugin_loader.load_plugin(plugin_name, install_path):
                 framework.plugin_loader.register_commands(plugin_name)
                 _persist_plugin_github_meta(plugin_name, repo, branch, sub_path)
                 if backup_dir and os.path.isdir(backup_dir):
@@ -392,10 +479,16 @@ def register(ctx):
                 audit_log(admin['id'], admin['username'], 'install_plugin_market',
                           'plugin', plugin_name, {'repo': repo, 'branch': branch, 'sub_path': sub_path})
                 return jsonify({'code': 0, 'msg': f'插件 [{plugin_name}] 安装成功并已加载'})
+            # 加载失败：能恢复备份就恢复；新装（无备份）且已搬迁进 core_plugins 的，
+            # 清掉残件，避免半成品留在 core_plugins/ 被扫描登记
             if backup_dir and os.path.isdir(backup_dir):
-                shutil.rmtree(target_dir, ignore_errors=True)
+                shutil.rmtree(install_path or target_dir, ignore_errors=True)
                 shutil.move(backup_dir, target_dir)
                 logger.warning(f"[{plugin_name}] 新代码加载失败，已恢复旧代码备份")
+            elif relocated_core_dir and os.path.isdir(relocated_core_dir):
+                shutil.rmtree(relocated_core_dir, ignore_errors=True)
+                framework.plugin_loader.unload_plugin(plugin_name)
+                logger.warning(f"[{plugin_name}] 加载失败，已清理残件 {relocated_core_dir}")
             audit_log(admin['id'], admin['username'], 'install_plugin_market',
                       'plugin', plugin_name, {'repo': repo}, 'failure', '加载失败')
             return jsonify({'code': 500, 'msg': '代码已下载但加载失败，请检查 main.py'}), 500

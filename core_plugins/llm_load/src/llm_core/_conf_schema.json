@@ -1,0 +1,106 @@
+{
+  "system_prompt": {
+    "description": "系统提示词",
+    "type": "text",
+    "default": "你是跑在聊天软件里的助手。回答要用口语，别写小作文，能用工具就直接用，别跟用户复述你要调用什么工具。",
+    "hint": "决定模型的整体人设与说话方式；改完对新消息立即生效"
+  },
+  "trigger": {
+    "description": "对话命令前缀",
+    "type": "string",
+    "default": "/llm",
+    "hint": "改成 /ai 之类也可以，改后需重载插件才建立新命令"
+  },
+  "free_chat": {
+    "description": "自由对话模式（所有普通消息都进模型）",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后群里每句话都会请求模型，注意费用与刷屏；建议配合唤醒词/概率/群白名单控制范围"
+  },
+  "wake_words": {
+    "description": "唤醒词（逗号分隔，空=不启用）",
+    "type": "string",
+    "default": "",
+    "hint": "如 小雪,雪姐。消息含唤醒词必回复（前缀命中会自动剥掉唤醒词再进模型），不含的走回复概率"
+  },
+  "free_chat_groups": {
+    "description": "自由对话生效群白名单（JSON 数组，空=全部）",
+    "type": "text",
+    "default": "[]",
+    "hint": "如 [123456, 654321]；只在这些群启用自由对话，私聊不受限"
+  },
+  "reply_probability": {
+    "description": "无唤醒词消息的回复概率（%）",
+    "type": "number",
+    "default": 100,
+    "hint": "如设 10，则 90% 的普通消息被忽略，含唤醒词的必回；控费用用这"
+  },
+  "vision_enabled": {
+    "description": "启用图片输入",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后即使模型支持视觉也不再携带图片；省钱的开关在这"
+  },
+  "enable_builtin_tools": {
+    "description": "启用内置示例工具（时间 / 计算器）",
+    "type": "bool",
+    "default": true
+  },
+  "temperature": {
+    "description": "采样温度",
+    "type": "number",
+    "default": 0.7,
+    "hint": "越低越稳，越高越跳；工具调用场景建议 0.2-0.6"
+  },
+  "max_tokens": {
+    "description": "单轮回复上限",
+    "type": "number",
+    "default": 1024
+  },
+  "max_reply_chars": {
+    "description": "单条消息分段上限（字符）",
+    "type": "number",
+    "default": 1200,
+    "hint": "回复超长时按句子边界分段发送；超长单句会硬切，不会丢内容"
+  },
+  "max_turns": {
+    "description": "工具调用最大轮数",
+    "type": "number",
+    "default": 6,
+    "hint": "到达上限后会自动去掉工具再问一次，逼模型收口给结论"
+  },
+  "history_turns": {
+    "description": "保留的历史用户轮数",
+    "type": "number",
+    "default": 20,
+    "hint": "超出后按轮数砍掉最老的对话；这是控制成本的第一道闸"
+  },
+  "session_capacity": {
+    "description": "最大会话数（LRU 回收）",
+    "type": "number",
+    "default": 500
+  },
+  "persist_sessions": {
+    "description": "会话持久化到磁盘",
+    "type": "bool",
+    "default": true,
+    "hint": "重启后各群/私聊的对话历史不丢；关闭则纯内存，重启清零"
+  },
+  "media_ttl": {
+    "description": "图片暂存有效期（秒）",
+    "type": "number",
+    "default": 300
+  },
+  "providers": {
+    "description": "模型提供商列表（JSON 数组）",
+    "type": "text",
+    "default": "[]",
+    "hint": "每项：{\"id\":\"deepseek\",\"type\":\"openai\",\"base_url\":\"https://api.deepseek.com/v1\",\"api_key\":\"sk-...\",\"model\":\"deepseek-chat\",\"default\":true}。api_key 留空时回落到环境变量 LLM_CORE_API_KEY"
+  },
+  "mcp_servers": {
+    "description": "MCP server 列表（JSON 数组）",
+    "type": "text",
+    "default": "[]",
+    "hint": "stdio 示例：{\"name\":\"fs\",\"transport\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\",\"/tmp\"]}；http 示例：{\"name\":\"remote\",\"transport\":\"http\",\"url\":\"https://x/mcp\"}"
+  }
+}

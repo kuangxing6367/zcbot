@@ -630,6 +630,25 @@ class OneBotAdapter(ProtocolAdapter):
             'status_extra': {'ws_port': port},
         }
 
+    # ── 消息契约 ────────────────────────────────────────────────
+    # OneBot 的段数组本身就是规范形态的近亲（语音叫 record，由别名表归位），
+    # 所以入站/出站都直接用基类默认翻译器即可，这里只需要如实自述能力。
+
+    def capabilities(self):
+        from framework.messaging.contract import (
+            CAP_AT, CAP_FILE, CAP_FORWARD, CAP_GROUP_ADMIN, CAP_IMAGE,
+            CAP_JSON, CAP_NOTICE, CAP_RECALL, CAP_REPLY, CAP_REQUEST,
+            CAP_TEXT, CAP_VIDEO, CAP_VOICE, Capabilities,
+        )
+        return Capabilities(
+            inbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
+                     CAP_AT, CAP_REPLY, CAP_JSON, CAP_FORWARD,
+                     CAP_NOTICE, CAP_REQUEST],
+            outbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
+                      CAP_AT, CAP_REPLY, CAP_JSON, CAP_FORWARD],
+            actions=[CAP_RECALL, CAP_GROUP_ADMIN],
+        )
+
     async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
         return normalize_event(raw_event, bot_name)
 
