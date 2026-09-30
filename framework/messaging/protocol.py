@@ -11,6 +11,13 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 from framework.hooks import HookPoints
+from framework.messaging.contract import (
+    CAP_TEXT, Capabilities, as_capabilities, contract_report, normalize_event,
+    validate_adapter,
+)
+from framework.messaging.segments import (
+    normalize_message, segments_to_text, to_outgoing,
+)
 
 logger = logging.getLogger('zcbot')
 
@@ -48,6 +55,71 @@ class ProtocolAdapter(ABC):
     async def stop(self):
         """停止适配器"""
         ...
+
+    # ─────────────────────────────────────────────────────────────
+    # 消息契约（可选实现，基类给全套兜底）
+    #
+    # 内核对"一条消息"只有一种形状：规范消息段列表
+    # [{'type': 'text'|'image'|'voice'|..., 'data': {...}}]。
+    # 接入端只需在两个方向各做一个翻译，其余由基类兜底：
+    #
+    #   原生协议 ──normalize_incoming──▶ 规范段 ──▶ ev.segments（插件）
+    #   插件 message ──▶ 规范段 ──to_native──▶ 原生协议（发送）
+    #
+    # 不实现也能跑：基类默认把入站消息交给通用归一化器（能识别 OneBot 段
+    # 数组与 CQ 码），出站原样透传规范段。但那样附件/语音多半会丢，
+    # 所以接入端应当实现这两个方法——契约自检会点名没实现的。
+    # ─────────────────────────────────────────────────────────────
+
+    def capabilities(self) -> Capabilities:
+        """
+        能力自述：本接入端能收/能发什么。
+
+        默认只声明"文本"；子类应当如实声明，插件据此决定要不要发图片、
+        要不要挂按钮，而不是发出去才发现协议不支持。
+        """
+        return Capabilities(inbound=[CAP_TEXT], outbound=[CAP_TEXT])
+
+    def supports(self, cap: str, direction: str = 'out') -> bool:
+        """能力查询：`adapter.supports('voice', 'in')`"""
+        try:
+            return as_capabilities(self.capabilities()).supports(cap, direction)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def normalize_incoming(self, raw_message) -> list:
+        """
+        入站翻译：协议原生消息 → 规范消息段列表。
+
+        默认实现交给通用归一化器（OneBot 段数组 / CQ 码 / 纯文本）。
+        子类应覆写以保留本协议的附件、语音、贴纸等语义。
+        """
+        return normalize_message(raw_message)
+
+    def to_native(self, segments: list):
+        """
+        出站翻译：规范消息段 → 协议原生消息结构。
+
+        默认原样返回（OneBot 系接入端可直接吃规范段）。
+        QQ 官方这类需要 msg_type+media 结构的应当覆写。
+        """
+        return segments
+
+    def finalize_event(self, raw_event: dict, bot_name: str) -> dict:
+        """
+        接入端在 handle_event() 尾部调用：按契约补齐事件形状。
+
+        只补缺失项，不覆盖接入端已给出的字段。返回新 dict（不改原对象）。
+        """
+        return normalize_event(raw_event, self, self._connection_id())
+
+    def incoming_text(self, raw_message) -> str:
+        """入站消息 → 纯文本（接入端拼事件时省得自己提取）"""
+        return segments_to_text(self.normalize_incoming(raw_message))
+
+    def outgoing(self, message):
+        """出站消息 → 协议原生结构（统一入口，内部走 to_native）"""
+        return to_outgoing(message, self)
 
     # ─────────────────────────────────────────────────────────────
     # 连接自描述（可选）：WebUI /api/connection 据此动态渲染配置表单，
@@ -209,7 +281,26 @@ class ServiceRegistry:
         if isinstance(service, ProtocolAdapter):
             aid = service._connection_id()
             self._adapters[aid] = service
+            self._check_contract(service, aid)
         logger.debug(f"服务已注册: [{name}]")
+
+    @staticmethod
+    def _check_contract(adapter, aid: str):
+        """
+        接入端契约自检：加载时跑一遍，缺能力/翻译器不合规直接点名告警。
+
+        只告警不拦人——第三方接入端可能是最小实现，拦了直接起不来；
+        但问题必须在日志里看得见，别等线上出了怪事才排查。
+        """
+        try:
+            issues = validate_adapter(adapter)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"接入端 [{aid}] 契约自检异常: {e}")
+            return
+        if not issues:
+            return
+        for issue in issues:
+            logger.warning(f"接入端契约 [{aid}]: {issue}")
 
     def get(self, name: str, default=None):
         """获取服务（核心框架/插件调用）"""
@@ -239,6 +330,11 @@ class ServiceRegistry:
         if isinstance(primary, ProtocolAdapter):
             out.setdefault(primary._connection_id(), primary)
         return out
+
+    def adapter_contracts(self) -> Dict[str, dict]:
+        """全部接入端的契约摘要 {adapter_id: 能力/翻译器/问题}，面板与排错用"""
+        return {aid: contract_report(ad)
+                for aid, ad in self.protocol_adapters().items()}
 
     def primary_adapter(self) -> Optional[ProtocolAdapter]:
         """当前主接入端（services['protocol_adapter']）"""

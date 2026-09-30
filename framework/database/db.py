@@ -339,6 +339,12 @@ def init_db(config: dict):
     # 非真实数据库后端（debug 调试模拟）直接经抽象层创建
     if dtype == 'debug':
         db = create_storage(db_config)
+        # 原生 init.sql 建核心表：记录 UNIQUE KEY，令 ODKU 在调试模式真正去重
+        try:
+            from framework.database.init_db import _init_debug
+            _init_debug(db)
+        except Exception as e:
+            logger.debug(f"调试模式自动建表跳过: {e}")
         logger.info(f"存储后端启动：{type(db).__name__}（database.type={dtype}）")
         return db
 

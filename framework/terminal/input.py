@@ -7,6 +7,7 @@
 
 import asyncio
 import logging
+import os
 import sys
 import threading
 
@@ -24,7 +25,12 @@ class TerminalInput:
         self._thread = None
 
     def start(self):
-        """启动终端监听（stdin 非交互时跳过，避免硬依赖终端）"""
+        """启动终端监听（stdin 非交互 / terminal.enabled: false 时跳过）"""
+        cfg = getattr(self.framework, 'config', {}) or {}
+        term_cfg = cfg.get('terminal', {}) or {}
+        if term_cfg.get('enabled', True) is False:
+            logger.info("终端交互已禁用（terminal.enabled: false）")
+            return
         try:
             interactive = bool(sys.stdin) and sys.stdin.isatty()
         except Exception:
@@ -35,10 +41,35 @@ class TerminalInput:
                 "终端命令仍可通过 API/IPC 触发"
             )
             return
+        # terminal.panel_autostart：先进入面板（独占 stdin），退出后再拉起输入
+        # 线程，二者不会同时读 stdin；面板随框架停机自动退出
+        if term_cfg.get('panel_autostart'):
+            threading.Thread(target=self._autostart_tui, daemon=True,
+                             name="ops-tui-autostart").start()
+            return
+        self._start_input_thread()
+
+    def _start_input_thread(self):
+        if self._thread is not None:
+            return
         self._running = True
         self._thread = threading.Thread(target=self._read_loop, daemon=True, name="terminal-input")
         self._thread.start()
         logger.info("终端交互已启动，输入 help 查看可用命令")
+
+    def _autostart_tui(self):
+        """启动终端面板（框架内置，失败回退普通终端输入）"""
+        try:
+            from framework.terminal import panel as panel_mod
+            term_cfg = (getattr(self.framework, 'config', {}) or {}).get('terminal', {}) or {}
+            panel = panel_mod.TerminalPanel(
+                self.framework,
+                refresh=float(term_cfg.get('panel_refresh', 1.0) or 1.0),
+                default_view=str(term_cfg.get('panel_default_view', 'monitor') or 'monitor'))
+            panel.run()
+        except Exception as e:
+            logger.warning(f"终端面板自启动失败，回退普通终端: {e}")
+        self._start_input_thread()
 
     def stop(self):
         """停止终端监听"""
@@ -51,12 +82,13 @@ class TerminalInput:
                 line = input()
                 if not line.strip():
                     continue
-                # 在事件循环中执行命令
+                # 在事件循环中执行命令（同步等待：长时交互命令如 ops tui 面板
+                # 会一直占用到此返回，期间本线程不再读 stdin，天然不与 TUI 抢键）
                 if self.framework.loop and self.framework.loop.is_running():
                     asyncio.run_coroutine_threadsafe(
                         self._execute_command(line.strip()),
                         self.framework.loop
-                    ).result(timeout=30)
+                    ).result()
             except EOFError:
                 break
             except KeyboardInterrupt:

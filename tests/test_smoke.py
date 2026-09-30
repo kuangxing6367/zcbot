@@ -742,8 +742,7 @@ def test_qq_official_upload_failure_propagates():
         if upload_err is not None:
             async def _boom(*a, **kw):
                 raise upload_err
-            adapter._upload_group_image = _boom
-            adapter._upload_c2c_image = _boom
+            adapter._upload_media = _boom
         return adapter
 
     def _msg(img_data):
@@ -770,9 +769,9 @@ def test_qq_official_upload_failure_propagates():
     adapter = object.__new__(QQOfficialAdapter)
     adapter._api_request = _fake_api
 
-    async def _ok_upload(group, img):
+    async def _ok_upload(openid, seg_type, data, is_group):
         return {'file_info': 'FILE_INFO_FAKE'}
-    adapter._upload_group_image = _ok_upload
+    adapter._upload_media = _ok_upload
     r = asyncio.run(adapter._send_group('grp_openid', _msg({'file': 'x.png'})))
     chk("群上传成功返回 ok",
         r.get('status') == 'ok', repr(r))

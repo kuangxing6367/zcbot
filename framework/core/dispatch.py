@@ -109,6 +109,17 @@ class FrameworkDispatchMixin:
         """
         bot_name = event.get('bot_name', 'default')
 
+        # 接入端契约补齐：接入端只交出有把握的字段，这里补成标准形状
+        # （消息段规范归一、sender 补全、notice_type 别名归位…）。
+        # 幂等：已合规的事件二次归一化不改变内容。
+        try:
+            from framework.messaging.contract import normalize_event as _normalize_event
+            adapter = self.services.adapter_for_source(event.get('bot_name'))
+            event = _normalize_event(event, adapter)
+            bot_name = event.get('bot_name') or 'default'
+        except Exception as e:  # noqa: BLE001 - 补齐失败不应吃掉事件
+            logger.debug(f"事件契约补齐失败，按原样分发: {e}")
+
         # 事件进入内核前的扩展点（任何 handler 返回 False 即丢弃该事件）
         try:
             if False in (await self.hooks.trigger_async(
@@ -131,12 +142,22 @@ class FrameworkDispatchMixin:
             await self._event_buffer.put(event, None)
 
     async def _event_worker_loop(self, worker_id: int):
-        """事件缓冲消费者：取事件并处理（单个事件异常不影响 worker 存活）"""
+        """事件缓冲消费者：取事件并处理（单个事件异常不影响 worker 存活）。
+
+        event_queue.workers=1 → 直连事件缓冲（零额外开销）；
+        workers>1 → 从本 worker 的会话分片队列取（同群/同用户事件保序、
+        跨会话并行），队列由 _event_distributor_loop 投递。
+        """
+        shard_q = (self._shard_queues[worker_id]
+                   if self._shard_queues is not None else None)
         while True:
-            if not self._running and self._event_buffer.empty_all():
-                break  # 停机信号 + 三层缓冲已空 → 退出
+            if not self._running and self._event_pipeline_empty():
+                break  # 停机信号 + 管线已空 → 退出
             try:
-                event, done, source = await self._event_buffer.get_async()
+                if shard_q is not None:
+                    event, done, source = await shard_q.get()
+                else:
+                    event, done, source = await self._event_buffer.get_async()
             except asyncio.CancelledError:
                 raise
             try:
@@ -149,6 +170,58 @@ class FrameworkDispatchMixin:
                 if done is not None and not done.done():
                     done.set_result(True)
                 self._event_buffer.task_done(source)
+
+    def _shard_of(self, event) -> int:
+        """会话分片路由：同群/同私聊/同 bot（无会话信息的通知等）固定同一分片。
+
+        保证同会话事件 FIFO 保序（session/防刷/命令状态机依赖顺序）；
+        不同会话打散到各 worker 并行处理。返回 worker 下标。
+
+        先做 64 位黄金比例乘散列再异或折叠低位：整数会话号直接用 `n % w`
+        会让 111/222/333 这类同余群号全挤进一个分片、并行退化回单 worker。
+        """
+        if isinstance(event, dict):
+            key = event.get('group_id') or event.get('user_id') \
+                or event.get('self_id') or 0
+        else:
+            key = 0
+        if isinstance(key, int):
+            h = (key * 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+        else:
+            h = hash(key) & 0xFFFFFFFFFFFFFFFF
+        h ^= h >> 32
+        h ^= h >> 16
+        return h % len(self._shard_queues)
+
+    async def _event_distributor_loop(self):
+        """事件分发器：从事件缓冲逐条取出，按会话分片投入对应 worker 队列。
+
+        - 每事件盖内部唯一代号 event['_seq']（0~9_999_999 轮转，追踪/对账用）；
+        - 分片队列满时 await put 背压（传导回 L1 → 触发溢出分层），不丢事件；
+        - task_done 记账仍由 worker 处理完调用：wait_drained 的 join 语义
+          天然覆盖「已出 L1、在分片队列/处理中」的在途事件，停机不丢。
+        """
+        while True:
+            try:
+                event, done, source = await self._event_buffer.get_async()
+            except asyncio.CancelledError:
+                raise
+            self._event_seq = (self._event_seq + 1) % 10_000_000
+            if isinstance(event, dict):
+                event['_seq'] = self._event_seq
+            try:
+                await self._shard_queues[self._shard_of(event)].put(
+                    (event, done, source))
+            except asyncio.CancelledError:
+                raise
+
+    def _event_pipeline_empty(self) -> bool:
+        """事件管线是否已空（缓冲三层 + 全部分片队列，worker 停机判定用）"""
+        if not self._event_buffer.empty_all():
+            return False
+        if self._shard_queues is not None:
+            return all(q.empty() for q in self._shard_queues)
+        return True
 
     async def _process_event(self, event: dict):
         """
@@ -256,9 +329,18 @@ class FrameworkDispatchMixin:
         return False
 
     async def _handle_notice(self, data: dict, bot_name: str = 'default'):
-        """处理通知事件"""
+        """处理通知事件
+
+        广播两次：协议原名 + 规范名。
+        原名（notice.group_increase）保住既有插件的订阅；
+        规范名（notice.group_member_increase）让新插件能跨协议订阅同一事件。
+        两者同名时只广播一次。
+        """
         notice_type = data.get('notice_type', '')
         await self.event_bus.aemit(f'notice.{notice_type}', data)
+        canonical = data.get('notice_type_canonical')
+        if canonical and canonical != notice_type:
+            await self.event_bus.aemit(f'notice.{canonical}', data)
 
         # 群成员增加/减少：进入批量同步队列（后台合并写库，热路径零线程切换零 DB）
         if notice_type == 'group_increase':
@@ -309,20 +391,16 @@ class FrameworkDispatchMixin:
                 joins.pop(key, None)
         if joins:
             try:
-                for group_id, user_id in joins:
-                    self.db.execute(
-                        "INSERT IGNORE INTO group_members (group_id, user_id) VALUES (%s, %s)",
-                        (group_id, user_id)
-                    )
+                self.db.execute_many(
+                    "INSERT IGNORE INTO group_members (group_id, user_id) VALUES (%s, %s)",
+                    list(joins.keys()))
             except Exception as e:
                 logger.error(f"批量同步群成员加入失败: {e}")
         if leaves:
             try:
-                for group_id, user_id in leaves:
-                    self.db.execute(
-                        "DELETE FROM group_members WHERE group_id = %s AND user_id = %s",
-                        (group_id, user_id)
-                    )
+                self.db.execute_many(
+                    "DELETE FROM group_members WHERE group_id = %s AND user_id = %s",
+                    list(leaves))
             except Exception as e:
                 logger.error(f"批量同步群成员离开失败: {e}")
 
@@ -330,27 +408,3 @@ class FrameworkDispatchMixin:
         """处理请求事件"""
         request_type = data.get('request_type', '')
         await self.event_bus.aemit(f'request.{request_type}', data)
-
-    def _sync_group_member_join(self, data: dict):
-        """同步群成员加入"""
-        try:
-            group_id = data.get('group_id')
-            user_id = data.get('user_id')
-            self.db.execute(
-                "INSERT IGNORE INTO group_members (group_id, user_id) VALUES (%s, %s)",
-                (group_id, user_id)
-            )
-        except Exception as e:
-            logger.error(f"同步群成员加入失败: {e}")
-
-    def _sync_group_member_leave(self, data: dict):
-        """同步群成员离开"""
-        try:
-            group_id = data.get('group_id')
-            user_id = data.get('user_id')
-            self.db.execute(
-                "DELETE FROM group_members WHERE group_id = %s AND user_id = %s",
-                (group_id, user_id)
-            )
-        except Exception as e:
-            logger.error(f"同步群成员离开失败: {e}")

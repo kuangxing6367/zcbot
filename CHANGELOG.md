@@ -26,6 +26,30 @@
 
 ---
 
+## 开发中（v1.9.0，未发布）
+
+> 主题：**运维终端能力内置化（删 `ops` 官方插件）+ LLM 子系统（装载器 + zip 载荷）+ 事件按会话分片并行 + debug 存储内存缓冲 + 插件市场声明式安装位**。
+
+### 新功能
+- **LLM 子系统（可选，默认关）**：新增官方插件 `core_plugins/llm_load`（装载器）+ 用户插件 `plugins/llm_core`（对话核心）。`llm_core` 源码真源在 `core_plugins/llm_load/src/llm_core/`，经 `python tools/build_llm_payload.py --write` 打包为 `llm_core.zip` 载荷，框架启动时由 `llm_load` 按 manifest 校验/释放/自愈到 `plugins/llm_core`（运行时目录改动会被 manifest 抹平）。提供模型提供商总线、函数（工具）调用与 Agent 循环；插件经 `fw.services.get('llm_core')` 取服务、`@svc.tool(...)` 注册函数、`svc.register_provider(...)` 注册提供商。文档见 `docs/guide/llm-chat.md`、`docs/llm/plugins.md`。
+- **事件按会话分片并行**：`event_queue.workers > 1` 时启用单一分发器（`_event_distributor_loop`）从事件缓冲逐条取事件、盖内部唯一代号 `_seq`，按会话键（群/用户/bot）哈希投入对应 worker 队列——同群/同用户事件 FIFO 保序，跨会话并行处理；`workers=1` 时 worker 直连缓冲，零额外开销。停机以 `_event_pipeline_empty`（三层缓冲 + 全部分片队列）判定，`wait_drained` 的 join 语义覆盖分片在途事件，不丢。
+- **插件市场声明式安装位**：`plugin.yaml` 同时声明 `install_target: core_plugins` 且 `official: true` 的市场插件可安装进 `core_plugins/`（其余默认 `plugins/`）。框架内置官方插件名（`config._CORE_PLUGIN_SCHEMA` 键）受保护，禁止经市场覆盖同名目录；下载/加载失败均回滚备份或清理残件。
+
+### 重构
+- **运维终端能力内置化**：删除 `core_plugins/ops` 官方插件，其 `restart / shell(sh) / dbdump` 命令迁入框架内置 `framework/terminal/cmd_ops.py`，`reload(rl)` 并入 `cmd_plugin.py`；新增交互式运维面板命令 `tui`（`framework/terminal/panel.py`，零第三方依赖、ANSI 备用屏、htop/NTop 交互布局独立实现）。命令配置读顶层 `config.yaml` 的 `ops` 段（`shell_timeout`/`max_output`，缺省即生效）。`config.yaml` 新增 `terminal` 段：`enabled` / `panel_autostart` / `panel_refresh` / `panel_default_view`。
+
+### 性能 / 存储
+- **debug 模式行集内存缓冲**：`framework/database/sql_sim.py` 行集常驻内存，写入先进缓冲、按 `database.debug_flush_ms`（毫秒，默认 1000，0=逐次同步落盘）由后台线程合并落盘，正常关停/进程退出（atexit）兜底全量落盘；外部/手工改动 JSON 文件按 mtime 自动重载。新增 `WHERE` 编译为闭包谓词（SELECT/UPDATE/DELETE 共用）、ORDER BY 多列 + 每列 ASC/DESC + 数值序 + NULL 殿后、`LIMIT offset,count` 变体、`INSERT IGNORE` 批内去重。群成员同步与统计写库改为 `execute_many` 批量。
+- **debug 模式支持 `ON DUPLICATE KEY UPDATE`（upsert）**：`_exec_create` 解析并持久化 `PRIMARY KEY` / `UNIQUE KEY` 冲突键，`_exec_insert` 据此定位冲突行就地更新（`VALUES(col)` 取待插入值，支持 `IF(cond,a,b)`、`NOW()`、`col=col±N`），命令同步与用户/群/成员统计写库在调试模式真正去重、ID 稳定；解析失败的 ODKU 子句安全退化为普通 INSERT，绝不因不可解析的表达式丢整行插入。配套：调试模式启动即执行 `init.sql` 的 `CREATE TABLE`（`_init_debug`，幂等、不重复跑种子 INSERT），使核心表带上唯一键元数据，避免表由 `INSERT` 惰性建出而无唯一键导致重复累积。
+
+### 修复 / 健壮性
+- **`/llm` 未配置提供商时回可读提示**：`handle_chat` 捕获 `ProviderError`，回一句「（LLM 未就绪）没有可用的模型提供商…」引导去面板配置 Key，而非让命令处理器抛异常静默无响应。
+- **运维面板 reload 走宿主进程转发**：`framework/terminal/panel.py` 的 `_call_command` 按命令 `target` 路由，`target: host`（如 `restart`/`reload`）在核心进程经 IPC `request_host('terminal.exec', …)` 转发到宿主执行，`both` 先本地再宿主，修复双进程模型下面板重载只作用于核心进程、宿主插件不刷新的缺口。
+- **文档与注释纠偏**：`llm_load`/`llm_core` 载荷释放的触发条件由「加 `__version__` 版本号」更正为「按逐文件 md5 比对，内容变化即生效」，同步修正 `build_llm_payload.py` 提示、两处 README 与 `docs/guide/llm-chat.md`；`providers.py` 示例导入改为运行时可用的 `from plugin_llm_core.providers import …`；`/llmtools` 输出补列每个工具的必填参数，便于核对 schema 推导。
+
+### 测试 / CI
+- 新增 `tests/test_llm_core.py`（18 项，离线不联网，含「无提供商回可读提示」回归）、`tests/test_llm_load.py`（7 项：释放/校验/自愈/幂等/现网对齐）、`tests/test_terminal_panel.py`（含核心进程下 `target: host` 命令走 IPC 转发的回归）；`test_event_buffer.py` 补会话分片保序与同余群号不坍缩回归；`test_sql_sim_debug.py` 补缓冲/合并落盘/ORDER BY/LIMIT 与 `ON DUPLICATE KEY UPDATE`。`tools/build_llm_payload.py --check` 现同时校验「src 真源↔载荷 zip」与「载荷↔现网副本」两级一致性，CI 主套件纳入 `test_terminal_panel`。
+
 ## v1.8.0（2026-09-29）
 
 > 主题：**事件缓冲引入 L4 攒批写缓冲（缓解 sqlite 单写者瓶颈）+ SQLite 写锁收敛 + 删除 file_store 冗余后端 + 声明式装饰器 API + 前端产物收归 webui 插件 + 全官方插件补文档**。

@@ -7,6 +7,14 @@ __pycache__/
 
 # Vite 构建期临时配置快照
 webui/vite.config.js.timestamp-*
+docs/.vitepress/config.mjs.timestamp-*
+
+# 根目录构建产物 / 压缩包
+/*.zip
+
+# Trae agent 本地工件
+.trae/
+traeagent*/
 
 # ============================================================
 # 文档站（VitePress）

@@ -52,11 +52,24 @@ class AsyncStatsWriter:
                 logger.warning(f"用户注册队列已满，已丢弃 {self._dropped} 条注册请求（消息量过大）")
 
     async def _run(self):
-        """后台循环：周期性 flush"""
+        """后台循环：周期性 flush。
+
+        各落库目标（命中计数 / users / groups / group_members）互不依赖，
+        各自封装为闭包并行提交到 DB 线程池（MySQL 下真实并行；SQLite 内核
+        单写者仍串行落盘，但省去三次往返的串行等待），任一失败不影响其余。
+        """
         while True:
             try:
                 await asyncio.sleep(self.flush_interval)
-                await self._run_in_db_thread(self._flush)
+                fns = self._drain_to_fns()
+                if not fns:
+                    continue
+                results = await asyncio.gather(
+                    *[self._run_in_db_thread(fn) for fn in fns],
+                    return_exceptions=True)
+                for r in results:
+                    if isinstance(r, Exception):
+                        logger.error(f"统计批量写库异常: {r}")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -70,36 +83,15 @@ class AsyncStatsWriter:
             return await asyncio.get_running_loop().run_in_executor(ex, func)
         return await asyncio.to_thread(func)
 
-    def _flush(self):
-        """批量落库（在线程中执行）"""
-        # 1. 命令命中计数
+    def _drain_to_fns(self) -> list:
+        """把内存聚合数据排空为一组互不依赖的落库闭包（供 DB 线程池并行执行）"""
+        fns = []
         hits = self._cmd_hits
         self._cmd_hits = {}
-        if hits:
-            for cmd_id, cnt in hits.items():
-                try:
-                    self.db.execute(
-                        "UPDATE commands SET hit_count = hit_count + %s WHERE id = %s",
-                        (cnt, cmd_id)
-                    )
-                except Exception as e:
-                    logger.error(f"命令命中计数写库失败 [{cmd_id}]: {e}")
-
-        # 1.5 关键词自动回复命中计数（dynamic_commands 表）
         kwhits = self._kw_hits
         self._kw_hits = {}
-        if kwhits:
-            for kw_id, cnt in kwhits.items():
-                try:
-                    self.db.execute(
-                        "UPDATE dynamic_commands SET hit_count = hit_count + %s WHERE id = %s",
-                        (cnt, kw_id)
-                    )
-                except Exception as e:
-                    logger.error(f"关键词命中计数写库失败 [{kw_id}]: {e}")
-
-        # 2. 用户/群注册：聚合去重后单事务批量写（三条表各一次 executemany，
-        #    避免每条消息 1-3 次独立 execute + commit/fsync 拖垮落库吞吐）
+        if hits or kwhits:
+            fns.append(lambda: self._flush_hits(hits, kwhits))
         items = []
         while True:
             try:
@@ -107,15 +99,45 @@ class AsyncStatsWriter:
             except asyncio.QueueEmpty:
                 break
         if items:
-            self._batch_register(items)
+            users, groups, members = self._aggregate_registrations(items)
+            if users:
+                fns.append(lambda u=users: self._write_users(u))
+            if groups:
+                fns.append(lambda g=groups: self._write_groups(g))
+            if members:
+                fns.append(lambda m=members: self._write_members(m))
+        return fns
 
-    def _batch_register(self, items):
-        """用户/群自动注册批量写库：按 (user / group / member) 聚合 + 单事务 executemany。
+    def _flush(self):
+        """同步排空（DB 线程中执行，停机收尾 / 兜底用）"""
+        for fn in self._drain_to_fns():
+            try:
+                fn()
+            except Exception as e:
+                logger.error(f"统计批量写库异常: {e}")
 
-        语义等价于原 _register_one 逐条 INSERT ... ON DUPLICATE KEY UPDATE：
-        - 同 user_id 聚合为一条（nickname 取最后状态，last_active_at 更新一次）；
-        - 同 (group_id, user_id) 聚合为一条，message_count 按消息数累加。
-        """
+    def _flush_hits(self, hits: dict, kwhits: dict):
+        """命令/关键词命中计数批量自增（executemany 一次往返替代逐条 UPDATE）"""
+        if hits:
+            try:
+                self.db.execute_many(
+                    "UPDATE commands SET hit_count = hit_count + %s WHERE id = %s",
+                    [(cnt, cmd_id) for cmd_id, cnt in hits.items()]
+                )
+            except Exception as e:
+                logger.error(f"命令命中计数写库失败: {e}")
+        if kwhits:
+            try:
+                self.db.execute_many(
+                    "UPDATE dynamic_commands SET hit_count = hit_count + %s WHERE id = %s",
+                    [(cnt, kw_id) for kw_id, cnt in kwhits.items()]
+                )
+            except Exception as e:
+                logger.error(f"关键词命中计数写库失败: {e}")
+
+    @staticmethod
+    def _aggregate_registrations(items):
+        """把注册请求按 (user / group / member) 聚合（同键合并，消息数累加）"""
         users = {}                          # user_id -> nickname（最后状态）
         groups = {}                         # group_id -> group_name（最后状态）
         members = {}                        # (group_id, user_id) -> [card, role, title, count]
@@ -141,90 +163,57 @@ class AsyncStatsWriter:
                     if sender.get('title', '') != '':
                         m[2] = sender.get('title', '')
                     m[3] += 1
+        return users, groups, members
+
+    def _write_users(self, users: dict):
+        """用户自动注册/活跃更新（executemany 单事务）"""
         try:
             with self.db.transaction():
-                if users:
-                    self.db.execute_many(
-                        "INSERT INTO users (user_id, nickname, first_seen_at, last_active_at) "
-                        "VALUES (%s, %s, NOW(), NOW()) "
-                        "ON DUPLICATE KEY UPDATE "
-                        "nickname = IF(VALUES(nickname) != '', VALUES(nickname), nickname), "
-                        "last_active_at = NOW()",
-                        [(uid, nick) for uid, nick in users.items()]
-                    )
-                if groups:
-                    self.db.execute_many(
-                        "INSERT INTO groups_info (group_id, group_name, is_active, join_at) "
-                        "VALUES (%s, %s, 1, NOW()) "
-                        "ON DUPLICATE KEY UPDATE "
-                        "is_active = 1, "
-                        "group_name = IF(VALUES(group_name) != '', VALUES(group_name), group_name)",
-                        [(gid, gname) for gid, gname in groups.items()]
-                    )
-                if members:
-                    self.db.execute_many(
-                        "INSERT INTO group_members (group_id, user_id, card, role, title, "
-                        "last_active_at, message_count) "
-                        "VALUES (%s, %s, %s, %s, %s, NOW(), %s) "
-                        "ON DUPLICATE KEY UPDATE "
-                        "card = IF(VALUES(card) != '', VALUES(card), card), "
-                        "role = VALUES(role), "
-                        "title = IF(VALUES(title) != '', VALUES(title), title), "
-                        "last_active_at = NOW(), "
-                        "message_count = message_count + VALUES(message_count)",
-                        [(gid, uid, m[0], m[1], m[2], m[3])
-                         for (gid, uid), m in members.items()]
-                    )
+                self.db.execute_many(
+                    "INSERT INTO users (user_id, nickname, first_seen_at, last_active_at) "
+                    "VALUES (%s, %s, NOW(), NOW()) "
+                    "ON DUPLICATE KEY UPDATE "
+                    "nickname = IF(VALUES(nickname) != '', VALUES(nickname), nickname), "
+                    "last_active_at = NOW()",
+                    [(uid, nick) for uid, nick in users.items()]
+                )
         except Exception as e:
-            logger.error(f"批量自动注册写库失败（{len(users)} 用户/{len(groups)} 群/"
-                         f"{len(members)} 群成员）: {e}")
+            logger.error(f"用户注册批量写库失败（{len(users)} 用户）: {e}")
 
-    def _register_one(self, user_id: int, sender: dict, message_type: str, group_id: int):
-        """单条用户/群自动注册"""
-        if not user_id:
-            return
-        nickname = sender.get('nickname', '') or sender.get('card', '') or str(user_id)
-        card = sender.get('card', '')
+    def _write_groups(self, groups: dict):
+        """群信息自动注册（executemany 单事务）"""
+        try:
+            with self.db.transaction():
+                self.db.execute_many(
+                    "INSERT INTO groups_info (group_id, group_name, is_active, join_at) "
+                    "VALUES (%s, %s, 1, NOW()) "
+                    "ON DUPLICATE KEY UPDATE "
+                    "is_active = 1, "
+                    "group_name = IF(VALUES(group_name) != '', VALUES(group_name), group_name)",
+                    [(gid, gname) for gid, gname in groups.items()]
+                )
+        except Exception as e:
+            logger.error(f"群注册批量写库失败（{len(groups)} 群）: {e}")
 
-        # INSERT ... ON DUPLICATE KEY UPDATE 实现自动注册+更新
-        # （SQLite 模式下由 db 方言层自动翻译为 ON CONFLICT + CASE WHEN）
-        self.db.execute(
-            "INSERT INTO users (user_id, nickname, first_seen_at, last_active_at) "
-            "VALUES (%s, %s, NOW(), NOW()) "
-            "ON DUPLICATE KEY UPDATE "
-            "nickname = IF(VALUES(nickname) != '', VALUES(nickname), nickname), "
-            "last_active_at = NOW()",
-            (user_id, nickname)
-        )
-
-        # 如果是群消息，自动注册群信息和群成员关系
-        if group_id and message_type == 'group':
-            group_name = sender.get('group_name', '')
-
-            # 自动注册群
-            self.db.execute(
-                "INSERT INTO groups_info (group_id, group_name, is_active, join_at) "
-                "VALUES (%s, %s, 1, NOW()) "
-                "ON DUPLICATE KEY UPDATE "
-                "is_active = 1, "
-                "group_name = IF(VALUES(group_name) != '', VALUES(group_name), group_name)",
-                (group_id, group_name)
-            )
-
-            # 自动注册群成员关系
-            role = sender.get('role', 'member')
-            title = sender.get('title', '')
-            self.db.execute(
-                "INSERT INTO group_members (group_id, user_id, card, role, title, last_active_at, message_count) "
-                "VALUES (%s, %s, %s, %s, %s, NOW(), 1) "
-                "ON DUPLICATE KEY UPDATE "
-                "card = IF(VALUES(card) != '', VALUES(card), card), "
-                "role = VALUES(role), "
-                "title = IF(VALUES(title) != '', VALUES(title), title), "
-                "last_active_at = NOW(), "
-                "message_count = message_count + 1",
-                (group_id, user_id, card, role, title)
-            )
+    def _write_members(self, members: dict):
+        """群成员关系自动注册/活跃计数更新（executemany 单事务）"""
+        try:
+            with self.db.transaction():
+                self.db.execute_many(
+                    "INSERT INTO group_members (group_id, user_id, card, role, title, "
+                    "last_active_at, message_count) "
+                    "VALUES (%s, %s, %s, %s, %s, NOW(), %s) "
+                    "ON DUPLICATE KEY UPDATE "
+                    "card = IF(VALUES(card) != '', VALUES(card), card), "
+                    "role = VALUES(role), "
+                    "title = IF(VALUES(title) != '', VALUES(title), title), "
+                    "last_active_at = NOW(), "
+                    "message_count = message_count + VALUES(message_count)",
+                    [(gid, uid, m[0], m[1], m[2], m[3])
+                     for (gid, uid), m in members.items()]
+                )
+        except Exception as e:
+            logger.error(f"群成员注册批量写库失败（{len(members)} 成员）: {e}")
 
     async def stop(self):
         """停止并执行最后一次落库"""

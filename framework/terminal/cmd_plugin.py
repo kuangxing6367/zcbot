@@ -2,9 +2,14 @@
 """
 终端命令：插件启停 / 配置 / 重载（enable / disable / config / reload）
 """
-from .helper import installed_core_plugins
+import logging
+import os
+import sys
 
 from .command import terminal_commands
+from .helper import installed_core_plugins
+
+logger = logging.getLogger('zcbot')
 
 
 def register(fw):
@@ -149,19 +154,82 @@ def register(fw):
             except Exception as e:
                 print(f"设置失败: {e}")
 
-    def cmd_reload(args):
-        """重载插件: reload [插件名]"""
+    def _reload_core_plugin(name):
+        """官方插件（core_plugins/）重载：合成模块名重导入 + register + 回填 loader。
+
+        plugin_loader.load_plugin 只认 plugins/ 目录；官方插件必须走本线路。
+        （修复历史缺陷：内置 reload 调用的 reload_plugin/reload_all 方法并不存在，
+        旧命令每次都静默失败。）"""
+        import importlib.util
+        main_file = os.path.join(fw._get_core_plugins_dir(), name, 'main.py')
+        if not os.path.isfile(main_file):
+            return False
         try:
-            if args.strip():
-                plugin_name = args.strip()
-                success = fw.plugin_loader.reload_plugin(plugin_name)
-                if success:
-                    print(f"插件 [{plugin_name}] 重载成功")
-                else:
-                    print(f"插件 [{plugin_name}] 重载失败")
-            else:
-                loaded = fw.plugin_loader.reload_all()
-                print(f"已重载 {len(loaded)} 个插件")
+            fw.plugin_loader.unload_plugin(name)
+            sys.modules.pop(f"core_plugin_{name}", None)
+            spec = importlib.util.spec_from_file_location(f"core_plugin_{name}", main_file)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[f"core_plugin_{name}"] = module
+            spec.loader.exec_module(module)
+            from framework.ctx import PluginContext
+            ctx = PluginContext(f"core:{name}", fw)
+            module.ctx = ctx
+            if hasattr(module, 'register'):
+                module.register(ctx)
+                try:
+                    from framework.plugin import flush as _flush_plugin
+                    _flush_plugin(module.__name__, ctx)
+                except Exception:
+                    pass
+            with fw.plugin_loader._lock:
+                meta = getattr(module, '__plugin_meta__', {})
+                fw.plugin_loader._loaded_plugins[name] = {
+                    'module': module,
+                    'path': os.path.dirname(main_file),
+                    'meta': meta,
+                    'priority': meta.get('priority', 50),
+                    'yaml': {},
+                }
+            return True
+        except Exception as e:
+            logger.error(f"[{name}] 官方插件重载异常: {e}")
+            return False
+
+    def _reload_one(name):
+        # 官方插件专用线路（core_plugins/ 有、plugins/ 没有同名目录）
+        if os.path.isfile(os.path.join(fw._get_core_plugins_dir(), name, 'main.py')) and                 not os.path.isdir(os.path.join(fw._get_plugins_dir(), name)):
+            return _reload_core_plugin(name)
+        fw.plugin_loader.unload_plugin(name)
+        if not fw.plugin_loader.load_plugin(name):
+            return False
+        try:
+            fw.plugin_loader.register_commands(name)
+        except Exception:
+            pass
+        try:
+            fw.router._invalidate_cache()
+        except Exception:
+            pass
+        return True
+
+    def cmd_reload(args):
+        """重载插件: reload [插件名]（缺省重载全部已加载插件）"""
+        try:
+            target = args.strip()
+            if target:
+                ok = _reload_one(target)
+                print(f"插件 [{target}] 重载{'成功' if ok else '失败'}")
+                return
+            with fw.plugin_loader._lock:
+                loaded = list(fw.plugin_loader._loaded_plugins.keys())
+            if not loaded:
+                print("没有已加载的插件")
+                return
+            ok_list, fail_list = [], []
+            for name in loaded:
+                (ok_list if _reload_one(name) else fail_list).append(name)
+            print(f"重载完成：成功 {len(ok_list)}/{len(loaded)}"
+                  + (f"，失败: {', '.join(fail_list)}" if fail_list else ""))
         except Exception as e:
             print(f"重载失败: {e}")
 
@@ -171,5 +239,6 @@ def register(fw):
     terminal_commands.register("enable", cmd_enable, "启用插件: enable <插件名>", target="host")
     terminal_commands.register("disable", cmd_disable, "禁用插件: disable <插件名>", target="host")
     terminal_commands.register("config", cmd_config, "查看/修改配置: config [key] [value]")
-    terminal_commands.register("reload", cmd_reload, "重载插件: reload [插件名]", target="host")
+    terminal_commands.register("reload", cmd_reload, "重载插件: reload [插件名]",
+                               aliases=["rl"], target="host")
 

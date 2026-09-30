@@ -54,13 +54,18 @@ SQLite 路径不可写等）时框架不会因此无法启动，而是自动降�
 - 调试模式适合无数据库的开发/联调环境，可真实验证查询/写入逻辑；
   生产或常规部署请使用 SQLite / MySQL（性能、事务、并发能力均更强）。
   但它性能低、无真实事务与并发保证，**仅限开发调试，生产必须用 sqlite/mysql**；
+- 行集内存缓冲：行集常驻内存，读写不再逐次全量解析/重写 JSON 文件；
+  写入先进缓冲，按 `database.debug_flush_ms`（毫秒，默认 `1000`，`0`=逐次
+  同步落盘）由后台线程合并落盘，正常关停/进程退出兜底全量落盘（进程被强杀
+  最多丢最近一个刷盘间隔的写入）；外部/手工改动 JSON 文件按 mtime 自动重载；
 - 框架感知：`framework.storage_mode`（`sqlite/mysql/file/debug`）与
   `framework.db_debug_mode`（True 表示调试模式）暴露当前后端。
 
 ```yaml
 # config.yaml —— 调试模式（低性能模式：本地模拟 SQL）
 database:
-  type: debug        # 无需任何数据库依赖，行集落盘 data/db/sql/
+  type: debug         # 无需任何数据库依赖，行集落盘 data/db/sql/
+  debug_flush_ms: 1000  # 内存缓冲刷盘间隔（毫秒），0 = 每次写同步落盘
 ```
 
 ## 自动初始化

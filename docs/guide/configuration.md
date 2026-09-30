@@ -199,6 +199,29 @@ plugin:
 原理见 [插件加载与模块机制](../advanced/loader.md)。
 :::
 
+## 终端交互与运维面板（config.yaml）
+
+框架内置交互式终端（stdin）与运维面板命令 `tui`（原 `core_plugins/ops` 官方插件已删除，
+能力全部内置）。终端命令 `restart / reload(rl) / shell(sh) / dbdump / tui` 无需任何插件即可用。
+
+```yaml
+terminal:
+  enabled: true                # false = 不启动终端交互（stdin 非 TTY 时本会自动跳过）
+  panel_autostart: false       # 框架启动后自动进入 tui 面板（退出后回到普通终端）
+  panel_refresh: 1.0           # 面板刷新间隔（秒，最小 0.2）
+  panel_default_view: monitor  # 面板初始页：monitor/overview/plugins/messages/system
+
+# 运维命令行为（可选，缺省即生效）
+ops:
+  shell_timeout: 10            # shell 命令超时（秒）
+  max_output: 4000             # 命令输出截断长度
+```
+
+- `tui`：进入交互式运维面板（状态总览 / 插件管理重载 / 消息与系统日志 / 运维操作），
+  方向键或数字导航，SGR 鼠标点击两段式确认，框架停机时面板自动退出。
+- `restart`：`os.execv` 原地重启框架（双进程的 host 角色会拒绝，请走核心进程或 Web 面板 `/api/restart`）。
+- `dbdump`：复用 `tools/export_db_snapshot.py` 导出数据库快照。
+
 ## 日志（config.yaml）
 
 ```yaml

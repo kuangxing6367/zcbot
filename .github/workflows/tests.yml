@@ -33,7 +33,7 @@ jobs:
         run: python tests/test_smoke.py
       # pytest 用例与脚本式回归并存：显式列文件（其余 test_*.py 是模块级 sys.exit 的脚本，
       # 被 pytest 收集会 INTERNALERROR），test_smoke.py 本身两种方式兼容
-      - name: Pytest suite (smoke + html_assembler + event_buffer + qq_official + scheduler + db_regression + loop_fix_regression + file_store_fallback + sql_sim_debug)
+      - name: Pytest suite (smoke + html_assembler + event_buffer + qq_official + scheduler + db_regression + loop_fix_regression + file_store_fallback + sql_sim_debug + terminal_panel + llm)
         run: |
           pip install pytest
-          python -m pytest tests/test_smoke.py tests/test_html_assembler.py tests/test_event_buffer.py tests/test_qq_official.py tests/test_scheduler.py tests/test_db_regression.py tests/test_loop_fix_regression.py tests/test_file_store_fallback.py tests/test_sql_sim_debug.py -q
+          python -m pytest tests/test_smoke.py tests/test_html_assembler.py tests/test_event_buffer.py tests/test_qq_official.py tests/test_qq_official_extra.py tests/test_scheduler.py tests/test_db_regression.py tests/test_loop_fix_regression.py tests/test_file_store_fallback.py tests/test_sql_sim_debug.py tests/test_terminal_panel.py tests/test_llm_load.py tests/test_llm_core.py tests/test_message_contract.py -q

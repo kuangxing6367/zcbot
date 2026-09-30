@@ -7,7 +7,8 @@
   T2: 调试模式 SQL 模拟引擎核心语句：
       建表、INSERT/INSERT IGNORE、WHERE 过滤、COUNT/scalar/exists、
       空表聚合、UPDATE 自增、ORDER+LIMIT+OFFSET、DISTINCT、
-      GROUP BY DATE 聚合、持久化重载。
+      GROUP BY DATE 聚合、持久化重载、多列/数值 ORDER BY、
+      LIMIT offset,count、内存行集缓冲（合并落盘/close 兜底/外部改动重载）。
   T3: 不支持语法安全兜底：JOIN / 子查询 / INSERT..SELECT 等
       query→[]、execute→0，绝不静默返回错误数据或抛异常。
   T4: init_db 接入：database.type: debug → SqlSimEngine。
@@ -131,6 +132,38 @@ def test_sim_count_scalar_exists(tmp_path):
     assert eng.query_one("SELECT * FROM t WHERE id = 99") is None
 
 
+def test_sim_on_duplicate_key_update(tmp_path):
+    """ODKU：唯一键命中已有行 → 就地更新且 id 稳定，不再追加新行
+    （曾退化为核心同步命令重复插入/覆盖失效）。VALUES(col) 取待插入值。"""
+    eng = _make_engine(tmp_path)
+    eng.execute(
+        "CREATE TABLE commands (id INT AUTO_INCREMENT PRIMARY KEY, "
+        "plugin_name VARCHAR(64), handler VARCHAR(64), pattern VARCHAR(64), "
+        "alias VARCHAR(64), is_active TINYINT DEFAULT 1, "
+        "UNIQUE KEY uk_plugin_handler (plugin_name, handler))")
+    ins = ("INSERT INTO commands (plugin_name, handler, pattern, alias) "
+           "VALUES (%s, %s, %s, %s) "
+           "ON DUPLICATE KEY UPDATE pattern = VALUES(pattern), "
+           "alias = VALUES(alias)")
+    eng.execute(ins, ('p1', 'h1', '/start', '启动'))
+    first_id = eng.query_one("SELECT id FROM commands WHERE handler='h1'")['id']
+    eng.execute(ins, ('p1', 'h1', '/restart', '重启'))  # 命中 uk → 更新，id 不变
+    assert eng.count("SELECT COUNT(*) FROM commands") == 1
+    row = eng.query_one("SELECT * FROM commands WHERE handler='h1'")
+    assert row['pattern'] == '/restart' and row['alias'] == '重启'
+    assert row['id'] == first_id
+    assert row['is_active'] == 1  # 缺省列不被 ODKU 破坏
+
+    # 多行 VALUES 部分冲突：h1 更新、h2 新插入
+    eng.execute_many(
+        "INSERT INTO commands (plugin_name, handler, pattern) "
+        "VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE pattern = VALUES(pattern)",
+        [('p1', 'h1', '/x'), ('p2', 'h2', '/y')])
+    assert eng.count("SELECT COUNT(*) FROM commands") == 2
+    assert eng.query_one("SELECT pattern FROM commands WHERE handler='h2'")['pattern'] == '/y'
+    eng.close()
+
+
 def test_sim_update_increment_and_now(tmp_path):
     eng = _make_engine(tmp_path)
     eng.execute("CREATE TABLE c (id INT, cnt INT, ts DATETIME)")
@@ -162,6 +195,102 @@ def test_sim_order_limit_offset_distinct(tmp_path):
     eng.execute("INSERT INTO t VALUES (9, NULL)")
     rows = eng.query("SELECT id, tag FROM t ORDER BY tag ASC")
     assert rows[-1]['id'] == 9
+
+
+def test_sim_order_by_numeric_not_lexicographic(tmp_path):
+    """数值列排序按数值序而非字典序（曾按 str 排：'99' > '100'）"""
+    eng = _make_engine(tmp_path)
+    eng.execute("CREATE TABLE s (id INT, hit_count INT)")
+    for h in (100, 99, 9, 1000):
+        eng.execute("INSERT INTO s (hit_count) VALUES (%s)", (h,))
+    rows = eng.query("SELECT hit_count FROM s ORDER BY hit_count DESC")
+    assert [r['hit_count'] for r in rows] == [1000, 100, 99, 9]
+
+
+def test_sim_order_by_multi_column(tmp_path):
+    """多列 ORDER BY（曾静默丢弃第 2+ 列，WebUI 列表排序错乱）"""
+    eng = _make_engine(tmp_path)
+    eng.execute("CREATE TABLE c (id INT, plugin_name VARCHAR(20), priority INT)")
+    # 同 plugin 内 priority 乱序、跨 plugin 交错
+    data = [('b', 2), ('a', 5), ('b', 1), ('a', 1), ('b', 3)]
+    for i, (p, pri) in enumerate(data):
+        eng.execute("INSERT INTO c (plugin_name, priority) VALUES (%s, %s)", (p, pri))
+    rows = eng.query(
+        "SELECT plugin_name, priority FROM c ORDER BY plugin_name ASC, priority ASC")
+    assert [(r['plugin_name'], r['priority']) for r in rows] == [
+        ('a', 1), ('a', 5), ('b', 1), ('b', 2), ('b', 3)]
+    rows = eng.query(
+        "SELECT plugin_name, priority FROM c ORDER BY plugin_name ASC, priority DESC")
+    assert [(r['plugin_name'], r['priority']) for r in rows] == [
+        ('a', 5), ('a', 1), ('b', 3), ('b', 2), ('b', 1)]
+
+
+def test_sim_limit_offset_count_form(tmp_path):
+    """MySQL 变体 LIMIT offset, count（曾把 offset 当 count 用）"""
+    eng = _make_engine(tmp_path)
+    eng.execute("CREATE TABLE t (id INT)")
+    for i in range(10):
+        eng.execute("INSERT INTO t (id) VALUES (%s)", (i,))
+    rows = eng.query("SELECT id FROM t ORDER BY id LIMIT 3, 4")
+    assert [r['id'] for r in rows] == [3, 4, 5, 6]
+
+
+def test_sim_memory_buffer_coalesced_flush(tmp_path):
+    """内存行集缓冲：写入先进内存（读一致、表存在），flush/close 才落盘"""
+    eng = SqlSimEngine({'type': 'debug', 'fallback_dir': str(tmp_path),
+                        'debug_flush_ms': 60000})  # 60s：进程内绝不自动刷
+    eng.execute("CREATE TABLE t (id INT, name VARCHAR(20))")
+    eng.execute("INSERT INTO t VALUES (1, 'a')")
+    # 缓冲生效：内存读一致、table_exists 为真，但文件尚未落盘
+    assert eng.count("SELECT COUNT(*) FROM t") == 1
+    assert eng.table_exists('t') is True
+    assert not os.path.isfile(os.path.join(str(tmp_path), 'sql', 't.json'))
+    # 显式 flush → 落盘；新实例可从盘上重载
+    eng.flush()
+    assert os.path.isfile(os.path.join(str(tmp_path), 'sql', 't.json'))
+    eng.close()
+    eng2 = _make_engine(tmp_path)
+    assert eng2.count("SELECT COUNT(*) FROM t") == 1
+    eng2.close()
+
+
+def test_sim_memory_buffer_close_flushes_and_default_on(tmp_path):
+    """close() 兜底落盘 + 默认开启缓冲（未配置 debug_flush_ms）"""
+    eng = _make_engine(tmp_path)  # 默认 debug_flush_ms=1000
+    eng.execute("CREATE TABLE t (id INT, name VARCHAR(20))")
+    eng.execute("INSERT INTO t VALUES (1, 'a')")
+    eng.close()  # close 兜底全量落盘
+    with open(os.path.join(str(tmp_path), 'sql', 't.json'), 'r', encoding='utf-8') as f:
+        assert json.load(f)['rows'][0]['name'] == 'a'
+
+
+def test_sim_sync_write_through_mode(tmp_path):
+    """debug_flush_ms: 0 → 每次写同步落盘（旧行为）"""
+    eng = SqlSimEngine({'type': 'debug', 'fallback_dir': str(tmp_path),
+                        'debug_flush_ms': 0})
+    eng.execute("CREATE TABLE t (id INT, name VARCHAR(20))")
+    eng.execute("INSERT INTO t VALUES (1, 'a')")
+    assert os.path.isfile(os.path.join(str(tmp_path), 'sql', 't.json'))
+    eng.close()
+
+
+def test_sim_external_file_edit_reloads(tmp_path):
+    """外部/手工改动 JSON 文件：按 mtime 检测自动重载（脏表以内存为准）"""
+    eng = _make_engine(tmp_path)
+    eng.execute("CREATE TABLE t (id INT, name VARCHAR(20))")
+    eng.execute("INSERT INTO t VALUES (1, 'a')")
+    eng.flush()
+    # 外部直改文件（模拟另一进程/手工编辑）
+    p = os.path.join(str(tmp_path), 'sql', 't.json')
+    with open(p, 'r', encoding='utf-8') as f:
+        raw = json.load(f)
+    raw['rows'][0]['name'] = 'edited'
+    with open(p, 'w', encoding='utf-8') as f:
+        json.dump(raw, f)
+    st = os.stat(p)  # 确定性步进 mtime，防文件系统时间戳粒度撞车
+    os.utime(p, (st.st_atime + 5, st.st_mtime + 5))
+    assert eng.query_one("SELECT name FROM t WHERE id = 1")['name'] == 'edited'
+    eng.close()
 
 
 def test_sim_group_by_date_aggregate(tmp_path):

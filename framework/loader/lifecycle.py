@@ -236,9 +236,13 @@ class PluginLifecycleMixin:
         except Exception as e:
             logger.debug(f"清理插件字节码缓存异常: {e}")
 
-    def load_plugin(self, plugin_name: str) -> bool:
-        """加载单个插件，返回是否成功"""
-        plugin_path = os.path.join(self.plugins_dir, plugin_name)
+    def load_plugin(self, plugin_name: str, plugin_path: str = None) -> bool:
+        """加载单个插件，返回是否成功。
+
+        plugin_path 缺省为 plugins/<name>；市场插件声明 install_target=core_plugins
+        时会传 core_plugins/<name>，其余加载流程不变。
+        """
+        plugin_path = plugin_path or os.path.join(self.plugins_dir, plugin_name)
 
         # 将插件目录加入 sys.path
         if plugin_path not in sys.path:

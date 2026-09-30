@@ -32,6 +32,7 @@
 | [配置系统](./configuration.md) | 两份 yaml、插件开关、安全清单 |
 | [编写插件](./writing-plugins.md) | 手把手做出签到类完整插件 |
 | [多轮会话](./session.md) | `wait_for` / `create_session` |
+| [接入大模型（LLM）](./llm-chat.md) | 模型提供商总线、函数（工具）调用、Agent 循环 |
 | [最佳实践](./best-practices.md) | 不依赖 IM 的三类用法 + 写插件规范 |
 
 ### API（写插件时查）
@@ -63,9 +64,9 @@
 | 路径 | 作用 |
 | ---- | ---- |
 | `framework/` | 平台内核：加载、路由、事件、上下文、权限、数据库（无具体 IM 实现） |
-| `core_plugins/` | 官方插件：`onebot_adapter` / `rust_accel` / `telegram` / `discord` / `qq_official` / `ws_client` / `http_inject` / `http_api` / `webui` / `session` / `scheduler` / `image_renderer` / `html_assembler` |
+| `core_plugins/` | 官方插件：`llm_load` / `onebot_adapter` / `telegram` / `discord` / `qq_official` / `ws_client` / `http_inject` / `http_api` / `webui` / `session` / `scheduler` / `image_renderer` / `html_assembler` |
 | `core_plugins.yaml` | 官方插件开关与配置（启动自动同步） |
-| `plugins/` | 用户插件，每个一个子目录，入口 `main.py` |
+| `plugins/` | 用户插件，每个一个子目录，入口 `main.py`（`llm_core` 由 `llm_load` 自动释放到这里） |
 | `data/` | 日志、数据库、`plugins_dat/` 插件私有数据（长期保留） |
 | `tests/` | 自测脚本 |
 
