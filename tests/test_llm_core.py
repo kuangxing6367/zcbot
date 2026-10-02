@@ -692,6 +692,31 @@ def test_chat_gates():
     return "对话闸门拦截/放行/容错符合预期"
 
 
+def test_persona_override():
+    """会话级人格：persona 优先于全局 system_prompt，落盘可恢复"""
+    m = mods()
+    hist = m['history']
+    d = os.path.join(_TMP, 'persona_test')
+    key = hist.session_key('bot1', 111, 222)
+
+    store = hist.ConversationStore(system_prompt='默认人格', persist=hist.SessionPersist(d))
+    conv = store.get(key)
+    assert conv.effective_prompt == '默认人格'
+    conv.persona = '猫娘模式'
+    conv.append({'role': 'user', 'content': 'hi'})
+    assert conv.effective_prompt == '猫娘模式'
+    req = conv.as_request()
+    assert req[0] == {'role': 'system', 'content': '猫娘模式'}
+
+    # 模拟重启：persona 从磁盘恢复
+    store2 = hist.ConversationStore(system_prompt='默认人格', persist=hist.SessionPersist(d))
+    conv2 = store2.get(key)
+    assert conv2.persona == '猫娘模式'
+    conv2.persona = ''
+    assert conv2.effective_prompt == '默认人格'
+    return "人格覆盖/恢复默认/落盘恢复符合预期"
+
+
 def cleanup():
     if _TMP and os.path.isdir(_TMP):
         shutil.rmtree(_TMP, ignore_errors=True)
@@ -717,6 +742,7 @@ if __name__ == '__main__':
         test_trigger_policy,
         test_split_text_sentences,
         test_chat_gates,
+        test_persona_override,
     ]
     failed = 0
     try:

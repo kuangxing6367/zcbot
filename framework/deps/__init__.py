@@ -16,7 +16,9 @@ import os
 import shutil
 import subprocess
 import sys
-import yaml
+
+# yaml 延迟导入：main.py 启动自检（装依赖前）会经 framework.deps.pip 走到本包，
+# 此时 pyyaml 尚未安装，顶层 import 会让自检安装器自身崩溃
 
 logger = logging.getLogger('zcbot')
 
@@ -87,6 +89,7 @@ class PluginDepsMixin:
         code_yaml_path = os.path.join(self.plugins_dir, plugin_name, 'plugin.yaml')
         if os.path.isfile(code_yaml_path):
             try:
+                import yaml
                 with open(code_yaml_path, 'r', encoding='utf-8') as f:
                     code_yaml = yaml.safe_load(f) or {}
                 code_deps = code_yaml.get('dependencies', {}).get('python', []) if isinstance(code_yaml, dict) else []

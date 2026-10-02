@@ -5,6 +5,12 @@
     "default": "你是跑在聊天软件里的助手。回答要用口语，别写小作文，能用工具就直接用，别跟用户复述你要调用什么工具。",
     "hint": "决定模型的整体人设与说话方式；改完对新消息立即生效"
   },
+  "personas": {
+    "description": "人格预设列表（JSON 数组，配合 /llm人格 命令）",
+    "type": "text",
+    "default": "[]",
+    "hint": "每项：{\"id\":\"cat\",\"name\":\"猫娘\",\"prompt\":\"你是...\"}。会话内用 /llm人格 <id> 切换，/llm人格 reset 恢复默认"
+  },
   "trigger": {
     "description": "对话命令前缀",
     "type": "string",

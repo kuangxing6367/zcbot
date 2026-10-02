@@ -203,7 +203,13 @@ def media_ref(segment: dict) -> str:
     """
     if not isinstance(segment, dict):
         return ''
-    data = segment.get('data') or {}
+    data = segment.get('data')
+    if not isinstance(data, dict):
+        # 允许直接传 data 字典（ev.first_voice 返回的就是 data），
+        # 省得调用方还得回头去 segments 里捞整个段
+        if 'type' in segment:
+            return ''
+        data = segment
     for key in _REF_KEYS:
         val = data.get(key)
         if val is None or val == '':
