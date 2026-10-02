@@ -38,18 +38,8 @@ jobs:
             renamed: zcbot_render.pyd
             setup_python: 'true'
             python_arch: x86
-          - platform: linux-x86_64
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            produced: libzcbot_render.so
-            renamed: zcbot_render.so
-            setup_python: 'false'
-          - platform: linux-aarch64
-            os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            produced: libzcbot_render.so
-            renamed: zcbot_render.so
-            setup_python: 'false'
+    # Linux 原生 runner（ubuntu-latest glibc 2.3x+）产出的 .so 无法在
+    # Anolis/CentOS 等旧 glibc(2.28) 环境加载，Linux 平台全部走下方 zigbuild 2.17
     steps:
       - uses: actions/checkout@v4
 
@@ -100,6 +90,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - platform: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            glibc: '2.17'
+          - platform: linux-aarch64
+            target: aarch64-unknown-linux-gnu
+            glibc: '2.17'
           - platform: linux-i686
             target: i686-unknown-linux-gnu
             glibc: '2.17'
