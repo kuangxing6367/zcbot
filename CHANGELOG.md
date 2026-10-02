@@ -26,12 +26,20 @@
 
 ---
 
-## 开发中（v1.9.0，未发布）
+## v1.8.1（2026-10-02）
 
-> 主题：**运维终端能力内置化（删 `ops` 官方插件）+ LLM 子系统（装载器 + zip 载荷）+ 事件按会话分片并行 + debug 存储内存缓冲 + 插件市场声明式安装位**。
+> 主题：**运维终端能力内置化（删 `ops` 官方插件）+ LLM 子系统（装载器 + zip 载荷 + 多人格）+ 事件按会话分片并行 + debug 存储内存缓冲 + 插件市场声明式安装位 + 接入端契约收尾与三处线上修复**。
 
 ### 新功能
-- **LLM 子系统（可选，默认关）**：新增官方插件 `core_plugins/llm_load`（装载器）+ 用户插件 `plugins/llm_core`（对话核心）。`llm_core` 源码真源在 `core_plugins/llm_load/src/llm_core/`，经 `python tools/build_llm_payload.py --write` 打包为 `llm_core.zip` 载荷，框架启动时由 `llm_load` 按 manifest 校验/释放/自愈到 `plugins/llm_core`（运行时目录改动会被 manifest 抹平）。提供模型提供商总线、函数（工具）调用与 Agent 循环；插件经 `fw.services.get('llm_core')` 取服务、`@svc.tool(...)` 注册函数、`svc.register_provider(...)` 注册提供商。文档见 `docs/guide/llm-chat.md`、`docs/llm/plugins.md`。
+- **接入端契约与规范消息段**：内核新增 `framework/messaging/segments.py`（规范消息段）与 `framework/messaging/contract.py`（能力常量 / 事件补齐 / 契约自检）。各协议对"一条消息"的表达差异（OneBot 的 `record`、Telegram 的 `photo[]/voice`、Discord 的 `attachments[]`、QQ 官方的 `msg_type`+`media`）在内核收口为一套规范段：`ev.segments` 恒为 `[{'type','data'}]`，语音一律叫 `voice`，文件引用统一用 `ev.media_url(seg)` 取。插件不再需要翻 `event['raw']` 摸底层协议。
+  - `ProtocolAdapter` 新增可选钩子：`capabilities()`（能力自述）/ `normalize_incoming()`（原生→规范）/ `to_native()`（规范→原生）/ `finalize_event()`（事件补齐），基类均有兜底，最小接入端不实现也能跑。
+  - 能力查询 `adapter.supports('voice','in')` 让插件"问了再发"，而不是发出去才发现不支持。
+  - 通知事件同时广播协议原名与规范名（如 `notice.group_increase` 与 `notice.group_member_increase`），`notice_type` 保持原名不动、规范名放 `notice_type_canonical`，既有订阅不受影响。
+  - 接入端注册时自动跑 `validate_adapter()`，不合规直接点名告警（只告警不拦人）。
+  - Telegram / Discord 适配器的附件不再被压成纯文本，改为产出真实消息段；Telegram 出站升级为通用媒体发送（图/语音/视频/文件/贴纸）。
+  - 文档见 `docs/guide/adapter-contract.md`，测试 `tests/test_message_contract.py`（80 条）。
+  - 收尾：`media_ref()` 同时接受整个消息段或裸 `data` 字典（容错，测试 `test_media_ref_accepts_data_or_segment`）；WebUI 插件 API 路由与文档同步微调。
+- **LLM 子系统（可选，默认关）**：新增官方插件 `core_plugins/llm_load`（装载器）+ 用户插件 `plugins/llm_core`（对话核心）。`llm_core` 源码真源在 `core_plugins/llm_load/src/llm_core/`，经 `python tools/build_llm_payload.py --write` 打包为 `llm_core.zip` 载荷，框架启动时由 `llm_load` 按 manifest 校验/释放/自愈到 `plugins/llm_core`（运行时目录改动会被 manifest 抹平）。提供模型提供商总线、函数（工具）调用与 Agent 循环；插件经 `fw.services.get('llm_core')` 取服务、`@svc.tool(...)` 注册函数、`svc.register_provider(...)` 注册提供商。文档见 `docs/guide/llm-chat.md`、`docs/llm/plugins.md`。**v1.8.1 补充：多人格预设**——`_conf_schema.json` 新增 `personas` 数组（每项 `{id,name,prompt}`），会话内 `/llm人格 <id>` 即时切换、`/llm人格 reset` 恢复默认，人格提示词按会话持久生效（测试 `test_persona_override`）。
 - **事件按会话分片并行**：`event_queue.workers > 1` 时启用单一分发器（`_event_distributor_loop`）从事件缓冲逐条取事件、盖内部唯一代号 `_seq`，按会话键（群/用户/bot）哈希投入对应 worker 队列——同群/同用户事件 FIFO 保序，跨会话并行处理；`workers=1` 时 worker 直连缓冲，零额外开销。停机以 `_event_pipeline_empty`（三层缓冲 + 全部分片队列）判定，`wait_drained` 的 join 语义覆盖分片在途事件，不丢。
 - **插件市场声明式安装位**：`plugin.yaml` 同时声明 `install_target: core_plugins` 且 `official: true` 的市场插件可安装进 `core_plugins/`（其余默认 `plugins/`）。框架内置官方插件名（`config._CORE_PLUGIN_SCHEMA` 键）受保护，禁止经市场覆盖同名目录；下载/加载失败均回滚备份或清理残件。
 
@@ -43,6 +51,9 @@
 - **debug 模式支持 `ON DUPLICATE KEY UPDATE`（upsert）**：`_exec_create` 解析并持久化 `PRIMARY KEY` / `UNIQUE KEY` 冲突键，`_exec_insert` 据此定位冲突行就地更新（`VALUES(col)` 取待插入值，支持 `IF(cond,a,b)`、`NOW()`、`col=col±N`），命令同步与用户/群/成员统计写库在调试模式真正去重、ID 稳定；解析失败的 ODKU 子句安全退化为普通 INSERT，绝不因不可解析的表达式丢整行插入。配套：调试模式启动即执行 `init.sql` 的 `CREATE TABLE`（`_init_debug`，幂等、不重复跑种子 INSERT），使核心表带上唯一键元数据，避免表由 `INSERT` 惰性建出而无唯一键导致重复累积。
 
 ### 修复 / 健壮性
+- **qq_official WebSocket 鉴权修复（线上致命）**：Identify/Resume 的 `d.token` 由错误的 `Bot {app_id}.{access_token}` 改为 QQ 官方网关要求的 `QQBot {access_token}`——原格式每轮 Identify 均被网关以 op 9 + 关闭码 4004 拒绝，适配器清 session 后约 5.5s 无限重连并最终触发 gateway 接口频率限制（code 100017），始终进不了 READY。HTTP API 侧格式本就正确，仅长连接受影响。
+- **启动自检安装器死锁修复**：`main.py` 缺依赖自检在安装前导入 `framework.loader`，而其依赖链顶层 `import yaml`——缺的恰是 pyyaml，自检器自身先崩、永远走不到安装步骤。改为只导入纯标准库的 `framework.deps.pip`，并把 `framework/deps/__init__.py` 的顶层 `import yaml` 移到唯一使用点延迟导入；模拟无 pyyaml/psutil 环境验证导入链畅通。
+- **image_renderer 文本基线 bug 修复**：原生渲染 `draw_text` 的 ymin 符号写反（正确为 `baseline - ymin - height`），导致文字纵向定位偏移；同步重编七平台原生产物，CI 全部 Linux 平台改走 cargo-zigbuild、以 glibc 2.17 为兼容底线（修复 ubuntu-latest 产物要求 GLIBC_2.30 无法在 Anolis 8 / CentOS 系旧 glibc 加载的问题），产物已随本版回填仓库。
 - **`/llm` 未配置提供商时回可读提示**：`handle_chat` 捕获 `ProviderError`，回一句「（LLM 未就绪）没有可用的模型提供商…」引导去面板配置 Key，而非让命令处理器抛异常静默无响应。
 - **运维面板 reload 走宿主进程转发**：`framework/terminal/panel.py` 的 `_call_command` 按命令 `target` 路由，`target: host`（如 `restart`/`reload`）在核心进程经 IPC `request_host('terminal.exec', …)` 转发到宿主执行，`both` 先本地再宿主，修复双进程模型下面板重载只作用于核心进程、宿主插件不刷新的缺口。
 - **文档与注释纠偏**：`llm_load`/`llm_core` 载荷释放的触发条件由「加 `__version__` 版本号」更正为「按逐文件 md5 比对，内容变化即生效」，同步修正 `build_llm_payload.py` 提示、两处 README 与 `docs/guide/llm-chat.md`；`providers.py` 示例导入改为运行时可用的 `from plugin_llm_core.providers import …`；`/llmtools` 输出补列每个工具的必填参数，便于核对 schema 推导。
