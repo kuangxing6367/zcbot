@@ -82,6 +82,8 @@ class Conversation:
         self.updated_at = time.time()
         self.compressed_times = 0
         self.total_calls = 0
+        # 会话级人格覆盖（空 = 用全局 system_prompt）
+        self.persona = ''
         # 由 ConversationStore 注入：任何变更写穿到磁盘（None = 不持久化）
         self._persist_cb = None
 
@@ -121,11 +123,16 @@ class Conversation:
         self.updated_at = time.time()
         self._persist()
 
+    @property
+    def effective_prompt(self) -> str:
+        """实际生效的系统提示词：会话人格优先，全局兜底"""
+        return self.persona or self.system_prompt
+
     def as_request(self) -> List[dict]:
         """导出给 provider 的消息数组（system 排头）"""
         out: List[dict] = []
-        if self.system_prompt:
-            out.append({'role': 'system', 'content': self.system_prompt})
+        if self.effective_prompt:
+            out.append({'role': 'system', 'content': self.effective_prompt})
         out.extend(self._drop_dangling_tool_calls(self._messages))
         return out
 
@@ -225,6 +232,7 @@ class SessionPersist:
                 'key': conv.key,
                 'saved_at': time.time(),
                 'compressed_times': conv.compressed_times,
+                'persona': conv.persona,
                 'messages': conv._messages,
             }
             tmp = self._path(conv.key) + '.tmp'
@@ -332,6 +340,7 @@ class ConversationStore:
         if not data:
             return
         conv._messages = [m for m in data['messages'] if isinstance(m, dict)]
+        conv.persona = str(data.get('persona') or '')
         conv.compressed_times = int(data.get('compressed_times') or 0)
         conv._enforce_limits()
         if data.get('saved_at'):

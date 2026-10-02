@@ -98,6 +98,14 @@ def test_pick_and_first():
     check('data_list', S.data_list(segs, 'voice') == [{'file': 'a.silk', 'duration': 3}])
 
 
+def test_media_ref_accepts_data_or_segment():
+    """media_ref 同时接受整个消息段或裸 data 字典（ev.first_voice 返回的就是 data）"""
+    check('裸 data 字典', S.media_ref({'file': 'http://x/a.png'}) == 'http://x/a.png')
+    check('裸 data file_id', S.media_ref({'file_id': 'TG123'}) == 'TG123')
+    check('整段', S.media_ref({'type': 'image', 'data': {'file': 'a.png'}}) == 'a.png')
+    check('data 非字典不炸', S.media_ref({'type': 'text', 'data': 'oops'}) == '')
+
+
 # ─────────────────────────────────────────────────────
 # 2. 接入端：Telegram
 # ─────────────────────────────────────────────────────

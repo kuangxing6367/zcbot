@@ -828,7 +828,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             raise RuntimeError('未配置 app_id / app_secret')
         url = await self._fetch_gateway()
         token = self._access_token
-        identify_token = f'Bot {self.app_id}.{token}'
+        identify_token = f'QQBot {token}'
         async with websockets.connect(
             url, max_size=8 * 1024 * 1024, ping_interval=20, ping_timeout=20,
         ) as ws:

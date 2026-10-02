@@ -153,6 +153,10 @@ ctx.send_msg(group_id=gid, message=f"[CQ:reply,id={msg_id}] 收到")
 ```
 
 > CQ 码是 OneBot 11 的写法。其它平台图片语法不同，但**文本发送接口不变**。
+>
+> 需要跨协议统一处理图片/语音/视频的插件，请改用规范消息段：
+> `ev.images` / `ev.voices` / `ev.videos` / `ev.files` 在所有接入端上都能读到，
+> 详见 [接入端契约与规范消息](./adapter-contract.md)。
 
 ### 群管 / 查询（依赖 OneBot 接入端）
 

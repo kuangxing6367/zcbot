@@ -56,6 +56,10 @@ def register(ctx):
             loaded = framework.plugin_loader.get_loaded_plugins()
             for r in rows:
                 r['is_loaded'] = r['plugin_name'] in loaded
+                # 核心插件/服务型插件不参与心跳，status 会一直停在初始 stopped；
+                # 只要实际已加载就按运行中显示（error/oom 等异常状态仍原样保留）
+                if r['is_loaded'] and r.get('status') in (None, '', 'stopped'):
+                    r['status'] = 'running'
                 r['dir_missing'] = not os.path.isfile(
                     os.path.join(framework.plugin_loader.plugins_dir, r['plugin_name'], 'main.py')
                 )

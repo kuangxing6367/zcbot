@@ -66,7 +66,7 @@ class WebServer:
             else:
                 logger.error(f"Web UI 异常: {e}")
 
-def stop(self):
+    def stop(self):
         """停止 Web 服务器（真正关闭监听，避免优雅停机后端口残留）"""
         self._running = False
         srv = self._server

@@ -93,8 +93,9 @@ def _check_and_install_deps():
     print(f"[自检] 检测到 {len(missing)} 个缺失依赖，正在自动安装...")
     print(f"[自检] 缺失: {', '.join(missing)}")
 
-    # 走清华源 + 自动回退
-    from framework.loader import pip_install_requirements
+    # 只走 framework.deps.pip（纯标准库），不能 import framework.loader ——
+    # loader/base 顶层 import yaml，缺的正是它，会让自检安装器自身崩溃
+    from framework.deps.pip import pip_install_requirements
     result = pip_install_requirements(sys.executable, req_file, timeout=300)
     if result['success']:
         print(f"[自检] 依赖安装完成（镜像: {result['mirror']}）")

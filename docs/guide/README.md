@@ -33,6 +33,7 @@
 | [编写插件](./writing-plugins.md) | 手把手做出签到类完整插件 |
 | [多轮会话](./session.md) | `wait_for` / `create_session` |
 | [接入大模型（LLM）](./llm-chat.md) | 模型提供商总线、函数（工具）调用、Agent 循环 |
+| [接入端契约与规范消息](./adapter-contract.md) | 消息段跨协议统一、能力自述、通知事件命名 |
 | [最佳实践](./best-practices.md) | 不依赖 IM 的三类用法 + 写插件规范 |
 
 ### API（写插件时查）

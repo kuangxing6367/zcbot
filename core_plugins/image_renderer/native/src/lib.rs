@@ -347,13 +347,14 @@ pub(crate) fn draw_text(
                     continue;
                 }
                 let bx = cx + m.xmin + px;
-                // fontdue 0.9 Metrics.ymin = 位图最底边相对基线的偏移（像素坐标 y 向下为正：
-                // 无降部字形贴基线 → 0，有降部（如 g/y）→ 正值）。
-                // 位图顶的屏幕 y = baseline + ymin - height，第 py 行（py=0 为顶）：
-                //   by = baseline + ymin - height + py
-                // 注意：此前误用 ±ymin 直接作为"顶偏移"（实际 ymin 恒为 0 且不含高度），
-                // 导致所有字形整体下移约一个行高、越靠下越明显（这正是 pyd 文本位置错误的根因）。
-                let by = baseline_y + m.ymin - m.height as i32 + py;
+                // fontdue 0.9 Metrics：y 轴向上为正，ymin 为位图底边相对基线的偏移
+                // （贴基线字形 → 0，降部字形如 g/y → 负值，引号/星号 → 正值），
+                // 位图顶边 = ymin + height。屏幕 y 向下为正，第 py 行（py=0 为顶）：
+                //   by = baseline - (ymin + height) + py
+                // 注意：此前误写为 baseline + ymin - height + py，等价于把符号写反，
+                // 仅在 ymin=0（贴基线字形）时碰巧正确；ymin≠0 的字形（g/y/p/q、
+                // 引号、星号等）整体被抬高 2*|ymin|，出现"上标"错位（pyd 基线 bug 根因）。
+                let by = baseline_y - m.ymin - m.height as i32 + py;
                 if bx < 0 || by < 0 || bx >= width as i32 || by >= height as i32 {
                     continue;
                 }

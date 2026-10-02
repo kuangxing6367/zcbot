@@ -47,6 +47,7 @@ export default defineConfig({
             { text: '编写插件', link: '/guide/writing-plugins' },
             { text: '多轮会话', link: '/guide/session' },
             { text: '接入大模型（LLM）', link: '/guide/llm-chat' },
+            { text: '接入端契约与规范消息', link: '/guide/adapter-contract' },
             { text: '最佳实践', link: '/guide/best-practices' }
           ]
         }

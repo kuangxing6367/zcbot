@@ -192,6 +192,88 @@ def _providers_config() -> List[dict]:
     return out
 
 
+def _personas_config() -> Dict[str, dict]:
+    """人格列表：[{id, name, prompt}]，id 做命令参数，name 做展示。返回 {id: 项}"""
+    out = {}
+    for item in _cfg_list('personas'):
+        if not isinstance(item, dict):
+            continue
+        pid = str(item.get('id') or '').strip()
+        prompt = str(item.get('prompt') or '').strip()
+        if pid and prompt:
+            out[pid] = {'name': str(item.get('name') or pid),
+                        'prompt': prompt}
+    return out
+
+
+def _persona_line(pid: str) -> str:
+    """当前会话的人格状态描述"""
+    conv = _current_conv()
+    cur = conv.persona if conv is not None else ''
+    cur_name = _personas_config().get(cur, {}).get('name', cur or '默认')
+    return f"当前人格：{cur_name}" + (f"（{cur}）" if cur else '')
+
+
+def _current_conv():
+    """命令场景里取当前会话（取不到返回 None）"""
+    try:
+        source = getattr(ctx, '_current_bot', None) or ''
+        ev = _persona_event
+        if ev is None:
+            return None
+        return _Svc.store.get(session_key(
+            source, ev.group_id if ev.is_group else None, ev.user_id), create=False)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# /llm人格 处理过程中暂存的事件（纯命令流，无并发风险）
+_persona_event = None
+
+
+async def handle_persona(event, match):
+    """查看/切换当前会话人格：/llm人格 列表 | /llm人格 <id> | /llm人格 reset"""
+    global _persona_event
+    if ctx is None or _Svc is None:
+        return
+    _persona_event = event
+    try:
+        arg = ((match.group(1) if match else '') or '').strip()
+        personas = _personas_config()
+        if not arg or arg in ('list', '列表'):
+            lines = ['人格列表：', '默认（全局 system_prompt）']
+            lines += [f"{pid} — {p['name']}" for pid, p in personas.items()]
+            lines += ['', _persona_line(arg)]
+            lines += ['', '切换：/llm人格 <id>；恢复默认：/llm人格 reset']
+            await ctx.asend_msg(user_id=event.user_id,
+                                group_id=event.group_id if event.is_group else None,
+                                message='\n'.join(lines))
+            return
+        if arg in ('reset', '默认'):
+            conv = _Svc.store.get(session_key(
+                getattr(ctx, '_current_bot', None) or '',
+                event.group_id if event.is_group else None, event.user_id))
+            conv.persona = ''
+            await ctx.asend_msg(user_id=event.user_id,
+                                group_id=event.group_id if event.is_group else None,
+                                message="已恢复默认人格")
+            return
+        if arg not in personas:
+            await ctx.asend_msg(user_id=event.user_id,
+                                group_id=event.group_id if event.is_group else None,
+                                message=f"没有人格 [{arg}]，用 /llm人格 查看列表")
+            return
+        conv = _Svc.store.get(session_key(
+            getattr(ctx, '_current_bot', None) or '',
+            event.group_id if event.is_group else None, event.user_id))
+        conv.persona = arg
+        await ctx.asend_msg(user_id=event.user_id,
+                            group_id=event.group_id if event.is_group else None,
+                            message=f"已切换人格：{personas[arg]['name']}（{arg}）")
+    finally:
+        _persona_event = None
+
+
 # ── 服务门面 ──────────────────────────────────────────────────
 
 class LLMCoreService:
@@ -721,6 +803,7 @@ def register(plugin_ctx):
     ctx.command("/llmtool", handle_tool_toggle, require_admin=True,
                 description="开关某个工具: /llmtool <名> on|off")
     ctx.command("/llmstatus", handle_status, description="查看 LLM 子系统概况")
+    ctx.command("/llm人格", handle_persona, alias="/llmpersona", description="查看/切换当前会话人格")
 
     # 8. 原始消息（截图片）与自由对话
     ctx.on_raw_message(on_raw)
