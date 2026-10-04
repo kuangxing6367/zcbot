@@ -4,18 +4,23 @@
 
 ## 硬事实
 
-- 事件驱动的 IM 平台:内核(framework/) + 官方插件(core_plugins/) + 用户插件(plugins/)
-- Python 3.10+,启动:`python main.py`;默认无 OneBot 代码,OneBot 11 只是默认接入端
+- 通用化 IM 平台(协议无关):内核(framework/) + 官方插件(core_plugins/) + 用户插件(plugins/)
+- Python 3.10+,启动:`python main.py`;内核不含任何协议接入代码;OneBot 11 只是**可选接入端之一**,不预设任何接入端
+- **官方插件默认全部 `enabled: false`**(发现即禁用),需显式启用:`core_plugins.yaml` 改 true 或 `python tools/scan_core_plugins.py --enable <名>`
 - 数据在 `data/`(db/logs/plugins_dat),代码目录更新会被覆盖,数据禁止写代码目录
 - 配置两份:`config.yaml`(全局) + `core_plugins.yaml`(官方插件开关,启动自动同步)
-- 适用版本 v1.7.0;文档站 docs/(VitePress)
+- 适用版本 v1.8.2;文档站 docs/(VitePress)
+
+## 内核设计哲学
+
+改 `framework/` 或写扩展前,先读 [docs/llm-framework.md](docs/llm-framework.md) 顶部的「内核设计哲学」段,以及人类版 [docs/core-philosophy.md](docs/core-philosophy.md)。核心一条:**扩展功能必须走 hook/服务注册,禁止往内核塞业务或特判某个接入端**。
 
 ## 按任务加载
 
 | 任务 | 读 |
 | ---- | ---- |
-| 写插件 / 调插件 API | [docs/llm/plugins.md](docs/llm/plugins.md) |
-| 改框架 / 找模块 / 理解事件流 | [docs/llm/framework.md](docs/llm/framework.md) |
-| 跑测试 / 排查报错 / 避坑 | [docs/llm/debugging.md](docs/llm/debugging.md) |
+| 写插件 / 调插件 API | [docs/llm-plugins.md](docs/llm-plugins.md) |
+| 改框架 / 找模块 / 理解事件流 | [docs/llm-framework.md](docs/llm-framework.md) |
+| 跑测试 / 排查报错 / 避坑 | [docs/llm-debugging.md](docs/llm-debugging.md) |
 
-人类文档:[README.md](README.md) · [docs/](docs/guide/)
+人类文档:[README.md](README.md) · [docs/](docs/index.md)

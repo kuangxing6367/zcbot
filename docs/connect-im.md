@@ -2,7 +2,7 @@
 
 你想让 ZCBOT 连上一个真实的聊天软件，让机器人能收发消息——这就是这篇要解决的问题。
 
-框架本身协议无关：「消息怎么来、怎么发」全由**接入端插件**负责。默认开的是 `onebot_adapter`（OneBot 11，常用来接 QQ）；热路径性能敏感时可换 `rust_accel`（同一协议的 Rust 加速接入端，默认关，见下表）；另外还有 QQ 官方、Telegram、Discord、出站 WS 等，默认关闭，填好凭证再开。
+框架本身协议无关：「消息怎么来、怎么发」全由**接入端插件**负责。所有接入端默认都是**关闭**的，需显式启用；最常用的是 `onebot_adapter`（OneBot 11，常用来接 QQ）；热路径性能敏感时可换 `rust_accel`（同一协议的 Rust 加速接入端，默认关，见下表）；另外还有 QQ 官方、Telegram、Discord、出站 WS 等，同样默认关闭，填好凭证再开。
 
 :::tip 先确认要不要读完
 框架能启动、命令能注册、定时任务能跑——**都不需要**接聊天平台。
@@ -29,7 +29,7 @@
 
 | 插件 | 平台 | 怎么开（`core_plugins.yaml`） |
 | ---- | ---- | ------------------------------ |
-| `onebot_adapter` | QQ（经 NapCat 等） | 默认已开；设 `access_token` 更安全 |
+| `onebot_adapter` | QQ（经 NapCat 等） | 默认关闭，需启用；设 `access_token` 更安全 |
 | `rust_accel` | QQ（同上，OneBot 11） | Rust 加速接入端（默认关）：`enabled: true`；启用前先停 `onebot_adapter`，监听独立端口 6831 |
 | `qq_official` | QQ 官方机器人 | `enabled: true` + `app_id` / `app_secret` |
 | `telegram` | Telegram | `enabled: true` + `token`（找 @BotFather 要） |
@@ -128,7 +128,7 @@ Lagrange、go-cqhttp 等同理：填同一个 `ws://地址` 和令牌即可。
 3. 给机器人发 `/echo 你好`
 
 Discord、QQ 官方同理：**开插件 → 填 token/app 凭证 → 重启 → 发消息自测**。
-详细字段说明见 [配置系统 · 各接入端](./configuration.md)。
+详细字段说明见 [配置系统 · 各接入端](configuration.md)。
 
 ---
 
@@ -156,7 +156,7 @@ ctx.send_msg(group_id=gid, message=f"[CQ:reply,id={msg_id}] 收到")
 >
 > 需要跨协议统一处理图片/语音/视频的插件，请改用规范消息段：
 > `ev.images` / `ev.voices` / `ev.videos` / `ev.files` 在所有接入端上都能读到，
-> 详见 [接入端契约与规范消息](./adapter-contract.md)。
+> 详见 [接入端契约与规范消息](adapter-contract.md)。
 
 ### 群管 / 查询（依赖 OneBot 接入端）
 
@@ -195,7 +195,7 @@ async def raw_handler(raw_event, bot_name):
 
 ## 下一步
 
-- [编写插件](./writing-plugins.md) —— 业务怎么写
-- [开始使用](./getting-started.md) —— 不接 IM 的两条路线
-- [配置系统](./configuration.md) —— 各接入端完整字段
-- [架构 · 事件总线](../advanced/architecture.md) —— 事件在框架里怎么流
+- [编写插件](writing-plugins.md) —— 业务怎么写
+- [开始使用](getting-started.md) —— 不接 IM 的两条路线
+- [配置系统](configuration.md) —— 各接入端完整字段
+- [架构 · 事件总线](architecture.md) —— 事件在框架里怎么流

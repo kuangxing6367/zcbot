@@ -312,7 +312,7 @@ curl -X POST http://127.0.0.1:8901/hook \
 | ---- | ------ | ---- |
 | **实时推送**（OneBot/Telegram） | 长连接 / WebSocket 收到消息 | 最常用 |
 | **Webhook 接收**（HTTP/Web 回调） | 外部 POST | 见上文示例 |
-| **主动轮询 / 定时**（cron/MQTT） | 定时器 / 订阅 | 见[最佳实践](../../guide/best-practices.md)场景一 |
+| **主动轮询 / 定时**（cron/MQTT） | 定时器 / 订阅 | 见[最佳实践](best-practices.md)场景一 |
 
 统一入口都是 `framework.dispatch_event(event)`。**事件入核后插件侧形态一致**（协议专有动作仍按各端能力实现）。
 
@@ -414,4 +414,4 @@ http(s) 与本地路径；配置块在 `core_plugins.yaml` 对应段（均默认
 
 ---
 
-> 想在接入端之外插入自己的行为？见 [扩展点（Hook 系统）](./hooks.md)：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个运行环节挂接逻辑。
+> 想在接入端之外插入自己的行为？见 [扩展点（Hook 系统）](hooks.md)：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个运行环节挂接逻辑。

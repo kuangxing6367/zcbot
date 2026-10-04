@@ -27,18 +27,18 @@
 ```yaml
 core_plugins:
   onebot_adapter:          # 合并后主配置段名为 onebot
-    enabled: true
+    enabled: false         # 默认关闭，需改为 true 启用
     listen_host: 0.0.0.0
     listen_port: 6830      # 反向 WebSocket 服务端端口（等 OneBot 客户端连入）
     access_token: ''       # 接入令牌，公网必须设非空强随机值
   webui:                   # 合并后主配置段名为 web
-    enabled: true
+    enabled: false         # 默认关闭，需改为 true 启用
     host: 127.0.0.1
     port: 8080             # Web 管理后台端口
   session:
-    enabled: true          # 多轮会话（ctx.wait_for/create_session）
+    enabled: false         # 默认关闭，需改为 true 启用；多轮会话（ctx.wait_for/create_session）
   scheduler:
-    enabled: true          # 定时任务（ctx.task）
+    enabled: false         # 默认关闭，需改为 true 启用；定时任务（ctx.task）
   http_inject:             # HTTP 事件注入接入端（默认关闭）
     enabled: false
     host: 127.0.0.1
@@ -57,7 +57,7 @@ core_plugins:
     app_id: ''
     app_secret: ''
     bot_name: qq_official
-    intents: 33554432      # GROUP_AND_C2C_EVENT
+    intents: 100663296     # QQ 官方默认意图（群/单聊等事件）
     reconnect_interval: 5
   telegram:                # Telegram（默认关闭，需 Bot Token）
     enabled: false
@@ -78,9 +78,11 @@ core_plugins:
     allow_db: false
 ```
 
-把某个插件的 `enabled` 改为 `false` 即禁用，**重启后生效**。关闭某个服务后，依赖它的能力
-（如会话、定时、API 调用）会不可用。`http_api`、`http_inject`、`ws_client`、
-`qq_official`、`telegram`、`discord` 涉及开端口、凭证或主动外连，**默认关闭**，需显式开启。
+把某个插件的 `enabled` 改为 `true` 即启用，**重启后生效**。关闭某个服务后，依赖它的能力
+（如会话、定时、API 调用）会不可用。**所有官方插件默认均为关闭（`enabled: false`）**，
+包括 `onebot_adapter` / `webui` / `session` / `scheduler` / `html_assembler`；需要哪个就把对应
+`enabled` 改为 `true`。其中 `http_api`、`http_inject`、`ws_client`、
+`qq_official`、`telegram`、`discord` 涉及开端口、凭证或主动外连，更需注意安全，需显式开启。
 
 > 提示：旧版本把开关写在 `config.yaml → core_plugins` 的写法仍能被识别（向后兼容，首次合并时迁移），
 > 但新配置请统一写到 `core_plugins.yaml`。
@@ -100,9 +102,9 @@ core_plugins:
 ```
 
 ZCBOT 作为 WebSocket **服务端**，由 NapCat / Lagrange 等 OneBot 实现端反向连接。
-客户端怎么配、连接怎么验证、插件里怎么发图片 / @ / 做群管，见 [对接 IM 平台](./connect-im.md)。
+客户端怎么配、连接怎么验证、插件里怎么发图片 / @ / 做群管，见 [对接 IM 平台](connect-im.md)。
 不用 OneBot 时可整体关闭该插件，改用 `http_inject` / `scheduler` 或自写接入端，
-见 [最佳实践](./best-practices.md)。
+见 [最佳实践](best-practices.md)。
 
 ## Web 管理后台（来自 webui）
 
@@ -112,7 +114,7 @@ web:
   host: 127.0.0.1         # 监听地址；0.0.0.0 = 监听所有网卡（公网可访问，务必配合令牌/白名单）
   port: 8080              # 监听端口
   session_timeout: 3600   # 登录会话超时时长（秒），同时也是会话 Token 有效期
-  enabled: true
+  enabled: false         # 由 core_plugins.webui.enabled 合并而来（默认 false）
   official_sidebar: true  # 是否显示官方默认侧边栏菜单
   sidebar:                # 自定义左侧栏（也可在后台「设置 → 侧边栏」调整）
     order: []             # 官方菜单显示顺序（键名，留空用默认顺序）
@@ -178,10 +180,10 @@ database:
 ```
 
 **选型提醒**：`sqlite` 是给小环境/开发环境用的默认值，**不适合大环境**；
-上生产、群多了、并发高了就切 `mysql`。详见 [数据库](../advanced/database.md)。
+上生产、群多了、并发高了就切 `mysql`。详见 [数据库](database.md)。
 
 插件 SQL 统一写 `%s` 占位、`AUTOINCREMENT` 自增，平台内核自动适配方言，
-详见 [数据库](../advanced/database.md)。
+详见 [数据库](database.md)。
 
 ## 插件相关（config.yaml）
 
@@ -196,7 +198,7 @@ plugin:
 :::warning 心跳 ≠ 完全重载
 心跳只对改动过的插件重新执行 `register(ctx)`，不会重新 import 代码。
 修改了函数体逻辑后，请在 Web 面板点「重载」走 unload + load，
-原理见 [插件加载与模块机制](../advanced/loader.md)。
+原理见 [插件加载与模块机制](loader.md)。
 :::
 
 ## 终端交互与运维面板（config.yaml）

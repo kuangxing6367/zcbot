@@ -61,8 +61,9 @@
 未配置则回退到静态解析每个插件 `__plugin_meta__['process']`（AST 解析，不执行代码）。
 
 已标记 `process: 'core'` 的官方插件：`onebot_adapter`、`http_inject`、`ws_client`、
-`qq_official`、`telegram`、`discord`、`http_api`、`webui`。
-其余（`scheduler`、`session`、`image_renderer`）与全部用户插件在宿主进程加载。
+`qq_official`、`telegram`、`discord`、`http_api`、`webui`、`rust_accel`。
+显式标 `process: 'host'`（`scheduler`、`session`、`html_assembler`）或无标记默认按宿主侧
+处理的 `image_renderer`，与全部用户插件在宿主进程加载。
 
 ## 4. IPC 协议
 

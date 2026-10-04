@@ -7,7 +7,7 @@
 | 需要 | 说明 |
 | ---- | ---- |
 | Python 3.10+ | 建议 3.10–3.14；Windows / Linux / macOS 均可 |
-| （可选）聊天接入端 | 只有要收发聊天消息才需要；纯定时 / Webhook 可以先不接。对接见 [对接 IM 平台](./connect-im.md) |
+| （可选）聊天接入端 | 只有要收发聊天消息才需要；纯定时 / Webhook 可以先不接。对接见 [对接 IM 平台](connect-im.md) |
 
 ## 第 1 步：下载代码
 
@@ -55,21 +55,23 @@ python main.py
 
 首次启动会生成 `config.yaml`、`core_plugins.yaml` 和 `data/`。
 
-看到类似输出即成功：
+> 注意：**官方插件默认全部关闭**（`core_plugins.yaml` 中每个插件的 `enabled` 均为 `false`）。
+> 需要哪个能力，就把对应插件 `enabled` 改为 `true`，或用
+> `python tools/scan_core_plugins.py --enable <插件名>`，然后重启框架。
+> 例如要进 Web 后台就得启用 `webui`；要收发聊天消息就得启用某个接入端（如 `onebot_adapter`）。
+
+看到类似输出即成功（默认未启用任何官方插件时）：
 
 ```
 ZCBOT 框架 启动中...
-官方插件 [onebot_adapter] 已加载
-官方插件 [webui] 已加载
-...
-框架启动完成，等待事件...
+框架启动完成，等待消息...
 ```
 
 **接着做：**
 
-1. 浏览器打开 `http://127.0.0.1:8080` → 进 [开始使用](./getting-started.md)
-2. 要连聊天软件 → 进 [对接 IM 平台](./connect-im.md)
-3. 要写功能 → 进 [编写插件](./writing-plugins.md)
+1. 浏览器打开 `http://127.0.0.1:8080` → 进 [开始使用](getting-started.md)
+2. 要连聊天软件 → 进 [对接 IM 平台](connect-im.md)
+3. 要写功能 → 进 [编写插件](writing-plugins.md)
 
 ---
 
@@ -84,10 +86,10 @@ zcbot/
 ├── pyproject.toml          # 项目元数据（与 requirements 同步）
 ├── framework/              # 平台内核
 ├── core_plugins/           # 官方插件（在 yaml 里开关）
-│   ├── onebot_adapter/     #   OneBot 11（默认开）
-│   ├── webui/              #   Web 后台（默认开）
-│   ├── session/            #   多轮会话（默认开）
-│   ├── scheduler/          #   定时任务（默认开）
+│   ├── onebot_adapter/     #   OneBot 11（默认关，需启用）
+│   ├── webui/              #   Web 后台（默认关，需启用）
+│   ├── session/            #   多轮会话（默认关，需启用）
+│   ├── scheduler/          #   定时任务（默认关，需启用）
 │   ├── telegram/ discord/  #   其它接入端（默认关，填凭证后开）
 │   ├── qq_official/ ws_client/ http_inject/ http_api/
 ├── plugins/                # 你的插件（每个一个文件夹）
@@ -111,6 +113,6 @@ pip install -r requirements.txt   # 补全新依赖
 
 ## 下一步
 
-- [开始使用](./getting-started.md) —— 验证启动、第一次对话、进后台
-- [对接 IM 平台](./connect-im.md) —— 连上真实聊天软件
-- [编写插件](./writing-plugins.md) —— 写你的第一条命令
+- [开始使用](getting-started.md) —— 验证启动、第一次对话、进后台
+- [对接 IM 平台](connect-im.md) —— 连上真实聊天软件
+- [编写插件](writing-plugins.md) —— 写你的第一条命令

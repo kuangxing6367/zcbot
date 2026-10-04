@@ -23,7 +23,7 @@ handler 的第二参数就是它——命令和 `message` 订阅里读消息内�
 | `event.bot_name` | `str` | 来源 OneBot 实例名（多账号区分） |
 | `event.font` | `int` | 客户端字体（一般用不到） |
 | `event.segments` | `list[dict]` | 消息段数组，每项 `{"type": ..., "data": {...}}` |
-| `event._raw` / `event.raw` | `dict` | 原始 OneBot 事件 dict |
+| `event._raw` | `dict` | 归一化后的内部事件 dict（原始上报经 `contract.normalize_event` 补齐后的形态，并非原始 OneBot 上报） |
 
 ## 二、类型判断（属性）
 
@@ -49,7 +49,7 @@ handler 的第二参数就是它——命令和 `message` 订阅里读消息内�
 
 ```python
 for seg in event.segments:
-    t = seg.get("type")           # text/image/at/reply/face/record/video/file/share...
+    t = seg.get("type")           # text/image/at/reply/face/voice/video/file/share...
     data = seg.get("data", {})
     if t == "text":
         text = data.get("text", "")
@@ -70,7 +70,7 @@ for seg in event.segments:
 | `event.has_at_bot` | `bool` | 是否 @ 了机器人本身 |
 | `event.has_reply` | `bool` | 是否为回复消息 |
 | `event.reply_id` | `int/None` | 被回复消息的 ID |
-| `event.has_voice` | `bool` | 是否含语音（消息段类型 `record`） |
+| `event.has_voice` | `bool` | 是否含语音（规范段类型 `voice`，OneBot 原字段 `record` 已归一化） |
 | `event.has_video` | `bool` | 是否含视频 |
 | `event.has_file` | `bool` | 是否含文件 |
 | `event.has_face` | `bool` | 是否含表情 |
@@ -152,4 +152,4 @@ ctx.log(f"收到事件: {event!r}")
 
 ---
 
-> 想在这些能力之外插入自己的行为？见 [扩展点（Hook 系统）](../advanced/hooks.md)：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个运行环节挂接逻辑。
+> 想在这些能力之外插入自己的行为？见 [扩展点（Hook 系统）](hooks.md)：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个运行环节挂接逻辑。

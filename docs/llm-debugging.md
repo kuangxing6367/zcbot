@@ -29,7 +29,7 @@ CI(`.github/workflows/tests.yml`):py3.10/3.11/3.12 矩阵 = 脚本回归 + pytes
 
 ## 日志
 
-`data/logs/zcbot.log`;启动成功标志:`框架启动完成，等待事件...`;后台
+`data/logs/zcbot.log`;启动成功标志:`框架启动完成，等待消息...`;后台
 `http://127.0.0.1:8080`(admin/admin123,首次必改密)看仪表盘/日志/在线改配置。
 
 ## 版本发布流程

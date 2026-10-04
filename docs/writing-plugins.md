@@ -2,7 +2,7 @@
 
 群里有人连着两天发 `/签到`，第二天收到「你今天已经签到过了」；管理面板里能改单次得分上限；每晚 0 点任务自动跑；新人进群还能领到初始分——这些都来自同一个插件。跟着把这套「每日签到」写完，你就掌握了插件开发的完整链路。
 
-动手前，先按 [安装](./installation.md) 把框架跑起来，终端出现「框架启动完成」再往下。还没接聊天平台的话，可以先读 [对接 IM 平台](./connect-im.md) 打通连接；走纯定时任务或 HTTP 事件注入两条不依赖聊天的路线，见 [开始使用](./getting-started.md)。
+动手前，先按 [安装](installation.md) 把框架跑起来，终端出现「框架启动完成」再往下。还没接聊天平台的话，可以先读 [对接 IM 平台](connect-im.md) 打通连接；走纯定时任务或 HTTP 事件注入两条不依赖聊天的路线，见 [开始使用](getting-started.md)。
 
 ## 这个插件会用到哪些能力
 
@@ -46,7 +46,7 @@ def handle_hello(event, match):
 
 启动框架（或到 Web 面板「插件」页点「重载」），向任意已接入的平台发送 `/hello` 即可看到回复。
 
-> 发消息需要至少一个就绪的**接入端**（接入端负责把消息真正发到某个平台）。如果你还没对接平台，可以先读 [对接 IM 平台](./connect-im.md) 把连接打通；或者走「纯定时任务 / HTTP 事件注入」两条不需要聊天的路线（见 [开始使用](./getting-started.md)）。
+> 发消息需要至少一个就绪的**接入端**（接入端负责把消息真正发到某个平台）。如果你还没对接平台，可以先读 [对接 IM 平台](connect-im.md) 把连接打通；或者走「纯定时任务 / HTTP 事件注入」两条不需要聊天的路线（见 [开始使用](getting-started.md)）。
 
 ## 逐段拆解
 
@@ -72,7 +72,7 @@ __plugin_meta__ = {
 
 为什么需要 `priority`？一条消息到来时，框架按插件优先级从小到大依次尝试匹配命令。两个插件都注册了 `/help` 时，`priority` 小的赢。命令的注册顺序和加载顺序也都跟它有关。
 
-元信息也可以写在 `plugin.yaml` 里，且 **`plugin.yaml` 的值会覆盖 `__plugin_meta__`**（便于不改代码改版本号），详见 [配置系统](./configuration.md)。
+元信息也可以写在 `plugin.yaml` 里，且 **`plugin.yaml` 的值会覆盖 `__plugin_meta__`**（便于不改代码改版本号），详见 [配置系统](configuration.md)。
 
 ### `register(ctx)`：唯一注册入口
 
@@ -138,7 +138,7 @@ ctx.send_msg(
 同步版 `ctx.send_msg(...)` 会在内部丢到线程执行，不阻塞；`async def` 处理函数里推荐用异步版 `await ctx.asend_msg(...)`，效果相同且不阻塞事件循环。
 :::
 
-> 需要发图片、@、回复等富媒体，或做禁言、踢人、查群成员等**平台操作**？这些能力依赖你启用的接入端，详见 [对接 IM 平台](./connect-im.md)。完整方法列表见 [ctx 参考](../api/basic/ctx.md)。
+> 需要发图片、@、回复等富媒体，或做禁言、踢人、查群成员等**平台操作**？这些能力依赖你启用的接入端，详见 [对接 IM 平台](connect-im.md)。完整方法列表见 [ctx 参考](ctx.md)。
 
 ## 完整的签到插件
 
@@ -168,7 +168,7 @@ def register(ctx):
     """)
     ctx.command("/签到", handle_sign, alias="/sign", description="每日签到")
     ctx.command("/我的积分", handle_score, description="查看我的积分")
-    ctx.task("0 0 * * *", reset_daily, description="每日清理过期标记")  # 由 scheduler 插件提供
+    ctx.task("0 0 * * *", reset_daily, description="每日清理过期标记")  # 由 scheduler 插件提供（默认关闭，需启用）
     ctx.on("notice.group_increase", on_new_member)                     # 新成员入群
 
 def handle_sign(event, match):
@@ -211,7 +211,7 @@ def on_new_member(payload):
             (user_id,))
 ```
 
-> 上面 `ctx.task` 的调度能力由官方插件 `scheduler` 提供（默认开启）；`notice.group_increase` 这类事件由你启用的接入端产生，常用内置事件见 [架构详解 · 事件总线](../advanced/architecture.md)，具体事件列表取决于接入端，见 [对接 IM 平台](./connect-im.md)。
+> 上面 `ctx.task` 的调度能力由官方插件 `scheduler` 提供（默认开启）；`notice.group_increase` 这类事件由你启用的接入端产生，常用内置事件见 [架构详解 · 事件总线](architecture.md)，具体事件列表取决于接入端，见 [对接 IM 平台](connect-im.md)。
 
 ## 数据库：建表与查询
 
@@ -293,7 +293,7 @@ finally:
 }
 ```
 
-支持 `string` / `number` / `select`（带 `options`）等类型，Web 面板据此生成表单，详见 [配置系统](./configuration.md)。
+支持 `string` / `number` / `select`（带 `options`）等类型，Web 面板据此生成表单，详见 [配置系统](configuration.md)。
 
 ### 代码里读取
 
@@ -324,7 +324,7 @@ def daily_report():        # 正确：无参
 def daily_report(event):   # 错误！会报参数不匹配
 ```
 
-更多触发器与细节见 [定时任务](../advanced/scheduler.md)。
+更多触发器与细节见 [定时任务](scheduler.md)。
 
 ## 事件订阅
 
@@ -341,7 +341,7 @@ def on_new_member(payload):
 - `ctx.on()` 的 handler 同步异步均可。
 - 事件回调收到的是 **`dict`**（不是 Event 对象），用 `.get("key")` 取值，键不存在返回 `None` 而不是报错。
 - 插件之间也能用 `ctx.emit(name, payload)` / `await ctx.aemit(...)` 自定义事件通信。
-- 常用内置事件见 [架构详解 · 事件总线](../advanced/architecture.md)。具体有哪些事件（消息、通知、成员变动等）取决于你启用的接入端，见 [对接 IM 平台](./connect-im.md)。
+- 常用内置事件见 [架构详解 · 事件总线](architecture.md)。具体有哪些事件（消息、通知、成员变动等）取决于你启用的接入端，见 [对接 IM 平台](connect-im.md)。
 
 ## 进阶写法：声明式装饰器
 
@@ -391,7 +391,7 @@ def on_new_member(payload):
 
 > 建表等一次性初始化仍建议放在 `register` 或 `on_loaded(ctx)` 钩子里，不要放进被装饰的命令处理函数（它在每次命中时都会执行）。
 
-`webui` / `override_webui` / `group_extension` / `user_extension` 也都在 `framework.plugin` 里；完整签名与示例见 [插件装饰器 API](../api/advanced/plugin-decorators)。
+`webui` / `override_webui` / `group_extension` / `user_extension` 也都在 `framework.plugin` 里；完整签名与示例见 [插件装饰器 API](plugin-decorators.md)。
 
 ## 排错速查
 
