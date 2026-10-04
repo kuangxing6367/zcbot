@@ -9,7 +9,7 @@
 
 - 同步方法（如 `send_msg`、`db_query`）内部桥接到异步实现或线程，普通函数 handler 可用；
 - `async def` handler 中请优先使用带 `a` 前缀的异步方法
-  （`asend_msg`、`adb_*` 等），避免阻塞事件循环。
+  （`asend_msg`、`aapi`、`aemit`，以及 `db_query_async` 等 `db_*_async` 系列），避免阻塞事件循环。
 
 ## 目录
 
@@ -106,9 +106,9 @@ ctx.command("/菜单说明", None, dynamic=True, description="展示用，不执
 
 ## 三、消息发送与接入端 API（协议中立）
 
-> 新代码请用 `ctx.actions.<动作>()`；`ctx.onebot` 仍可用作兼容别名。
-> 出站统一走 `ctx.actions.send_text(...)`（适配器可覆写），底层动作也可直接
-> `ctx.api().acall('send_msg', ...)`，不依赖任何具体协议。
+> 新代码请用 `ctx.actions.<动作>()`（如 `ctx.actions.send_msg(...)`）；`ctx.onebot` 仍可用作兼容别名。
+> 框架出站文本统一走适配器的 `send_text(...)`（可覆写，默认返回 unsupported），底层动作也可直接
+> `await ctx.aapi('send_msg', ...)`，不依赖任何具体协议。
 
 ### ctx.send_msg() / ctx.asend_msg()
 
@@ -276,7 +276,7 @@ finally:
 | `get_user_role(group_id, user_id)` | `str` | `super/owner/admin/member/blacklist` |
 
 事件对象上也有一套等价能力：`event.has_perm(node)`、`event.role`、
-`event.is_admin`、`event.perms` 等，见 [Event](./event.md)。
+`event.is_admin`、`event.perms` 等，见 [Event](event.md)。
 
 ## 九、多轮会话
 
@@ -296,7 +296,7 @@ async with ctx.create_session(event, timeout=120) as sess:
     sess.data["name"] = r.get("message", "")
 ```
 
-详见 [多轮会话](../../guide/session.md)。
+详见 [多轮会话](session.md)。
 
 ## 十、定时任务
 
@@ -311,7 +311,7 @@ ctx.task("*/5 * * * *", check)
 - 任务函数无参数、不接收事件，需要框架能力时在函数内用服务注册表；
 - 自动生成任务 ID `<插件名>_<函数名>`。
 
-更多触发器（interval/date）、动态增删见 [定时任务](../../advanced/scheduler.md)。
+更多触发器（interval/date）、动态增删见 [定时任务](scheduler.md)。
 
 ## 十一、仪表盘与 WebUI
 
@@ -426,12 +426,12 @@ ctx.audit_log("reset_data", target_type="data", detail={"by": event.user_id})
 | 自定义 REST 接口 | `register_api` | Flask 视图 |
 | 多轮会话（问答式交互） | `wait_for` / `create_session` | 需启用 session 插件 |
 | 权限判断 | `has_perm` / `is_superuser` / `is_group_admin` | 见 [权限与身份](#八权限与身份) |
-| 扩展内核（启动 / 分发 / 协议钩子） | `hook` | 见 [Hook 系统](../advanced/hooks.md) |
+| 扩展内核（启动 / 分发 / 协议钩子） | `hook` | 见 [Hook 系统](hooks.md) |
 | 后台跑耗时任务 | `run_async` | 提交线程池，不阻塞 |
 | 写审计日志 | `audit_log` | 以插件身份记录 |
 
-> 想用更简洁的声明式写法（把注册写在函数定义处）？见 [插件装饰器 API](../advanced/plugin-decorators.md)：与上面的 `ctx.xxx(...)` 完全等价，只是少写样板。
+> 想用更简洁的声明式写法（把注册写在函数定义处）？见 [插件装饰器 API](plugin-decorators.md)：与上面的 `ctx.xxx(...)` 完全等价，只是少写样板。
 
 ---
 
-> 想在这些能力之外插入自己的行为？见 [扩展点（Hook 系统）](../advanced/hooks.md)：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个运行环节挂接逻辑。
+> 想在这些能力之外插入自己的行为？见 [扩展点（Hook 系统）](hooks.md)：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个运行环节挂接逻辑。

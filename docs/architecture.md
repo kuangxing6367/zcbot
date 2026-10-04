@@ -2,6 +2,8 @@
 
 你在群里发出一条命令，插件几乎立刻回复——这中间经历了分层加载、事件归一、路由匹配和一次服务注册表查询。把这条链路拆开看，才能在插件出问题时知道该往哪一层查。
 
+> **设计哲学先行**：本仓库所有架构决策都遵循一组内核设计信条，见 [内核设计哲学](core-philosophy.md)。改框架、写扩展前先读它——它决定了"代码该放哪、该不该动内核"。
+
 ## 分层总览
 
 ```
@@ -27,20 +29,20 @@
 
 ## 启动时序
 
-`main.py → Framework.start()`（`framework/core/`）：
+`main.py → Framework.start()`（`framework/core/base.py` 的 `Framework`；调度/心跳/看门狗在 `framework/core/runtime.py`）：
 
-1. 打印安全提示（监听 `0.0.0.0` 且无 token 时告警）；
-2. `_load_core_plugins()`：按 `core_plugins.yaml`（启动时合并进主配置 `core_plugins` 段）的开关加载官方插件，
-   它们向服务注册表注册基础能力；
-3. 创建 `data/plugins_dat/`，把旧版散落在代码目录的配置迁移过去；
-4. `plugin_loader.load_all()`：发现并加载全部未被禁用的用户插件
-   （依赖检查/自动安装 → 建合成包 → 预载子模块 → 执行 main.py）；
-5. 依赖自愈：首轮缺依赖失败的插件，补装后再尝试一次；
-6. 逐个 `register_commands()`：执行 `register(ctx)`，落库命令/任务/卡片，触发 `on_loaded`；
-7. 启动路由表刷新、统计批量写库器、心跳、内存看门狗；
-8. 广播 `system.plugin.loaded`，启动内置终端。
+1. 打印安全提示：`_warn_insecure_config()`——仅当 Web 面板 `web.host` 为 `0.0.0.0`/`::` 时告警，建议改为 `127.0.0.1`；各接入端的令牌提示由适配器注册时给出，内核不在此处理 token；
+2. 启动基础后台循环：路由表周期刷新、事件队列消费 worker、L4 写缓冲 flush、统计批量写库器、群成员同步批量写库、心跳任务、内存看门狗（均在加载插件前就绪，不阻塞插件加载）；
+3. 注册终端命令并启动内置终端（仅非宿主进程启动交互输入）；
+4. `_load_plugins_sync()`（同步、放入后台线程执行）：
+   a. `_load_core_plugins()`：按 `core_plugins.yaml`（启动时由 `_autoload_core_plugins` 合并进主配置 `core_plugins` 段）的开关加载官方插件，它们向服务注册表注册基础能力；
+   b. 创建 `data/plugins_dat/`，把旧版散落在代码目录的配置迁移过去；
+   c. `plugin_loader.load_all()`：发现并加载全部未被禁用的用户插件（依赖检查/自动安装 → 建合成包 → 预载子模块 → 执行 main.py）；
+   d. 依赖自愈：首轮缺依赖失败的插件，补装后再尝试一次；
+   e. 逐个 `register_commands()`：执行 `register(ctx)`，落库命令/任务/卡片，触发 `on_loaded`；
+5. `_finalize_startup()`：路由表预热（`router._rebuild_routes`）→ 广播 `system.plugin.loaded` → 触发 `LIFECYCLE_STARTUP` 扩展点 → 置就绪标记。
 
-关闭 `Framework.stop()` 按相反顺序停止 WebSocket、调度器、Web 服务并关闭数据库。
+关闭 `Framework.stop()`：依次取消后台插件加载、触发 `LIFECYCLE_SHUTDOWN` 扩展点、停止终端、事件缓冲、统计写库器、群成员同步、路由表刷新、心跳、内存看门狗、官方插件服务（协议/Web/调度），最后广播 `system.plugin.unloaded` 并关闭数据库线程池。
 
 ## 消息处理流程
 
@@ -61,11 +63,14 @@ WebSocket 服务端 (core_plugins/onebot_adapter)
     │       ▼  未接管继续
     ├─→ 消息路由器 (router.py)
     │       ├─→ 插件命令匹配（按 priority 升序）
-    │       │       │  命中且未 continue_route → 不再走关键词
-    │       │       ▼  未命中
+    │       │       │  命中且未 continue_route → 终止路由
+    │       │       ▼  未命中（且未 stop_event）
+    │       ├─→ message 事件广播（ctx.on("message")，文本统一监听通道）
+    │       │       │  handler 返回 True → 终止路由
+    │       │       ▼  未接管
     │       ├─→ 关键词自动回复（dynamic_commands）
-    │       │       ▼  未命中
-    │       └─→ message 事件广播（ctx.on("message")）
+    │       │       ▼
+    │       └─→ 未匹配扩展点（ROUTER_MESSAGE_UNMATCHED）
     │
     ├─→ 通知事件 notice
     └─→ 请求事件 request
@@ -96,11 +101,14 @@ caller = ctx._framework.services.get('api_caller')
 | `session_manager` | session | 多轮会话管理器 |
 | `web_server` | webui | Web 管理后台服务 |
 | `http_api` | http_api | 独立对外 HTTP API（默认关闭） |
+| `rust_accel` | rust_accel | Rust 加速层（可选高性能事件处理接入，与 onebot_adapter 互斥） |
+| `html_assembler` | html_assembler | HTML 模板渲染转图片服务 |
+| `llm_core` | llm_load | LLM 核心服务（Provider/Agent/MCP 门面） |
 
 `protocol_adapter` / `api_caller` 是协议无关的通用槽位：默认由 onebot_adapter 填充；换成其它接入端后由新接入端填充，业务插件的取用方式不变。
 连接页 `/api/connection` 与仪表盘状态由各接入端的 `get_connection_info()` / `get_connected_bots()` 自描述，内核不写死任何协议字段。
 
-详见 [ServiceRegistry](../api/basic/services.md)。
+详见 [ServiceRegistry](services.md)。
 
 ## 插件加载机制（要点）
 
@@ -111,7 +119,7 @@ caller = ctx._framework.services.get('api_caller')
 - 卸载按模块 `__file__` 前缀一次性扫净 `sys.modules`。
 
 完整原理、导入规则、热重载行为、排错见
-[插件加载与模块机制](./loader.md)。
+[插件加载与模块机制](loader.md)。
 
 ## 插件优先级
 
@@ -138,8 +146,10 @@ caller = ctx._framework.services.get('api_caller')
 - 依赖自愈：启动时对缺依赖导致加载失败的插件，在补装依赖后自动再试；
 - 孤儿自检 `self_check_orphans`：周期性清理代码目录已不存在的命令/任务，
   以及调度器里属于未加载插件的幽灵任务；
-- 内存看门狗：每 3s 采样，单插件模块估算内存连续超过
-  `plugin.max_memory_mb`（默认 64MB）两次即自动卸载并记录日志。
+- **插件级内存监控**（`framework/loader/runtime.py` 的 `_start_memory_monitor`）：每 3 秒采样一次，按模块全局变量估算单插件内存占用，**连续 2 次超过 `plugin.max_memory_mb`（默认 64MB）即自动卸载该插件**（进程总内存超阈值 1.5 倍时另出告警）；
+- **进程级内存看门狗**（`framework/core/runtime.py` 的 `_memory_watchdog_loop`）：每 `memory.check_interval`（默认 30s）采样进程 RSS，超过 `memory.limit_mb`（默认 120MB）时做三层防御——超限硬清（清框架级缓存 + GC + trim）、峰值回落主动 trim、检测到「内存地板」进入持续回收模式；**只回收内存，不卸载插件**。
+
+  两者是彼此独立的两套机制：前者按插件卸载，后者按进程回收，互不替代。
 
 ## 事件总线
 
@@ -153,14 +163,14 @@ ctx.on("notice.group_increase", on_member_join)    # 订阅（同步/异步 hand
 
 | 事件名 | 触发时机 |
 |--------|----------|
-| `message` | 收到文本消息且命令/关键词均未命中 |
+| `message` | 文本消息且命令未匹配时广播（关键词自动回复与未匹配扩展点在 message 事件之后触发）；`ctx.on("message")` 的 handler 返回 True 可终止路由 |
 | `notice.group_increase` | 新成员入群 |
 | `notice.group_decrease` | 成员退群 |
 | `request.friend` | 好友请求 |
 | `request.group` | 加群请求 |
-| `meta.heartbeat` | OneBot 心跳包 |
-| `bot.connected` / `bot.disconnected` | OneBot 客户端连接/断开 |
+| `meta.heartbeat` | OneBot 心跳包（`meta_event` 的 `sub_type=heartbeat`） |
 | `system.plugin.loaded` | 本轮插件全部加载注册完成（payload 含插件列表） |
+| `system.plugin.unloaded` | 框架停止时广播 |
 | `after_message_sent` | 消息发送完成后 |
 
 插件可自定义任意事件名，通过 `emit/aemit` 在插件间解耦通信。

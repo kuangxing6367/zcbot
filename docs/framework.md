@@ -12,8 +12,8 @@
 |------|------|------|
 | `fw.config` | `dict` | 加载并合并 `core_plugins.yaml` 后的全局配置 |
 | `fw.config_path` | `str` | 实际使用的配置文件绝对路径 |
-| `fw.services` | `ServiceRegistry` | 服务注册表，详见 [ServiceRegistry](./services.md) |
-| `fw.db` | `Database` | 数据库实例，详见 [数据库](../../advanced/database.md) |
+| `fw.services` | `ServiceRegistry` | 服务注册表，详见 [ServiceRegistry](services.md) |
+| `fw.db` | `Database` | 数据库实例，详见 [数据库](database.md) |
 | `fw.event_bus` | `EventBus` | 事件总线（`subscribe/aemit/emit`） |
 | `fw.router` | `MessageRouter` | 消息路由器 |
 | `fw.plugin_loader` | `PluginLoader` | 插件加载器（加载/卸载/重载/发现） |
@@ -44,7 +44,7 @@ await fw.start()              # 加载官方插件 → 用户插件 → 注册 �
 await fw.stop()               # 反序停止：WebSocket、调度器、Web、数据库
 ```
 
-`start()` 的精确顺序见 [架构详解 - 启动时序](../../advanced/architecture.md)。
+`start()` 的精确顺序见 [架构详解 - 启动时序](architecture.md)。
 
 ## 典型用法
 
@@ -72,7 +72,7 @@ if ok:
 ```
 
 插件模块的加载/命名/热重载机制见
-[插件加载与模块机制](../../advanced/loader.md)。
+[插件加载与模块机制](loader.md)。
 
 ### 跨插件事件
 
@@ -92,4 +92,4 @@ await fw.event_bus.aemit("my_custom_event", {"k": "v"})
 
 ---
 
-> 想在这些能力之外插入自己的行为？见 [扩展点（Hook 系统）](../advanced/hooks.md)：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个运行环节挂接逻辑。
+> 想在这些能力之外插入自己的行为？见 [扩展点（Hook 系统）](hooks.md)：在启动/关闭、Web 请求、事件分发、命令执行、协议动作、出站文本等几乎每个运行环节挂接逻辑。

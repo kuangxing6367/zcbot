@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [ "3.10", "3.12", "3.13", "3.14" ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Web 管理后台（create_web_app 依赖 Flask）与测试运行器/异步测试，未在 requirements.txt 中声明
+          # pytest-asyncio 锁 <1.0：1.0 改了默认模式，可能破坏 asyncio_mode=auto 行为
+          pip install "flask>=2.3.0" "flask-cors>=4.0.0" "waitress>=3.0.0" \
+                      pytest "pytest-asyncio>=0.21,<1.0" pytest-timeout
+
+      - name: Compile check
+        run: python -m compileall -q framework core_plugins
+
+      # 显式 pytest 文件列表：仓库内部分为「脚本式自测」（模块顶层 sys.exit，
+      # 如 test_perm.py / test_plugin_imports.py，须用 `python tests/xxx.py` 单独跑）
+      # 与「纯 pytest 用例」两类。盲跑 `pytest tests/` 会因脚本式文件的顶层 sys.exit
+      # 中断收集，故这里只收编带 def test_ 的纯 pytest 用例。
+      # asyncio_mode=auto 让带 async def 的缓冲层用例也能被原生驱动。
+      - name: Run tests
+        run: |
+          python -m pytest -q --timeout=120 -o asyncio_mode=auto -p no:cacheprovider \
+            tests/test_api_security.py \
+            tests/test_buffer_l2_file.py \
+            tests/test_core_plugin_switch.py \
+            tests/test_buffer_refill.py \
+            tests/test_db_regression.py \
+            tests/test_dual_core.py \
+            tests/test_event_buffer.py \
+            tests/test_file_store_fallback.py \
+            tests/test_html_assembler.py \
+            tests/test_ipc_perf.py \
+            tests/test_llm_core.py \
+            tests/test_llm_load.py \
+            tests/test_loop_fix_regression.py \
+            tests/test_message_contract.py \
+            tests/test_plugin_decorators.py \
+            tests/test_qq_official.py \
+            tests/test_qq_official_extra.py \
+            tests/test_scheduler.py \
+            tests/test_security_hardening.py \
+            tests/test_self_heal.py \
+            tests/test_smoke.py \
+            tests/test_sql_sim_debug.py \
+            tests/test_terminal_panel.py

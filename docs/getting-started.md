@@ -9,21 +9,22 @@ python main.py
 # 也可指定配置：python main.py D:\config\zcbot.yaml
 ```
 
-成功时大致长这样：
+成功时大致长这样（默认未启用任何官方插件）：
 
 ```
 ==================================================
 ZCBOT 框架 启动中...
 ==================================================
-官方插件 [onebot_adapter] 已加载
-官方插件 [scheduler] 已加载
-官方插件 [session] 已加载
-官方插件 [webui] 已加载
-已加载 8 个用户插件: ['echo', 'help', ...]
-框架启动完成，等待事件...
+已加载 N 个用户插件: [...]
+框架启动完成，等待消息...
 ```
 
-出现最后一行 `框架启动完成，等待事件...` 即就绪。日志同时写在 `data/logs/zcbot.log`。
+出现最后一行 `框架启动完成，等待消息...` 即就绪。日志同时写在 `data/logs/zcbot.log`。
+
+> 注意：**官方插件默认全部关闭**（`core_plugins.yaml` 中每个 `enabled` 均为 `false`）。
+> 要使用 Web 后台需启用 `webui`；要收发聊天消息需启用某个接入端（如 `onebot_adapter`）。
+> 启用方式：把 `core_plugins.yaml` 里对应插件的 `enabled` 改为 `true`，或运行
+> `python tools/scan_core_plugins.py --enable <插件名>`，然后重启。
 
 **没报错？** 直接往下。**报错了？** 看日志最后几行；依赖问题多半会在启动时自动补装后重试。
 
@@ -33,7 +34,7 @@ ZCBOT 框架 启动中...
 
 | 事件来源 | 需要聊天平台吗 | 做法 |
 | -------- | -------------- | ---- |
-| IM 消息（QQ / TG / Discord…） | 需要 | 按 [对接 IM 平台](./connect-im.md) 连接 |
+| IM 消息（QQ / TG / Discord…） | 需要 | 按 [对接 IM 平台](connect-im.md) 连接 |
 | 定时任务 | 不要 | `scheduler` + `ctx.task()` 注册 cron 任务 |
 | HTTP 注入 | 不要 | 开 `http_inject`，外部系统 POST JSON 进来 |
 
@@ -62,6 +63,8 @@ curl -X POST http://127.0.0.1:8901/hook \
 
 ## 4. 打开 Web 管理后台
 
+> 前提：需在 `core_plugins.yaml` 启用 `webui`（默认关闭）并重启，否则不会监听端口。
+
 浏览器访问：`http://127.0.0.1:8080`（端口以 `core_plugins.yaml → webui` 为准）
 
 | | |
@@ -80,8 +83,8 @@ curl -X POST http://127.0.0.1:8901/hook \
 
 | 目标 | 去哪 |
 | ---- | ---- |
-| 写第一条命令 | [编写插件](./writing-plugins.md) |
-| 连真实聊天软件 | [对接 IM 平台](./connect-im.md) |
-| 改端口 / 开关插件 / 换数据库 | [配置系统](./configuration.md) |
-| 插件拆多文件 | [加载机制](../advanced/loader.md) |
-| 放到服务器 | [部署上线](../advanced/deployment.md) |
+| 写第一条命令 | [编写插件](writing-plugins.md) |
+| 连真实聊天软件 | [对接 IM 平台](connect-im.md) |
+| 改端口 / 开关插件 / 换数据库 | [配置系统](configuration.md) |
+| 插件拆多文件 | [加载机制](loader.md) |
+| 放到服务器 | [部署上线](deployment.md) |

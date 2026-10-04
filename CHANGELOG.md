@@ -26,6 +26,23 @@
 
 ---
 
+## v1.8.2（2026-10-05）
+
+> 主题：**凑业绩**。本版本无新功能、无行为变更——框架运行时行为与 v1.8.1 完全一致。
+> 只是把工程地基上一直缺的两块补上：CI 门禁，以及安全面的真实行为回归测试。
+
+### 工程 / 测试
+
+- **CI 门禁**：新增 `.github/workflows/ci.yml`。Python 3.10 / 3.12 / 3.13 / 3.14 四版本矩阵，先 `compileall` 编译检查 `framework` 与 `core_plugins`，再跑 pytest。
+  - 采用**显式 pytest 文件列表**而非 `pytest tests/`：仓库内混有脚本式自测（`test_perm.py`、`test_plugin_imports.py` 在模块顶层 `sys.exit`），整目录收集会直接中断。
+  - 额外安装 `pytest-asyncio`（锁 `<1.0`，避开 1.0 默认模式变更）与 `pytest-timeout`，并开 `asyncio_mode=auto`——否则缓冲层的 `async def` 用例会被报 "async def functions are not natively supported"。
+  - 本地按同一条命令实跑：**253 passed**，退出码 0。
+- **安全面行为回归测试**：新增 `tests/test_api_security.py`（7 例）。用真实 `Framework()`（SQLite 临时库、官方插件全关、不 `start()` 以避免拉起线程）+ `create_web_app()` + `test_client()` 发真 HTTP，覆盖：无 token 一律 401；敏感表 `admin_users` / `api_tokens` 对普通管理员隐藏且 schema/rows 返回 403；super-only 高危端点收敛；登录失败文案统一（防用户名枚举）；普通管理员下载 `.db` 文件被拦。
+  - 与既有的 `test_security_hardening.py`（源码字符串匹配）互补：那份验"代码里写了"，这份验"运行时真的生效"。
+- **修复 pytest 收集崩溃**：`tests/test_perm.py` 原先在模块顶层执行 `sys.exit(...)`，`pytest` 一收集即崩（`INTERNALERROR ... SystemExit`）。执行逻辑已整体移入 `if __name__ == '__main__':`，`python tests/test_perm.py` 直接跑的行为不变。
+
+---
+
 ## v1.8.1（2026-10-02）
 
 > 主题：**运维终端能力内置化（删 `ops` 官方插件）+ LLM 子系统（装载器 + zip 载荷 + 多人格）+ 事件按会话分片并行 + debug 存储内存缓冲 + 插件市场声明式安装位 + 接入端契约收尾与三处线上修复**。
@@ -37,9 +54,9 @@
   - 通知事件同时广播协议原名与规范名（如 `notice.group_increase` 与 `notice.group_member_increase`），`notice_type` 保持原名不动、规范名放 `notice_type_canonical`，既有订阅不受影响。
   - 接入端注册时自动跑 `validate_adapter()`，不合规直接点名告警（只告警不拦人）。
   - Telegram / Discord 适配器的附件不再被压成纯文本，改为产出真实消息段；Telegram 出站升级为通用媒体发送（图/语音/视频/文件/贴纸）。
-  - 文档见 `docs/guide/adapter-contract.md`，测试 `tests/test_message_contract.py`（80 条）。
+  - 文档见 `docs/adapter-contract.md`，测试 `tests/test_message_contract.py`（80 条）。
   - 收尾：`media_ref()` 同时接受整个消息段或裸 `data` 字典（容错，测试 `test_media_ref_accepts_data_or_segment`）；WebUI 插件 API 路由与文档同步微调。
-- **LLM 子系统（可选，默认关）**：新增官方插件 `core_plugins/llm_load`（装载器）+ 用户插件 `plugins/llm_core`（对话核心）。`llm_core` 源码真源在 `core_plugins/llm_load/src/llm_core/`，经 `python tools/build_llm_payload.py --write` 打包为 `llm_core.zip` 载荷，框架启动时由 `llm_load` 按 manifest 校验/释放/自愈到 `plugins/llm_core`（运行时目录改动会被 manifest 抹平）。提供模型提供商总线、函数（工具）调用与 Agent 循环；插件经 `fw.services.get('llm_core')` 取服务、`@svc.tool(...)` 注册函数、`svc.register_provider(...)` 注册提供商。文档见 `docs/guide/llm-chat.md`、`docs/llm/plugins.md`。**v1.8.1 补充：多人格预设**——`_conf_schema.json` 新增 `personas` 数组（每项 `{id,name,prompt}`），会话内 `/llm人格 <id>` 即时切换、`/llm人格 reset` 恢复默认，人格提示词按会话持久生效（测试 `test_persona_override`）。
+- **LLM 子系统（可选，默认关）**：新增官方插件 `core_plugins/llm_load`（装载器）+ 用户插件 `plugins/llm_core`（对话核心）。`llm_core` 源码真源在 `core_plugins/llm_load/src/llm_core/`，经 `python tools/build_llm_payload.py --write` 打包为 `llm_core.zip` 载荷，框架启动时由 `llm_load` 按 manifest 校验/释放/自愈到 `plugins/llm_core`（运行时目录改动会被 manifest 抹平）。提供模型提供商总线、函数（工具）调用与 Agent 循环；插件经 `fw.services.get('llm_core')` 取服务、`@svc.tool(...)` 注册函数、`svc.register_provider(...)` 注册提供商。文档见 `docs/llm-chat.md`、`docs/llm-plugins.md`。**v1.8.1 补充：多人格预设**——`_conf_schema.json` 新增 `personas` 数组（每项 `{id,name,prompt}`），会话内 `/llm人格 <id>` 即时切换、`/llm人格 reset` 恢复默认，人格提示词按会话持久生效（测试 `test_persona_override`）。
 - **事件按会话分片并行**：`event_queue.workers > 1` 时启用单一分发器（`_event_distributor_loop`）从事件缓冲逐条取事件、盖内部唯一代号 `_seq`，按会话键（群/用户/bot）哈希投入对应 worker 队列——同群/同用户事件 FIFO 保序，跨会话并行处理；`workers=1` 时 worker 直连缓冲，零额外开销。停机以 `_event_pipeline_empty`（三层缓冲 + 全部分片队列）判定，`wait_drained` 的 join 语义覆盖分片在途事件，不丢。
 - **插件市场声明式安装位**：`plugin.yaml` 同时声明 `install_target: core_plugins` 且 `official: true` 的市场插件可安装进 `core_plugins/`（其余默认 `plugins/`）。框架内置官方插件名（`config._CORE_PLUGIN_SCHEMA` 键）受保护，禁止经市场覆盖同名目录；下载/加载失败均回滚备份或清理残件。
 
@@ -56,7 +73,7 @@
 - **image_renderer 文本基线 bug 修复**：原生渲染 `draw_text` 的 ymin 符号写反（正确为 `baseline - ymin - height`），导致文字纵向定位偏移；同步重编七平台原生产物，CI 全部 Linux 平台改走 cargo-zigbuild、以 glibc 2.17 为兼容底线（修复 ubuntu-latest 产物要求 GLIBC_2.30 无法在 Anolis 8 / CentOS 系旧 glibc 加载的问题），产物已随本版回填仓库。
 - **`/llm` 未配置提供商时回可读提示**：`handle_chat` 捕获 `ProviderError`，回一句「（LLM 未就绪）没有可用的模型提供商…」引导去面板配置 Key，而非让命令处理器抛异常静默无响应。
 - **运维面板 reload 走宿主进程转发**：`framework/terminal/panel.py` 的 `_call_command` 按命令 `target` 路由，`target: host`（如 `restart`/`reload`）在核心进程经 IPC `request_host('terminal.exec', …)` 转发到宿主执行，`both` 先本地再宿主，修复双进程模型下面板重载只作用于核心进程、宿主插件不刷新的缺口。
-- **文档与注释纠偏**：`llm_load`/`llm_core` 载荷释放的触发条件由「加 `__version__` 版本号」更正为「按逐文件 md5 比对，内容变化即生效」，同步修正 `build_llm_payload.py` 提示、两处 README 与 `docs/guide/llm-chat.md`；`providers.py` 示例导入改为运行时可用的 `from plugin_llm_core.providers import …`；`/llmtools` 输出补列每个工具的必填参数，便于核对 schema 推导。
+- **文档与注释纠偏**：`llm_load`/`llm_core` 载荷释放的触发条件由「加 `__version__` 版本号」更正为「按逐文件 md5 比对，内容变化即生效」，同步修正 `build_llm_payload.py` 提示、两处 README 与 `docs/llm-chat.md`；`providers.py` 示例导入改为运行时可用的 `from plugin_llm_core.providers import …`；`/llmtools` 输出补列每个工具的必填参数，便于核对 schema 推导。
 
 ### 测试 / CI
 - 新增 `tests/test_llm_core.py`（18 项，离线不联网，含「无提供商回可读提示」回归）、`tests/test_llm_load.py`（7 项：释放/校验/自愈/幂等/现网对齐）、`tests/test_terminal_panel.py`（含核心进程下 `target: host` 命令走 IPC 转发的回归）；`test_event_buffer.py` 补会话分片保序与同余群号不坍缩回归；`test_sql_sim_debug.py` 补缓冲/合并落盘/ORDER BY/LIMIT 与 `ON DUPLICATE KEY UPDATE`。`tools/build_llm_payload.py --check` 现同时校验「src 真源↔载荷 zip」与「载荷↔现网副本」两级一致性，CI 主套件纳入 `test_terminal_panel`。
@@ -66,7 +83,7 @@
 > 主题：**事件缓冲引入 L4 攒批写缓冲（缓解 sqlite 单写者瓶颈）+ SQLite 写锁收敛 + 删除 file_store 冗余后端 + 声明式装饰器 API + 前端产物收归 webui 插件 + 全官方插件补文档**。
 
 ### 新功能
-- **声明式装饰器 API**：新增 `framework/plugin.py`，支持 `from framework.plugin import command, on, on_message, on_raw_message, hook, task, api, dashboard_card, webui, override_webui, group_extension, user_extension` 的模块级声明式写法；装饰器在 `import` 时登记到当前模块的延迟缓冲区，`register(ctx)` 时一次性应用，行为与原 `ctx.*` 调用完全一致（同一套扩展点契约）。文档见 `docs/api/advanced/plugin-decorators.md` 与 `docs/guide/writing-plugins.md`「进阶写法」。
+- **声明式装饰器 API**：新增 `framework/plugin.py`，支持 `from framework.plugin import command, on, on_message, on_raw_message, hook, task, api, dashboard_card, webui, override_webui, group_extension, user_extension` 的模块级声明式写法；装饰器在 `import` 时登记到当前模块的延迟缓冲区，`register(ctx)` 时一次性应用，行为与原 `ctx.*` 调用完全一致（同一套扩展点契约）。文档见 `docs/plugin-decorators.md` 与 `docs/writing-plugins.md`「进阶写法」。
 - **官方插件全量文档**：为全部 `core_plugins` 补齐 `README.md`（onebot_adapter / qq_official / telegram / discord / ws_client / http_inject / http_api / image_renderer / rust_accel / scheduler / session / ops / html_assembler / webui），覆盖协议接入、配置项、命令/事件/API/WebUI 能力与端口，均基于真实源码、无臆造数字。
 
 ### 性能 / 架构
@@ -78,7 +95,7 @@
 - **前端产物收归 webui 插件**：构建产物从根目录 `web/` 移入 `core_plugins/webui/web/`，`webui/` 自包含前端；同步更新 `framework/api/static_routes.py`（`_web_root_dir`）、`framework/api/framework_update.py`、`framework/terminal/cmd_update.py` 的更新白名单、以及 `webui/vite.config.js` 的 `outDir`、`README.md` 目录树与构建说明共 5 处引用，并重新构建验证。
 
 ### 文档
-- **API 文档增强**：`docs/api/basic/ctx.md` 增补「静态命令与动态命令（dynamic 参数）」小节与「场景选型：哪个 ctx 函数适合做什么」决策表；`docs/.vitepress/config.mjs` 侧边栏新增「插件装饰器 API」入口。
+- **API 文档增强**：`docs/ctx.md` 增补「静态命令与动态命令（dynamic 参数）」小节与「场景选型：哪个 ctx 函数适合做什么」决策表；`docs/.vitepress/config.mjs` 侧边栏新增「插件装饰器 API」入口。
 - debug / sim 存储模式新增 1MB 预读与可选索引（`config.json` 开关）。
 
 ### 测试
@@ -476,14 +493,14 @@
 ### 文档 / 配置
 - **明确 SQLite 适用边界**：SQLite **仅适合小环境与开发环境**（单写多读、单文件），
   **不适合大环境**（多群、高并发、多进程部署）——`config.yaml` 注释、默认配置模板、
-  启动日志、`docs/advanced/database.md`、`docs/guide/configuration.md`、README 统一标注，
+  启动日志、`docs/database.md`、`docs/configuration.md`、README 统一标注，
   大环境一律切 `database.type: mysql`。
-- 同步过期文档路径：`docs/advanced/database.md` 改指 `framework/database/*`；
+- 同步过期文档路径：`docs/database.md` 改指 `framework/database/*`；
   `architecture.md` / `event.md` / `services.md` / `protocol_adapter.md` / `session.md` /
   `loader.md` / `best-practices.md` 中的 `framework/{event,protocol}.py` 旧路径改指
   `framework/messaging/*`；README 目录树补齐 `pyproject.toml`、
   `framework/{database,messaging,terminal,deps,loader_*,stats_writer,api/{webserver,app_helpers,framework_update,plugin_market,plugin_meta}}`；
-  `docs/advanced/loader.md` 维护者速查注明 deps / loader_ui / loader_config / loader_runtime 分工。
+  `docs/loader.md` 维护者速查注明 deps / loader_ui / loader_config / loader_runtime 分工。
 - **全库定位改写为「事件驱动的 IM 平台」**：README / CHANGELOG / pyproject / docs /
   vitepress config / main.py / framework 注释 / sql / WebUI 登录与权限页文案统一口径；
   清除「插件化服务宿主 / 借鉴 / 参考 AstrBot / 参考 Koishi / LuckPerms 风格 / xxx风格」等措辞；
@@ -542,7 +559,7 @@
 - **双进程终端交互修复（跨进程终端）**：核心进程此前不走 `fw.start()`，导致双核心下**终端从未启动**。
   现在核心进程显式注册并启动终端；终端命令按 `target`（`core` / `host` / `both`）路由，
   `plugins` / `enable` / `disable` / `reload` / `tasks` 经 IPC `terminal.exec` 转发到宿主进程执行，
-  `status` / `plugins` 两侧合并展示；单进程（`standard`）行为不变。见[双核心](docs/advanced/dual-core.md) 5.3 节。
+  `status` / `plugins` 两侧合并展示；单进程（`standard`）行为不变。见[双核心](docs/dual-core.md) 5.3 节。
 
 ---
 
@@ -567,7 +584,7 @@
 - **文档与 README 内核叙事重构**：
   - README 从「插件化框架」升级为「内核 + 扩展点」叙事，新增「扩展点（Extension Points）」章节，保留全部原有详解（快速开始、权限、API Key、目录结构、双核心等）。
   - `docs/api/` 重组为 **基础参考**（`basic/`：ctx / event / framework / services）与 **进阶扩展**（`advanced/`：扩展点 / 协议适配器）两大块，原有详解完整保留。
-  - 新增 `docs/api/advanced/hooks.md`（扩展点完整文档）与 `docs/api/index.md`（API 总览）。
+  - 新增 `docs/hooks.md`（扩展点完整文档）与 `docs/api-index.md`（API 总览）。
 
 ### 修复
 - **管理后台前端（WebUI）构建改用相对路径**：`base` 由 `'/'` 改为 `'./'`，logo 采用 `import.meta.env.BASE_URL` 拼接，
@@ -584,7 +601,7 @@
 - **双核心架构（core/host 双进程，实验特性）**：把一次启动拆成「核心进程 + 宿主进程」，经标准库 IPC（回环 TCP + authkey）通信，零第三方依赖。
   - `config.yaml` 暴露 `dual_process` 开关（`enabled` / `core_plugins` / `max_restarts` / `restart_interval`），**默认关闭，单进程行为完全不变**。
   - 官方插件按 `__plugin_meta__['process']` 标记自动分派：`onebot_adapter` / `http_inject` / `http_api` / `webui` 留在核心进程，其余与用户插件在宿主进程加载。
-  - 新增开发文档 `docs/advanced/dual-core.md`，README 增加「十二、双核心实验版」章节。
+  - 新增开发文档 `docs/dual-core.md`，README 增加「十二、双核心实验版」章节。
 - 新增 `tests/test_dual_core.py`：插件归属解析、IPC 协议往返、远程数据库约束；实测双进程可正常拉起（核心 spawn 宿主、IPC 握手成功、RemoteDatabase 代理生效）。
 
 ### 修复
@@ -681,7 +698,7 @@
 
 ### 测试 / 文档
 - `test_plugin_imports.py` 新增「同秒同尺寸快速重载」回归，共 31 项全过；新增卸载/重载压测（双插件同名模块交错卸载、反复重载、运行时懒加载嵌套包）全部通过。
-- `docs/advanced/loader.md` 增补「为什么插件不使用 `__pycache__`」并扩充"改了代码不生效"FAQ。
+- `docs/loader.md` 增补「为什么插件不使用 `__pycache__`」并扩充"改了代码不生效"FAQ。
 
 ## v1.3.2（2026-09-10）
 
@@ -694,7 +711,7 @@
 - 新增统一的 `_purge_plugin_modules`，卸载、重试与各失败路径都会回滚 `sys.modules`，避免半初始化模块残留；合入调度器为 None 时的守卫，避免空指针。
 
 ### 文档 / 测试
-- 新增《插件加载与模块机制》（`docs/advanced/loader.md`）：合成包、三层模块名、相对/绝对导入规则、热重载与卸载清理、排错 FAQ。
+- 新增《插件加载与模块机制》（`docs/loader.md`）：合成包、三层模块名、相对/绝对导入规则、热重载与卸载清理、排错 FAQ。
 - 全面扩写编写插件、ctx、Event、架构、数据库、定时任务、权限、会话、配置、部署等 16 篇文档，并订正与代码不符的旧描述。
 - 新增 `tests/test_plugin_imports.py`（29 项断言全过）。
 

@@ -199,7 +199,7 @@ async def handle_job(**kw):
 
 | 需求 | 用什么 |
 | ---- | ------ |
-| 插入 HTTP REST 路由（复用框架鉴权） | `ctx.register_api(path, handler, ...)`（见 [Framework](./../basic/framework.md) 或 Web 章节） |
+| 插入 HTTP REST 路由（复用框架鉴权） | `ctx.register_api(path, handler, ...)`（见 [Framework](framework.md) 或 Web 章节） |
 | 订阅/发布业务事件 | `ctx.on / ctx.emit / ctx.aemit`（事件总线） |
 | 接管原始消息（命令匹配前） | `ctx.on_raw_message(handler)` |
 | 在运行环节插行为（本文） | `ctx.hook(point, handler)`（扩展点） |

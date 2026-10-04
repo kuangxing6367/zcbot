@@ -19,7 +19,7 @@
 
 | 场景 | 改动量 | 说明 |
 | ---------- | ------ | ---- |
-| 默认 QQ 机器人 | 零 | 开箱即是 |
+| 默认 QQ 机器人 | 启用 onebot_adapter | 在 `core_plugins.yaml` 把 `onebot_adapter.enabled` 改为 `true` 并重启（官方插件默认全部关闭） |
 | 换 Telegram / Discord / QQ 官方 | 开对应接入端 | 已内置，填凭证即可；不够再写 adapter |
 | 定时任务 / 监控告警 | 换插件 | 调度器 + 事件总线现成 |
 | 带权限的内部工具 | 换插件 | 权限 + 后台 + 数据库现成 |
@@ -87,7 +87,7 @@ def collect_metrics():
     )
 ```
 
-> 提示：定时任务签名不带 `event`（见 [ctx 参考](../api/basic/ctx.md)）。
+> 提示：定时任务签名不带 `event`（见 [ctx 参考](ctx.md)）。
 > 真要发消息时，再从 `get_connected_bots()` 里选一个就绪接入端。
 
 要点：定时任务的事件源就是时间。没有 OneBot 时，`scheduler` 就是你的事件源。
@@ -106,7 +106,7 @@ curl -X POST http://127.0.0.1:8901/hook \
 
 事件归一化入核后，和 IM 来的消息走同一条插件管线。
 
-**想自定义路径 / 鉴权时**，可手写最小接入端（理解契约用，完整版见 [协议适配器](../api/advanced/protocol_adapter.md)）：
+**想自定义路径 / 鉴权时**，可手写最小接入端（理解契约用，完整版见 [协议适配器](protocol_adapter.md)）：
 
 ```python
 # core_plugins/http_webhook/main.py
@@ -194,7 +194,7 @@ async def leave(ev, match):
                         message="请假申请已提交")
 ```
 
-权限、审计、后台是平台给的，你只写业务。权限节点与身份轴的细节见 [权限系统](../advanced/permission.md)。
+权限、审计、后台是平台给的，你只写业务。权限节点与身份轴的细节见 [权限系统](permission.md)。
 
 ## 写插件的通用规范
 
@@ -322,6 +322,6 @@ assert fake.sent[0]["message"] == "你 2 级"
 
 ## 继续深入
 
-- 自写接入端 → [协议适配器](../api/advanced/protocol_adapter.md)
-- 完整插件教程 → [编写插件](./writing-plugins.md)
-- 权限机制 → [权限系统](../advanced/permission.md)
+- 自写接入端 → [协议适配器](protocol_adapter.md)
+- 完整插件教程 → [编写插件](writing-plugins.md)
+- 权限机制 → [权限系统](permission.md)

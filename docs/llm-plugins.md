@@ -31,12 +31,12 @@ def unregister(): ...                # 可选
 | ---- | ---- |
 | 发送 | `send_msg/asend_msg(user_id, group_id, message)`、`api/aapi(action, bot=None, **params)`、`actions` |
 | 会话 | `await wait_for(event, prompt, timeout)`、`create_session(event)`(session 插件) |
-| 数据 | `db.query/execute(sql, params)`(SQLite/MySQL 双方言)、`get_config(key, default)` |
+| 数据 | `db_query/db_execute(sql, params)`(及 `db_query_one`/`db_insert`/`create_table` 与异步 `*_async` 版;SQLite/MySQL 双方言)、`get_config(key, default)` |
 | 权限 | `has_perm(user_id, node)`、`audit_log(action)` |
 | 其它 | `on/emit/aemit`、`hook/unhook`、`register_api(path, view)`、`webui(...)`、`log(msg)` |
 
 event 字段:`message`(提取后文本)、`raw_message`、`user_id/group_id/is_group`、`sender`、
-`role`、`is_admin`、`segments`、`reply_text()`、`stop_propagation()`。
+`role`、`is_admin`、`segments`、`reply_id`(被回复消息 ID,属性)、`stop_event()`(停止传播)。
 
 ## LLM 子系统（可选）
 
@@ -49,7 +49,7 @@ event 字段:`message`(提取后文本)、`raw_message`、`user_id/group_id/is_g
 - 注册模型提供商：`svc.register_provider(Provider 子类实例)`（provider id 要各不相同）
 - 函数契约：描述写给模型看；参数是 JSON Schema（也可按类型注解推导）；返回 str 回灌、
   返回 None 不回灌；参数校验失败会回灌错误信息让模型自纠
-- 详见 [docs/guide/llm-chat.md](../guide/llm-chat.md)
+- 详见 [docs/llm-chat.md](llm-chat.md)
 
 ## 跨插件访问
 

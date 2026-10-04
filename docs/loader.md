@@ -270,8 +270,8 @@ CPython 默认按源码整数秒 mtime + 文件大小校验 `.pyc`：如果在�
 
 说明模块没有被当作包成员加载。确认：
 
-1. 你的框架版本是否为本文所述的合成包机制（`loader.py` 里有
-   `_ensure_plugin_package`）；旧版本请改用短名绝对导入或升级；
+1. 你的框架版本是否为本文所述的合成包机制（`framework/loader/lifecycle.py` 的
+   `PluginLifecycleMixin` 里有 `_ensure_plugin_package`）；旧版本请改用短名绝对导入或升级；
 2. 你是不是绕过框架、自己用 `python plugins/xxx/main.py` 直接跑了？
    插件必须由框架加载，直接运行脚本时没有合成包上下文。
 

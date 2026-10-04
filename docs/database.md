@@ -14,7 +14,7 @@ SQL 能不能跑，解决不了 SQLite 的并发与扩展上限。
 - SQL 方言翻译：`framework/database/dialect.py`（纯函数）；
 - 自动建表/迁移：`framework/database/schema.py` + `framework/database/init_db.py` 的 `auto_init_database(db)`；
 - 调试模式引擎：`framework/database/sql_sim.py` 的 `SqlSimEngine`（无数据库时本地 SQL 模拟）；
-- 配置见 [配置系统](../guide/configuration.md#数据库)。
+- 配置见 [配置系统](configuration.md#数据库)。
 
 ## 存储降级兜底（数据库不可用）
 
@@ -30,7 +30,7 @@ SQLite 路径不可写等）时框架不会因此无法启动，而是自动降�
 - 旧版 `database.type: file`（降级文件存储）**已移除**：该模式 SQL 调用一律返回空值、
   无实际持久化能力，现已不可用；若配置中仍写 `type: file`，框架启动将明确报错提示改用
   `sqlite` / `mysql` / `debug`；
-- 框架可通过 `db.pool_status`（`type` 字段为 `debug`）感知当前处于调试/降级兜底模式。
+- 框架通过 `framework.db_debug_mode`（True 表示调试/降级兜底模式）与 `framework.storage_mode`（sqlite/mysql/debug）感知当前后端；连接池状态可用 `ctx.db_pool_status` 查看。
 
 ## 调试模式（低性能模式 / 本地模拟 SQL）
 
@@ -58,7 +58,7 @@ SQLite 路径不可写等）时框架不会因此无法启动，而是自动降�
   写入先进缓冲，按 `database.debug_flush_ms`（毫秒，默认 `1000`，`0`=逐次
   同步落盘）由后台线程合并落盘，正常关停/进程退出兜底全量落盘（进程被强杀
   最多丢最近一个刷盘间隔的写入）；外部/手工改动 JSON 文件按 mtime 自动重载；
-- 框架感知：`framework.storage_mode`（`sqlite/mysql/file/debug`）与
+- 框架感知：`framework.storage_mode`（`sqlite/mysql/debug`）与
   `framework.db_debug_mode`（True 表示调试模式）暴露当前后端。
 
 ```yaml

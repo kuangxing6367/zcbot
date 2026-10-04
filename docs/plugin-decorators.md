@@ -33,8 +33,8 @@ def handle_sign(event, match):
     ...
 ```
 
-参数与 [ctx.command](/api/basic/ctx#二命令注册) 一致：`priority`、`dynamic`、`alias`、`description`、`require_admin`、`require_superuser`、`require_perm`。
-`dynamic=True` 时该命令仅展示、不参与路由（见 [静态命令与动态命令](/api/basic/ctx#静态命令与动态命令dynamic-参数)）。
+参数与 [ctx.command](/ctx#二命令注册) 一致：`priority`、`dynamic`、`alias`、`description`、`require_admin`、`require_superuser`、`require_perm`。
+`dynamic=True` 时该命令仅展示、不参与路由（见 [静态命令与动态命令](/ctx#静态命令与动态命令dynamic-参数)）。
 
 ### @on(event_name) / @on_message / @on_raw_message
 
@@ -58,7 +58,7 @@ def raw(raw_event: dict, bot_name: str):
 
 ### @hook(point, priority=50)
 
-在内核扩展点挂接处理器，等价于 `ctx.hook(point, handler, priority)`。可用扩展点见 [Hook 系统](/api/advanced/hooks)。
+在内核扩展点挂接处理器，等价于 `ctx.hook(point, handler, priority)`。可用扩展点见 [Hook 系统](/hooks)。
 
 ```python
 @hook("command.before")
@@ -133,4 +133,4 @@ def query_days(group_id):
 | `@group_extension(...)` | `ctx.register_group_extension(handler, ...)` |
 | `@user_extension(...)` | `ctx.register_user_extension(handler, ...)` |
 
-完整 ctx 能力清单见 [PluginContext 参考](/api/basic/ctx)。
+完整 ctx 能力清单见 [PluginContext 参考](/ctx)。
