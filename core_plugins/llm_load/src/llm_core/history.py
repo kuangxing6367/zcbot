@@ -30,10 +30,29 @@ from typing import Dict, List, Optional
 logger = logging.getLogger('zcbot.llm_core')
 
 __all__ = ['Conversation', 'ConversationStore', 'SessionPersist',
-           'estimate_tokens', 'session_key']
+           'estimate_tokens', 'session_key', 'parse_session_key', 'content_text']
 
 _CJK = re.compile(r'[\u4e00-\u9fff]')
 _LATIN = re.compile(r'[A-Za-z]+')
+
+# 会话摘要里留给面板搜索的正文字幕上限（够长话也翻得动，又不至于拖慢列表）
+_SEARCH_TEXT_LIMIT = 20000
+
+
+def content_text(content) -> str:
+    """消息正文拍平成纯文本（带图时正文是内容块数组）"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return ' '.join(str(b.get('text') or '') for b in content
+                        if isinstance(b, dict) and b.get('type') == 'text')
+    return ''
+
+
+def _search_text(messages: List[dict]) -> str:
+    parts = [content_text(m.get('content')) for m in messages or [] if isinstance(m, dict)]
+    text = '\n'.join(p for p in parts if p)
+    return text[:_SEARCH_TEXT_LIMIT]
 
 
 def estimate_tokens(messages: List[dict]) -> int:
@@ -63,9 +82,29 @@ def estimate_tokens(messages: List[dict]) -> int:
 
 
 def session_key(source: str = '', group_id=None, user_id=None) -> str:
-    """会话唯一键。群聊时 user_id 不参与（群里是公共上下文）。"""
+    """会话唯一键：来源:群(或 private):用户。三段都参与，群聊同样按人隔离。"""
     gid = str(group_id) if group_id else 'private'
     return f"{source or '-'}:{gid}:{user_id or 0}"
+
+
+def parse_session_key(key: str) -> dict:
+    """把会话键拆回来源/群/用户，供面板展示与过滤。
+
+    注意：历史原因下 group_id 段可能是字面量 'private'（私聊），
+    而 user_id 段始终参与，所以群聊实际也是按人隔离的。
+    """
+    parts = (key or '').split(':')
+    source = parts[0] if parts else ''
+    gid = parts[1] if len(parts) > 1 else ''
+    uid = parts[2] if len(parts) > 2 else ''
+    is_group = bool(gid) and gid != 'private'
+    return {
+        'key': key or '',
+        'source': source if source != '-' else '',
+        'group_id': gid if is_group else '',
+        'user_id': uid,
+        'is_group': is_group,
+    }
 
 
 class Conversation:
@@ -204,7 +243,11 @@ class Conversation:
             'messages': len(self._messages),
             'tokens': estimate_tokens(self.as_request()),
             'compressed': self.compressed_times,
+            'persona': self.persona or '',
             'idle_seconds': int(time.time() - self.updated_at),
+            'created_at': int(self.created_at),
+            'updated_at': int(self.updated_at),
+            'search_text': _search_text(self._messages),
         }
 
 
@@ -252,11 +295,31 @@ class SessionPersist:
         except Exception:  # noqa: BLE001 - 不存在/损坏都当没有
             return None
 
-    def delete(self, key: str) -> None:
+    def delete(self, key: str) -> bool:
         try:
             os.remove(self._path(key))
+            return True
         except OSError:
-            pass
+            return False
+
+    def iter_records(self) -> List[dict]:
+        """读出磁盘上所有会话文件。重启后内存是空的，面板要靠这个看到历史会话。"""
+        out: List[dict] = []
+        try:
+            names = os.listdir(self._dir)
+        except OSError:
+            return out
+        for name in names:
+            if not name.endswith('.json'):
+                continue
+            try:
+                with open(os.path.join(self._dir, name), 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:  # noqa: BLE001 - 半截/损坏文件跳过，不拖垮整个列表
+                continue
+            if isinstance(data, dict) and isinstance(data.get('messages'), list):
+                out.append(data)
+        return out
 
     def clear(self) -> None:
         try:
@@ -348,9 +411,10 @@ class ConversationStore:
             conv.created_at = conv.created_at if conv.created_at < conv.updated_at else conv.updated_at
 
     def drop(self, key: str) -> bool:
+        """删掉一个会话（内存 + 磁盘），返回是否真删掉了东西"""
         existed = self._sessions.pop(key, None) is not None
         if self._persist is not None:
-            self._persist.delete(key)
+            existed = self._persist.delete(key) or existed
         return existed
 
     def clear_all(self) -> int:
@@ -359,6 +423,57 @@ class ConversationStore:
         if self._persist is not None:
             self._persist.clear()
         return n
+
+    def list_sessions(self) -> List[dict]:
+        """内存 ∪ 磁盘 的会话概览，按最近活跃倒序。
+
+        内存里的会话是唯一真相（可能比磁盘新）；只在磁盘上有的说明还没被
+        LRU 捞回来或刚重启，同样列出来，否则面板在重启后是空的。
+        """
+        items: List[dict] = [conv.summary() for conv in self._sessions.values()]
+        seen = {it['key'] for it in items}
+        if self._persist is not None:
+            for rec in self._persist.iter_records():
+                key = rec.get('key')
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                items.append(self._summarize_record(rec))
+        items.sort(key=lambda it: it['updated_at'], reverse=True)
+        return items
+
+    def _summarize_record(self, rec: dict) -> dict:
+        """磁盘记录（未加载进内存）折算成与 Conversation.summary 同构的概览"""
+        messages = [m for m in rec.get('messages') or [] if isinstance(m, dict)]
+        probe = ([{'role': 'system', 'content': self._system_prompt}]
+                 if self._system_prompt else []) + messages
+        updated = float(rec.get('saved_at') or 0)
+        return {
+            'key': rec.get('key') or '',
+            'turns': sum(1 for m in messages if m.get('role') == 'user'),
+            'messages': len(messages),
+            'tokens': estimate_tokens(probe),
+            'compressed': int(rec.get('compressed_times') or 0),
+            'persona': str(rec.get('persona') or ''),
+            'idle_seconds': max(0, int(time.time() - updated)),
+            'created_at': int(updated),
+            'updated_at': int(updated),
+            'search_text': _search_text(messages),
+        }
+
+    def detail(self, key: str) -> Optional[dict]:
+        """单个会话的完整消息，供面板查看；不落盘的会话只在内存里"""
+        conv = self._sessions.get(key)
+        if conv is not None:
+            return {'key': key, 'persona': conv.persona or '',
+                    'messages': conv.messages}
+        if self._persist is None:
+            return None
+        rec = self._persist.load(key)
+        if not rec:
+            return None
+        return {'key': key, 'persona': str(rec.get('persona') or ''),
+                'messages': [m for m in rec['messages'] if isinstance(m, dict)]}
 
     def keys(self) -> List[str]:
         return list(self._sessions.keys())

@@ -445,10 +445,11 @@ class PluginLifecycleMixin:
             logger.warning(f"[{plugin_name}] on_unload 异常: {e}")
 
         # 清理调度器中的定时任务
-        try:
-            self.framework.scheduler.remove_plugin_tasks(plugin_name)
-        except Exception as e:
-            logger.warning(f"[{plugin_name}] 清理调度器任务失败: {e}")
+        if self.framework.scheduler is not None:
+            try:
+                self.framework.scheduler.remove_plugin_tasks(plugin_name)
+            except Exception as e:
+                logger.warning(f"[{plugin_name}] 清理调度器任务失败: {e}")
 
         # 清理数据库
         try:

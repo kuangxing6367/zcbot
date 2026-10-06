@@ -3,7 +3,7 @@
     <el-aside :width="collapsed ? '64px' : '220px'" class="sidebar">
       <div class="brand">
         <img v-show="!collapsed" :src="logoUrl" alt="ZCBOT" class="brand-logo" />
-        <el-icon v-show="collapsed" :size="24" color="#6366f1"><Cpu /></el-icon>
+        <img v-show="collapsed" :src="logoMiniUrl" alt="ZCBOT" class="brand-logo-mini" />
         <span v-show="!collapsed" class="brand-name">ZCBOT</span>
       </div>
       <el-menu :default-active="activeKey" router :collapse="collapsed" class="nav-menu">
@@ -75,7 +75,10 @@ import { OFFICIAL_SIDEBAR_ITEMS } from '../sidebar'
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
-const logoUrl = import.meta.env.BASE_URL + 'img/logo.png'
+// 标志按主题切换明暗两版：亮底用 #6366F1，暗底提亮到 #818CF8
+const logoUrl = computed(() => import.meta.env.BASE_URL + (theme.value === 'dark' ? 'img/zcbot-icon-dark.svg' : 'img/zcbot-icon-light.svg'))
+// 折叠态 24px 用简化版：标准版断口在 24px 下只有 2px，会糊
+const logoMiniUrl = computed(() => import.meta.env.BASE_URL + (theme.value === 'dark' ? 'img/zcbot-icon-mini-dark.svg' : 'img/zcbot-icon-mini-light.svg'))
 
 const titleMap = {
   dashboard: '仪表盘', marketplace: '插件市场', plugins: '插件管理', commands: '命令管理',
@@ -168,6 +171,7 @@ onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer) })
   font-weight: 700;
 }
 .brand-logo { height: 30px; width: 30px; object-fit: contain; }
+.brand-logo-mini { height: 24px; width: 24px; object-fit: contain; }
 .nav-menu { border-right: none; flex: 1; overflow-y: auto; }
 .plugin-ico { display: inline-flex; width: 1em; justify-content: center; }
 .sidebar-foot { border-top: 1px solid var(--el-border-color); }

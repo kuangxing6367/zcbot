@@ -128,8 +128,9 @@ class Database(DatabaseConnMixin):
                 return rows
             finally:
                 cursor.close()
-                if self.db_type == 'mysql':
-                    conn.close()  # 归还连接池（而非真关闭）
+                if self.db_type == 'mysql' and not getattr(self._local, 'in_txn', False):
+                    # 归还连接池（而非真关闭）；事务内连接被 pin，归还要等 transaction() 统一做
+                    conn.close()
         return self._run_with_reconnect(_do, sql, params)
 
     def query_one(self, sql: str, params: tuple = None) -> dict:
@@ -147,8 +148,9 @@ class Database(DatabaseConnMixin):
                 return row
             finally:
                 cursor.close()
-                if self.db_type == 'mysql':
-                    conn.close()  # 归还连接池（而非真关闭）
+                if self.db_type == 'mysql' and not getattr(self._local, 'in_txn', False):
+                    # 归还连接池（而非真关闭）；事务内连接被 pin，归还要等 transaction() 统一做
+                    conn.close()
         return self._run_with_reconnect(_do, sql, params)
 
     def _write(self, sql: str, params=None, *, many: bool = False,
@@ -181,8 +183,9 @@ class Database(DatabaseConnMixin):
                 raise
             finally:
                 cursor.close()
-                if self.db_type == 'mysql':
-                    conn.close()  # 归还连接池（而非真关闭）
+                if self.db_type == 'mysql' and not getattr(self._local, 'in_txn', False):
+                    # 归还连接池（而非真关闭）；事务内连接被 pin，归还要等 transaction() 统一做
+                    conn.close()
         return self._run_with_reconnect(_do, sql, params)
 
     def execute(self, sql: str, params: tuple = None) -> int:
@@ -242,11 +245,13 @@ class Database(DatabaseConnMixin):
         # 固定事务连接：事务内所有 db.* 调用走同一连接
         self._local.txn_conn = conn
         self._local.in_txn = True
-        if self.db_type == 'mysql':
-            conn.autocommit(False)
-        else:
-            conn.execute('BEGIN')
         try:
+            if self.db_type == 'mysql':
+                # 借出的连接可能已被服务端空闲断开，先 ping 重建，避免死连接被 pin 死
+                conn.ping(reconnect=True)
+                _set_autocommit(conn, False)
+            else:
+                conn.execute('BEGIN')
             yield conn
             conn.commit()
         except Exception:
@@ -259,9 +264,15 @@ class Database(DatabaseConnMixin):
             self._local.in_txn = False
             self._local.txn_conn = None
             if self.db_type == 'mysql':
-                conn.autocommit(True)
+                try:
+                    _set_autocommit(conn, True)
+                except Exception:
+                    pass
                 if borrowed:
-                    conn.close()  # 归还连接池
+                    try:
+                        conn.close()  # 归还连接池
+                    except Exception:
+                        pass
             # SQLite 线程本地连接不关闭，交给后续复用
 
     def table_exists(self, table_name: str) -> bool:
@@ -293,6 +304,27 @@ class Database(DatabaseConnMixin):
             return any(r['name'] == column_name for r in cols)
         else:
             return any(r['Field'] == column_name for r in cols)
+
+
+def _set_autocommit(conn, on=True):
+    """
+    MySQL 连接设置 autocommit。
+
+    DBUtils >= 3.x 的 Pooled/SteadyDB 包装层不再把 autocommit 透传给底层
+    DB-API 连接（只有 commit/rollback/cursor 等显式方法），直接调
+    conn.autocommit(...) 会报 'SteadyDBConnection' object has no attribute
+    'autocommit'。沿 _con 链（PooledDedicatedDBConnection → SteadyDBConnection
+    → pymysql）找到真正持有该方法的连接再设置；裸连接首次调用即成功。
+    """
+    c = conn
+    for _ in range(4):
+        try:
+            c.autocommit(on)
+            return
+        except AttributeError:
+            c = getattr(c, '_con', None)
+            if c is None:
+                raise
 
 
 def _parse_sqlite_type(config: dict) -> dict:

@@ -385,7 +385,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         """同步定时任务到数据库和调度器"""
         try:
             # 先移除调度器中的旧任务（避免僵尸残留 + 重复添加报错）
-            self.framework.scheduler.remove_plugin_tasks(plugin_name)
+            if self.framework.scheduler is not None:
+                self.framework.scheduler.remove_plugin_tasks(plugin_name)
 
             # 删除旧任务
             self.db.execute(
@@ -399,7 +400,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
                 )
                 t['id'] = task_id
                 # 注册到调度器
-                self.framework.scheduler.add_plugin_task(t)
+                if self.framework.scheduler is not None:
+                    self.framework.scheduler.add_plugin_task(t)
 
         except Exception as e:
             logger.error(f"[{plugin_name}] 同步任务失败: {e}")

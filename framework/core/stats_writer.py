@@ -178,7 +178,7 @@ class AsyncStatsWriter:
                     [(uid, nick) for uid, nick in users.items()]
                 )
         except Exception as e:
-            logger.error(f"用户注册批量写库失败（{len(users)} 用户）: {e}")
+            logger.error(f"用户注册批量写库失败（{len(users)} 用户）: {e!r}")
 
     def _write_groups(self, groups: dict):
         """群信息自动注册（executemany 单事务）"""
@@ -193,7 +193,7 @@ class AsyncStatsWriter:
                     [(gid, gname) for gid, gname in groups.items()]
                 )
         except Exception as e:
-            logger.error(f"群注册批量写库失败（{len(groups)} 群）: {e}")
+            logger.error(f"群注册批量写库失败（{len(groups)} 群）: {e!r}")
 
     def _write_members(self, members: dict):
         """群成员关系自动注册/活跃计数更新（executemany 单事务）"""
@@ -213,7 +213,7 @@ class AsyncStatsWriter:
                      for (gid, uid), m in members.items()]
                 )
         except Exception as e:
-            logger.error(f"群成员注册批量写库失败（{len(members)} 成员）: {e}")
+            logger.error(f"群成员注册批量写库失败（{len(members)} 成员）: {e!r}")
 
     async def stop(self):
         """停止并执行最后一次落库"""

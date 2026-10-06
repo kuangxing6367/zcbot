@@ -13,6 +13,16 @@ import time
 
 logger = logging.getLogger('zcbot')
 
+
+def _split_pkg_name(spec: str) -> str:
+    """从 pip 依赖说明符中取包名（去掉 >= / == / ~= 等版本约束）。
+    例：'llm_core>=1.2' -> 'llm_core'"""
+    if not spec:
+        return ''
+    import re
+    m = re.match(r'^([A-Za-z0-9_.\-]+)', str(spec).strip())
+    return m.group(1) if m else ''
+
 # 仪表盘卡片线程池（懒创建；global 指向本模块命名空间）
 _cards_executor = None
 
@@ -171,7 +181,7 @@ class PluginWebuiMixin:
             if info:
                 # 避免重复注册
                 webuis = info.setdefault('webuis', [])
-                # 查找是否已存在同名 WebUI
+                # 查找是否已存在同名 WebUI（同一插件下 title 唯一）
                 existing = next((w for w in webuis if w['title'] == webui_info['title']), None)
                 if not existing:
                     webui_info['plugin_name'] = plugin_name
@@ -211,7 +221,13 @@ class PluginWebuiMixin:
         return path
 
     def get_plugin_webuis(self) -> list:
-        """获取所有已注册的插件 WebUI 列表（按 order 排序）"""
+        """获取所有已注册的插件 WebUI 列表（按 order 排序）
+
+        契约字段：
+          host  —— 依赖归组的宿主插件名。若本插件 plugin.yaml 的 dependencies.python
+                  中包含某个「同样是 webui 插件」的包名，则 host 指向该宿主；否则为 None。
+                  前端据此把子插件自动归入宿主节点下（如 llm_draw 依赖 llm_core → 归入其下）。
+        """
         result = []
         with self._lock:
             for name, info in self._loaded_plugins.items():
@@ -223,9 +239,24 @@ class PluginWebuiMixin:
                         'icon': w.get('icon'),
                         'order': w.get('order', 50),
                         'sidebar': bool(w.get('sidebar', False)),
+                        'host': self._resolve_webui_host(name, result),
                     })
-        result.sort(key=lambda x: x['order'])
+        result.sort(key=lambda x: (x['host'] is not None, x['order']))
         return result
+
+    def _resolve_webui_host(self, plugin_name: str, webuis: list) -> str:
+        """按 plugin.yaml 依赖解析归属的宿主 webui 插件名（无则 None）"""
+        webui_names = {w['plugin_name'] for w in webuis if w['plugin_name'] != plugin_name}
+        try:
+            yaml_data = self.read_plugin_yaml(plugin_name)
+            deps = (yaml_data or {}).get('dependencies', {}).get('python', []) or []
+            for dep in deps:
+                pkg = _split_pkg_name(dep)
+                if pkg and pkg in webui_names:
+                    return pkg
+        except Exception:
+            pass
+        return None
 
     def get_plugin_webui_path(self, plugin_name: str) -> str:
         """获取插件 web/ 目录的绝对路径"""

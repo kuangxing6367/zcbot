@@ -2,7 +2,13 @@
 """qq_official 适配器增量能力测试（富媒体 / markdown / 按钮 / 互动回调 /
 生命周期事件 / 撤回）。全部离线，不触网。"""
 import asyncio
+import base64
+import time
+import types
+
 import pytest
+
+from core_plugins.qq_official import main
 
 from core_plugins.qq_official.main import (
     QQOfficialAdapter, _split_outgoing, _first_media, build_keyboard,
@@ -28,7 +34,7 @@ class _Recorder:
 # ── 出站拆分 ─────────────────────────────────────────────────
 
 def test_split_plain_text():
-    text, media, md, buttons = _split_outgoing('你好')
+    text, media, md, buttons, card, pk = _split_outgoing('你好')
     assert text == '你好' and media is None and md is None and buttons is None
 
 
@@ -38,13 +44,13 @@ def test_split_media_pick_first():
         {'type': 'image', 'data': {'file': 'base64://aGk='}},
         {'type': 'record', 'data': {'file': 'https://x/a.silk'}},
     ]
-    _, media, _, _ = _split_outgoing(msg)
+    _, media, _, _, _, _ = _split_outgoing(msg)
     assert media is not None and media[0] == 'image', "应取第一个媒体段"
     assert _first_media(msg)[0] == 'image'
 
 
 def test_split_at_degrades_to_text():
-    text, media, _, _ = _split_outgoing(
+    text, media, _, _, _, _ = _split_outgoing(
         [{'type': 'at', 'data': {'qq': '10001', 'name': '张三'}}])
     assert text == '@张三' and media is None
 
@@ -54,7 +60,7 @@ def test_split_markdown_and_buttons():
         {'type': 'markdown', 'data': {'content': '# 标题'}},
         {'type': 'keyboard', 'data': {'buttons': [{'text': '点我', 'data': 'go'}]}},
     ]
-    _, _, md, buttons = _split_outgoing(msg)
+    _, _, md, buttons, _, _ = _split_outgoing(msg)
     assert md == '# 标题' and len(buttons) == 1
 
 
@@ -332,3 +338,138 @@ def test_call_api_send_voice_segment():
     assert captured['seg_type'] == 'record'
     assert captured['path'] == '/v2/groups/G1/messages'
     assert captured['body']['msg_type'] == 7
+
+
+# ── v1.1.0 新增：body 错误码 / 11244 / 流式 / 卡片 / 群管理 ──────────
+
+
+def _http_resp(status=200, body=None, text=''):
+    import types as _t
+    import json as _json
+    content = _json.dumps(body).encode() if body is not None else b''
+    return _t.SimpleNamespace(status_code=status, content=content,
+                              text=text or (content.decode() if content else ''))
+
+
+def test_api_request_http200_body_error_raises_api_error():
+    a = _adapter()
+    a._access_token = 'tok'
+    a._token_expire_at = time.time() + 1000
+    a._http = types.SimpleNamespace(request=lambda *ar, **kw: _http_resp(
+        body={'code': 40023001, 'err_code': 40023001, 'message': 'rate'}))
+    with pytest.raises(RuntimeError) as ei:
+        a._api_request('POST', '/x', json_body={})
+    assert isinstance(ei.value, main._ApiError)
+    assert ei.value.err_code == '40023001'
+
+
+def test_api_request_11244_refreshes_token_and_retries():
+    a = _adapter()
+    a._access_token = 'old'
+    a._token_expire_at = time.time() + 1000
+    calls = {'n': 0}
+
+    seen_headers = []
+
+    def fake_request(method, url, **kw):
+        calls['n'] += 1
+        seen_headers.append(kw.get('headers', {}).get('Authorization'))
+        if calls['n'] == 1:
+            return _http_resp(body={'code': 11244, 'message': 'token expired'})
+        return _http_resp(body={'id': 'ok'})
+    a._http = types.SimpleNamespace(request=fake_request)
+
+    def fake_refresh():
+        a._access_token = 'new-tok'
+        return 'new-tok'
+    a._refresh_token_sync = fake_refresh
+    data = a._api_request('POST', '/x', json_body={})
+    assert data == {'id': 'ok'} and calls['n'] == 2
+    assert seen_headers[0] == 'QQBot old' and seen_headers[1] == 'QQBot new-tok'
+
+
+def test_send_group_error_hint_11255():
+    import asyncio as _aio
+    e = main._ApiError('POST', '/x', {'code': 11255, 'err_code': 11255,
+                                      'message': 'removed'})
+    hint = main.QQOfficialAdapter._group_error_hint(e)
+    assert '11255' in hint and '移出' in hint
+    # 非 _ApiError 原样透传
+    assert main.QQOfficialAdapter._group_error_hint(
+        RuntimeError('plain')) == 'plain'
+
+
+def test_send_stream_builds_body():
+    import asyncio as _aio
+    a = _adapter()
+    captured = {}
+
+    def fake(method, path, json_body=None, **kw):
+        captured['path'] = path
+        captured['body'] = json_body
+        return {'id': 'SM1'}
+    a._api_request = fake
+    r = _aio.run(a._send_stream('U1', 'hello', msg_id='M1', index=0,
+                                input_state=1))
+    assert r['status'] == 'ok'
+    assert captured['path'] == '/v2/users/U1/stream_messages'
+    b = captured['body']
+    assert b['input_mode'] == 'replace' and b['input_state'] == 1
+    assert b['index'] == 0 and b['content_raw'] == 'hello'
+    assert b['msg_id'] == 'M1' and 'msg_seq' in b
+
+
+def test_card_and_prompt_keyboard_in_body():
+    import asyncio as _aio
+    a = _adapter()
+    captured = {}
+    a._api_request = lambda m, p, json_body=None, **kw: captured.update(
+        path=p, body=json_body) or {'id': 'M'}
+    r = _aio.run(a.call_api(
+        'send_msg', group_id='G1', active=True, card={'card_type': 'tuwen',
+                                                      'content': {'a': 1}},
+        prompt_buttons=[{'text': '提示', 'data': 'p1'}]))
+    assert r['status'] == 'ok'
+    assert captured['body']['msg_type'] == 8
+    assert captured['body']['card'] == {'type': 'tuwen', 'content': {'a': 1}}
+    assert captured['body']['prompt_keyboard']['content']['rows']
+
+
+def test_group_admin_passthrough():
+    import asyncio as _aio
+    a = _adapter()
+    captured = {}
+
+    def fake(method, path, json_body=None, data=None, **kw):
+        captured.update(method=method, path=path, body=json_body)
+        return {'members': []}
+    a._api_request = fake
+    r = _aio.run(a.call_api('get_group_members', group_id='G1'))
+    assert r['status'] == 'ok'
+    assert captured['path'] == '/v2/groups/G1/members'
+    r = _aio.run(a.call_api('review_group_join_request', group_id='G1',
+                            member_openid='U1', op='decline',
+                            reject_reason='no'))
+    assert captured['method'] == 'POST'
+    assert captured['path'] == '/v2/groups/G1/approval_join_request/U1'
+    assert captured['body'] == {'op': 'decline', 'reject_reason': 'no'}
+
+
+def test_upload_media_size_cap():
+    import asyncio as _aio
+    a = _adapter()
+    big = base64.b64encode(b'x' * (main._MAX_MEDIA_BYTES + 1)).decode()
+    with pytest.raises(Exception, match='上限'):
+        _aio.run(a._upload_media('G1', 'image', {'file': f'base64://{big}'}))
+
+
+def test_normalize_incoming_dict_yields_media_segments():
+    a = _adapter()
+    segs = a.normalize_incoming({
+        'content': '看图',
+        'attachments': [{'url': 'https://x/a.png',
+                         'content_type': 'image/png'}],
+    })
+    types_ = [s['type'] for s in segs]
+    assert types_ == ['text', 'image']
+    assert segs[1]['data']['url'] == 'https://x/a.png'

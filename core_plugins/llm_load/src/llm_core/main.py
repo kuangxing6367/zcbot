@@ -40,7 +40,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .agent import AgentResult, ToolLoopAgent
-from .history import ConversationStore, SessionPersist, estimate_tokens, session_key
+from .history import (ConversationStore, SessionPersist, estimate_tokens,
+                      parse_session_key, session_key)
 from .media import MediaCache, build_user_content, extract_images
 from .mcp import bind_mcp_tools
 from .providers import OpenAICompatProvider, Provider, ProviderError, ProviderRegistry
@@ -70,7 +71,7 @@ __plugin_meta__ = {
 # 版本号仅用于 /llmstatus 展示与日志；llm_load 重新释放/重启是按 manifest 里
 # 每个文件的 md5 比对触发的（改了源码重新打包即可，见 tools/build_llm_payload.py），
 # 不依赖这个号是否递增。改动源码后照常 --write 重打包即可生效。
-__version__ = '1.0.6'
+__version__ = '1.1.1'
 
 _DEFAULT_SYSTEM_PROMPT = (
     "你是跑在聊天软件里的助手。回答要用口语，别写小作文，"
@@ -80,11 +81,12 @@ _DEFAULT_SYSTEM_PROMPT = (
 _MAX_REPLY_CHARS = 1200
 
 try:  # Flask 是可选依赖（启用 webui 插件时才安装）
-    from flask import jsonify, request as flask_request
+    from flask import Response as flask_response, jsonify, request as flask_request
     _HAS_FLASK = True
 except Exception:  # noqa: BLE001
     jsonify = None
     flask_request = None
+    flask_response = None
     _HAS_FLASK = False
 
 
@@ -476,10 +478,8 @@ async def handle_chat(event, match):
                                max_tokens=int(_cfg('max_tokens', 1024)))
     elapsed = time.time() - started
 
-    # 工具执行错了不写进历史，否则错误上下文会被下一轮复读一遍
+    # 助手的回复由 agent 循环内部写入会话，这里只负责发给用户
     body = result.text or result.error or "（模型没有给出任何内容）"
-    if result.ok and body:
-        conv.append({'role': 'assistant', 'content': body})
 
     for chunk in _split_text(body):
         await ctx.asend_msg(user_id=event.user_id,
@@ -716,6 +716,184 @@ def _view_clear_sessions():
     return jsonify({'code': 0, 'data': {'cleared': n}})
 
 
+# ── 会话管理接口 ──────────────────────────────────────────────
+
+def _req_arg(key: str, default=None):
+    """先取 query 再取 JSON body，让 GET/POST 共用一套参数名"""
+    if flask_request is None:
+        return default
+    val = flask_request.args.get(key)
+    if val not in (None, ''):
+        return val
+    if flask_request.method != 'GET':
+        body = flask_request.get_json(silent=True) or {}
+        val = body.get(key)
+        if val not in (None, ''):
+            return val
+    return default
+
+
+def _parse_when(val):
+    """时间过滤参数：接受 epoch 秒或 YYYY-MM-DD[ HH:MM:SS]，解不出返回 None"""
+    if val in (None, ''):
+        return None
+    s = str(val).strip()
+    try:
+        return int(float(s))
+    except ValueError:
+        pass
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+        try:
+            return int(time.mktime(time.strptime(s, fmt)))
+        except ValueError:
+            continue
+    return None
+
+
+def _int_arg(key: str, default: int, lo: int, hi: int) -> int:
+    try:
+        val = int(str(_req_arg(key, default)).strip())
+    except (TypeError, ValueError):
+        return default
+    return min(hi, max(lo, val))
+
+
+def _all_sessions():
+    """会话概览 + 会话键拆解，供过滤用"""
+    items = []
+    for it in _Svc.store.list_sessions():
+        meta = parse_session_key(it['key'])
+        meta.update(it)
+        items.append(meta)
+    return items
+
+
+def _filter_sessions(items=None):
+    """按 query/body 里的 source / chat_type / q / since / until 过滤概览。
+
+    列表和导出共用：面板筛出什么就能导什么，不用前端把分页翻一遍凑 key。
+    """
+    items = _all_sessions() if items is None else items
+
+    source = str(_req_arg('source') or '')
+    chat_type = str(_req_arg('chat_type') or '')
+    q = str(_req_arg('q') or '').strip().lower()
+    since = _parse_when(_req_arg('since'))
+    until = _parse_when(_req_arg('until'))
+
+    if source:
+        items = [it for it in items if it['source'] == source]
+    if chat_type == 'group':
+        items = [it for it in items if it['is_group']]
+    elif chat_type == 'private':
+        items = [it for it in items if not it['is_group']]
+    if since:
+        items = [it for it in items if it['updated_at'] >= since]
+    if until:
+        items = [it for it in items if it['updated_at'] <= until]
+    if q:
+        # 概览里已经带了正文字幕，不用再逐个读盘
+        items = [it for it in items
+                 if q in it['key'].lower() or q in (it['search_text'] or '').lower()]
+    return items
+
+
+def _view_sessions():
+    """会话列表：来源 / 群私聊 / 时间范围 / 关键词过滤 + 分页。
+
+    列表来自 store.list_sessions()（内存 ∪ 磁盘），所以刚重启、会话还没被
+    LRU 捞回内存时，面板依然看得到历史会话。
+    """
+    items = _all_sessions()
+
+    stats = {
+        'total': len(items),
+        'messages': sum(it['messages'] for it in items),
+        'tokens': sum(it['tokens'] for it in items),
+        'active_1h': sum(1 for it in items if it['idle_seconds'] < 3600),
+    }
+    facets = {'sources': sorted({it['source'] for it in items if it['source']})}
+
+    items = _filter_sessions(items)
+    page = _int_arg('page', 1, 1, 10 ** 6)
+    page_size = _int_arg('page_size', 20, 1, 100)
+    total = len(items)
+    pages = max(1, -(-total // page_size))
+    page = min(page, pages)
+    start = (page - 1) * page_size
+    # 正文字幕只用来筛，不跟着列表下发
+    rows = [{k: v for k, v in it.items() if k != 'search_text'}
+            for it in items[start:start + page_size]]
+    return jsonify({'code': 0, 'data': {
+        'sessions': rows,
+        'pagination': {'page': page, 'page_size': page_size,
+                       'total': total, 'total_pages': pages},
+        'facets': facets,
+        'stats': stats,
+    }})
+
+
+def _view_session_detail():
+    key = str(_req_arg('key') or '')
+    if not key:
+        return jsonify({'code': 1, 'msg': '缺少会话 key'})
+    det = _Svc.store.detail(key)
+    if det is None:
+        return jsonify({'code': 404, 'msg': '会话不存在或已被回收'})
+    det['meta'] = parse_session_key(key)
+    return jsonify({'code': 0, 'data': det})
+
+
+def _arg_keys():
+    """取 keys 参数：接受数组、单个字符串，以及单数 key"""
+    keys = _req_arg('keys') or []
+    if isinstance(keys, str):
+        keys = [k for k in keys.split(',') if k.strip()]
+    single = str(_req_arg('key') or '')
+    if single:
+        keys = list(keys) + [single]
+    return [str(k).strip() for k in keys if str(k).strip()]
+
+
+def _view_delete_sessions():
+    keys = _arg_keys()
+    if not keys:
+        return jsonify({'code': 1, 'msg': '没有指定会话'})
+    deleted, failed = [], []
+    for key in keys:
+        try:
+            ok = bool(_Svc.store.drop(key))
+        except Exception as e:  # noqa: BLE001 - 一个删不掉不影响其它
+            logger.debug(f"[llm_core] 删除会话失败 {key}: {e}")
+            ok = False
+        (deleted if ok else failed).append(key)
+    return jsonify({'code': 0, 'data': {
+        'deleted': len(deleted), 'failed': failed,
+        'msg': f'已删除 {len(deleted)} 个会话' + (f'，{len(failed)} 个失败' if failed else '')}})
+
+
+def _view_export_sessions():
+    """导出 JSONL（一行一个会话）。给了 keys 就导这些，否则导当前筛选结果。"""
+    keys = _arg_keys()
+    items = ([{'key': k} for k in keys] if keys
+             else [{'key': it['key']} for it in _filter_sessions()])
+    lines = []
+    for it in items:
+        key = it['key']
+        det = _Svc.store.detail(key)
+        if not det:
+            continue
+        lines.append(json.dumps(
+            {'key': key, 'meta': parse_session_key(key),
+             'messages': det.get('messages') or []}, ensure_ascii=False))
+    fname = f"llm_sessions_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    resp = flask_response('\n'.join(lines) + ('\n' if lines else ''),
+                          mimetype='application/x-ndjson')
+    resp.headers['Content-Disposition'] = f'attachment; filename={fname}'
+    resp.headers['X-Session-Count'] = str(len(lines))
+    return resp
+
+
 # ── 注册入口 ──────────────────────────────────────────────────
 
 def register(plugin_ctx):
@@ -812,6 +990,8 @@ def register(plugin_ctx):
 
     # 9. WebUI 面板页 + 数据接口
     try:
+        # 一个插件只有一个侧边栏入口（框架前端按插件名折叠，多注册会撞进同一个页面），
+        # 概览与会话管理做成 index.html 内部的标签页
         ctx.webui(title="LLM 对话", entry="index.html", icon="◈", order=40, sidebar=True)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"注册 WebUI 页面失败: {e}")
@@ -820,6 +1000,14 @@ def register(plugin_ctx):
                          methods=['GET'], description="LLM 子系统总览")
         ctx.register_api('/api/llm_core/tools/<name>', _view_toggle_tool,
                          methods=['POST', 'PUT'], description="开关工具")
+        ctx.register_api('/api/llm_core/sessions', _view_sessions,
+                         methods=['GET'], description="会话列表（过滤 + 分页）")
+        ctx.register_api('/api/llm_core/sessions/detail', _view_session_detail,
+                         methods=['GET'], description="单个会话的消息明细")
+        ctx.register_api('/api/llm_core/sessions/delete', _view_delete_sessions,
+                         methods=['POST'], description="删除会话（支持批量）")
+        ctx.register_api('/api/llm_core/sessions/export', _view_export_sessions,
+                         methods=['POST'], description="导出会话为 JSONL")
         ctx.register_api('/api/llm_core/sessions/clear', _view_clear_sessions,
                          methods=['POST'], description="清空全部会话")
     else:
