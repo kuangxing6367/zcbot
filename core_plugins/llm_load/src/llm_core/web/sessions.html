@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>会话管理</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --panel: #1c1f26;
+    --panel-2: #22262f;
+    --line: #2e333d;
+    --text: #d8dce3;
+    --muted: #8b93a1;
+    --accent: #6ea8fe;
+    --ok: #5dcaa5;
+    --off: #e0855f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 15px; font-weight: 500; margin: 0 0 14px; letter-spacing: .3px; }
+  h2 { font-size: 13px; font-weight: 500; margin: 18px 0 8px; color: var(--muted); }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px 14px;
+  }
+  .card .num { font-size: 20px; font-weight: 500; letter-spacing: .5px; }
+  .card .cap { color: var(--muted); font-size: 12px; }
+  .filters {
+    display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px 14px; margin: 14px 0;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { color: var(--muted); font-size: 12px; }
+  input, select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font-size: 12px; font-family: inherit;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  input[type=text] { min-width: 200px; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.warn:hover { border-color: var(--off); color: var(--off); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-weight: 400; white-space: nowrap; }
+  th { color: var(--muted); font-size: 12px; background: var(--panel-2); }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--panel-2); }
+  td.key { white-space: normal; word-break: break-all; max-width: 260px; font-family: Consolas, monospace; font-size: 12px; }
+  .tag { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 12px; }
+  .on { color: var(--ok); }
+  .off { color: var(--off); }
+  .muted { color: var(--muted); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .msg { padding: 10px 12px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+  .err { border-color: #5b2a2a; color: #e08a8a; }
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: var(--muted); font-size: 12px; }
+  .pager .grow { flex: 1; }
+  /* 详情弹窗 */
+  .mask {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, .55);
+    display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 20;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    width: min(900px, 100%); max-height: 100%; display: flex; flex-direction: column;
+  }
+  .modal header { display: flex; gap: 10px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .modal header .t { flex: 1; font-size: 13px; font-family: Consolas, monospace; word-break: break-all; }
+  .modal .tabs { display: flex; gap: 6px; padding: 10px 16px 0; }
+  .modal .tabs button.active { border-color: var(--accent); color: var(--accent); }
+  .modal .content { padding: 14px 16px 18px; overflow: auto; }
+  .bub { max-width: 78%; padding: 8px 12px; border-radius: 10px; margin-bottom: 10px; background: var(--panel-2); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+  .bub.user { margin-left: auto; border-color: #33456b; }
+  .bub.assistant { border-color: #2f5145; }
+  .bub.tool, .bub.system { border-style: dashed; color: var(--muted); }
+  .bub .who { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+  pre.json {
+    margin: 0; padding: 12px; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; overflow: auto; max-height: 60vh;
+    font: 12px/1.5 Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+  }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <h1 style="flex:1;margin:0">会话管理</h1>
+    <button id="refresh">刷新</button>
+    <button id="exportAll">按筛选条件导出</button>
+  </div>
+  <div id="status"></div>
+  <div class="cards" id="cards" style="margin-top:12px"></div>
+
+  <div class="filters">
+    <div class="field">
+      <label>来源</label>
+      <select id="fSource"></select>
+    </div>
+    <div class="field">
+      <label>会话类型</label>
+      <select id="fType">
+        <option value="">全部</option>
+        <option value="group">群聊</option>
+        <option value="private">私聊</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>关键词（会话键 / 消息正文）</label>
+      <input type="text" id="fQ" placeholder="群号、用户号或一句话">
+    </div>
+    <div class="field">
+      <label>活跃始于</label>
+      <input type="text" id="fSince" placeholder="2026-10-01">
+    </div>
+    <div class="field">
+      <label>活跃止于</label>
+      <input type="text" id="fUntil" placeholder="2026-10-05">
+    </div>
+    <button id="fReset">重置</button>
+    <div class="field" style="margin-left:auto">
+      <label>每页</label>
+      <select id="fSize">
+        <option>20</option><option>50</option><option>100</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="bar">
+    <span id="selInfo" class="muted">未选择会话</span>
+    <div style="flex:1"></div>
+    <button id="exportSel" disabled>导出所选</button>
+    <button id="delSel" class="warn" disabled>删除所选</button>
+  </div>
+
+  <div id="body"></div>
+  <div id="pager"></div>
+  <div id="modalHost"></div>
+
+<script>
+const TOKEN_KEY = 'zcbot_token'
+const API = '/api/llm_core/sessions'
+
+async function call(url, options = {}) {
+  const headers = { ...(options.headers || {}) }
+  const token = localStorage.getItem(TOKEN_KEY) || ''
+  if (token) headers['Authorization'] = 'Bearer ' + token
+  if (options.body) headers['Content-Type'] = 'application/json'
+  const res = await fetch(url, {
+    ...options, headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
+  const data = await res.json().catch(() => null)
+  if (res.status === 401) throw new Error('未登录或登录已过期，请先登录管理面板')
+  // 404 基本都是路由没挂上：插件更新后只走「重载」挂不了新路由，得整进程重启
+  if (!res.ok) throw new Error(`接口不可用（HTTP ${res.status}）：重启框架后重试`)
+  if (!data || data.code !== 0) throw new Error((data && data.msg) || `请求失败（HTTP ${res.status}）`)
+  return data
+}
+
+// 导出接口返回的是文件流，不是 {code,data}，得单独走一条路
+async function download(body, fallbackName) {
+  const headers = { 'Content-Type': 'application/json' }
+  const token = localStorage.getItem(TOKEN_KEY) || ''
+  if (token) headers['Authorization'] = 'Bearer ' + token
+  const res = await fetch(API + '/export', {
+    method: 'POST', headers, body: JSON.stringify(body || {}),
+  })
+  if (res.status === 401) throw new Error('未登录或登录已过期，请先登录管理面板')
+  if (!res.ok) throw new Error('导出失败：' + res.status)
+  const name = (res.headers.get('Content-Disposition') || '').match(/filename=([^;]+)/)?.[1] || fallbackName
+  const count = res.headers.get('X-Session-Count') || '?'
+  const blob = await res.blob()
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(a.href)
+  return count
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+}
+
+function relative(sec) {
+  if (sec == null) return '-'
+  if (sec < 60) return sec + ' 秒前'
+  if (sec < 3600) return Math.floor(sec / 60) + ' 分钟前'
+  if (sec < 86400) return Math.floor(sec / 3600) + ' 小时前'
+  if (sec < 86400 * 30) return Math.floor(sec / 86400) + ' 天前'
+  return new Date(sec ? Date.now() - sec * 1000 : 0).toLocaleDateString('zh-CN')
+}
+
+function stamp(ts) {
+  if (!ts) return '-'
+  const d = new Date(ts * 1000)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function copyText(text, done) {
+  const fallback = () => {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    let ok = false
+    try { ok = document.execCommand('copy') } catch (e) { /* 非安全上下文可能禁用 */ }
+    document.body.removeChild(ta)
+    done(ok)
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => done(true), fallback)
+  } else fallback()
+}
+
+const state = {
+  seq: 0,
+  page: 1,
+  pageSize: 20,
+  filters: { source: '', chat_type: '', q: '', since: '', until: '' },
+  checked: new Set(),
+  sources: [],
+  stats: null,
+  rows: [],
+}
+
+function readFilters() {
+  state.filters.source = document.getElementById('fSource').value
+  state.filters.chat_type = document.getElementById('fType').value
+  state.filters.q = document.getElementById('fQ').value.trim()
+  state.filters.since = document.getElementById('fSince').value.trim()
+  state.filters.until = document.getElementById('fUntil').value.trim()
+  state.pageSize = parseInt(document.getElementById('fSize').value, 10) || 20
+}
+
+function buildQuery() {
+  const params = new URLSearchParams()
+  Object.entries(state.filters).forEach(([k, v]) => { if (v) params.set(k, v) })
+  params.set('page', state.page)
+  params.set('page_size', state.pageSize)
+  return API + '?' + params.toString()
+}
+
+function status(text, isError) {
+  const el = document.getElementById('status')
+  el.className = isError ? 'msg err' : 'msg'
+  el.textContent = text
+}
+
+function renderCards(s) {
+  document.getElementById('cards').innerHTML = [
+    ['会话总数', s.total], ['消息数', s.messages],
+    ['估算 tokens', s.tokens], ['1 小时内活跃', s.active_1h],
+  ].map(([cap, num]) =>
+    `<div class="card"><div class="num">${esc(num)}</div><div class="cap">${esc(cap)}</div></div>`
+  ).join('')
+}
+
+function renderSourceOptions() {
+  const sel = document.getElementById('fSource')
+  const cur = state.filters.source
+  let html = '<option value="">全部</option>'
+  for (const src of state.sources) html += `<option value="${esc(src)}">${esc(src) || '（默认）'}</option>`
+  sel.innerHTML = html
+  sel.value = cur && state.sources.includes(cur) ? cur : ''
+}
+
+function syncSelection() {
+  const n = state.checked.size
+  document.getElementById('selInfo').textContent = n ? `已选 ${n} 个会话` : '未选择会话'
+  document.getElementById('exportSel').disabled = !n
+  document.getElementById('delSel').disabled = !n
+  const all = document.getElementById('checkAll')
+  if (!all) return   // 空结果时压根没有表头勾选框
+  const rows = state.rows.map(r => r.key)
+  const onPage = rows.filter(k => state.checked.has(k)).length
+  all.checked = rows.length > 0 && onPage === rows.length
+  all.indeterminate = onPage > 0 && onPage < rows.length
+}
+
+function renderTable(pagination) {
+  const body = document.getElementById('body')
+  if (!state.rows.length) {
+    const filtered = Object.values(state.filters).some(v => v)
+    body.innerHTML = `<div class="msg">${filtered
+      ? '没有符合条件的会话。试着放宽筛选条件。'
+      : '还没有任何会话。在群里或私聊对机器人说一次话，这里就会出现记录。'}</div>`
+    document.getElementById('pager').innerHTML = ''
+    return
+  }
+  let html = '<table><thead><tr>'
+  html += '<th><input type="checkbox" id="checkAll"></th>'
+  html += '<th>会话键</th><th>来源</th><th>类型</th><th class="num">轮次</th><th class="num">消息</th>'
+  html += '<th class="num">tokens</th><th class="num">压缩</th><th>最近活跃</th><th></th>'
+  html += '</tr></thead><tbody>'
+  for (const r of state.rows) {
+    html += `<tr data-key="${esc(r.key)}">`
+    html += `<td><input type="checkbox" class="rowCheck" data-check="${esc(r.key)}"${state.checked.has(r.key) ? ' checked' : ''}></td>`
+    html += `<td class="key">${esc(r.key)} <button class="muted" data-copy="${esc(r.key)}" style="padding:1px 6px">复制</button></td>`
+    html += `<td><span class="tag">${esc(r.source) || '默认'}</span></td>`
+    html += `<td class="${r.is_group ? '' : 'muted'}">${r.is_group ? '群聊' : '私聊'}</td>`
+    html += `<td class="num">${esc(r.turns)}</td>`
+    html += `<td class="num">${esc(r.messages)}</td>`
+    html += `<td class="num">${esc(r.tokens)}</td>`
+    html += `<td class="num${r.compressed ? ' off' : ' muted'}">${esc(r.compressed)}</td>`
+    html += `<td title="${esc(stamp(r.updated_at))}">${esc(relative(r.idle_seconds))}</td>`
+    html += `<td><button data-detail="${esc(r.key)}">查看</button> <button class="warn" data-del="${esc(r.key)}">删除</button></td>`
+    html += '</tr>'
+  }
+  html += '</tbody></table>'
+  body.innerHTML = html
+
+  const p = pagination || {}
+  document.getElementById('pager').innerHTML = `
+    <div class="pager">
+      <button id="prev" ${p.page <= 1 ? 'disabled' : ''}>上一页</button>
+      <span>第 ${esc(p.page)} / ${esc(p.total_pages)} 页，共 ${esc(p.total)} 个会话</span>
+      <button id="next" ${p.page >= p.total_pages ? 'disabled' : ''}>下一页</button>
+      <div class="grow"></div>
+      <span class="muted">会话按人隔离：同一群里不同用户各有一套上下文</span>
+    </div>`
+
+  bindTable()
+}
+
+function bindTable() {
+  document.getElementById('checkAll').addEventListener('change', ev => {
+    state.rows.forEach(r => ev.target.checked
+      ? state.checked.add(r.key) : state.checked.delete(r.key))
+    document.querySelectorAll('[data-check]').forEach(cb => {
+      cb.checked = ev.target.checked
+    })
+    syncSelection()
+  })
+  document.querySelectorAll('[data-check]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const k = cb.getAttribute('data-check')
+      cb.checked ? state.checked.add(k) : state.checked.delete(k)
+      syncSelection()
+    })
+  })
+  document.querySelectorAll('[data-copy]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      copyText(btn.getAttribute('data-copy'), ok =>
+        status(ok ? '会话键已复制到剪贴板' : '浏览器不允许复制，请手动选中'))
+    })
+  })
+  document.querySelectorAll('[data-detail]').forEach(btn => {
+    btn.addEventListener('click', () => openDetail(btn.getAttribute('data-detail')))
+  })
+  document.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', () => removeKeys([btn.getAttribute('data-del')]))
+  })
+  const prev = document.getElementById('prev')
+  const next = document.getElementById('next')
+  if (prev) prev.addEventListener('click', () => { state.page--; load() })
+  if (next) next.addEventListener('click', () => { state.page++; load() })
+}
+
+async function removeKeys(keys) {
+  if (!keys.length) return
+  const tip = keys.length === 1
+    ? `确定删除会话 ${keys[0]} ？\n该会话的多轮上下文会一并清空，不可恢复。`
+    : `确定删除选中的 ${keys.length} 个会话？\n这些会话的多轮上下文会一并清空，不可恢复。`
+  if (!confirm(tip)) return
+  try {
+    const r = await call(API + '/delete', { method: 'POST', body: { keys } })
+    keys.forEach(k => state.checked.delete(k))
+    const d = r.data
+    status(d.msg + (d.failed && d.failed.length ? '：' + d.failed.join(', ') : ''))
+    await load()
+  } catch (e) {
+    status(e.message, true)
+  }
+}
+
+async function openDetail(key) {
+  let det
+  try {
+    det = (await call(API + '/detail?key=' + encodeURIComponent(key))).data
+  } catch (e) {
+    status(e.message, true)
+    return
+  }
+  const msgs = det.messages || []
+  let bubbles = ''
+  for (const m of msgs) {
+    const role = String(m.role || '')
+    const label = { system: '系统提示', user: '用户', assistant: '助手', tool: '工具结果' }[role] || role
+    bubbles += `<div class="bub ${esc(role)}"><div class="who">${esc(label)}${m.name ? ' · ' + esc(m.name) : ''}</div>${esc(contentToText(m.content))}`
+    const calls = m.tool_calls || []
+    if (calls.length) {
+      bubbles += calls.map(c => `<div class="muted">→ 调用 ${esc(c.function ? c.function.name : c.name)}</div>`).join('')
+    }
+    bubbles += '</div>'
+  }
+  const host = document.getElementById('modalHost')
+  host.innerHTML = `
+    <div class="mask" id="mask">
+      <div class="modal">
+        <header>
+          <div class="t">${esc(key)}</div>
+          <button data-copy="${esc(key)}">复制键</button>
+          <button id="closeModal">关闭</button>
+        </header>
+        <div class="tabs">
+          <button class="active" id="tabBubbles">对话预览（${msgs.length}）</button>
+          <button id="tabJson">JSON 原文</button>
+        </div>
+        <div class="content" id="modalBody">${det.persona
+          ? `<div class="msg" style="margin-bottom:10px">该会话单独设了人格：${esc(det.persona)}</div>` : ''}${bubbles || '<div class="msg">这个会话没有消息。</div>'}</div>
+      </div>
+    </div>`
+  const bubblesHtml = host.querySelector('#modalBody').innerHTML
+  const jsonText = JSON.stringify(det, null, 2)
+  const show = mode => {
+    host.querySelector('#modalBody').innerHTML = mode === 'json'
+      ? `<pre class="json">${esc(jsonText)}</pre>` : bubblesHtml
+    host.querySelector('#tabBubbles').classList.toggle('active', mode !== 'json')
+    host.querySelector('#tabJson').classList.toggle('active', mode === 'json')
+  }
+  host.querySelector('#tabBubbles').addEventListener('click', () => show('bubbles'))
+  host.querySelector('#tabJson').addEventListener('click', () => show('json'))
+  const close = () => {
+    host.innerHTML = ''
+    document.removeEventListener('keydown', onKey)
+  }
+  const onKey = ev => { if (ev.key === 'Escape') close() }
+  host.querySelector('#closeModal').addEventListener('click', close)
+  host.querySelector('#mask').addEventListener('click', ev => { if (ev.target.id === 'mask') close() })
+  document.addEventListener('keydown', onKey)
+  host.querySelector('[data-copy]').addEventListener('click', () =>
+    copyText(key, ok => status(ok ? '会话键已复制到剪贴板' : '浏览器不允许复制，请手动选中')))
+}
+
+function contentToText(content) {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content.map(b => {
+      if (!b || typeof b !== 'object') return ''
+      if (b.type === 'image_url') return '[图片]'
+      return b.text || ''
+    }).join(' ')
+  }
+  return ''
+}
+
+async function load() {
+  const seq = ++state.seq
+  readFilters()
+  try {
+    const d = (await call(buildQuery())).data
+    if (seq !== state.seq) return   // 已有更新的请求在跑，丢掉这份过期结果
+    state.rows = d.sessions || []
+    state.pagination = d.pagination || {}
+    state.sources = (d.facets || {}).sources || []
+    state.stats = d.stats || { total: 0, messages: 0, tokens: 0, active_1h: 0 }
+    state.page = state.pagination.page
+    renderCards(state.stats)
+    renderSourceOptions()
+    renderTable(state.pagination)
+    syncSelection()
+  } catch (e) {
+    if (seq !== state.seq) return
+    status(e.message, true)
+    document.getElementById('body').innerHTML = ''
+    document.getElementById('pager').innerHTML = ''
+  }
+}
+
+let debounce
+function onFilterChange() {
+  clearTimeout(debounce)
+  debounce = setTimeout(() => { state.page = 1; load() }, 400)
+}
+
+;['fType', 'fSource', 'fSize'].forEach(id =>
+  document.getElementById(id).addEventListener('change', () => { state.page = 1; load() }))
+;['fQ', 'fSince', 'fUntil'].forEach(id =>
+  document.getElementById(id).addEventListener('input', onFilterChange))
+
+document.getElementById('fReset').addEventListener('click', () => {
+  document.getElementById('fSource').value = ''
+  document.getElementById('fType').value = ''
+  document.getElementById('fQ').value = ''
+  document.getElementById('fSince').value = ''
+  document.getElementById('fUntil').value = ''
+  state.page = 1
+  load()
+})
+document.getElementById('refresh').addEventListener('click', load)
+document.getElementById('delSel').addEventListener('click', () => removeKeys([...state.checked]))
+document.getElementById('exportSel').addEventListener('click', async () => {
+  try {
+    status('正在导出 ' + state.checked.size + ' 个会话……')
+    status('已导出 ' + await download({ keys: [...state.checked] }, 'llm_sessions.jsonl') + ' 个会话')
+  } catch (e) { status(e.message, true) }
+})
+document.getElementById('exportAll').addEventListener('click', async () => {
+  try {
+    readFilters()
+    // 不带 keys，后端按同一套筛选条件导，跨页也能导全
+    status('正在导出……')
+    status('已导出 ' + await download({ ...state.filters }, 'llm_sessions.jsonl') + ' 个会话')
+  } catch (e) { status(e.message, true) }
+})
+
+load()
+</script>
+</body>
+</html>

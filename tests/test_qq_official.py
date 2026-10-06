@@ -51,8 +51,11 @@ def test_normalize_event_attachments_structured():
     ev = normalize_event({'_t': 'GROUP_AT_MESSAGE_CREATE', 'id': 'E3', 'd': {
         'id': 'M3', 'group_openid': 'G1', 'author': {'id': 'U1'},
         'content': '看图', 'attachments': att}}, 'bot')
-    # content 仍是纯文本（含 URL 提示行），但附件同时结构化透传
-    assert 'https://example.com/a.png' in ev['message']
+    # 带附件：message 是 dict（供 normalize_incoming 翻媒体段），
+    # raw_message 仍是纯文本（含 URL 提示行），附件同时结构化透传
+    assert isinstance(ev['message'], dict)
+    assert ev['message']['attachments'] == att
+    assert 'https://example.com/a.png' in ev['raw_message']
     assert ev['attachments'] == att
 
 

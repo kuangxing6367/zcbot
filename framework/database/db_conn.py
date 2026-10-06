@@ -214,6 +214,10 @@ class DatabaseConnMixin:
             except Exception as e:
                 if not self._is_reconnect_error(e):
                     raise
+                if getattr(self._local, 'in_txn', False):
+                    # 事务 pin 连接已死，回滚已不可能；事务内重试没有意义，
+                    # 直接抛给调用方（下一次 transaction 会借到 ping 过的新连接）
+                    raise
                 if attempt >= self._max_reconnect:
                     logger.error(f"MySQL 连接断开且重连 {self._max_reconnect} 次后仍失败: {e}")
                     raise

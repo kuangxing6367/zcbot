@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="zcbot">
+  <title>zcbot</title>
+  <!-- 标准图标：≥24px 使用。几何 Z 的斜笔画断成三节等长块 -->
+  <g fill="none" stroke="#6366F1" stroke-width="14">
+    <path d="M16 25H80"/>
+    <path d="M16 71H80"/>
+    <path d="M80 25 63 37.22"/>
+    <path d="M56.5 41.89 39.5 54.11"/>
+    <path d="M33 58.78 16 71"/>
+  </g>
+</svg>

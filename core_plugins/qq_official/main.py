@@ -20,6 +20,7 @@ import base64
 import itertools
 import json
 import logging
+import platform
 import re
 import threading
 import time
@@ -43,7 +44,7 @@ def _next_msg_seq() -> int:
 
 __plugin_meta__ = {
     "name": "qq_official",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "author": "ZCBOT",
     "desc": "QQ 官方机器人接入端：WSS 网关 + OpenAPI 收发",
     "priority": 5,
@@ -74,6 +75,17 @@ _MSG_TYPE_MARKDOWN = 2    # markdown（可带 keyboard / 模板）
 _MSG_TYPE_ARK = 3         # ark 模板
 _MSG_TYPE_EMBED = 4       # embed
 _MSG_TYPE_MEDIA = 7       # 富媒体（图片/语音/视频/文件）
+_MSG_TYPE_CARD = 8        # 卡片消息（card: {type, content}）
+
+# ── 官方错误码（HTTP 200 也可能包业务错误，必须看 body 的 code/err_code）────
+_ERR_TOKEN_EXPIRED = 11244        # token 失效 → 强制刷新后重试一次
+_ERR_GROUP_REMOVED = 11255        # 机器人已被移出群（私域无群权限也会报）
+_ERR_GROUP_LEFT = 40011026        # 机器人已退群/群已解散
+_ERR_RATE_LIMITED = 40023001      # 接口频率限制
+_ERR_VIOLATION = 40034006         # 消息内容违规被拦截
+
+# 富媒体整体读内存的上限（官方富媒体下载无流式接口，防大视频 OOM）
+_MAX_MEDIA_BYTES = 100 * 1024 * 1024
 
 # 消息段类型 → 上传 file_type（1图 2视频 3语音 4文件）
 _FILE_TYPE = {'image': 1, 'video': 2, 'record': 3, 'voice': 3, 'file': 4}
@@ -83,6 +95,9 @@ _MEDIA_EXT = {'image': 'png', 'video': 'mp4', 'record': 'silk',
               'voice': 'silk', 'file': 'bin'}
 
 # ── 入站事件分类 ──────────────────────────────────────────────
+# 注意：DIRECT_MESSAGE_CREATE / MESSAGE_CREATE 不在默认 intents
+# （1<<25|1<<26）里，需在配置里追加 1<<12（私域频道私信）/ 1<<9（私域频道）
+# 并申请对应权限才会真的推送；GROUP_MESSAGE_CREATE 官方无此事件名，保留仅容错。
 _MESSAGE_EVENTS = frozenset({
     'GROUP_AT_MESSAGE_CREATE', 'GROUP_MESSAGE_CREATE',
     'C2C_MESSAGE_CREATE', 'DIRECT_MESSAGE_CREATE', 'MESSAGE_CREATE',
@@ -160,6 +175,28 @@ _IMG_EXT = {'image/png': 'png', 'image/jpeg': 'jpg',
 def _image_filename(mime: str) -> str:
     """按嗅探到的 mime 定上传文件名扩展名（群/单聊上传统一用，不再硬编码 .png）"""
     return f'image.{_IMG_EXT.get(mime, "png")}'
+
+
+class _ApiError(RuntimeError):
+    """官方 API 业务错误：携带 body 里的 code / err_code 供调用方分类处理。"""
+
+    def __init__(self, method: str, path: str, body):
+        self.body = body if isinstance(body, dict) else {}
+        code = self.body.get('code', self.body.get('err_code', ''))
+        err_code = self.body.get('err_code', code)
+        message = self.body.get('message', '') or str(body)
+        super().__init__(f'{method} {path} -> code={code} err_code={err_code}: '
+                         f'{message[:300]}')
+        self.code = str(code)
+        self.err_code = str(err_code)
+
+
+def _resp_error_code(body) -> str:
+    """取官方错误响应里的业务码（code 与 err_code 都可能是数字或字符串）。"""
+    if not isinstance(body, dict):
+        return ''
+    code = body.get('code', body.get('err_code', ''))
+    return '' if code in (None, 0, '0') else str(code)
 
 
 def normalize_message(message):
@@ -266,11 +303,11 @@ def _first_media(message):
 
 
 def _split_outgoing(message):
-    """把出站 message 拆成 (文本, 富媒体段, markdown文本, 按钮行)。
+    """把出站消息拆成 (文本, 富媒体段, markdown文本, 按钮行, 卡片, 提示键盘)。
 
-    这一段存在的理由：QQ 官方一条消息只能带一种主体（文本 / markdown / 媒体），
-    所以插件塞进来的混合内容必须先拆干净，再决定 msg_type。
-    优先级：markdown > 富媒体 > 文本（按钮作为附属字段挂在 markdown/文本上）。
+    这一段存在的理由：QQ 官方一条消息只能带一种主体（文本 / markdown /
+    媒体 / 卡片），所以插件塞进来的混合内容必须先拆干净，再决定 msg_type。
+    优先级：markdown > 卡片 > 富媒体 > 文本（按钮/提示键盘作为附属字段）。
     """
     if isinstance(message, str):
         message = normalize_message(message)
@@ -279,6 +316,8 @@ def _split_outgoing(message):
             if message is not None else []
 
     texts, markdown, buttons, media = [], None, None, None
+    card = None
+    prompt_buttons = None
     for seg in message:
         if not isinstance(seg, dict):
             texts.append(str(seg))
@@ -292,11 +331,16 @@ def _split_outgoing(message):
             texts.append('@' + str(data.get('name') or data.get('qq') or ''))
         elif seg_type == 'markdown':
             markdown = str(data.get('content') or data.get('text') or '')
+        elif seg_type == 'card':
+            card = data
         elif seg_type in ('keyboard', 'buttons'):
             buttons = data.get('buttons') or data.get('rows') or []
+        elif seg_type in ('prompt_keyboard', 'prompt_buttons'):
+            prompt_buttons = data.get('buttons') or data.get('rows') or []
         elif seg_type in _MEDIA_SEGS and media is None:
             media = (seg_type, data)
-    return ''.join(texts).strip(), media, markdown, buttons
+    return (''.join(texts).strip(), media, markdown, buttons,
+            card, prompt_buttons)
 
 
 def build_keyboard(buttons) -> Optional[dict]:
@@ -468,14 +512,11 @@ def normalize_event(raw: dict, bot_name: str) -> Optional[dict]:
     user_openid = author.get('user_openid') or author.get('id') or ''
     member_openid = author.get('member_openid') or author.get('id') or ''
 
-    # 附件补进文本提示
-    if attachments:
-        urls = []
-        for att in attachments:
-            if isinstance(att, dict) and att.get('url'):
-                urls.append(att['url'])
-        if urls:
-            content = (content + '\n' if content else '') + '\n'.join(urls)
+    # 附件 URL 清单（仅用于 raw_message 可读提示；结构化透传走 message dict）
+    urls = []
+    for att in attachments or []:
+        if isinstance(att, dict) and att.get('url'):
+            urls.append(att['url'])
 
     # 频道消息：channel_id 当群
     channel_id = d.get('channel_id') or ''
@@ -498,8 +539,13 @@ def normalize_event(raw: dict, bot_name: str) -> Optional[dict]:
         'user_id': user_id,
         'group_id': group_id,
         'message_id': msg_id,
-        'message': content,
-        'raw_message': content,
+        # 带附件时 message 用 dict 透传原始结构，让 contract 走
+        # adapter.normalize_incoming(dict) 翻成规范媒体段（此前把 URL 拼进
+        # 文本字符串，段转换成了永远走不到的死路径）
+        'message': {'content': content, 'attachments': attachments}
+                   if attachments else content,
+        # raw_message 保持纯文本可读口径：附件 URL 以换行缀在正文后
+        'raw_message': (content + '\n' + '\n'.join(urls)) if urls else content,
         'sender': {
             'user_id': user_id,
             'nickname': author.get('username') or str(user_id),
@@ -554,7 +600,6 @@ class QQOfficialAdapter(ProtocolAdapter):
         self._seq = None
         self._session_id = ''
         self._heartbeat_interval_ms = 41250
-        self._last_msg_id = ''          # 最近入站消息 id（被动回复）
         self._pending_reply = {}        # {会话key: (msg_id, ts, kind)} kind=group/private
         self._seen_events = OrderedDict()   # event_id 幂等去重（Resume 重放/服务重发）
         self._boot_waiting = False
@@ -683,8 +728,10 @@ class QQOfficialAdapter(ProtocolAdapter):
             CAP_TEXT, CAP_VIDEO, CAP_VOICE, Capabilities,
         )
         return Capabilities(
+            # 入站无 CAP_AT：官方入站 content 是纯文本、不给结构化 at 信息，
+            # 声明了会误导依赖 ev.has_at_bot 的插件（出站 at 退化为 @昵称 文本）
             inbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
-                     CAP_AT, CAP_REPLY, CAP_NOTICE, CAP_REQUEST],
+                     CAP_REPLY, CAP_NOTICE, CAP_REQUEST],
             outbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
                       CAP_AT, CAP_REPLY, CAP_MARKDOWN, CAP_KEYBOARD],
             actions=[CAP_RECALL, CAP_GROUP_ADMIN],
@@ -798,9 +845,14 @@ class QQOfficialAdapter(ProtocolAdapter):
                          name='qq_official-boot-wait').start()
 
     async def _supervise(self):
+        # 指数退避：连不上（网关故障/断网）时 5s→10s→…封顶 60s，
+        # 连上（recv_loop 正常跑过）即清零，避免故障期固定频率打 gateway
+        failures = 0
         while not self._closing:
+            connected_once = False
             try:
                 await self._connect_once()
+                connected_once = True
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -811,7 +863,9 @@ class QQOfficialAdapter(ProtocolAdapter):
                 await self._cancel_heartbeat()
             if self._closing:
                 break
-            await asyncio.sleep(self.reconnect_interval)
+            failures = 0 if connected_once else failures + 1
+            await asyncio.sleep(
+                min(self.reconnect_interval * (2 ** failures), 60))
 
     async def _cancel_heartbeat(self):
         t = self._heartbeat_task
@@ -860,7 +914,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                         'intents': self.intents,
                         'shard': [0, 1],
                         'properties': {
-                            '$os': 'windows',
+                            '$os': platform.system().lower() or 'unknown',
                             '$browser': 'zcbot',
                             '$device': 'zcbot',
                         },
@@ -961,7 +1015,6 @@ class QQOfficialAdapter(ProtocolAdapter):
             if key and d.get('id'):
                 self._pending_reply[key] = (d['id'], time.time(),
                                             'group' if is_group else 'private')
-                self._last_msg_id = d['id']
             event = normalize_event(wrapped, self.bot_name)
             if event is None:
                 continue
@@ -1073,56 +1126,93 @@ class QQOfficialAdapter(ProtocolAdapter):
         hit = self._pending_reply.get(key)
         if hit:
             return hit[0]
-        return self._last_msg_id if not group_id and not user_id else ''
+        # 不再回退到 _last_msg_id：那是别的会话的 msg_id，官方会以
+        # "msg_id 不匹配"拒绝整条消息。拿不到就按主动消息发（返回空串）。
+        return ''
 
     def _api_request(self, method: str, path: str, *,
                      json_body: dict = None, files=None, data=None,
                      timeout: int = 20) -> dict:
         """同步 HTTP（在 to_thread 里调用）。
 
-        非 2xx 抛 RuntimeError——调用方据此区分成败。旧实现不查状态码、
-        错误体被当正常响应返回，再叠一层 'ret' 子串判定，可把失败报成成功。
+        错误模型（对照官方文档 / ElainaBot 参考实现）：
+          1. 非 2xx 抛 _ApiError——调用方据此区分成败；
+          2. HTTP 200 也可能包业务错误（body 的 code/err_code 非零且带
+             message），同样抛 _ApiError，最典型的是 11244 token 失效；
+          3. 11244 强制刷新 token 后重试一次；
+          4. 超时/连接类异常重试最多 2 次（带 msg_seq 的发送平台会按 seq
+             去重，重试不会重复投递；读接口天然幂等）。
 
         域名兼容：默认走正式环境 api.sgroup.qq.com；迁移窗口期内若新域名
         网络异常 / 404 / 5xx，自动用旧域名 api.bot.qq.com 重试一次
         （仅当 api_base 与旧域名不同；4xx 业务错误不换域名直接抛出）。
         """
-        token = self._refresh_token_if_stale()
-        headers = {'Authorization': f'QQBot {token}'}
+        headers = {'Authorization': f'QQBot {self._refresh_token_if_stale()}'}
         base = self.api_base
         fb = getattr(self, 'api_base_fallback', '')
         hosts = [base, fb] if fb else [base]
         last_exc = None
         last_resp = None
+        token_retried = False
+        net_retries = 0
         for host in hosts:
             url = f'{host}{path}'
-            try:
-                if files is not None:
-                    resp = self._http.request(
-                        method, url, headers=headers, files=files, data=data,
-                        timeout=timeout)
-                else:
-                    if json_body is not None:
-                        headers['Content-Type'] = 'application/json; charset=utf-8'
-                    resp = self._http.request(
-                        method, url, headers=headers, json=json_body, data=data,
-                        timeout=timeout)
-            except Exception as e:
-                last_exc = e
-                continue
-            last_resp = resp
-            if resp.status_code < 400:
+            while True:
                 try:
-                    return resp.json() if resp.content else {}
-                except Exception:
-                    return {}
-            # 4xx 业务错误不换域名重试，直接抛
-            if resp.status_code < 500 and resp.status_code != 404:
-                raise RuntimeError(
-                    f'{method} {path} -> HTTP {resp.status_code}: '
-                    f'{(resp.text or "")[:300]}')
-            # 404/5xx：换域名再试一次
-            continue
+                    if files is not None:
+                        resp = self._http.request(
+                            method, url, headers=headers, files=files,
+                            data=data, timeout=timeout)
+                    else:
+                        if json_body is not None:
+                            headers['Content-Type'] = \
+                                'application/json; charset=utf-8'
+                        resp = self._http.request(
+                            method, url, headers=headers, json=json_body,
+                            data=data, timeout=timeout)
+                except Exception as e:  # noqa: BLE001
+                    # 超时/连接类异常：小退避后重试（上限 2 次），其余直接抛
+                    lowered = f'{type(e).__name__} {e}'.lower()
+                    retryable = (('timeout' in lowered or 'connect' in lowered
+                                  or 'connection' in lowered)
+                                 and 'pooltimeout' not in lowered)
+                    if retryable and net_retries < 2:
+                        net_retries += 1
+                        time.sleep(0.5 * net_retries)
+                        continue
+                    last_exc = e
+                    break
+                last_resp = resp
+                body = None
+                if resp.content:
+                    try:
+                        body = json.loads(resp.content)
+                    except Exception:  # noqa: BLE001
+                        body = None
+                if resp.status_code < 400:
+                    # HTTP 200 但 body 是业务错误（如 11244 token 失效）
+                    err_code = _resp_error_code(body)
+                    if err_code and isinstance(body, dict) \
+                            and body.get('message'):
+                        if err_code == str(_ERR_TOKEN_EXPIRED) \
+                                and not token_retried:
+                            token_retried = True
+                            with self._token_lock:
+                                self._token_expire_at = 0.0
+                            headers['Authorization'] = \
+                                f'QQBot {self._refresh_token_if_stale()}'
+                            continue
+                        raise _ApiError(method, path, body)
+                    return body or {}
+                # 4xx（非 404）业务错误不换域名重试，直接抛
+                if resp.status_code < 500 and resp.status_code != 404:
+                    raise _ApiError(method, path, body) \
+                        if isinstance(body, dict) and body.get('message') else \
+                        RuntimeError(
+                            f'{method} {path} -> HTTP {resp.status_code}: '
+                            f'{(resp.text or "")[:300]}')
+                # 404/5xx：换域名再试一次
+                break
         if last_resp is not None:
             raise RuntimeError(
                 f'{method} {path} -> HTTP {last_resp.status_code}: '
@@ -1149,6 +1239,10 @@ class QQOfficialAdapter(ProtocolAdapter):
                 raw = _b64_to_bytes(b64)
                 if not raw:
                     raise ValueError(f'{label} base64 解码失败: {b64[:64]}...')
+                if len(raw) > _MAX_MEDIA_BYTES:
+                    raise ValueError(
+                        f'{label} 超过 {_MAX_MEDIA_BYTES // 1024 // 1024}MB 上限: '
+                        f'{len(raw)} bytes')
                 mime = _mime_for(seg_type, raw)
                 files = {'file': (_media_name(seg_type, mime), raw, mime)}
                 form = {'file_type': str(file_type), 'srv_send_msg': 'false'}
@@ -1165,6 +1259,10 @@ class QQOfficialAdapter(ProtocolAdapter):
                 raw = await asyncio.to_thread(_read_file_bytes, local)
                 if not raw:
                     raise FileNotFoundError(f'读取本地{label}失败: {local}')
+                if len(raw) > _MAX_MEDIA_BYTES:
+                    raise ValueError(
+                        f'{label} 超过 {_MAX_MEDIA_BYTES // 1024 // 1024}MB 上限: '
+                        f'{len(raw)} bytes')
                 mime = _mime_for(seg_type, raw, local)
                 name = _media_name(seg_type, mime,
                                    local.rsplit('/', 1)[-1].rsplit('\\', 1)[-1])
@@ -1190,17 +1288,36 @@ class QQOfficialAdapter(ProtocolAdapter):
                           is_group: bool):
         """出站消息 → OpenAPI 请求体。
 
-        官方一条消息只能有一种主体：媒体(msg_type 7) / markdown(2) / 文本(0)，
-        keyboard 只能挂在 markdown 上——所以这里做唯一的"选型"决策，
-        其余地方不再各自判断。
+        官方一条消息只能有一种主体：媒体(msg_type 7) / markdown(2) /
+        卡片(8) / 文本(0)，keyboard 只能挂在 markdown 上——所以这里做唯一
+        的"选型"决策，其余地方不再各自判断。prompt_keyboard 是独立附属
+        字段（提示键盘），可与任意主体共存。
 
         :return: (body, err)；err 非空即失败原因（已是可直接回给调用方的中文）
         """
-        text, media, markdown, buttons = _split_outgoing(message)
+        text, media, markdown, buttons, card, prompt_buttons = \
+            _split_outgoing(message)
         body: dict = {}
         if reply_msg_id:
             body['msg_id'] = reply_msg_id
             body['msg_seq'] = _next_msg_seq()
+
+        pk = build_keyboard(prompt_buttons) if prompt_buttons else None
+
+        if card is not None:
+            # msg_type=8 卡片：data 形如 {'card_type': 'tuwen',
+            # 'content': {...}}，content 缺省按空 dict
+            body['msg_type'] = _MSG_TYPE_CARD
+            body['card'] = {
+                'type': str(card.get('card_type') or card.get('type')
+                            or 'tuwen'),
+                'content': card.get('content') or {},
+            }
+            if text:
+                body['content'] = text
+            if pk:
+                body['prompt_keyboard'] = pk
+            return body, ''
 
         if media is not None:
             seg_type, seg_data = media
@@ -1213,6 +1330,8 @@ class QQOfficialAdapter(ProtocolAdapter):
             body['media'] = uploaded
             if text:
                 body['content'] = text
+            if pk:
+                body['prompt_keyboard'] = pk
             return body, ''
 
         keyboard = build_keyboard(buttons)
@@ -1240,6 +1359,8 @@ class QQOfficialAdapter(ProtocolAdapter):
             body['markdown'] = md
             if keyboard:
                 body['keyboard'] = keyboard
+            if pk:
+                body['prompt_keyboard'] = pk
             return body, ''
 
         if keyboard:
@@ -1247,11 +1368,39 @@ class QQOfficialAdapter(ProtocolAdapter):
             body['msg_type'] = _MSG_TYPE_MARKDOWN
             body['markdown'] = {'content': text}
             body['keyboard'] = keyboard
+            if pk:
+                body['prompt_keyboard'] = pk
             return body, ''
 
         body['msg_type'] = _MSG_TYPE_TEXT
         body['content'] = text
+        if pk:
+            body['prompt_keyboard'] = pk
         return body, ''
+
+    @staticmethod
+    def _group_error_hint(e: Exception) -> str:
+        """把群相关的代表性错误码翻成可直接展示的提示。"""
+        if isinstance(e, _ApiError):
+            if e.err_code == str(_ERR_GROUP_REMOVED) or \
+                    e.code == str(_ERR_GROUP_REMOVED):
+                return '机器人已被移出该群 (11255)'
+            if e.err_code == str(_ERR_GROUP_LEFT) or \
+                    e.code == str(_ERR_GROUP_LEFT):
+                return '机器人已退群或群已解散 (40011026)'
+            if e.err_code == str(_ERR_RATE_LIMITED) or \
+                    e.code == str(_ERR_RATE_LIMITED):
+                return '触发平台频率限制 (40023001)，请稍后重试'
+            if e.err_code == str(_ERR_VIOLATION) or \
+                    e.code == str(_ERR_VIOLATION):
+                return '消息内容违规被平台拦截 (40034006)'
+        return str(e)
+
+    def _forget_pending_reply(self, group_id=None, user_id=None):
+        """群状态失效（被移出/退群）时清掉对应被动回复缓存。"""
+        for key in (group_id, user_id):
+            if key:
+                self._pending_reply.pop(str(key), None)
 
     async def _send_group(self, group_openid: str, message,
                           reply_msg_id: str = '') -> dict:
@@ -1264,10 +1413,18 @@ class QQOfficialAdapter(ProtocolAdapter):
         try:
             data = await asyncio.to_thread(
                 self._api_request, 'POST', path, json_body=body)
-        except Exception as e:
-            logger.warning('qq_official 群消息发送失败: %s', e)
-            return self._wrap({'error': str(e)}, ok=False)
-        # _api_request 只在 2xx 时返回——到此处即为成功，不再对响应体形状做猜测
+        except Exception as e:  # noqa: BLE001
+            hint = self._group_error_hint(e)
+            logger.warning('qq_official 群消息发送失败: %s', hint)
+            if isinstance(e, _ApiError) and (
+                    e.err_code == str(_ERR_GROUP_REMOVED)
+                    or e.code == str(_ERR_GROUP_REMOVED)
+                    or e.err_code == str(_ERR_GROUP_LEFT)
+                    or e.code == str(_ERR_GROUP_LEFT)):
+                # 已不在群里：被动回复缓存作废，避免后续继续拿它当 msg_id
+                self._forget_pending_reply(group_id=group_openid)
+            return self._wrap({'error': hint}, ok=False)
+        # _api_request 只在 2xx 且无业务错误码时返回——到此处即为成功
         return self._wrap(data, ok=True)
 
     async def _send_c2c(self, user_openid: str, message,
@@ -1281,9 +1438,89 @@ class QQOfficialAdapter(ProtocolAdapter):
         try:
             data = await asyncio.to_thread(
                 self._api_request, 'POST', path, json_body=body)
-        except Exception as e:
-            logger.warning('qq_official 单聊消息发送失败: %s', e)
-            return self._wrap({'error': str(e)}, ok=False)
+        except Exception as e:  # noqa: BLE001
+            hint = self._group_error_hint(e)
+            logger.warning('qq_official 单聊消息发送失败: %s', hint)
+            return self._wrap({'error': hint}, ok=False)
+        return self._wrap(data, ok=True)
+
+    async def _send_stream(self, user_openid: str, content: str, *,
+                           msg_id: str = '', event_id: str = '',
+                           msg_seq: int = None, index: int = 0,
+                           input_mode: str = 'replace',
+                           input_state: int = 10,
+                           stream_msg_id: str = '') -> dict:
+        """C2C 流式消息（POST /v2/users/{openid}/stream_messages）。
+
+        input_mode: replace=全量覆盖 / append=追加；input_state 官方约定
+        1=进行中、10=结束。index 从 0 递增；续传时带上一响的 stream_msg_id。
+        msg_id/event_id 至少一个用于被动窗口（主动流式可不带，受频率限制）。
+        """
+        if not user_openid:
+            return {'status': 'failed', 'retcode': -2,
+                    'msg': 'send_stream 需要 user_id'}
+        body = {
+            'input_mode': str(input_mode or 'replace'),
+            'input_state': int(input_state),
+            'index': int(index),
+            'content_type': 'text',
+            'content_raw': str(content or ''),
+            'msg_seq': int(msg_seq) if msg_seq else _next_msg_seq(),
+        }
+        if stream_msg_id:
+            body['stream_msg_id'] = str(stream_msg_id)
+        if msg_id:
+            body['msg_id'] = str(msg_id)
+        elif event_id:
+            body['event_id'] = str(event_id)
+        path = f'/v2/users/{user_openid}/stream_messages'
+        try:
+            data = await asyncio.to_thread(
+                self._api_request, 'POST', path, json_body=body)
+        except Exception as e:  # noqa: BLE001
+            hint = self._group_error_hint(e)
+            logger.warning('qq_official 流式消息发送失败: %s', hint)
+            return self._wrap({'error': hint}, ok=False)
+        return self._wrap(data, ok=True)
+
+    async def _group_request(self, group_id: str, endpoint: str,
+                             payload: dict = None, params: dict = None) -> dict:
+        """群管理统一入口：GET /v2/groups/{gid}/{endpoint}（带 payload 则 POST）。"""
+        if not group_id:
+            return {'status': 'failed', 'retcode': -2,
+                    'msg': '缺少 group_id'}
+        path = f'/v2/groups/{group_id}/{endpoint}'
+        method = 'POST' if payload is not None else 'GET'
+        kwargs = {}
+        if payload is not None:
+            kwargs['json_body'] = payload
+        elif params:
+            kwargs['data'] = params
+        try:
+            data = await asyncio.to_thread(
+                self._api_request, method, path, **kwargs)
+        except Exception as e:  # noqa: BLE001
+            hint = self._group_error_hint(e)
+            logger.warning('qq_official 群接口 %s 失败: %s', endpoint, hint)
+            return self._wrap({'error': hint}, ok=False)
+        return self._wrap(data, ok=True)
+
+    async def _wakeup(self, user_openid: str, content: str,
+                      buttons=None) -> dict:
+        """唤醒消息（is_wakeup: true，可召回 30 天内互动过的用户）。"""
+        body = {'msg_type': _MSG_TYPE_TEXT, 'content': str(content or ''),
+                'msg_seq': _next_msg_seq(), 'is_wakeup': True}
+        kb = build_keyboard(buttons) if buttons else None
+        if kb:
+            body['keyboard'] = kb
+        try:
+            data = await asyncio.to_thread(
+                self._api_request, 'POST', f'/v2/users/{user_openid}/messages',
+                json_body=body)
+        except Exception as e:  # noqa: BLE001
+            hint = self._group_error_hint(e)
+            logger.warning('qq_official 唤醒消息发送失败: %s', hint)
+            return self._wrap({'error': hint}, ok=False)
         return self._wrap(data, ok=True)
 
     async def _upload_c2c_image(self, user_openid: str,
@@ -1325,6 +1562,17 @@ class QQOfficialAdapter(ProtocolAdapter):
                        'data': {'buttons': params['buttons']}}]
                 message = (message if isinstance(message, list)
                            else [{'type': 'text', 'data': {'text': str(message)}}]) + kb
+            if params.get('prompt_buttons') or params.get('prompt_keyboard'):
+                pk = params.get('prompt_buttons') or params.get('prompt_keyboard')
+                seg = [{'type': 'prompt_keyboard', 'data': {'buttons': pk}}]
+                message = (message if isinstance(message, list)
+                           else [{'type': 'text', 'data': {'text': str(message)}}]) + seg
+            if params.get('card') is not None:
+                card = params['card']
+                data_ = card if isinstance(card, dict) else {'content': card}
+                seg = [{'type': 'card', 'data': data_}]
+                message = seg + (message if isinstance(message, list)
+                                 else [{'type': 'text', 'data': {'text': str(message)}}])
             group_id = params.get('group_id')
             user_id = params.get('user_id')
             if params.get('active'):
@@ -1372,6 +1620,232 @@ class QQOfficialAdapter(ProtocolAdapter):
             return await self.ack_interaction(
                 params.get('interaction_id') or params.get('event_id') or '',
                 params.get('code', 0))
+
+        # ── 流式消息（仅 C2C）────────────────────────────────────
+        if action in ('send_stream_message', 'send_stream'):
+            return await self._send_stream(
+                str(params.get('user_id') or ''),
+                str(params.get('content') or params.get('text') or ''),
+                msg_id=params.get('msg_id') or params.get('reply_msg_id') or '',
+                event_id=params.get('event_id') or '',
+                msg_seq=params.get('msg_seq'),
+                index=params.get('index', 0),
+                input_mode=params.get('input_mode', 'replace'),
+                input_state=params.get('input_state', 10),
+                stream_msg_id=params.get('stream_msg_id') or '')
+
+        # ── 唤醒消息 ────────────────────────────────────────────
+        if action == 'send_wakeup':
+            return await self._wakeup(
+                str(params.get('user_id') or ''),
+                str(params.get('content') or params.get('text') or ''),
+                buttons=params.get('buttons'))
+
+        # ── URL Link ────────────────────────────────────────────
+        if action == 'generate_url_link':
+            callback = str(params.get('callback_data') or '')
+            if not callback:
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'generate_url_link 需要 callback_data'}
+            try:
+                data = await asyncio.to_thread(
+                    self._api_request, 'POST', '/v2/generate_url_link',
+                    json_body={'callbackData': callback})
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+            return self._wrap(data, ok=True)
+
+        # ── 全局自定义菜单 ──────────────────────────────────────
+        if action == 'get_global_menu':
+            try:
+                data = await asyncio.to_thread(self._api_request, 'GET', '/v2/menu')
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+            return self._wrap(data, ok=True)
+        if action in ('set_global_menu', 'update_global_menu'):
+            menu = params.get('menu')
+            if not isinstance(menu, dict):
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'set_global_menu 需要 menu 字典'}
+            try:
+                data = await asyncio.to_thread(
+                    self._api_request, 'PUT', '/v2/menu', json_body={'menu': menu})
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+            return self._wrap(data, ok=True)
+
+        # ── 指令面板 /v2/panels ─────────────────────────────────
+        if action == 'get_panels':
+            qp = {}
+            if params.get('cursor'):
+                qp['cursor'] = str(params['cursor'])
+            qp['limit'] = max(1, min(int(params.get('limit', 20) or 20), 50))
+            try:
+                data = await asyncio.to_thread(
+                    self._api_request, 'GET', '/v2/panels', data=qp)
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+            return self._wrap(data, ok=True)
+        if action == 'get_panel':
+            pid = str(params.get('panel_id') or '')
+            if not pid:
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'get_panel 需要 panel_id'}
+            try:
+                data = await asyncio.to_thread(
+                    self._api_request, 'GET', f'/v2/panels/{pid}')
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+            return self._wrap(data, ok=True)
+        if action == 'create_panel':
+            panel = params.get('panel')
+            scope = str(params.get('scope') or '')
+            if not isinstance(panel, dict) or scope not in \
+                    ('c2c', 'group', 'channel', 'dm'):
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'create_panel 需要 scope(c2c/group/channel/dm) '
+                               '和 panel 字典'}
+            payload = {'scope': scope,
+                       'target_type': str(params.get('target_type') or 'all'),
+                       'panel': panel}
+            if params.get('user_openids'):
+                payload['user_openids'] = params['user_openids']
+            if params.get('group_openids'):
+                payload['group_openids'] = params['group_openids']
+            try:
+                data = await asyncio.to_thread(
+                    self._api_request, 'POST', '/v2/panels', json_body=payload)
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+            return self._wrap(data, ok=True)
+        if action == 'update_panel':
+            pid = str(params.get('panel_id') or '')
+            panel = params.get('panel')
+            if not pid or not isinstance(panel, dict):
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'update_panel 需要 panel_id 和 panel 字典'}
+            try:
+                data = await asyncio.to_thread(
+                    self._api_request, 'PUT', f'/v2/panels/{pid}',
+                    json_body={'panel': panel})
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+            return self._wrap(data, ok=True)
+        if action == 'delete_panel':
+            pid = str(params.get('panel_id') or '')
+            if not pid:
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'delete_panel 需要 panel_id'}
+            try:
+                await asyncio.to_thread(
+                    self._api_request, 'DELETE', f'/v2/panels/{pid}')
+                return self._wrap({'panel_id': pid}, ok=True)
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+        if action == 'update_panel_targets':
+            pid = str(params.get('panel_id') or '')
+            op = str(params.get('op') or '')
+            if not pid or op not in ('add', 'del'):
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'update_panel_targets 需要 panel_id 和 op(add/del)'}
+            payload = {'op': op}
+            if params.get('user_openids'):
+                payload['user_openids'] = params['user_openids']
+            if params.get('group_openids'):
+                payload['group_openids'] = params['group_openids']
+            try:
+                data = await asyncio.to_thread(
+                    self._api_request, 'PUT', f'/v2/panels/{pid}/target',
+                    json_body=payload)
+            except Exception as e:  # noqa: BLE001
+                return self._wrap({'error': self._group_error_hint(e)}, ok=False)
+            return self._wrap(data, ok=True)
+
+        # ── 群管理 /v2/groups/{gid}/... ─────────────────────────
+        if action == 'get_group_info':
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'info')
+        if action == 'get_group_bot_state':
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'bot_state')
+        if action in ('get_group_members', 'get_group_member_list'):
+            qp = {'cursor': str(params.get('cursor') or '')} \
+                if params.get('cursor') else {'cursor': ''}
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'members', params=qp)
+        if action in ('get_group_member', 'get_group_member_info'):
+            gid = str(params.get('group_id') or '')
+            mid = str(params.get('member_id') or params.get('member_openid')
+                      or params.get('user_id') or '')
+            if not gid or not mid:
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'get_group_member 需要 group_id 和 member_id'}
+            return await self._group_request(gid, f'members/{mid}')
+        if action in ('batch_remove_group_members', 'remove_group_members'):
+            payload = {'member_openids': params.get('member_openids') or []}
+            if params.get('add_to_member_blacklist'):
+                payload['add_to_member_blacklist'] = True
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'batch_remove_members',
+                                             payload=payload)
+        if action in ('get_group_member_blacklist', 'get_group_blacklist'):
+            qp = {'cursor': str(params.get('cursor') or '')} \
+                if params.get('cursor') else {'cursor': ''}
+            qp['limit'] = max(1, min(int(params.get('limit', 20) or 20), 100))
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'member_blacklist', params=qp)
+        if action in ('update_group_member_blacklist',
+                      'operate_group_member_blacklist'):
+            op = str(params.get('op') or '')
+            if op not in ('add', 'del'):
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': '群黑名单 op 只能为 add 或 del'}
+            payload = {'op': op,
+                       'member_openids': params.get('member_openids') or []}
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'member_blacklist',
+                                             payload=payload)
+        if action in ('get_group_join_requests', 'get_group_join_request_list'):
+            qp = {'cursor': str(params.get('cursor') or '')} \
+                if params.get('cursor') else {'cursor': ''}
+            qp['limit'] = max(1, min(int(params.get('limit', 20) or 20), 50))
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'join_request_list', params=qp)
+        if action in ('review_group_join_request', 'approve_group_join_request',
+                      'decline_group_join_request'):
+            gid = str(params.get('group_id') or '')
+            mid = str(params.get('member_openid') or params.get('user_id') or '')
+            op = str(params.get('op') or '')
+            if action.startswith('approve'):
+                op = 'approve'
+            elif action.startswith('decline'):
+                op = 'decline'
+            if not gid or not mid or op not in ('approve', 'decline'):
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': '入群审批需要 group_id、member_openid 和 '
+                               'op(approve/decline)'}
+            payload = {'op': op}
+            if params.get('join_request_id'):
+                payload['join_request_id'] = str(params['join_request_id'])
+            if op == 'decline':
+                if params.get('reject_reason'):
+                    payload['reject_reason'] = str(params['reject_reason'])
+                if params.get('add_to_member_blacklist'):
+                    payload['add_to_member_blacklist'] = True
+            return await self._group_request(
+                gid, f'approval_join_request/{mid}', payload=payload)
+        if action == 'get_group_restrict_chat_setting':
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'restrict_chat_setting')
+        if action in ('set_group_member_mute', 'update_group_member_mute'):
+            members = params.get('members')
+            if not isinstance(members, list) or not members:
+                return {'status': 'failed', 'retcode': -2,
+                        'msg': 'set_group_member_mute 需要 members 列表'
+                               '（单次最多 20 人）'}
+            return await self._group_request(str(params.get('group_id') or ''),
+                                             'restrict_chat_setting',
+                                             payload={'members': members})
 
         if action in ('get_status', 'get_login_info', 'get_online_clients'):
             return {

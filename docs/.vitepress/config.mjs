@@ -13,18 +13,29 @@ export default defineConfig({
 
   // README.md 在 GitHub 上作为目录入口更好读，但站点需要 index.html
   rewrites: {
-    'guide/README.md': 'guide/index.md'
+    'guide/README.md': 'guide/index.md',
+    'brand.md': 'brand/index.md'
   },
 
   head: [
-    ['meta', { name: 'theme-color', content: '#3c8772' }]
+    ['link', { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' }],
+    ['link', { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' }],
+    ['meta', { name: 'theme-color', content: '#6366F1' }]
   ],
 
   themeConfig: {
+    // 导航栏标志：亮底 #6366F1 / 暗底 #818CF8，随站点主题自动切换
+    logo: {
+      light: '/brand/zcbot-icon-light.svg',
+      dark: '/brand/zcbot-icon-dark.svg',
+      alt: 'zcbot'
+    },
+
     nav: [
       { text: '指南', link: '/guide/', activeMatch: '/guide/' },
       { text: 'API', link: '/api/', activeMatch: '/api/' },
       { text: '进阶', link: '/advanced/architecture', activeMatch: '/advanced/' },
+      { text: '品牌标识', link: '/brand/', activeMatch: '/brand/' },
       { text: '更新日志', link: 'https://github.com/kuangxing6367/zcbot/blob/main/CHANGELOG.md' },
       { text: 'GitHub', link: 'https://github.com/kuangxing6367/zcbot' }
     ],
@@ -83,6 +94,14 @@ export default defineConfig({
             { text: '定时任务', link: '/advanced/scheduler' },
             { text: '部署上线', link: '/advanced/deployment' },
             { text: '双核心架构（实验）', link: '/advanced/dual-core' }
+          ]
+        }
+      ],
+      '/brand/': [
+        {
+          text: '品牌标识',
+          items: [
+            { text: '标志与规范', link: '/brand/' }
           ]
         }
       ]

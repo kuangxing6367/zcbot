@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="zcbot">
+  <title>zcbot</title>
+  <g fill="none" stroke="#6366F1" stroke-width="14" stroke-linecap="butt">
+    <path d="M16 25 H80"/>
+    <path d="M16 71 H80"/>
+    <path d="M80 25 L16 71"/>
+  </g>
+</svg>

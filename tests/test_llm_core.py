@@ -12,12 +12,14 @@ llm_core 载荷测试（全离线，不联网、不需要真实模型）
 运行：python tests/test_llm_core.py
 """
 import asyncio
+import json
 import os
 import shutil
 import sys
 import tempfile
 import types
 import zipfile
+from urllib.parse import quote
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -408,7 +410,7 @@ class _StubCtx:
         self.event_handlers.append((name, handler))
 
     def webui(self, title, entry='index.html', icon=None, order=50, sidebar=False):
-        self.web_pages.append({'title': title, 'sidebar': sidebar})
+        self.web_pages.append({'title': title, 'entry': entry, 'sidebar': sidebar})
 
     def register_api(self, path, handler, methods=None, auth=True, description=None):
         self.apis.append(path)
@@ -442,8 +444,11 @@ def test_register_and_service():
     assert '/llm' in patterns, f"对话命令没注册: {patterns}"
     assert '/llmreset' in patterns and '/llmtools' in patterns, f"命令不全: {patterns}"
     assert ctx.raw_handlers, "没有注册原始消息处理器（图片就抓不到了）"
-    assert ctx.web_pages and ctx.web_pages[0]['sidebar'] is True, \
-        "WebUI 面板页未注册"
+    sidebars = [w for w in ctx.web_pages if w['sidebar']]
+    assert len(sidebars) == 1, \
+        f"侧边栏入口必须只有一个（框架前端按插件名折叠，多注册会撞进同一页）: {ctx.web_pages}"
+    assert sidebars[0]['entry'] == 'index.html', \
+        f"侧边栏入口应是标签页外壳 index.html: {sidebars[0]}"
 
     # 别的插件用法：装饰器注册 + 立刻可用
     @svc.tool(description="把文本变大写")
@@ -491,8 +496,12 @@ def test_end_to_end_chat():
     assert '60' in result.tool_calls[0]['result'], \
         f"工具结果不对: {result.tool_calls[0]['result']}"
     conv = svc.conversation(group_id=20002, user_id=10001)
-    assert conv is not None and conv.turns >= 1, "会话历史没有留下"
-    return "端到端对话 + 工具调用成功"
+    assert conv is not None and conv.turns >= 1, "会话历史没留下"
+    # 一轮工具调用只该留下「带 tool_calls 的 assistant」+「收口 assistant」两条；
+    # handle_chat 要是再补写一遍最终回答，历史里就会出现重复助手消息
+    roles = [x.get('role') for x in conv.messages]
+    assert roles.count('assistant') == 2, f"助手消息被重复写入历史: {roles}"
+    return "端到端对话 + 工具调用成功（历史无重复助手消息）"
 
 
 def test_handle_chat_no_provider():
@@ -717,6 +726,114 @@ def test_persona_override():
     return "人格覆盖/恢复默认/落盘恢复符合预期"
 
 
+def test_session_admin_api():
+    """会话管理面板接口：列表（内存∪磁盘）/过滤/分页/详情/删除/导出"""
+    try:
+        from flask import Flask
+    except ImportError:
+        return "未安装 Flask，跳过"
+    m = mods()
+    hist, main_mod = m['history'], m['main']
+    d = os.path.join(_TMP, 'admin_test')
+
+    store = hist.ConversationStore(system_prompt='测试人格',
+                                   persist=hist.SessionPersist(d))
+    g1 = store.get('qq:100001:200001')
+    g1.extend([
+        {'role': 'user', 'content': '今天天气怎么样'},
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'c1', 'type': 'function',
+             'function': {'name': 'get_weather', 'arguments': '{"city":"南京"}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': '26 度，晴'},
+        {'role': 'assistant', 'content': '南京今天 26 度，晴'},
+    ])
+    store.get('qq:100001:200002').append({
+        'role': 'user',
+        'content': [{'type': 'text', 'text': '图里是什么'},
+                    {'type': 'image_url', 'image_url': {'url': 'http://x/y.png'}}]})
+    store.get('qq:private:300003').append({'role': 'user', 'content': '私聊你好'})
+    store.get('onebot:private:400004').append({'role': 'user', 'content': '另一个来源'})
+    persona = store.get('qq:200200:300300')
+    persona.persona = '只回喵'
+    persona.append({'role': 'user', 'content': '喵'})
+
+    # 模拟重启：内存清空，面板仍要能从磁盘列出全部会话
+    live = hist.ConversationStore(system_prompt='测试人格',
+                                  persist=hist.SessionPersist(d))
+    prev_svc = main_mod._Svc
+    main_mod._Svc = types.SimpleNamespace(store=live)
+    try:
+        app = Flask(__name__)
+        app.add_url_rule('/api/llm_core/sessions', 's', main_mod._view_sessions,
+                         methods=['GET'])
+        app.add_url_rule('/api/llm_core/sessions/detail', 'd2',
+                         main_mod._view_session_detail, methods=['GET'])
+        app.add_url_rule('/api/llm_core/sessions/delete', 'x',
+                         main_mod._view_delete_sessions, methods=['POST'])
+        app.add_url_rule('/api/llm_core/sessions/export', 'e',
+                         main_mod._view_export_sessions, methods=['POST'])
+        c = app.test_client()
+
+        body = c.get('/api/llm_core/sessions').get_json()['data']
+        assert body['pagination']['total'] == 5, f"重启后列不全: {body['pagination']}"
+        assert body['stats']['messages'] > 0 and body['stats']['tokens'] > 0
+        assert body['facets']['sources'] == ['onebot', 'qq'], body['facets']
+        row = body['sessions'][0]
+        assert {'key', 'source', 'is_group', 'turns', 'messages',
+                'tokens', 'idle_seconds'} <= set(row), f"行字段不全: {row}"
+        # 正文字幕只用于服务端过滤，不跟着列表下发
+        assert 'search_text' not in row, "列表把会话正文泄漏给前端了"
+        groups = {r['key'] for r in body['sessions'] if r['is_group']}
+        assert groups == {'qq:100001:200001', 'qq:100001:200002', 'qq:200200:300300'}, groups
+
+        assert c.get('/api/llm_core/sessions?source=qq').get_json(
+            )['data']['pagination']['total'] == 4
+        assert c.get('/api/llm_core/sessions?chat_type=private').get_json(
+            )['data']['pagination']['total'] == 2
+        assert c.get('/api/llm_core/sessions?q=100001').get_json(
+            )['data']['pagination']['total'] == 2, "按会话键搜失败"
+        assert c.get('/api/llm_core/sessions?q=' + quote('喵')).get_json(
+            )['data']['pagination']['total'] == 1, "按正文搜失败"
+        assert c.get('/api/llm_core/sessions?q=' + quote('图里是什么')).get_json(
+            )['data']['pagination']['total'] == 1, "多模态内容块应可被搜到"
+        assert c.get('/api/llm_core/sessions?q=ONEBOT').get_json(
+            )['data']['pagination']['total'] == 1, "搜索应忽略大小写"
+        assert c.get('/api/llm_core/sessions?q=zzz').get_json(
+            )['data']['pagination']['total'] == 0
+        assert c.get('/api/llm_core/sessions?since=not-a-date').get_json(
+            )['data']['pagination']['total'] == 5, "脏时间参数不该把列表清空"
+        page = c.get('/api/llm_core/sessions?page=99&page_size=2').get_json()['data']
+        assert page['pagination']['page'] == 3 and len(page['sessions']) == 1, page['pagination']
+        assert c.get('/api/llm_core/sessions?page_size=9999').get_json(
+            )['data']['pagination']['page_size'] == 100
+
+        assert c.get('/api/llm_core/sessions/detail').get_json()['code'] == 1
+        assert c.get('/api/llm_core/sessions/detail?key=nope').get_json()['code'] == 404
+        det = c.get('/api/llm_core/sessions/detail?key=qq%3A100001%3A200001').get_json()['data']
+        assert len(det['messages']) == 4 and det['meta']['group_id'] == '100001', det['meta']
+
+        r = c.post('/api/llm_core/sessions/delete',
+                   json={'keys': ['qq:100001:200002', '不存在:x:y']}).get_json()['data']
+        assert r['deleted'] == 1 and r['failed'] == ['不存在:x:y'], r
+        assert live.detail('qq:100001:200002') is None, "删除没同时清掉内存和磁盘"
+        assert c.post('/api/llm_core/sessions/delete', json={}).get_json()['code'] == 1
+
+        out = c.post('/api/llm_core/sessions/export',
+                     json={'keys': ['qq:100001:200001']})
+        assert 'attachment' in out.headers.get('Content-Disposition', ''), out.headers
+        assert out.headers.get('X-Session-Count') == '1'
+        line = json.loads(out.get_data(as_text=True).strip())
+        assert line['key'] == 'qq:100001:200001' and len(line['messages']) == 4
+        # 不带 keys 时按同一套筛选条件导，跨页也能导全
+        filtered = c.post('/api/llm_core/sessions/export', json={'source': 'onebot'})
+        assert filtered.headers['X-Session-Count'] == '1', filtered.headers
+        assert c.post('/api/llm_core/sessions/export', json={}).headers[
+            'X-Session-Count'] == '4'
+    finally:
+        main_mod._Svc = prev_svc
+    return "会话列表/过滤/分页/详情/删除/导出接口符合预期"
+
+
 def cleanup():
     if _TMP and os.path.isdir(_TMP):
         shutil.rmtree(_TMP, ignore_errors=True)
@@ -743,6 +860,7 @@ if __name__ == '__main__':
         test_split_text_sentences,
         test_chat_gates,
         test_persona_override,
+        test_session_admin_api,
     ]
     failed = 0
     try:

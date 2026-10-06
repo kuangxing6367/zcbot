@@ -17,7 +17,7 @@ import logging
 import threading
 
 from framework.database.db import _translate_sql_for_sqlite, _translate_sql_for_mysql
-from framework.database.db import _replace_now
+from framework.database.db import _replace_now, _set_autocommit
 
 logger = logging.getLogger('zcbot')
 
@@ -47,7 +47,7 @@ class RemoteTxManager:
                 entry = {'conn': conn, 'db_type': 'sqlite'}
             else:
                 conn = db.get_connection()
-                conn.autocommit(False)
+                _set_autocommit(conn, False)
                 entry = {'conn': conn, 'db_type': 'mysql'}
             self._tx_map[tx_id] = entry
         logger.debug(f"事务开启: {tx_id}")

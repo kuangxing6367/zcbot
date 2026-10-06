@@ -179,7 +179,7 @@ class PluginRuntimeMixin:
                         self.db.execute(
                             f"DELETE FROM {tbl} WHERE plugin_name = %s", (pn,)
                         )
-                        if tbl == 'tasks':
+                        if tbl == 'tasks' and self.framework.scheduler is not None:
                             self.framework.scheduler.remove_plugin_tasks(pn)
                         logger.info(f"[自检] 清理孤儿 {tbl}: 插件 [{pn}] 已不存在")
                     except Exception as e:

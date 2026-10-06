@@ -35,14 +35,17 @@ import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { computed } from 'vue'
 import { api, setToken, session } from '../api'
+import { theme } from '../theme'
 
 const router = useRouter()
 const route = useRoute()
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
 const ver = ref(null)
-const logoUrl = import.meta.env.BASE_URL + 'img/logo.png'
+// 标志按主题切换明暗两版：亮底用 #6366F1，暗底提亮到 #818CF8
+const logoUrl = computed(() => import.meta.env.BASE_URL + (theme.value === 'dark' ? 'img/zcbot-icon-dark.svg' : 'img/zcbot-icon-light.svg'))
 
 async function onLogin() {
   if (!form.value.username || !form.value.password) {

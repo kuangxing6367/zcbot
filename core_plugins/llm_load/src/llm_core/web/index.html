@@ -3,173 +3,84 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LLM 对话</title>
+<title>LLM 控制台</title>
 <style>
   :root {
     --bg: #16181d;
     --panel: #1c1f26;
-    --panel-2: #22262f;
     --line: #2e333d;
     --text: #d8dce3;
     --muted: #8b93a1;
     --accent: #6ea8fe;
-    --ok: #5dcaa5;
-    --off: #e0855f;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; padding: 18px;
+    margin: 0; padding: 0;
     background: var(--bg); color: var(--text);
     font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column;
   }
-  h1 { font-size: 15px; font-weight: 500; margin: 0 0 14px; letter-spacing: .3px; }
-  h2 { font-size: 13px; font-weight: 500; margin: 20px 0 8px; color: var(--muted); }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
-  .card {
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 8px; padding: 12px 14px;
+  .tabs {
+    display: flex; gap: 4px; flex: none;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line);
   }
-  .card .num { font-size: 20px; font-weight: 500; letter-spacing: .5px; }
-  .card .cap { color: var(--muted); font-size: 12px; }
-  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-weight: 400; }
-  th { color: var(--muted); font-size: 12px; background: var(--panel-2); }
-  tr:last-child td { border-bottom: none; }
-  td.desc { color: var(--muted); max-width: 320px; }
-  .tag { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 12px; }
-  .on { color: var(--ok); }
-  .off { color: var(--off); }
-  button {
-    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+  .tab {
+    background: none; border: 1px solid transparent; border-radius: 6px;
+    color: var(--muted); padding: 5px 14px; font: inherit; font-size: 13px; cursor: pointer;
   }
-  button:hover { border-color: var(--accent); color: var(--accent); }
-  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-  .msg { padding: 10px 12px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
-  .err { border-color: #5b2a2a; color: #e08a8a; }
+  .tab:hover { color: var(--text); }
+  .tab.on { color: var(--accent); border-color: var(--line); background: var(--bg); }
+  .views { flex: 1; position: relative; }
+  iframe {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    border: 0; background: var(--bg); display: none;
+  }
+  iframe.on { display: block; }
 </style>
 </head>
 <body>
-  <div class="bar">
-    <h1 style="flex:1;margin:0">LLM 对话</h1>
-    <button id="refresh">刷新</button>
-    <button id="clear">清空会话</button>
-  </div>
-  <div id="status"></div>
-  <div id="body"></div>
+  <div class="tabs" id="tabs"></div>
+  <div class="views" id="views"></div>
 
 <script>
-const TOKEN_KEY = 'zcbot_token'
+const PAGES = [
+  { id: 'overview', label: '运行概览', entry: 'overview.html' },
+  { id: 'sessions', label: '会话管理', entry: 'sessions.html' },
+]
 
-async function call(url, options = {}) {
-  const headers = { ...(options.headers || {}) }
-  const token = localStorage.getItem(TOKEN_KEY) || ''
-  if (token) headers['Authorization'] = 'Bearer ' + token
-  if (options.body) headers['Content-Type'] = 'application/json'
-  const res = await fetch(url, {
-    ...options, headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  })
-  const data = await res.json().catch(() => null)
-  if (res.status === 401) throw new Error('未登录或登录已过期，请先登录管理面板')
-  if (!data || data.code !== 0) throw new Error((data && data.msg) || '请求失败')
-  return data
+// 本页自己也是被 /api/plugin_webui/<插件名>?entry=index.html 发出来的，
+// 换 entry 只改查询串即可——不写死插件名，插件改名或换目录都不用动这里
+const SELF = location.pathname
+const tabs = document.getElementById('tabs')
+const views = document.getElementById('views')
+const frames = {}
+
+function show(id, remember) {
+  const page = PAGES.find(p => p.id === id) || PAGES[0]
+  let frame = frames[page.id]
+  if (!frame) {
+    frame = document.createElement('iframe')
+    frame.src = SELF + '?entry=' + encodeURIComponent(page.entry)
+    views.appendChild(frame)
+    frames[page.id] = frame
+  }
+  for (const key of Object.keys(frames)) frames[key].classList.toggle('on', key === page.id)
+  for (const btn of tabs.children) btn.classList.toggle('on', btn.dataset.id === page.id)
+  if (remember && location.hash !== '#' + page.id) history.replaceState(null, '', '#' + page.id)
 }
 
-function esc(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+for (const page of PAGES) {
+  const btn = document.createElement('button')
+  btn.className = 'tab'
+  btn.textContent = page.label
+  btn.dataset.id = page.id
+  btn.addEventListener('click', () => show(page.id, true))
+  tabs.appendChild(btn)
 }
 
-function render(data) {
-  const p = data.providers || []
-  const t = data.tools || []
-  const s = data.sessions || {}
-  const cfg = data.config || {}
-
-  let html = '<div class="cards">'
-  html += `<div class="card"><div class="num">${esc(p.length)}</div><div class="cap">模型提供商</div></div>`
-  html += `<div class="card"><div class="num">${esc((t || []).filter(x => x.enabled).length)}/${esc(t.length)}</div><div class="cap">启用工具 / 总工具</div></div>`
-  html += `<div class="card"><div class="num">${esc(s.sessions || 0)}</div><div class="cap">活跃会话</div></div>`
-  html += `<div class="card"><div class="num">${esc(s.estimated_tokens || 0)}</div><div class="cap">估算 tokens</div></div>`
-  html += `<div class="card"><div class="num">${esc(cfg.max_turns ?? '-')}</div><div class="cap">工具最大轮数</div></div>`
-  html += `<div class="card"><div class="num">${esc(cfg.history_turns ?? '-')}</div><div class="cap">历史保留轮数</div></div>`
-  html += '</div>'
-
-  html += '<h2>模型提供商</h2>'
-  if (!p.length) {
-    html += '<div class="msg">还没有配置提供商。到插件配置里填 providers（JSON 数组，含 base_url / api_key / model）。</div>'
-  } else {
-    html += '<table><thead><tr><th>ID</th><th>名称</th><th>默认模型</th><th>函数调用</th><th>视觉</th><th>默认</th></tr></thead><tbody>'
-    for (const x of p) {
-      html += `<tr><td>${esc(x.id)}</td><td>${esc(x.label)}</td><td>${esc(x.model)}</td>`
-      html += `<td class="${x.supports_tools ? 'on' : 'off'}">${x.supports_tools ? '支持' : '不支持'}</td>`
-      html += `<td class="${x.supports_vision ? 'on' : 'off'}">${x.supports_vision ? '支持' : '不支持'}</td>`
-      html += `<td>${x.default ? '●' : ''}</td></tr>`
-    }
-    html += '</tbody></table>'
-  }
-
-  html += '<h2>可用函数（工具）</h2>'
-  if (!t.length) {
-    html += '<div class="msg">当前没有注册任何工具。别的插件可以用 fw.services.get("llm_core").tool() 挂上来。</div>'
-  } else {
-    html += '<table><thead><tr><th>名称</th><th>来源</th><th>说明</th><th>必填参数</th><th>状态</th><th></th></tr></thead><tbody>'
-    for (const x of t) {
-      html += `<tr><td>${esc(x.name)}</td><td><span class="tag">${esc(x.source)}</span></td>`
-      html += `<td class="desc">${esc(x.description)}</td><td>${esc((x.required || []).join(', ') || '-')}</td>`
-      html += `<td class="${x.enabled ? 'on' : 'off'}">${x.enabled ? '启用' : '停用'}</td>`
-      html += `<td><button data-toggle="${esc(x.name)}" data-next="${x.enabled ? 0 : 1}">${x.enabled ? '停用' : '启用'}</button></td></tr>`
-    }
-    html += '</tbody></table>'
-  }
-
-  document.getElementById('body').innerHTML = html
-  document.querySelectorAll('[data-toggle]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const name = btn.getAttribute('data-toggle')
-      const enabled = btn.getAttribute('data-next') === '1'
-      const status = document.getElementById('status')
-      try {
-        await call('/api/llm_core/tools/' + encodeURIComponent(name), { method: 'POST', body: { enabled } })
-        status.className = 'msg'
-        status.textContent = `工具 [${name}] 已${enabled ? '启用' : '停用'}`
-        await load()
-      } catch (e) {
-        status.className = 'msg err'
-        status.textContent = e.message
-      }
-    })
-  })
-}
-
-async function load() {
-  const status = document.getElementById('status')
-  try {
-    const r = await call('/api/llm_core/overview')
-    status.className = 'msg'
-    status.textContent = `llm_core v${esc(r.data.version)} 运行中`
-    render(r.data)
-  } catch (e) {
-    status.className = 'msg err'
-    status.textContent = e.message
-    document.getElementById('body').innerHTML = ''
-  }
-}
-
-document.getElementById('refresh').addEventListener('click', load)
-document.getElementById('clear').addEventListener('click', async () => {
-  const status = document.getElementById('status')
-  try {
-    const r = await call('/api/llm_core/sessions/clear', { method: 'POST' })
-    status.className = 'msg'
-    status.textContent = `已清空 ${r.data.cleared} 个会话`
-    await load()
-  } catch (e) {
-    status.className = 'msg err'
-    status.textContent = e.message
-  }
-})
-load()
+show((location.hash || '').slice(1), false)
+window.addEventListener('hashchange', () => show((location.hash || '').slice(1), false))
 </script>
 </body>
 </html>

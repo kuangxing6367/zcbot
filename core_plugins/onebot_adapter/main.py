@@ -665,7 +665,7 @@ class OneBotAdapter(ProtocolAdapter):
             'send_private_msg', user_id=user_id, message=text, bot=source)
 
     def get_connected_bots(self) -> list:
-        return self.ws_server.get_connected_bots()
+        return self.ws_server.get_connected_bots() if self.ws_server else []
 
     def start(self):
         self.ws_server.start(getattr(self.framework, 'loop', None))
