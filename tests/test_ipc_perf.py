@@ -120,17 +120,28 @@ def test_batch_log_single_frame_per_interval():
 def test_disconnect_fast_fail_waker():
     """优化点4：对端断开时等待中的 call 立即失败，不等到 timeout
 
-    不用「sleep 固定时长」抢时序（CI 负载下可能请求还没发出就断了对端，
-    异常类型随之漂移）——改用事件等对端确认收到请求后再断开。
+    对端刻意用「未启动读线程的裸 Connection」：若对端自己也阻塞在同一个 socket 的
+    recv() 上，它的 close() 在 Linux 上只摘掉 fd 表项——socket 本体要等 in-flight
+    recv 返回才真正释放，本端收不到 FIN（Windows 的 closesocket 会立刻 abort，所以
+    旧写法只在 Windows 能观察到断开，Linux 下本用例必然挂到 join 超时）。裸 Connection
+    没有在途 recv，close() 即刻向本端发 FIN，与「对端进程退出」等价。
     """
-    ca, cb = _pair()
-    started = threading.Event()
+    ca_conn, peer = mpc.Pipe(duplex=True)
+    ca = JsonRpcConnection(ca_conn)
+    ca.start()
 
-    def hang(**kw):
-        started.set()
-        time.sleep(30)
+    got_req = threading.Event()
 
-    cb.register('hang', hang)
+    def peer_reader():
+        try:
+            msg = peer.recv()
+        except Exception:
+            return
+        if isinstance(msg, dict) and msg.get('t') == 'req':
+            got_req.set()
+            time.sleep(60)  # 永不回响应：模拟对端卡住；此刻不在 recv，close 才发得出 FIN
+
+    threading.Thread(target=peer_reader, daemon=True).start()
     result = {}
 
     def waiter():
@@ -143,8 +154,8 @@ def test_disconnect_fast_fail_waker():
     t = threading.Thread(target=waiter, daemon=True)
     t0 = time.perf_counter()
     t.start()
-    assert started.wait(10), "请求未送达对端（hang 未被调用）"
-    cb._conn.close()  # 对端一侧断开 → ca 读线程 recv 异常 → 唤醒 pending
+    assert got_req.wait(10), "请求未送达对端"
+    peer.close()  # 对端断开 → ca 读线程 recv 异常 → 唤醒 pending
     t.join(5)
     elapsed = time.perf_counter() - t0
     assert not t.is_alive(), "call 未快速失败（仍在等待）"
@@ -152,7 +163,6 @@ def test_disconnect_fast_fail_waker():
     # 关键语义：远早于 timeout=30 就返回
     assert elapsed < 10, f"未快速失败，耗时 {elapsed:.1f}s（timeout=30）"
     ca.close()
-    cb.close()
 
 
 def test_close_wakes_waiters_no_crash():
