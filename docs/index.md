@@ -119,7 +119,7 @@ python main.py
 
 | 文档 | 内容 |
 | ---- | ---- |
-| [LLM 索引](../LLM.md) | 按需加载入口，先读它 |
+| [LLM 索引](https://github.com/kuangxing6367/zcbot/blob/main/LLM.md) | 按需加载入口，先读它（仓库根目录） |
 | [框架结构（LLM）](llm-framework.md) | 目录、事件流水线、扩展点、服务名 |
 | [插件开发（LLM）](llm-plugins.md) | 最小模板、ctx 常用面、坑 |
 | [调试排错（LLM）](llm-debugging.md) | 跑测试、排查报错 |

@@ -271,22 +271,31 @@ def test_render_tolerates_broken_fw(tui_mod):
     assert p._render_system() is not None
 
 
-def test_reload_official_core_plugin(tmp_path):
-    """官方插件（core_plugins/）重载：原 reload 只认 plugins/ 目录必失败，现走专用线路"""
+def test_reload_official_core_plugin(tmp_path, monkeypatch):
+    """官方插件（core_plugins/）重载：原 reload 只认 plugins/ 目录必失败，现走专用线路
+
+    官方插件启停的唯一权威是 core_plugins.yaml，而它被 .gitignore 忽略：开发机本地
+    有这个文件（恰好启用了若干插件），干净环境/CI 里没有，于是「发现即禁用」，
+    本用例会以「无已加载官方插件可测」失败。这里显式把 CORE_PLUGINS_YAML 指向
+    临时文件并只启用 session，使任何环境下行为一致、不依赖本机 dev 配置。
+    """
     import asyncio
     import contextlib
     import io
+
+    import framework.config as _fw_config
+
+    cps_yaml = tmp_path / 'core_plugins.yaml'
+    cps_yaml.write_text(
+        "core_plugins:\n  session:\n    enabled: true\n", encoding='utf-8')
+    monkeypatch.setattr(_fw_config, 'CORE_PLUGINS_YAML', str(cps_yaml))
+
     cfg_path = tmp_path / 'config.yaml'
     cfg_path.write_text(
         "database:\n  type: debug\n"
         "log:\n  level: ERROR\n"
         "web:\n  host: 127.0.0.1\n  port: 0\n"
-        "onebot:\n  enabled: false\n"
-        "core_plugins:\n"
-        "  onebot_adapter: false\n  webui: false\n  http_api: false\n  http_inject: false\n"
-        "  ws_client: false\n  qq_official: false\n  telegram: false\n  discord: false\n"
-        "  session: true\n  scheduler: false\n  image_renderer: false\n"
-        "  ops: true\n", encoding='utf-8')
+        "onebot:\n  enabled: false\n", encoding='utf-8')
     from framework.core import Framework
     from framework.terminal import register_builtins
     from framework.terminal.command import terminal_commands

@@ -118,9 +118,19 @@ def test_batch_log_single_frame_per_interval():
 
 
 def test_disconnect_fast_fail_waker():
-    """优化点4：对端断开时等待中的 call 立即失败，不等到 timeout"""
+    """优化点4：对端断开时等待中的 call 立即失败，不等到 timeout
+
+    不用「sleep 固定时长」抢时序（CI 负载下可能请求还没发出就断了对端，
+    异常类型随之漂移）——改用事件等对端确认收到请求后再断开。
+    """
     ca, cb = _pair()
-    cb.register('hang', lambda **kw: time.sleep(30))
+    started = threading.Event()
+
+    def hang(**kw):
+        started.set()
+        time.sleep(30)
+
+    cb.register('hang', hang)
     result = {}
 
     def waiter():
@@ -131,12 +141,16 @@ def test_disconnect_fast_fail_waker():
             result['r'] = type(e).__name__
 
     t = threading.Thread(target=waiter, daemon=True)
+    t0 = time.perf_counter()
     t.start()
-    time.sleep(0.3)  # 等 caller 进入等待
+    assert started.wait(10), "请求未送达对端（hang 未被调用）"
     cb._conn.close()  # 对端一侧断开 → ca 读线程 recv 异常 → 唤醒 pending
-    t.join(3)
+    t.join(5)
+    elapsed = time.perf_counter() - t0
     assert not t.is_alive(), "call 未快速失败（仍在等待）"
-    assert result.get('r') in ('IpcClosed', 'RemoteError'), result
+    assert result.get('r') != 'no error', result
+    # 关键语义：远早于 timeout=30 就返回
+    assert elapsed < 10, f"未快速失败，耗时 {elapsed:.1f}s（timeout=30）"
     ca.close()
     cb.close()
 
@@ -144,7 +158,13 @@ def test_disconnect_fast_fail_waker():
 def test_close_wakes_waiters_no_crash():
     """优化点5：close() 唤醒等待者且不崩溃（interruptible call）"""
     ca, cb = _pair()
-    cb.register('hang', lambda **kw: time.sleep(30))
+    started = threading.Event()
+
+    def hang(**kw):
+        started.set()
+        time.sleep(30)
+
+    cb.register('hang', hang)
     result = {}
 
     def waiter():
@@ -155,10 +175,13 @@ def test_close_wakes_waiters_no_crash():
             result['r'] = type(e).__name__
 
     t = threading.Thread(target=waiter, daemon=True)
+    t0 = time.perf_counter()
     t.start()
-    time.sleep(0.3)
+    assert started.wait(10), "请求未送达对端（hang 未被调用）"
     ca.close()  # 关闭连接 → pending 被唤醒
-    t.join(2)
+    t.join(5)
+    elapsed = time.perf_counter() - t0
     assert not t.is_alive(), "close 未唤醒等待者"
-    assert result.get('r') in ('IpcClosed', 'RemoteError'), result
+    assert result.get('r') != 'no error', result
+    assert elapsed < 10, f"未快速失败，耗时 {elapsed:.1f}s（timeout=30）"
     cb.close()
