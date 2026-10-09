@@ -29,6 +29,10 @@ jobs:
           # pytest-asyncio 锁 <1.0：1.0 改了默认模式，可能破坏 asyncio_mode=auto 行为
           pip install "flask>=2.3.0" "flask-cors>=4.0.0" "waitress>=3.0.0" \
                       pytest "pytest-asyncio>=0.21,<1.0" pytest-timeout
+          # 官方插件依赖（aiwriter 的 textual 等）未在 requirements.txt 声明，跑全量测试需装齐
+          for f in core_plugins/*/requirements.txt; do
+            [ -f "$f" ] && pip install -r "$f"
+          done
 
       - name: Compile check
         run: python -m compileall -q framework core_plugins
