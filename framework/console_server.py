@@ -204,6 +204,12 @@ class ConsoleServer:
             except Exception:
                 pass
             self._sock = None
+        # 等 accept 线程真正退出，确保端口释放后再允许复用探测。
+        # 否则 Linux 上 close 后线程仍在 accept，复用探测会误判「已有控制台在跑」
+        # （test_console_reuses_port_and_token 在 CI/Linux 上因此失败）。
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=5)
 
     # ── 会话 ───────────────────────────────────────────────────────────
     def _accept_loop(self):
