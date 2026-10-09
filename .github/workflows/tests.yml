@@ -23,6 +23,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Install plugin/test optional dependencies
+        run: |
+          # 测试套件覆盖 Web 层（flask 契约）与官方插件（aiwriter 的 textual、image_renderer 的 Pillow），
+          # 这些在 requirements.txt 中是「启用时自动安装」的可选依赖；CI 跑全量测试需提前装齐。
+          for f in core_plugins/*/requirements.txt; do
+            [ -f "$f" ] && pip install -r "$f"
+          done
       - name: Plugin import regression
         run: python tests/test_plugin_imports.py
       - name: Dual-core regression
