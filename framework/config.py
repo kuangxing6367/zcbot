@@ -159,6 +159,27 @@ dual_process:
     - webui
   max_restarts: 5           # 宿主崩溃重启限流：窗口内最大重启次数（默认 5）
   restart_interval: 30      # 限流窗口（秒）（默认 30）
+
+# ── 调试控制台（无 TTY 也能接进运行中的框架） ──────────────────
+# 启动时在 127.0.0.1 上监听一个本地端口，端口与超长随机 token 自动生成并
+# 存入数据库（console_access 表），无需重启、无需 TTY（systemd 托管场景）。
+# 本地执行 `python main.py attach` 即可接入，直接使用框架的终端命令
+# （help / status / plugins / reload / ...）。
+console:
+  enabled: true              # 是否启用本地调试控制台
+  host: 127.0.0.1            # 仅回环地址；不要改成 0.0.0.0（等于把控制台暴露到网络）
+  port: 0                    # 0 = 首次启动自动分配空闲端口并落库；之后复用该端口
+  token_bits: 16384          # token 位数（默认 16384 bit = 2048 字节；越长越安全）
+  backlog: 8                 # 监听队列长度
+  read_timeout: 3600         # 单条会话空闲超时（秒），超时自动断开
+
+# ── 终端交互（前台运行时） ────────────────────────────────────
+# 有 TTY 时的交互终端；无 TTY（systemd / 重定向）会自动跳过，改用上面 console 段接入。
+terminal:
+  enabled: true              # 是否启用交互终端（stdin 非 TTY 时自动跳过）
+  panel_autostart: false     # 启动后自动进入运维面板（退出后回到普通终端）
+  panel_refresh: 1.0         # 面板刷新间隔（秒，最小 0.2）
+  panel_default_view: monitor # 面板默认页：monitor / overview / plugins / messages / system
 """
 
 
@@ -289,6 +310,15 @@ _CORE_PLUGIN_SCHEMA = {
     'llm_load': {  # LLM 核心装载器：释放/自愈 plugins/llm_core
         'enabled': False, 'plugin_name': 'llm_core',
         'auto_restart': True, 'payload': '',
+    },
+    'aiwriter': {  # 终端 AI 智能体：自带 LLM 客户端 + 工作区工具集 + Agent 循环
+        'enabled': False, 'base_url': 'https://api.deepseek.com/v1',
+        'api_key': '', 'model': 'deepseek-chat', 'temperature': 0.7,
+        'max_rounds': 12, 'timeout': 120, 'mode': 'workspace',
+        'allow_exec': False, 'workspace': '', 'keep_turns': 20,
+        'max_history_chars': 24000, 'max_output': 8000, 'shell_timeout': 60,
+        'python_timeout': 60, 'net_timeout': 20, 'session_key': 'terminal',
+        'agent': 'build', 'agents': [],
     },
     'rust_accel': {'enabled': False, 'ws_host': '0.0.0.0', 'ws_port': 6831,
                    'access_token': '', 'max_frame_size': 16777216,

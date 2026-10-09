@@ -36,7 +36,10 @@ class LogCoalescer(logging.Filter):
         self._buckets: "OrderedDict[str, dict]" = OrderedDict()
         self._root = logging.getLogger()
         self._stop = False
-        self._timer = threading.Thread(target=self._flush_loop, daemon=True)
+        # 停止唤醒事件：stop() 置位后立即唤醒 flush 线程，不必等完整个窗口周期
+        self._wake = threading.Event()
+        self._timer = threading.Thread(
+            target=self._flush_loop, daemon=True, name='log-coalesce-flush')
         self._timer.start()
 
     # ---- 工具 ----
@@ -116,7 +119,10 @@ class LogCoalescer(logging.Filter):
     # ---- 后台 flush ----
     def _flush_loop(self):
         while not self._stop:
-            time.sleep(self.window)
+            # 等窗口到期或 stop() 唤醒（替代裸 sleep：停止时可立即退出，不再滞留一个窗口周期）
+            self._wake.wait(self.window)
+            if self._stop:
+                break
             now = time.monotonic()
             with self._lock:
                 expired = [(k, self._buckets.pop(k)) for k, b in list(self._buckets.items())
@@ -125,5 +131,15 @@ class LogCoalescer(logging.Filter):
             for k, b in expired:
                 self._emit_summary(k, b)
 
-    def stop(self):
+    def stop(self, timeout: float = 5.0) -> bool:
+        """停止后台 flush 线程：置停止信号 → 唤醒 → 有限等待线程退出。
+
+        幂等，可重复调用。返回线程是否已真正退出（daemon 线程超时未退也不阻塞
+        进程关闭）。合并/去重决策不受影响——stop 后仅缺少「无人再触发同类日志」
+        时的周期性兜底汇总。
+        """
         self._stop = True
+        self._wake.set()
+        if self._timer.is_alive() and threading.current_thread() is not self._timer:
+            self._timer.join(timeout)
+        return not self._timer.is_alive()

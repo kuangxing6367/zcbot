@@ -41,10 +41,12 @@ jobs:
       - name: Run tests
         run: |
           python -m pytest -q --timeout=120 -o asyncio_mode=auto -p no:cacheprovider \
+            tests/test_aiwriter.py \
             tests/test_api_security.py \
             tests/test_buffer_l2_file.py \
             tests/test_core_plugin_switch.py \
             tests/test_buffer_refill.py \
+            tests/test_console_server.py \
             tests/test_db_regression.py \
             tests/test_dual_core.py \
             tests/test_event_buffer.py \
@@ -63,4 +65,36 @@ jobs:
             tests/test_self_heal.py \
             tests/test_smoke.py \
             tests/test_sql_sim_debug.py \
+            tests/test_task2_arch_split.py \
             tests/test_terminal_panel.py
+
+      # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────────
+      # 允许工作流正常产生且已被 .gitignore 覆盖的文件（不出现在 git status）；
+      # 例外放行项目有意跟踪的 native/bin 发布二进制。细则见脚本内注释。
+      - name: Workspace guard (pollution + test residue)
+        run: bash .github/scripts/guard_workspace.sh
+
+  # ── WebUI：npm ci + 生产构建检查 ────────────────────────────
+  # 产物落点 core_plugins/webui/web 为有意跟踪的发布资产（与 native/bin
+  # 发布二进制同定位）：本作业只验证「锁文件驱动下可安装、可生产构建」，
+  # 不跑污染守卫，避免内容哈希漂移误报。
+  webui-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: WebUI install (npm ci)
+        working-directory: webui
+        run: npm ci
+
+      - name: WebUI production build (vite build)
+        working-directory: webui
+        run: npm run build

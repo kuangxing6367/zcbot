@@ -110,6 +110,14 @@ def host_entry(config_path, address, token, core_pid):
             await stop_event.wait()
         finally:
             await fw.stop()
+            # 停止宿主侧日志合并器后台 flush 线程（置信号 → 唤醒 → 有界等待退出）
+            try:
+                for f in list(_ipc_log_handler.filters):
+                    stop = getattr(f, 'stop', None)
+                    if callable(stop):
+                        stop()
+            except Exception:
+                pass
             # 冲刷剩余日志（避免丢最后一批 host 日志），再关闭 IPC
             try:
                 _ipc_log_handler.flush_logs()

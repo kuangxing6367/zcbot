@@ -7,6 +7,7 @@
 """
 import asyncio
 import logging
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
@@ -271,9 +272,13 @@ class ServiceRegistry:
     def __init__(self):
         self._services: Dict[str, Any] = {}
         self._adapters: Dict[str, ProtocolAdapter] = {}
+        # 服务就绪回调（一次性）：name -> [handle, ...]
+        # handle 为不透明 dict：{'name', 'callback', 'state'}
+        self._ready_callbacks: Dict[str, list] = {}
+        self._ready_lock = threading.Lock()
 
     def register(self, name: str, service: Any):
-        """注册服务（官方插件调用）"""
+        """注册服务（官方插件调用）；同名服务的就绪回调在此同步触发"""
         if name in self._services:
             logger.warning(f"服务 [{name}] 已注册，将被覆盖")
         self._services[name] = service
@@ -283,6 +288,10 @@ class ServiceRegistry:
             self._adapters[aid] = service
             self._check_contract(service, aid)
         logger.debug(f"服务已注册: [{name}]")
+        # 触发等待该服务就绪的一次性回调（如 session 等调度器服务）。
+        # service 为 None 也触发——显式 register(None) 表示「插件已处理但被禁用」，
+        # 等待方据此给出警告而非无限挂起。回调在注册线程同步执行，异常不外抛。
+        self._fire_ready(name, service)
 
     @staticmethod
     def _check_contract(adapter, aid: str):
@@ -321,6 +330,67 @@ class ServiceRegistry:
     def all(self) -> dict:
         """返回所有已注册服务"""
         return dict(self._services)
+
+    # ---- 服务就绪回调（明确的“服务就绪”机制，替代固定延迟重试）----
+
+    def call_when_ready(self, name: str, callback) -> dict:
+        """登记一次性服务就绪回调：服务已注册时立即同步执行 callback(service)，
+        否则挂起，待 register(name, ...) 时在注册线程同步触发（每个句柄只触发一次）。
+
+        :param name: 服务名（如 'scheduler'）
+        :param callback: callback(service)，service 可能为 None（服务方显式禁用）
+        :return: 不透明句柄，供 cancel_ready 取消（停用时清理，避免迟到注册）
+        """
+        if not callable(callback):
+            raise TypeError(f"服务 [{name}] 的就绪回调必须可调用")
+        handle = {'name': name, 'callback': callback, 'state': 'pending'}
+        with self._ready_lock:
+            if name in self._services:
+                handle['state'] = 'fired'
+            else:
+                self._ready_callbacks.setdefault(name, []).append(handle)
+        if handle['state'] == 'fired':
+            self._run_ready_callback(handle, self._services.get(name))
+        return handle
+
+    def cancel_ready(self, handle) -> bool:
+        """取消尚未触发的就绪回调（插件停用时调用，防止停用后迟到注册任务）。
+        已触发 / 已取消的句柄返回 False。"""
+        if not isinstance(handle, dict):
+            return False
+        with self._ready_lock:
+            if handle.get('state') != 'pending':
+                return False
+            handle['state'] = 'cancelled'
+            pending = self._ready_callbacks.get(handle.get('name'))
+            if pending:
+                try:
+                    pending.remove(handle)
+                except ValueError:
+                    pass
+                if not pending:
+                    self._ready_callbacks.pop(handle.get('name'), None)
+        return True
+
+    def _fire_ready(self, name: str, service: Any):
+        """register 时触发该服务挂起中的就绪回调（锁内摘除、锁外执行，避免死锁）"""
+        with self._ready_lock:
+            handles = self._ready_callbacks.pop(name, None)
+            if not handles:
+                return
+            for h in handles:
+                h['state'] = 'fired'
+        for h in handles:
+            self._run_ready_callback(h, service)
+
+    @staticmethod
+    def _run_ready_callback(handle: dict, service: Any):
+        """执行就绪回调：异常仅记录日志，绝不影响注册流程"""
+        try:
+            handle['callback'](service)
+        except Exception as e:
+            logger.error(
+                f"服务 [{handle.get('name')}] 就绪回调异常: {e}", exc_info=True)
 
     def protocol_adapters(self) -> Dict[str, ProtocolAdapter]:
         """全部已注册协议适配器 {adapter_id: adapter}（连接页/状态聚合用）"""

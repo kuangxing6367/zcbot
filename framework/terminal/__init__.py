@@ -5,7 +5,9 @@
 """
 
 from .command import TerminalCommand, terminal_commands
+from .context import is_remote_session, remote_session
 from .input import TerminalInput
 from .builtins import register_builtins
 
-__all__ = ['TerminalCommand', 'terminal_commands', 'TerminalInput', 'register_builtins']
+__all__ = ['TerminalCommand', 'terminal_commands', 'TerminalInput', 'register_builtins',
+           'remote_session', 'is_remote_session']

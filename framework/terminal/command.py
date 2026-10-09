@@ -52,6 +52,23 @@ class TerminalCommand:
         real_name = self._aliases.get(name)
         return real_name if real_name in self._commands else None
 
+    def remove(self, name: str) -> bool:
+        """注销终端命令（含其全部别名）。返回是否确实移除了命令。
+
+        供插件卸载时清理其注册的终端命令（如 aiwriter 卸载后摘掉 `ai`），
+        避免残留 handler 指向已卸载模块。
+        """
+        real = self._resolve(name)
+        if real is None:
+            return False
+        self._commands.pop(real, None)
+        self._descriptions.pop(real, None)
+        self._targets.pop(real, None)
+        for alias, target in list(self._aliases.items()):
+            if target == real:
+                self._aliases.pop(alias, None)
+        return True
+
     def get_target(self, name: str) -> str:
         """获取命令归属进程（'core' | 'host' | 'both'）"""
         real = self._resolve(name)

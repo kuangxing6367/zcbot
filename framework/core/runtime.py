@@ -80,7 +80,8 @@ class FrameworkRuntimeMixin:
 
             try:
                 spec = importlib.util.spec_from_file_location(
-                    f"core_plugin_{name}", main_file)
+                    f"core_plugin_{name}", main_file,
+                    submodule_search_locations=[plugin_dir])
                 module = importlib.util.module_from_spec(spec)
                 sys.modules[f"core_plugin_{name}"] = module
                 spec.loader.exec_module(module)

@@ -134,6 +134,7 @@ class TerminalPanel:
         self._plugin_names = []
         self._scroll = 0
         self._saved_termios = None
+        self._saved_input_mode = None
         self._stop = False
         self._leave_registered = False
         self._last_size = None
@@ -151,6 +152,7 @@ class TerminalPanel:
         if os.name == 'nt':
             if not self._enable_windows_vt():
                 return False
+            self._set_windows_input_mode()
         else:
             try:
                 import termios
@@ -176,6 +178,7 @@ class TerminalPanel:
             sys.stdout.flush()
         except Exception:
             pass
+        self._restore_windows_input_mode()
         if self._saved_termios is not None:
             try:
                 import termios
@@ -183,6 +186,39 @@ class TerminalPanel:
             except Exception:
                 pass
             self._saved_termios = None
+
+    def _set_windows_input_mode(self):
+        """关掉 Windows 控制台的 processed / line / echo 输入模式。
+
+        - ENABLE_PROCESSED_INPUT：关掉后 Ctrl+C 变成普通按键字节（0x03），
+          不再触发系统信号把整个进程干掉（面板/界面自己处理退出）；
+        - ENABLE_LINE_INPUT：关掉后按键即时送达，不必等回车；
+        - ENABLE_ECHO_INPUT：关掉后按键不回显（界面自绘光标，避免重影）。
+        """
+        self._saved_input_mode = None
+        if os.name != 'nt':
+            return
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            h = k.GetStdHandle(-10)          # STD_INPUT_HANDLE
+            mode = ctypes.c_uint32()
+            if k.GetConsoleMode(h, ctypes.byref(mode)):
+                new_mode = mode.value & ~0x0001 & ~0x0002 & ~0x0004
+                if k.SetConsoleMode(h, new_mode):
+                    self._saved_input_mode = (h, mode.value)
+        except Exception:
+            self._saved_input_mode = None
+
+    def _restore_windows_input_mode(self):
+        if getattr(self, '_saved_input_mode', None):
+            try:
+                import ctypes
+                h, mode = self._saved_input_mode
+                ctypes.windll.kernel32.SetConsoleMode(h, mode)
+            except Exception:
+                pass
+        self._saved_input_mode = None
 
     @staticmethod
     def _enable_windows_vt() -> bool:
@@ -847,6 +883,14 @@ def register(fw):
 
     def cmd_tui(args):
         """终端运维面板: tui（数字键/方向键/鼠标切页，q 退出）"""
+        try:
+            from .context import is_remote_session
+            if is_remote_session():
+                print("[tui] 这是远程文本通道（调试控制台 / HTTP），没有 TTY，无法承载全屏面板。\n"
+                      "      请在 bot 所在终端直接输入 tui")
+                return
+        except Exception:
+            pass
         try:
             panel = TerminalPanel(
                 fw,

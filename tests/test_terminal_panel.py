@@ -338,3 +338,75 @@ def test_draw_renders_title_and_body(tui_mod, capsys):
     p._draw()
     out = capsys.readouterr().out
     assert '主菜单' in out and '状态总览' in out
+
+
+# ── 终端编码对齐（framework/terminal/encoding.py）────────────────────────
+
+def test_console_codepages_shape():
+    from framework.terminal import encoding as enc
+    out_cp, in_cp = enc.console_codepages()
+    if os.name == 'nt':
+        assert isinstance(out_cp, int) and isinstance(in_cp, int)
+    else:
+        assert out_cp is None and in_cp is None
+
+
+def test_ensure_utf8_console_returns_bool_without_side_effect():
+    """ensure_utf8_console() 返回布尔；测试后还原控制台代码页，避免污染后续输出。"""
+    from framework.terminal import encoding as enc
+    before = enc.console_codepages()
+    try:
+        assert isinstance(enc.ensure_utf8_console(), bool)
+    finally:
+        if os.name == 'nt' and before[0]:
+            try:
+                import ctypes
+                k = ctypes.windll.kernel32
+                k.SetConsoleOutputCP(before[0])
+                k.SetConsoleCP(before[1])
+            except Exception:
+                pass
+
+
+def test_align_and_restore_stdio_no_raise():
+    from framework.terminal import encoding as enc
+    saved = enc.align_stdio_to_console()
+    assert isinstance(saved, dict)
+    enc.restore_stdio(saved)          # 幂等、不抛
+    enc.restore_stdio(None)
+
+
+# ── 终端编码对齐（framework/terminal/encoding.py）────────────────────────
+
+def test_console_codepages_shape():
+    from framework.terminal import encoding as enc
+    out_cp, in_cp = enc.console_codepages()
+    if os.name == 'nt':
+        assert isinstance(out_cp, int) and isinstance(in_cp, int)
+    else:
+        assert out_cp is None and in_cp is None
+
+
+def test_ensure_utf8_console_returns_bool_without_side_effect():
+    """ensure_utf8_console() 返回布尔；测试后还原控制台代码页，避免污染后续输出。"""
+    from framework.terminal import encoding as enc
+    before = enc.console_codepages()
+    try:
+        assert isinstance(enc.ensure_utf8_console(), bool)
+    finally:
+        if os.name == 'nt' and before[0]:
+            try:
+                import ctypes
+                k = ctypes.windll.kernel32
+                k.SetConsoleOutputCP(before[0])
+                k.SetConsoleCP(before[1])
+            except Exception:
+                pass
+
+
+def test_align_and_restore_stdio_no_raise():
+    from framework.terminal import encoding as enc
+    saved = enc.align_stdio_to_console()
+    assert isinstance(saved, dict)
+    enc.restore_stdio(saved)          # 幂等、不抛
+    enc.restore_stdio(None)

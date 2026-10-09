@@ -96,10 +96,11 @@ def register(ctx):
 
         args = command[len(cmd_name):].strip()
 
-        # 捕获 stdout
+        # 捕获 stdout（并标记为「远程调用」——全屏界面类命令据此拒绝并给出指引）
         output_buffer = io.StringIO()
         try:
-            with contextlib.redirect_stdout(output_buffer):
+            from framework.terminal.context import remote_session
+            with contextlib.redirect_stdout(output_buffer), remote_session():
                 handler(args)
         except Exception as e:
             output_buffer.write(f"\n执行异常: {e}")
