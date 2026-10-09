@@ -207,12 +207,15 @@ class SessionManager:
 
 
 _manager = None
+_fw = None                # unregister() 无 ctx 入参，register 时留存框架引用
+_ready_handle = None      # 调度器服务就绪回调句柄（停用时可取消）
 
 
 def register(ctx):
     """注册会话管理器"""
-    global _manager
+    global _manager, _fw, _ready_handle
     fw = ctx._framework
+    _fw = fw
 
     session_cfg = fw.config.get('session', {})
     if session_cfg.get('enabled') is False:
@@ -220,29 +223,39 @@ def register(ctx):
         fw.services.register('session_manager', None)
         return
 
+    # 防御：重复 register（插件重载）先清理旧状态，避免旧就绪回调 / 旧原始消息处理器残留
+    if _ready_handle is not None:
+        fw.services.cancel_ready(_ready_handle)
+        _ready_handle = None
+    try:
+        fw.unregister_raw_message_handlers('session_manager')
+    except Exception:
+        pass
+
     _manager = SessionManager(fw)
     fw.services.register('session_manager', _manager)
 
     # 注册原始消息拦截（priority=0，最先执行）
     fw.register_raw_message_handler('session_manager', _manager.on_raw_message, priority=0)
 
-    # 注册定时清理任务（延迟注册，确保调度器已加载）
-    def _register_cleanup_task():
-        scheduler = fw.services.get('scheduler')
-        if scheduler:
-            scheduler.add_plugin_task({
-                'plugin_name': 'session',
-                'cron_expression': '*/5 * * * *',
-                'handler': '_cleanup_task',
-                'handler_name': '_cleanup_task',
-                'description': '清理过期会话',
-            })
-        else:
+    # 定时清理任务：等「调度器服务就绪」回调后再注册。
+    # 替代旧 threading.Timer(2.0) 固定延迟——旧法存在竞态：定时器触发时调度器可能
+    # 仍未就绪（清理任务丢失）；插件停用后定时器线程还会残留并在停用后迟到注册。
+    # 现语义：调度器已注册则立即注册一次；未注册则挂起，待其 register 时触发一次；
+    # 调度器显式禁用（register None）时同样触发一次并在此告警跳过。
+    def _register_cleanup_task(scheduler):
+        if scheduler is None:
             ctx.log("调度器未加载，跳过清理任务注册", level="warning")
-    
-    # 延迟 2 秒注册，确保调度器已启动
-    import threading
-    threading.Timer(2.0, _register_cleanup_task).start()
+            return
+        scheduler.add_plugin_task({
+            'plugin_name': 'session',
+            'cron_expression': '*/5 * * * *',
+            'handler': '_cleanup_task',
+            'handler_name': '_cleanup_task',
+            'description': '清理过期会话',
+        })
+
+    _ready_handle = fw.services.call_when_ready('scheduler', _register_cleanup_task)
 
     ctx.log("会话管理器已就绪")
 
@@ -254,5 +267,34 @@ def _cleanup_task():
 
 
 def unregister():
-    global _manager
+    """停用会话管理器：取消未触发的就绪回调、移除已注册的清理任务、
+    摘除原始消息处理器与服务注册——停用后无残留线程、无重复任务。"""
+    global _manager, _fw, _ready_handle
+    fw = _fw
+    if fw is not None:
+        # 1) 调度器尚未就绪：取消挂起的就绪回调（停用后不再注册清理任务）
+        if _ready_handle is not None:
+            try:
+                fw.services.cancel_ready(_ready_handle)
+            except Exception:
+                pass
+            _ready_handle = None
+        # 2) 清理任务已注册：从调度器移除（幂等，未注册时为空操作）
+        scheduler = fw.services.get('scheduler')
+        if scheduler is not None:
+            try:
+                scheduler.remove_plugin_tasks('session')
+            except Exception:
+                pass
+        # 3) 摘除原始消息处理器（旧 manager 的绑定方法会把它钉在内存里）
+        try:
+            fw.unregister_raw_message_handlers('session_manager')
+        except Exception:
+            pass
+        # 4) 摘除服务注册：停用后 ctx.wait_for() 明确报「未加载」而非继续用死对象
+        try:
+            fw.services.remove('session_manager')
+        except Exception:
+            pass
     _manager = None
+    _fw = None

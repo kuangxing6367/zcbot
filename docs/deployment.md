@@ -27,6 +27,51 @@ python main.py
 适合本地调试与小规模使用。管理后台默认由 **waitress**（生产级 WSGI 服务器，
 依赖缺失时回退到 werkzeug）在独立线程提供服务。
 
+## 远程部署脚本（宝塔 / Linux）
+
+仓库自带一条从本地到服务器的部署链路，把线上代码更新成当前工作区版本：
+
+```bash
+SSH_KEY=/path/to/id_ed25519 \
+SSH_HOST=root@1.2.3.4 \
+REMOTE_DIR=/www/wwwroot/bot.zgric.top/zcbot \
+WEB_PORT=6080 \
+bash tools/deploy_remote.sh
+```
+
+它做的事，以及为什么这么做：
+
+- **只同步代码**：`config.yaml` / `core_plugins.yaml` / `data/` / `plugins/` 一律不动 ——
+  线上这些是真实配置与数据（含数据库口令），覆盖即事故；
+- **排除原生库**（`*.so` / `*.pyd` / `image_renderer/native`）：本地可能是别的平台构建，
+  覆盖会让线上渲染 / 加速模块直接崩；
+- **用 tar 解包**（不带删除语义），线上独有文件（如 `start.sh`）不会被删；
+- **重启用目录全路径匹配进程**：宽泛的 `zcbot` 会连同机其它站点（如 `dbcj_zcbot`）一起杀掉；
+- 部署前在 `/root/zcbot-backup-<时间戳>/` 留一份代码 + 配置备份，可回滚；
+- `web.port` 被宝塔占用时（8080 默认归 BT-Panel）自动改成 `WEB_PORT`。
+
+`DRY_RUN=1` 只打包并自检，不上传。
+
+## 无 TTY 接入运行中的框架（调试控制台）
+
+systemd / 宝塔托管时进程没有交互终端。框架启动会在 **`127.0.0.1` 上开一个调试控制台端口**，
+**端口与超长随机 token 自动生成并写入数据库**（`console_access` 表），之后每次启动复用：
+
+```bash
+# 在服务器上（无需 TTY，进程照常在跑）
+python main.py attach              # 交互式：直接敲终端命令
+python main.py attach status       # 一次性执行一条命令
+python main.py -a plugins          # 同上，-a 是 attach 简写
+python main.py -a --agent          # 文本通道里跟 AI 智能体对话
+```
+
+- 凭证存放位置**跟随 `database` 配置**：SQLite 存 `data/zcbot.db`，MySQL 存对应库的
+  `console_access` 表 —— 两种部署 `attach` 都能用（无需手工填端口/token）；
+- 只绑回环地址，token 用常量时间比较；`config.yaml` 的 `console` 段可配
+  （`enabled` / `host` / `port` / `token_bits` / `backlog` / `read_timeout`）；
+- 端口被占用会重试；若该端口上**已有本框架的控制台在跑**（多实例），新实例放弃监听且
+  **不覆盖凭证**，避免把先跑那个实例的接入入口打掉。
+
 ## Linux systemd 常驻
 
 ```ini

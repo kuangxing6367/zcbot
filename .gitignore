@@ -145,3 +145,46 @@ core_plugins/rust_accel/rust_accel/target/
 # ============================================================
 core_plugins/**/native/build_log.txt
 core_plugins/**/native/bin/**/*.bak_*
+
+# ============================================================
+# 工作区治理（2026-10）：本地临时目录、测试残留、备份/合并残留
+# 与 .github/scripts/guard_workspace.sh（CI 污染/测试残留守卫）配套维护：
+# 守卫只看 git status 与文件系统残留模式，天然放行「工作流正常运行
+# 产生且被此处忽略」的文件（__pycache__、.pytest_cache 等）。
+# ============================================================
+# 本地实验目录与工具缓存
+/tmp/
+.pytest_cache/
+.kilo/
+.kilocode/
+
+# 测试运行残留：test_perm.py 异常中断遗留的临时权限库（含 SQLite 侧车；
+# 正常路径由脚本自身 finally 清理，出现即代表清理契约被打破）
+tests/_perm_test_*.db
+tests/_perm_test_*.db-*
+
+# 根目录自测输出（render 冒烟为手工运行产物）
+/render_test*.png
+
+# 备份与合并/编辑器残留（merge 冲突、原子写快照等）
+*.bak
+*.bak_*
+*.orig
+*.rej
+*.tmp.*
+
+# SQLite 侧车与变体（*.db 已忽略，此处补齐 -shm/-wal/-journal）
+*.db-shm
+*.db-wal
+*.db-journal
+
+# 覆盖率等构建产物
+.coverage
+.coverage.*
+htmlcov/
+
+# 发布二进制保护性例外（有意跟踪，防止后续宽泛规则误伤；
+# 与旧 plugins/ 路径下的放行规则对应，此为插件迁移后的现行路径）
+!core_plugins/image_renderer/native/bin/**/zcbot_render.so
+!core_plugins/image_renderer/native/bin/**/zcbot_render.pyd
+!core_plugins/image_renderer/native/bin/**/.gitkeep

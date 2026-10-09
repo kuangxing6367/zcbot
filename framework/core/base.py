@@ -51,6 +51,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self.config = load_config(config_path)
         # 数据目录统一迁移（logs / plugins_dat → data/ 下），必须在日志与插件加载前执行
         self._migrate_legacy_data_dirs()
+        # 日志合并器实例集（stop() 时统一停掉后台 flush 线程）
+        self._log_coalescers = []
         self._setup_logging()
 
         # 初始化各个模块
@@ -109,6 +111,9 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 终端交互
         self.terminal = TerminalInput(self)
+
+        # 本地调试控制台（无 TTY 也能接进运行中的框架；见 framework/console_server.py）
+        self.console_server = None
 
         # 统计批量写库器
         self.stats_writer = AsyncStatsWriter(self)
@@ -278,6 +283,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 window=float(log_cfg.get('coalesce_window', 10)),
                 min_level=lvl,
             )
+            # 纳入框架生命周期：stop() 时统一停止后台 flush 线程
+            self._log_coalescers.append(coalescer)
             # 挂在每个下游 handler 上（logging 的 logger.filter 不会作用于 ancestor，
             # 只有 handler.filter 会对流经的每条记录生效）；同一 record 实例经多个 handler
             # 时由合并器内部缓存决策，保证 console / 文件 / WebUI 三端一致。
@@ -378,6 +385,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         register_builtins(self)
         if getattr(self, '_role', 'standard') != 'host':
             self.terminal.start()
+        self.start_console_server()
 
         # 8. 插件加载：wait_ready=True 同步等待（原行为）；False 后台异步执行不阻塞启动
         if wait_ready:
@@ -508,6 +516,31 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         out = buf.getvalue()
         return out if out.strip() else f"[{name}] 已执行"
 
+    def start_console_server(self):
+        """启动本地调试控制台（端口 + 超长 token 自动生成并存入数据库）。
+
+        systemd 等无 TTY 场景下，本地执行 `python main.py attach` 即可接入，
+        无需重启。由 config.yaml 的 console 段控制（默认开启、仅回环地址）。
+        """
+        cfg = self.config.get('console', {}) or {}
+        if cfg.get('enabled', True) is False:
+            logger.info("调试控制台已禁用（console.enabled: false）")
+            return None
+        try:
+            from framework.console_server import ConsoleServer
+            self.console_server = ConsoleServer(
+                self,
+                host=str(cfg.get('host', '127.0.0.1') or '127.0.0.1'),
+                port=int(cfg.get('port', 0) or 0),
+                token_bits=int(cfg.get('token_bits', 16384) or 16384),
+                backlog=int(cfg.get('backlog', 8) or 8),
+                read_timeout=int(cfg.get('read_timeout', 3600) or 3600))
+            self.console_server.start()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"调试控制台启动异常: {e}")
+            self.console_server = None
+        return self.console_server
+
     def build_ssl_context(self):
         """构建服务端 SSLContext（Web HTTPS 与 OneBot WSS 共用 config['ssl']）。
 
@@ -540,6 +573,12 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 停止终端交互
         self.terminal.stop()
+        if getattr(self, 'console_server', None) is not None:
+            try:
+                self.console_server.stop()
+            except Exception:
+                pass
+            self.console_server = None
 
         # 停止 L4 写缓冲后台任务并收尾 flush（先于事件缓冲排空，确保 L4 残留落 L2）
         try:
@@ -632,5 +671,13 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 触发系统事件
         await self.event_bus.aemit('system.plugin.unloaded', {})
+
+        # 停止日志合并器后台 flush 线程（置信号 → 唤醒 → 有限等待退出；
+        # 合并决策不受影响，停止后仅缺少周期性兜底汇总）
+        for coalescer in getattr(self, '_log_coalescers', None) or []:
+            try:
+                coalescer.stop()
+            except Exception as e:
+                logger.warning(f"日志合并器停止异常: {e}")
 
         logger.info("框架已停止")

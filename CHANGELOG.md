@@ -26,6 +26,83 @@
 
 ---
 
+## 开发中（未发布）
+
+> 暂无。
+
+## v1.8.5-alpha.1（2026-10-10）
+
+> 我靠我脑残发布1.8.5-alpha.0忘了推送了。
+> 本版本即 alpha.0 本应发布的内容（核心架构债务拆分任务2 + aiwriter 官方插件 + 框架内置调试控制台 + CI 工作区护栏），补打 tag 并推送远端、创建 GitHub Release，无额外代码改动。
+
+## v1.8.5-alpha.0（2026-10-09）
+
+> 主题：**核心架构债务拆分（任务2）+ 新增 `aiwriter` 官方插件（ZCBOT 插件开发智能体）+ 框架内置调试控制台 + CI 工作区护栏**。
+> 本批为纯内部收敛与新增，公开 API / 服务名 / 配置键 / 数据库 schema 全部不变，老插件零改动。
+> 这是 **alpha 预发布**，用于提前试用；稳定后再出正式版。
+
+### 重构 · 架构债务拆分（任务2）
+- **调度器收敛为单一权威实现**：`framework/scheduler.py` 的 `TaskScheduler` 成为唯一实现，`core_plugins/scheduler/main.py` 退化为薄封装（再导出 + 以官方插件形态注册 `services['scheduler']`）。旧导入路径 `core_plugins.scheduler.main.TaskScheduler` 与 `framework.scheduler.TaskScheduler` 指向同一类；`start/stop/add_plugin_task/remove_plugin_tasks/remove_task/get_jobs/pause_task/resume_task` 及实例属性 `_scheduler` / `_plugin_tasks` 全部保留。插件重载（重复 `register`）先停旧实例，停用（`unregister`）同步摘除服务注册。
+- **服务就绪回调机制**：`ServiceRegistry` 新增 `call_when_ready(name, callback)` / `cancel_ready(handle)`——服务已注册时立即同步触发，否则挂起待 `register` 时触发（每句柄只触发一次，回调异常隔离不外抛）；`register(name, None)` 也会触发，供等待方「收到 None 即告警跳过」而非无限挂起。取代原先的固定延迟重试。
+- **session 插件改为就绪回调注册**：清理任务经「调度器服务就绪」回调注册且恰好一次；停用后无残留（挂起回调 / 已注册任务 / 原始消息处理器 / 服务注册全摘除），彻底移除固定延迟定时器（`Timer`）实现，消除「停用后迟到注册任务」的竞态。
+- **LogCoalescer 停止收敛**：`stop(timeout)` 置停止信号后立即唤醒后台 flush 线程并有限等待退出（幂等）；框架 `stop()` 与宿主退出统一停掉日志合并器后台线程，不再滞留一个窗口周期。合并/去重决策不变。
+- **核心进程 IPC 服务装配抽离**：新增内部模块 `framework/ipc/core_services.py`，把 `db.* / api.call / api.send_text / bots.list / tx.* / route.register / 宿主日志桥接 / 事件分发替换` 的接线从 `CoreRuntime` 抽出；`CoreRuntime` 保留同名薄委托方法，RPC 名 / 参数 / 返回值 / Flask 行为与抽取前完全一致，协议格式 / 传输 / 心跳 / 重连均不动。模块级仅依赖标准库，`flask` / `framework.api` / `framework.log_broker` 延迟导入——单进程（`dual_process.enabled=false`）路径不加载 IPC 组件。
+
+### 新功能
+- **框架内置调试控制台（无 TTY 也能接进运行中的框架）**：启动时在 `127.0.0.1` 上监听一个本地端口，**端口与超长随机 token 自动生成并存入数据库**（`console_access` 表，默认 16384 bit = 2048 字节，可配），之后每次启动复用。本地执行 **`python main.py attach`（简写 `-a`）** 即可接入，直接使用框架的终端命令（`help` / `status` / `plugins` / `reload` / …），**无需重启、无需 TTY**——systemd 托管场景下的调试入口。协议为 JSON Lines，token 用常量时间比较；只绑定回环地址。
+  - 端口复用带重试（重启太快、旧进程还没释放时不会立刻换端口）；若该端口上**已有本框架的控制台在跑**（多实例场景），新实例**放弃监听且不覆盖凭证**，避免把先跑那个实例的 attach 入口打掉。
+  - 配置见 `config.yaml` 的 `console` 段（`enabled` / `host` / `port` / `token_bits` / `backlog` / `read_timeout`）。
+- **`config.yaml` 补 `terminal` 段**：`enabled` / `panel_autostart` / `panel_refresh` / `panel_default_view` 全部显性化（此前只在本地 config.yaml、未进默认模板）。
+- **官方插件 `aiwriter`（AI 智能体 CLI，默认关）**：把 AI 编码 / 运维智能体做成**终端界面 + 独立 CLI**。两种入口共用同一界面：**独立 CLI `python main.py code`**（命令行直接启动、不启动 bot）与 **bot 运行中在终端输入 `code`**（以独立进程拉起界面）。智能体自带一份最小 LLM 客户端（OpenAI 兼容流式）+ 工具集 + Agent 工具调用闭环，**完全不依赖 `llm_core`**。
+  - **全屏界面（Textual）**：用 **[Textual](https://github.com/Textualize/textual)（MIT）** 承载——成熟的 TUI 框架负责输入 / 渲染 / resize / 键位 / 弹窗，不再手搓 ANSI 重绘与按键解析（那套在 Windows 控制台上极易卡死）。布局：顶栏（人格 · 模型 · 模式）+ 对话流 `RichLog` + **右侧边栏（人格列表 + 运行状态）** + 输入框 + 键位栏；设置为模态 `SettingsScreen`。键位：Enter 发送 · **Tab 切模式** · Ctrl+C 退出 · Ctrl+L 清屏 · Ctrl+S 设置 · Ctrl+G 人格（F1/F2/F3 仅作别名——部分 Windows 控制台会抢 F 键，如 F3=重复上一条命令）。依赖见 `core_plugins/aiwriter/requirements.txt`。
+  - **界面独立进程**：bot 内 `code` 命令以**独立进程**拉起界面（`python main.py code`），与「TUI 独立于后端」一致，彻底避开在 bot 线程里跑全屏 TUI 的坑；退出后回到 bot 终端。
+  - **定位：专门给 ZCBOT 写插件的智能体**：系统提示重写为「运行环境 / 沟通 / 写 ZCBOT 插件 / 在代码库里工作」四节，并**自动注入仓库的插件开发要点**（`docs/llm-plugins.md` + `LLM.md`，进程内缓存截断），因此它按 `__plugin_meta__` / `ctx.command·on·hook·register_api` / `ctx.get_data_dir()` 等框架约定写插件，而不是猜。
+  - **工作区缺省 = 框架根目录**（直接在项目里干活），可 `aiwriter.workspace` 改；临时文件统一写到 `data/tmp/`。二者都会写进系统提示，避免污染工作区。
+  - **长期记忆 + 历史归档**（`data/plugins_dat/core_aiwriter/`）：`memory.md` 每轮注入系统提示，`/memory [add|clear]` 或新增的 `remember` 工具写入；`history.jsonl` 逐轮归档，`/history [N]` 回看。
+  - **新增工具 `plugin_new`**：直接生成 `plugins/<名>/` 骨架（main.py + README.md），配合 `/plugin <名>` 与 `write/edit` 完成插件落地。
+  - **设置界面**（`/settings` · Ctrl+S）覆盖：人格 / 模型 / 温度 / 最大轮数 / 模式 / 是否允许执行 / 工作区 / 压缩保留轮数 / 压缩阈值 / 历史硬上限 / 输出截断 / shell·python·网络超时 / 接口地址 / API Key，共 16 项，可滚动，保存即写回 `core_plugins.yaml` 并即时重建工具集与会话存储。
+  - **人格（agent）可配置 + 编辑弹窗**：多个人格各自带附加系统提示（可选覆盖 `model` / `mode`），默认内置 `build`（ZCBOT 插件开发）。侧栏切换，或 `/agent`：`new`/`edit` 打开**编辑弹窗**（名称 / 描述 / 多行附加提示 / 覆盖模型 / 覆盖模式，`F4` 也可打开），`add`/`prompt`/`del` 走命令行。存在 `aiwriter.agents`，当前人格记在 `aiwriter.agent`。
+  - **深度思考（reasoning）支持**：LLM 客户端解析 `reasoning_content` / `reasoning` / `thinking` 等字段为 `reason` 事件；`thinking` 开关按 `thinking_style`（`auto`/`anthropic`/`flag`/`openai`）注入请求字段，配合 `deepseek-reasoner` 这类模型即可。
+  - **防刷屏（默认收敛）**：工具调用默认只显示一行（`⚙ write` / `✔`），不展开参数与结果；思考过程默认**折叠成一行摘要**（`💭 思考：…（共 N 字）`）。`/detail [on|off]`（或 Ctrl+T）展开细节/思考全文，`/tools [on|off]` 整体显示或隐藏工具行，`/think [on|off]` 控制是否请求深度思考。
+  - **会话持久化开关**：`aiwriter.persist_session`（默认 true）。置 false 后每次启动都是全新会话；`/new` 清当前会话（不动历史归档与长期记忆）。
+  - **多会话管理**：会话存储升到 **v2 格式**（`{version, sessions:{key:{name,created,updated,model,mode,messages}}}`，旧格式自动迁移）。`/sessions`（或 `Ctrl+N`）打开**会话管理弹窗**：列举旧会话（● 当前 / 轮数 / 字符数 / 更新时间 / 覆盖项），`Enter` 进入 · `n` 新建 · `r` 重命名 · `c` 配置（会话级覆盖模型与模式）· `Del` 删除；命令行版 `/session new|<名>|del|rename|model|mode`。删除当前会话会自动切到剩下的最近一个；进入会话时会回放最近几轮。
+  - **独立模式也能查库**：`python main.py code` 是无框架宿主的独立进程，此前 `db_query` 只能报「数据库不可用」。现在按 `config.yaml` 的 `database` 段以**只读**连接打开库（SQLite `mode=ro`，避免与运行中的 bot 争写锁）：`db_query` 可用、`db_execute` 明确拒绝并给指引。`plugin_list` 在独立模式改读 `core_plugins.yaml` 的启用列表（真实可用），`plugin_action` 只给指引不代管。
+  - **工具集（16 个）**：`read` / `list` / `glob` / `grep` / `webfetch` / `websearch` / `db_query` / `plugin_list` / `write` / `edit` / `remember` / `plugin_new` / `shell` / `python` / `db_execute` / `plugin_action`。`edit` 采用 `oldString → newString` 定点替换语义（默认须唯一命中，可 `replaceAll`）；`websearch` 默认走免 key 的 Bing（配 `FIRECRAWL_API_KEY` 则用 Firecrawl）；数据库 / 插件类工具经宿主桥复用框架能力，独立 CLI 下明确提示不可用。
+  - 权限闸门按「能力 × 模式」：`readonly`（只读 + 网络 + 只读 DB）/ `workspace`（+ 写）/ `full`（+ shell / python / DB 写 / 插件管理，需 `allow_exec`）；`specs()` 只暴露当前允许的工具，调用前再强制校验；所有文件路径以工作区根为边界。界面里 **Tab** 循环模式（切到 full 自动开 `allow_exec`，离开时关），输入框占位符与侧栏同步显示当前模式。
+  - 系统提示三节式（harness / communication / codebase）+ 人格附加段，按开放的工具动态拼装；长会话超阈值把较早对话压缩成摘要（compaction），`session_hard_cap` 控制历史硬上限。
+  - 配置段 `aiwriter`（`base_url` / `api_key` / `model` / `temperature` / `max_rounds` / `timeout` / `mode` / `allow_exec` / `workspace` / `agent` / `agents` / `keep_turns` / `max_history_chars` / `session_hard_cap` / `max_output` / `shell_timeout` / `python_timeout` / `net_timeout` / `session_key`），`api_key` 留空时读环境变量 `AIWRITER_API_KEY`。插件归属进程为 **core**（终端在核心进程）。
+  - 修掉旧「AI 编写」形态的隐患：旧插件以 `spec_from_file_location` 被框架以顶层模块加载时，`agent.py` 的相对导入会直接失败（该插件从未能被框架真正加载）；新实现用「相对导入 + 同目录绝对导入」兜底，两种加载方式均可用。
+
+### 工程 / CI
+- **工作区护栏**：新增 `.github/scripts/guard_workspace.sh`（污染守卫 + 测试残留守卫），由 `ci.yml` 与 `tests.yml` 在测试步骤后调用——拦截工作流留下的未忽略新文件/跟踪文件改动，以及 `test_perm` / `test_api_security` 的临时库残留、`render_test*` / `*.bak` / `*.orig` / `*.rej` / `*.tmp.*` 等手工/合并/编辑器残留。
+- **WebUI 构建检查作业**：`ci.yml` / `tests.yml` 新增 `webui-build`（`npm ci` + `vite build`），验证锁文件驱动下前端可安装、可生产构建（不跑污染守卫，避免内容哈希漂移误报）。
+
+### 修复
+- **终端中文乱码（Windows）**：环境设了 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`（Python 以 UTF-8 输出）而控制台代码页是 936（GBK）时，中文输出被按 GBK 解码即乱码；`msvcrt.getch()` 读到的也是代码页字节。新增 `framework/terminal/encoding.py`：`ensure_utf8_console()` 优先把控制台代码页切到 65001（与 Python 的 UTF-8 模式对齐），失败时 `align_stdio_to_console()` 把 stdio 对齐到控制台代码页兜底。`main.py` 启动即对齐；`code` 界面进入时再对齐一次、退出还原。
+- **插件子模块同名撞车**：框架对 core 插件按文件加载且不建包，插件若用 `from agent import ...` 之类的顶层绝对导入兜底，会撞上其它插件的同名模块（如 `plugins/llm_core/agent.py` → `cannot import name 'Agent' from 'plugin_llm_core.agent'`）。框架 `_load_core_plugins` 现在按用户插件同样的方式把 core 插件建成包（`submodule_search_locations`），插件内相对导入直接可用；aiwriter 亦保留"自补包属性"的兜底。
+- **全屏界面（`tui` / `code`）与终端冲突**：Windows 控制台默认的 `ENABLE_PROCESSED_INPUT` 会让 Ctrl+C 变成系统信号——在全屏界面里按 Ctrl+C 会把整个 bot 干掉；`ENABLE_LINE_INPUT` / `ENABLE_ECHO_INPUT` 则让按键要等回车、且回显与界面重影。`TerminalPanel._enter/_leave` 现统一关掉这三项、退出还原：Ctrl+C 变成普通按键（界面自己处理退出，不再影响 bot），按键即时送达、不回显。内置 `tui` 面板与 `code` 界面同时受益。
+- **`code` 界面响应与可观测性**：改为「有变化立即重绘、否则最多每 0.2s 一次」，输入轮询收紧到 0.02s，键入不再迟钝；渲染异常首次记日志（不再被静默吞掉）；界面期间临时静音控制台日志处理器，避免其它线程日志与画面互相覆盖。
+- **`code` 界面卡死**（render-on-demand / 最小帧更新）：
+  - **增量绘制**：只重写「相对上一帧有变化的行」（绝对光标定位 + `\x1b[K`），不再每帧整屏刷——流式输出时通常只动底部 1~2 行，cmd.exe 这类终端不再被全量 ANSI 刷屏拖死；
+  - **关掉鼠标上报**：界面不用鼠标，`\x1b[?1000h/\x1b[?1006h` 开着会让鼠标移动刷出大量转义序列、把输入解析拖住；
+  - **收紧转义序列读取**：未知序列的最长等待从 32×0.05s≈1.6s 降到 8×0.01s≈80ms；
+  - **正文只换行窗口所需的那几行**（从尾部往前凑），历史不再做每帧 O(n) 全量换行；对话历史上限 4000 行、上滚上限 5000 行；
+  - **单次循环耗时看门狗**：>2s 记一条日志，便于定位卡顿。
+
+- **SQLite 方言清理误伤 `PRIMARY KEY CHECK (...)`**：`_strip_mysql_ddl_syntax` 里「`KEY <索引名> (<列>)` → 删除」这条规则会连 `PRIMARY KEY CHECK (id = 1)` 里的 `KEY CHECK (id = 1)` 一起吃掉，把建表语句截成 `id INTEGER PRIMARY` → `near ",": syntax error`，DDL 静默失败。已给该规则加负向断言（`CHECK` / `CONSTRAINT` / `PRIMARY` / `FOREIGN` / `UNIQUE` 不吃），并补回归测试。
+- **`main.py` 参数校验**：未知选项 / 不存在的配置文件不再被静默当成「配置文件路径」。历史坑：`python main.py argparse` 会在项目根目录生成一个叫 `argparse` 的默认配置文件，`python main.py -a` 则被当无事发生直接启动。现在未知选项、多余位置参数、不存在的配置路径都会打印用法并以退出码 2 结束；新增 `--help` / `--version`。
+- **调试控制台在 MySQL 部署下凭证静默落库失败**：写入语句用了 `?` 占位符，而框架的方言约定是 `%s`（SQLite 由框架翻成 `?`，MySQL 保持 `%s`）。结果建表成功但 INSERT/UPDATE 抛 `not all arguments converted during string formatting`，凭证只在内存里、**没进库** → 重启后端口/token 会变、`attach` 取不到。已改用 `%s` 并补回归测试（测试替身也按框架语义翻译占位符，避免再次漏检）。
+- **`python main.py attach` 只认 SQLite**：凭证读取硬编码 `data/zcbot.db`，MySQL 部署下报「未找到控制台凭证」。现在按 `config.yaml` 的 `database` 段自动分派（`sqlite` / `mysql`），无需手工填端口与 token。
+- **部署工具**：新增 `tools/deploy_remote.sh`（本地 → 服务器代码部署：只同步代码、排除原生库与配置数据、备份、按目录全路径重启、自动验收），`docs/deployment.md` 补「远程部署脚本」与「无 TTY 接入运行中的框架」两节。
+
+### 测试
+- 新增 `tests/test_console_server.py`（6 例）：SQL 方言 `PRIMARY KEY CHECK (...)` 不被误删（并能真正建表）、`KEY/INDEX/UNIQUE KEY` 仍被正确清理、调试控制台端到端（端口+token 落库、错误 token 拒绝、命令回传、重启复用端口与 token）、`load_credentials` 读库。
+- 新增 `tests/test_task2_arch_split.py`（32 例）：调度器单一权威实现与旧导入路径、服务就绪回调语义、session 就绪注册与停用无残留、LogCoalescer 停止流程、`CoreRuntime` / `core_services` 装配面与远程 stub 视图 Flask 契约、单进程路径不加载 IPC（子解释器验证）。
+- 新增 `tests/test_aiwriter.py`（55 例，离线不联网）：框架 loader 顶层模块加载路径与模块同名撞车、工具能力闸门与 `specs` 按模式过滤、`edit` 唯一性语义、扩展工具（DB / 插件 / Python / 网络 / remember / plugin_new）、独立模式只读库与插件工具指引、插件开发要点与长期记忆注入、历史归档读写、多会话存储与 v1→v2 迁移、会话切换/删除/覆盖、人格 CRUD 与编辑弹窗、会话管理弹窗、工作区缺省为框架根目录、会话持久化开关、深度思考事件与请求体、显示开关与思考/工具渲染收敛、Textual 界面、`code` 在远程会话下拒绝。
+- 全量回归：CI 显式 pytest 套件（含新增文件）全绿。
+
+---
+
 ## v1.8.3（2026-10-06）
 
 > 主题：**划水版**。顺手加了个小功能，其余无改动。

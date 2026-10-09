@@ -19,6 +19,8 @@
 | **http_inject** | HTTP 事件注入端 |
 | **image_renderer** | 通用图片渲染引擎（卡片/文字图，Rust 原生加速、缺失回退 PIL） |
 | **html_assembler** | 单文件 HTML 装配引擎：占位符替换 + 图片 base64 内嵌 |
+| **llm_load** | LLM 核心装载器：释放/自愈 `plugins/llm_core`（对话核心，提供模型总线 / 工具调用 / Agent 循环） |
+| **aiwriter** | AI 智能体 CLI：`python main.py code` 或终端 `code` 打开全屏界面（可配置 OpenAI / 写插件），不依赖 llm_core |
 
 ## 随项目内置的用户扩展（plugins/）
 

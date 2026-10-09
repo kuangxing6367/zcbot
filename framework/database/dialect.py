@@ -83,8 +83,11 @@ def _strip_mysql_ddl_syntax(sql: str) -> str:
         sql, flags=re.IGNORECASE
     )
     # KEY uk_name (col) → 删除
+    # 注意：只匹配「KEY + 索引名 + (列)」这种 MySQL 索引定义；`PRIMARY KEY`、
+    # `KEY CHECK (...)`（列级 CHECK 约束）等不能吃——否则会把
+    # `id INTEGER PRIMARY KEY CHECK (id = 1)` 截成 `id INTEGER PRIMARY`（语法错误）。
     sql = re.sub(
-        r',?\s*\bKEY\s+\S+\s*\([^)]+\)',
+        r',?\s*\bKEY\s+(?!(?:CHECK|CONSTRAINT|PRIMARY|FOREIGN|UNIQUE)\b)\S+\s*\([^)]+\)',
         '',
         sql, flags=re.IGNORECASE
     )

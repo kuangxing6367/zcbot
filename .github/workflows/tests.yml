@@ -33,7 +33,33 @@ jobs:
         run: python tests/test_smoke.py
       # pytest 用例与脚本式回归并存：显式列文件（其余 test_*.py 是模块级 sys.exit 的脚本，
       # 被 pytest 收集会 INTERNALERROR），test_smoke.py 本身两种方式兼容
-      - name: Pytest suite (smoke + html_assembler + event_buffer + qq_official + scheduler + db_regression + loop_fix_regression + file_store_fallback + sql_sim_debug + terminal_panel + llm)
+      - name: Pytest suite (smoke + html_assembler + event_buffer + qq_official + scheduler + db_regression + loop_fix_regression + file_store_fallback + sql_sim_debug + terminal_panel + llm + arch_split)
         run: |
           pip install pytest
-          python -m pytest tests/test_smoke.py tests/test_html_assembler.py tests/test_event_buffer.py tests/test_qq_official.py tests/test_qq_official_extra.py tests/test_scheduler.py tests/test_db_regression.py tests/test_loop_fix_regression.py tests/test_file_store_fallback.py tests/test_sql_sim_debug.py tests/test_terminal_panel.py tests/test_llm_load.py tests/test_llm_core.py tests/test_message_contract.py -q
+          python -m pytest tests/test_aiwriter.py tests/test_console_server.py tests/test_smoke.py tests/test_html_assembler.py tests/test_event_buffer.py tests/test_qq_official.py tests/test_qq_official_extra.py tests/test_scheduler.py tests/test_db_regression.py tests/test_loop_fix_regression.py tests/test_file_store_fallback.py tests/test_sql_sim_debug.py tests/test_terminal_panel.py tests/test_llm_load.py tests/test_llm_core.py tests/test_message_contract.py tests/test_task2_arch_split.py -q
+      # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────
+      # 本作业 pytest 未加 -p no:cacheprovider，会正常产生 .pytest_cache/ 与
+      # __pycache__/——已被 .gitignore 覆盖，git status 不可见，天然放行；
+      # 例外放行项目有意跟踪的 native/bin 发布二进制。细则见脚本内注释。
+      - name: Workspace guard (pollution + test residue)
+        run: bash .github/scripts/guard_workspace.sh
+
+  # ── WebUI：npm ci + 生产构建检查 ──────────────────────────
+  # 产物落点 core_plugins/webui/web 为有意跟踪的发布资产：只验证「锁文件
+  # 驱动下可安装、可生产构建」，不跑污染守卫（避免内容哈希漂移误报）。
+  webui-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: WebUI install (npm ci)
+        working-directory: webui
+        run: npm ci
+      - name: WebUI production build (vite build)
+        working-directory: webui
+        run: npm run build
