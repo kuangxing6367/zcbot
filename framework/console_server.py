@@ -147,6 +147,9 @@ class ConsoleServer:
         """探测该端口上是否已有 zcbot 调试控制台（避免多实例互相覆盖凭证）。"""
         try:
             with socket.create_connection((self.host, int(port)), timeout=0.5) as s:
+                # 给读 banner 加超时：连上「幽灵端口」（TIME_WAIT 等）但无进程发
+                # banner 时不能无限阻塞，否则会误判为「已有控制台在跑」
+                s.settimeout(0.5)
                 f = s.makefile('rb')
                 line = f.readline()
                 if not line:
