@@ -1089,6 +1089,10 @@ def test_app_session_cmd_create_switch():
 
 def test_standalone_mode_db_is_readonly_and_usable():
     """独立 CLI（python main.py code）也要能查库：只读可用，写被拒并给指引。"""
+    import pytest
+    # 独立模式以只读方式连真实业务库（data/zcbot.db）；CI 干净环境无业务库，跳过。
+    if not os.path.isfile(os.path.join(ROOT, 'data', 'zcbot.db')):
+        pytest.skip("独立模式只读查库需要本地 data/zcbot.db（CI 干净环境无业务库）")
     import core_plugins.aiwriter.main as m
     fw, mod = m.bootstrap()
     try:
