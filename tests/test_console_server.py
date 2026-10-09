@@ -139,7 +139,15 @@ def test_console_reuses_port_and_token():
     fw, srv = _mk_server()
     port, token = srv.port, srv.token
     srv.stop()
-    time.sleep(0.2)
+    # Linux 上监听套接字 close 后端口进入 TIME_WAIT，需等其真正不可连再复用，
+    # 否则复用探测会误判「已有控制台在跑」（Windows 上 close 立即释放无此问题）。
+    import socket as _sock
+    for _ in range(60):
+        try:
+            _sock.create_connection((srv.host, port), timeout=0.3)
+        except Exception:
+            break
+        time.sleep(0.1)
     srv2 = ConsoleServer(fw, port=0, token_bits=512)        # 同一库 → 复用
     assert srv2.start() is True
     try:
