@@ -89,7 +89,11 @@ class _FakeFW:
 
 
 def _make_panel(tui_mod):
-    return tui_mod.TerminalPanel(_FakeFW(), refresh=1.0)
+    fw = _FakeFW()
+    # 固定 uptime 基准，避免依赖「测试模块导入后真实流逝的时间」：
+    # 类属性 _start_time 在 import 时算一次，CI 上到本测试已流逝数十秒会跨分钟边界 flaky。
+    fw._start_time = time.time() - 3725
+    return tui_mod.TerminalPanel(fw, refresh=1.0)
 
 
 def test_fmt_helpers(tui_mod):
