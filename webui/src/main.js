@@ -8,6 +8,10 @@ import App from './App.vue'
 import router from './router'
 import './styles/global.css'
 import './theme'
+import { ensurePass } from './human-check'
+
+// 后台静默求解人机验证（不阻塞渲染）；首个 API 调用会自动等待结果
+ensurePass()
 
 const app = createApp(App)
 

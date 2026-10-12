@@ -1,5 +1,7 @@
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { getPass, ensurePass, clearPass } from './human-check'
+import { API_BASE } from './config'
 
 export const TOKEN_KEY = 'zcbot_token'
 
@@ -10,27 +12,62 @@ export function clearToken() {
   document.cookie = 'zcbot_token=; Max-Age=0; path=/'
 }
 
+function gotoLogin() {
+  if (!location.hash.includes('/login')) location.hash = '#/login'
+}
+
+/** 静默丢弃（444 / 无响应）：服务端「不对就不理」，前端据此判定会话失效 */
+function isSilentDrop(res) {
+  return res.status === 444 || res.status === 0
+}
+
+/** 为裸 fetch 附加 token 与通行票据（用于不便走 api() 的场景，如登录、版本查询） */
+export async function secureHeaders(extra = {}) {
+  const h = { ...extra }
+  const token = getToken()
+  if (token) h['Authorization'] = 'Bearer ' + token
+  const pass = getPass() || await ensurePass()
+  if (pass) h['X-ZC-Pass'] = pass
+  return h
+}
+
 export async function api(url, options = {}) {
   const opts = { ...options, headers: { ...(options.headers || {}) } }
   const token = getToken()
   if (token) opts.headers['Authorization'] = 'Bearer ' + token
+  // 人机验证通行票据（首次调用会自动求解并缓存）
+  const pass = getPass() || await ensurePass()
+  if (pass) opts.headers['X-ZC-Pass'] = pass
   if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(opts.body)
   }
   let res
   try {
-    res = await fetch(url, opts)
+    res = await fetch(url.startsWith('http') ? url : API_BASE + url, opts)
   } catch (e) {
     throw new Error('网络错误: ' + e.message)
   }
+
+  // 票据过期 / 服务端重启 → 重新求解一次再试
+  if (res.status === 444 && !options.__retried) {
+    clearPass()
+    const fresh = await ensurePass()
+    if (fresh) return api(url, { ...options, __retried: true })
+  }
+
   let data = null
-  try { data = await res.json() } catch (e) { /* 非 JSON */ }
+  try { data = await res.json() } catch (e) { /* 非 JSON（含静默丢弃的空响应） */ }
+
+  if (isSilentDrop(res)) {
+    clearToken()
+    clearPass()
+    gotoLogin()
+    throw new Error('会话已失效，请重新登录')
+  }
   if (res.status === 401) {
     clearToken()
-    if (!location.hash.includes('/login')) {
-      location.hash = '#/login'
-    }
+    gotoLogin()
     throw new Error(data?.msg || '登录已过期')
   }
   return data

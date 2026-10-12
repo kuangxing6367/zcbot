@@ -50,7 +50,13 @@ onebot:
 # ── Web UI 管理后台 ─────────────────────────────────────────
 web:
   host: 127.0.0.1            # 仅本机访问；需要局域网/公网访问请改为 0.0.0.0（注意安全）
-  port: 8080
+  port: 8080                 # WebUI 端口：提供前端页面 + 蜜罐诱饵
+  # ui_enabled: true         # 是否启用 WebUI 前端。设为 false 即"纯 API 模式"：不启动 WebUI 端口，
+  #                          仅起 API 端口（web.api_port；未设则用 web.port），本进程只提供真实 /api/*。
+  # api_port: 8081           # API 独立端口（可选）。设置后 WebUI 端口不再提供任何真实 API，
+  #                          只留静态文件与诱饵；真实 /api/* 全部搬到该端口。
+  #                          两者同进程，黑名单 / 人机验证票据 / 会话状态天然同步。
+  #                          外网部署时需在反代里把 /api/ 转发到该端口。
   # secret_key: ""          # 留空则每次重启随机生成，填入后重启保持登录态
   session_timeout: 3600      # 登录会话超时（秒），同时作为登录 token 的有效期
   official_sidebar: true     # 是否显示官方默认侧边栏菜单（关闭后仅显示插件注册项与设置）
@@ -129,10 +135,25 @@ system:
   show_disk: true            # 仪表盘显示磁盘使用率
   status_interval: 30        # 系统状态刷新间隔（秒）
 
-# ── 安全配置（双请求防破解认证系统） ─────────────────────────
-# 保护管理后台免受暴力破解与自动化脚本攻击
-# 客户端必须按顺序发送两次请求：先发 fake_token_len 位探针获取 nonce，再发 real_token_len 位 Token + nonce
+# ── 安全配置 ────────────────────────────────────────────────
+# 由「安全等级」一档统管：蜜罐诱饵、tarpit 延迟、自动拉黑、安全响应头、指纹隐藏、
+# JS 人机验证、认证静默丢弃。全部默认值由 level 决定，无需逐项调参；
+# 确有需要再对单项显式覆盖（显式值优先）。
+#
+# 档位（security.level）：
+#   off       关闭所有主动防御（仅保留登录限速），适合本地开发
+#   low       宽松：核心诱饵 + 安全响应头 + 人机验证，不自动拉黑
+#   medium    标准（默认，推荐）：完整诱饵集 + 拉黑 1 小时 + 认证静默 + 人机验证
+#   high      严格：延迟 1.5s、拉黑 24 小时、认证失败 10 次即封
+#   paranoid  偏执：延迟 3s、永久封禁、认证失败 5 次即封
+#
+# ⚠️ 蜜罐所有诱饵返回的密钥/凭据/Token 均为随机伪造，不具备任何真实访问能力。
+# ⚠️ 内网 IP（127.*、192.168.*、172.16-31.*、10.*）与 whitelist_ips 自动豁免拉黑。
 security:
+  level: medium                # 安全等级总开关：off / low / medium / high / paranoid
+  silent_auth: true            # 认证不对就静默丢弃（不返回 401 JSON，扫描器拿不到反馈）
+
+  # ── 双请求防破解认证（与等级无关的独立参数） ──
   fake_token_len: 8            # 探针请求的 Token 长度（任意字符串）
   real_token_len: 8192         # 真实认证的 Token 长度
   nonce_len: 16                # 下发 nonce 的长度
@@ -141,8 +162,37 @@ security:
   blacklist_enabled: true      # 是否启用黑名单（持久化到数据库 ip_blacklist 表，重启不清除）
   whitelist_ips:               # 白名单 IP，跳过所有检查
     - "127.0.0.1"
+  trusted_proxies: []          # 受信反向代理 IP：仅这些 IP 的 X-Forwarded-For 才被采信
   # success_fake_data:         # 认证通过后返回的迷惑性数据（不填则使用默认假数据）
-  # 内网 IP（127.*、192.168.*、172.16-31.*、10.*）自动豁免蜜罐拉黑，避免误伤本机/局域网
+
+  # ── 单项覆盖（可选；不填则完全由 security.level 决定）──
+  # headers:
+  #   enabled: true            # 是否注入安全响应头（CSP / X-Frame-Options 等）
+  #   server: ""               # 覆盖 Server 头；留空 = 隐藏真实服务器指纹
+  #   csp: ""                  # 自定义 Content-Security-Policy；留空用内置策略
+  # human_check:               # JS 人机验证（工作量证明，必须真正执行 JS 才能通过）
+  #   enabled: true
+  #   difficulty: 4            # sha256 前导 0 的十六进制位数；每 +1 成本 ×16（4≈0.3s，5≈8s）
+  #   apply_to: all            # 校验范围：all（所有 /api）/ login（仅登录）/ none
+  #   bypass_whitelist: false  # 白名单 IP 是否免检
+  #   ticket_ttl: 1800         # 通行票据有效期（秒）
+  #   challenge_ttl: 120       # challenge 有效期（秒）
+  # honeypot:
+  #   enabled: true            # 蜜罐总开关
+  #   decoy_set: full          # 诱饵集：off / basic（核心 45 个）/ full（全量 125 个）
+  #   tarpit_ms: 600           # 命中诱饵后的随机延迟上限（毫秒，0=不延迟）
+  #   blacklist: true          # 命中是否自动拉黑来源 IP
+  #   blacklist_ttl: 3600      # 自动解封秒数（0=永久封禁）
+  #   log_body: true           # 是否记录请求体（便于取证）
+  #   max_body_log: 2048       # 请求体记录上限（字节）
+  #   unknown_api_decoy: true  # 未知 /api 路径返回诱饵（false=普通 404）
+  #   auth_fail_blacklist: 20  # 同一 IP 认证连续失败多少次后拉黑（0=不拉黑）
+  #   auth_fail_window: 300    # 认证失败统计窗口（秒）
+  #   tarpit_auth_ms: 800      # 认证失败时的随机延迟上限（毫秒）
+  #   invalid_token_decoy: false # true=无效 token 返回诱饵 200（会掩盖静默丢弃，慎用）
+  #   canary: true             # 在诱饵响应中植入唯一追踪串，便于事后追溯泄露路径
+  #   evasion_detect: true     # 检测路径变形绕过（%2e 编码 / 重复斜杠 / 穿越），加重处置
+  #   fake_404: true           # 未知页面返回伪装 nginx 的假 404（false=普通 JSON 404）
 
 # ── 双进程架构（可选） ────────────────────────────────────────
 # 一次启动拆成两个进程，用标准库 IPC 通信（零第三方依赖）：
@@ -264,7 +314,10 @@ def get_config() -> dict:
 
 
 # 官方插件配置中心：独立 yaml，由启动时自动扫描 core_plugins/ 目录同步
-CORE_PLUGINS_YAML = os.path.join(
+# 注：支持环境变量 ZCBOT_CORE_PLUGINS_YAML 覆盖路径（黑盒测试启动器
+# test/webui_blackbox_launcher.py 借此把插件配置指向一份隔离副本，
+# 从而在不改动真实仓库的前提下自定义 webui 监听端口等）。
+CORE_PLUGINS_YAML = os.environ.get('ZCBOT_CORE_PLUGINS_YAML') or os.path.join(
     os.path.dirname(os.path.dirname(__file__)), 'core_plugins.yaml')
 
 

@@ -5,7 +5,7 @@
 import logging
 import os
 
-from flask import jsonify, redirect, send_from_directory
+from flask import Response, jsonify, redirect, send_from_directory
 
 logger = logging.getLogger('zcbot')
 
@@ -42,6 +42,16 @@ def register(ctx):
     def serve_img(filename):
         return send_from_directory(os.path.join(_web_root_dir(), 'img'), filename)
 
+    @app.route('/favicon.ico')
+    def serve_favicon():
+        """站点图标（根路径，非 /img 下）"""
+        return send_from_directory(_web_root_dir(), 'favicon.ico')
+
+    @app.route('/robots.txt')
+    def serve_robots():
+        """爬虫协议：管理后台明确禁止收录"""
+        return Response('User-agent: *\nDisallow: /\n', mimetype='text/plain')
+
     @app.route('/<page>.html')
     def serve_page(page):
         """提供 HTML 页面"""
@@ -53,11 +63,30 @@ def register(ctx):
 
     @app.route('/')
     def serve_index():
-        """根路径：若插件接管了前端则 redirect 到插件入口，否则返回框架默认 index.html"""
+        """根路径：若插件接管了前端则 redirect 到插件入口，否则返回框架默认 index.html
+
+        端口隔离模式（web.api_port 与 web.port 不同）下，真实 API 不在本端口提供，
+        需向首页注入 /webui-config.js，让前端知道去哪个端口调 API。
+        """
         entry = _override_entry_url()
         if entry:
             return redirect(entry, code=302)
-        return send_from_directory(_web_root_dir(), 'index.html')
+
+        web_static = _web_root_dir()
+        if not getattr(ctx, 'api_split', False):
+            return send_from_directory(web_static, 'index.html')
+
+        # 需要注入配置脚本：读模板后在 </head> 前插入同源外部脚本（CSP 允许）
+        import os as _os
+        try:
+            with open(_os.path.join(web_static, 'index.html'), 'r', encoding='utf-8') as f:
+                html = f.read()
+        except Exception:
+            return send_from_directory(web_static, 'index.html')
+        if '__ZC_API_BASE__' not in html and '<script type="module"' in html:
+            html = html.replace('<script type="module"',
+                                '<script src="/webui-config.js"></script>\n  <script type="module"', 1)
+        return Response(html, mimetype='text/html')
 
     @app.route('/reset')
     def serve_reset():

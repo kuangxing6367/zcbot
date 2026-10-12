@@ -11,6 +11,8 @@ function apply(t) {
     el.classList.remove('dark')
   }
   el.style.colorScheme = t
+  // 同步首屏底色，避免切换时闪白
+  el.style.backgroundColor = t === 'dark' ? '#070707' : '#fafbfc'
   localStorage.setItem(THEME_KEY, t)
 }
 
