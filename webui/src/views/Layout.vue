@@ -6,21 +6,23 @@
         <img v-show="collapsed" :src="logoMiniUrl" alt="ZCBOT" class="brand-logo-mini" />
         <span v-show="!collapsed" class="brand-name">ZCBOT</span>
       </div>
-      <el-menu :default-active="activeKey" router :collapse="collapsed" class="nav-menu">
-        <template v-if="session.officialSidebar">
-          <el-menu-item v-for="it in officialItems" :key="it.key" :index="it.path">
-            <el-icon><component :is="it.icon" /></el-icon><span>{{ it.title }}</span>
+      <el-scrollbar class="nav-scroll">
+        <el-menu :default-active="activeKey" router :collapse="collapsed" class="nav-menu">
+          <template v-if="session.officialSidebar">
+            <el-menu-item v-for="it in officialItems" :key="it.key" :index="it.path">
+              <el-icon><component :is="it.icon" /></el-icon><span>{{ it.title }}</span>
+            </el-menu-item>
+          </template>
+          <el-menu-item v-for="p in pluginSidebarItems" :key="p.plugin_name" :index="'/plugin/' + p.plugin_name">
+            <el-icon v-if="!p.icon"><Menu /></el-icon>
+            <span v-else class="plugin-ico">{{ p.icon }}</span>
+            <span>{{ p.title }}</span>
           </el-menu-item>
-        </template>
-        <el-menu-item v-for="p in pluginSidebarItems" :key="p.plugin_name" :index="'/plugin/' + p.plugin_name">
-          <el-icon v-if="!p.icon"><Menu /></el-icon>
-          <span v-else class="plugin-ico">{{ p.icon }}</span>
-          <span>{{ p.title }}</span>
-        </el-menu-item>
-        <el-menu-item v-if="aggregatePlugins.length" index="/plugin_webui">
-          <el-icon><Monitor /></el-icon><span>插件页面</span>
-        </el-menu-item>
-      </el-menu>
+          <el-menu-item v-if="aggregatePlugins.length" index="/plugin_webui">
+            <el-icon><Monitor /></el-icon><span>插件页面</span>
+          </el-menu-item>
+        </el-menu>
+      </el-scrollbar>
       <div class="sidebar-foot">
         <el-menu class="nav-menu" :default-active="activeKey" router :collapse="collapsed">
           <el-menu-item index="/settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
@@ -30,31 +32,41 @@
     </el-aside>
 
     <el-container class="right">
-      <el-header class="topbar" height="52px">
+      <el-header class="topbar" height="60px">
         <div class="topbar-left">
-          <el-button text circle @click="collapsed = !collapsed">
+          <button class="icon-btn" @click="collapsed = !collapsed" title="折叠菜单">
             <el-icon :size="18"><Expand v-if="collapsed" /><Fold v-else /></el-icon>
-          </el-button>
-          <span class="page-title">{{ pageTitle }}</span>
+          </button>
+          <div class="crumb">
+            <span class="crumb-root">ZCBOT</span>
+            <span class="crumb-sep">/</span>
+            <span class="page-title">{{ pageTitle }}</span>
+          </div>
         </div>
         <div class="topbar-right">
-          <el-button text circle @click="toggleTheme" title="切换亮暗主题" class="theme-btn">
-            <el-icon :size="18" :key="theme === 'dark' ? 'sun' : 'moon'">
+          <button class="icon-btn" @click="toggleTheme" title="切换亮暗主题" :key="theme">
+            <el-icon :size="18">
               <Sunny v-if="theme === 'light'" />
               <Moon v-else />
             </el-icon>
-          </el-button>
-          <el-dropdown @command="onUserCommand">
+          </button>
+          <el-dropdown @command="onUserCommand" trigger="click">
             <span class="user-chip">
-              <el-icon><UserFilled /></el-icon>
-              <span>{{ session.admin?.username || '' }}</span>
-              <el-tag size="small" :type="session.admin?.role === 'super' ? 'warning' : 'primary'" effect="plain">
-                {{ session.admin?.role === 'super' ? '超管' : '管理' }}
-              </el-tag>
+              <span class="avatar">{{ avatarText }}</span>
+              <span class="user-meta">
+                <span class="user-name">{{ session.admin?.username || '' }}</span>
+                <span class="user-role">{{ session.admin?.role === 'super' ? '超级管理员' : '管理员' }}</span>
+              </span>
+              <el-icon class="user-caret"><ArrowDown /></el-icon>
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+                <el-dropdown-item command="settings">
+                  <el-icon><Setting /></el-icon>设置
+                </el-dropdown-item>
+                <el-dropdown-item command="logout" divided>
+                  <el-icon><SwitchButton /></el-icon>退出登录
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -68,14 +80,15 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { session, api, clearToken } from '../api'
+import { session, api, clearToken, secureHeaders } from '../api'
+import { API_BASE } from '../config'
 import { theme, toggleTheme } from '../theme'
 import { OFFICIAL_SIDEBAR_ITEMS } from '../sidebar'
 
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
-// 标志按主题切换明暗两版：亮底用 #6366F1，暗底提亮到 #818CF8
+// 标志按主题切换明暗两版：亮底用 #5D87FF，暗底提亮
 const logoUrl = computed(() => import.meta.env.BASE_URL + (theme.value === 'dark' ? 'img/zcbot-icon-dark.svg' : 'img/zcbot-icon-light.svg'))
 // 折叠态 24px 用简化版：标准版断口在 24px 下只有 2px，会糊
 const logoMiniUrl = computed(() => import.meta.env.BASE_URL + (theme.value === 'dark' ? 'img/zcbot-icon-mini-dark.svg' : 'img/zcbot-icon-mini-light.svg'))
@@ -88,6 +101,10 @@ const titleMap = {
 }
 const pluginSidebarItems = computed(() => (session.pluginWebUIs || []).filter(p => p.sidebar))
 const aggregatePlugins = computed(() => (session.pluginWebUIs || []).filter(p => !p.sidebar))
+const avatarText = computed(() => {
+  const n = session.admin?.username || 'A'
+  return n.slice(0, 1).toUpperCase()
+})
 // 官方菜单按自定义配置渲染：hidden 隐藏、order 指定顺序（未列出的按默认次序追加）
 const officialItems = computed(() => {
   const cfg = session.sidebar || {}
@@ -133,12 +150,14 @@ async function loadWebUIs() {
 }
 
 async function loadVersion() {
-  const r = await fetch('/api/version').then(r => r.json()).catch(() => null)
+  const r = await fetch(API_BASE + '/api/version', { headers: await secureHeaders() }).then(r => r.json()).catch(() => null)
   if (r && r.code === 0) session.frameworkVersion = r.data.version || ''
 }
 
 function onUserCommand(cmd) {
-  if (cmd === 'logout') {
+  if (cmd === 'settings') {
+    router.push('/settings')
+  } else if (cmd === 'logout') {
     api('/api/logout', { method: 'POST' }).catch(() => {})
     clearToken()
     router.push('/login')
@@ -153,43 +172,118 @@ onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer) })
 
 <style scoped>
 .layout { height: 100vh; }
+
+/* ------------------------------ 侧边栏 ------------------------------ */
 .sidebar {
-  background: var(--el-bg-color);
-  border-right: 1px solid var(--el-border-color);
+  background: var(--default-box-color);
+  border-right: 1px solid var(--art-card-border);
   display: flex;
   flex-direction: column;
-  transition: width .2s;
+  transition: width .22s ease;
   overflow: hidden;
 }
 .brand {
-  height: 52px;
+  height: 60px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  border-bottom: 1px solid var(--el-border-color);
-  font-weight: 700;
+  gap: 9px;
+  border-bottom: 1px solid var(--art-card-border);
+  flex-shrink: 0;
 }
-.brand-logo { height: 30px; width: 30px; object-fit: contain; }
+.brand-logo { height: 28px; width: 28px; object-fit: contain; }
 .brand-logo-mini { height: 24px; width: 24px; object-fit: contain; }
-.nav-menu { border-right: none; flex: 1; overflow-y: auto; }
+.brand-name {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.nav-scroll { flex: 1; overflow: hidden; }
+.nav-menu { border-right: none; padding: 6px 0; }
 .plugin-ico { display: inline-flex; width: 1em; justify-content: center; }
-.sidebar-foot { border-top: 1px solid var(--el-border-color); }
-.sb-version { text-align: center; color: var(--el-text-color-secondary); font-size: 12px; padding: 6px 0; }
+.sidebar-foot {
+  border-top: 1px solid var(--art-card-border);
+  flex-shrink: 0;
+  padding-bottom: 4px;
+}
+.sb-version {
+  text-align: center;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  padding: 2px 0 8px;
+}
+
+/* ------------------------------ 顶栏 ------------------------------ */
 .right { min-width: 0; }
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--el-border-color);
-  background: var(--el-bg-color);
+  padding: 0 16px;
+  border-bottom: 1px solid var(--art-card-border);
+  background: var(--default-box-color);
 }
-.topbar-left { display: flex; align-items: center; gap: 8px; }
-.page-title { font-size: 16px; font-weight: 600; }
-.brand-name { font-size: 18px; font-weight: 800; letter-spacing: .02em;
-  background: var(--brand-gradient); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.theme-btn { transition: transform .3s ease, color .3s ease; }
-.theme-btn:hover { transform: rotate(20deg) scale(1.1); color: var(--el-color-primary); }
-.user-chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; outline: none; }
-.main { padding: 0; background: var(--el-bg-color-page, #f5f7fa); overflow: auto; }
+.topbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.crumb { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.crumb-root { color: var(--el-text-color-secondary); }
+.crumb-sep { color: var(--el-text-color-secondary); opacity: .6; }
+.page-title { font-size: 15px; font-weight: 600; }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: calc(var(--custom-radius) / 2);
+  background: transparent;
+  color: var(--el-text-color-regular);
+  cursor: pointer;
+  transition: background-color .2s, color .2s, transform .3s;
+}
+.icon-btn:hover {
+  background: var(--art-hover-color);
+  color: var(--main-color);
+}
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.topbar-right .icon-btn:hover { transform: rotate(18deg); }
+
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 999px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color .2s;
+}
+.user-chip:hover { background: var(--art-hover-color); }
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--brand-gradient);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+.user-meta { display: flex; flex-direction: column; line-height: 1.15; }
+.user-name { font-size: 13px; font-weight: 500; color: var(--el-text-color-primary); }
+.user-role { font-size: 11px; color: var(--el-text-color-secondary); }
+.user-caret { color: var(--el-text-color-secondary); font-size: 12px; }
+
+.main {
+  padding: 0;
+  background: var(--default-bg-color);
+  overflow: auto;
+}
 </style>

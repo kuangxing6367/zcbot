@@ -35,6 +35,7 @@ Web 应用核心：Flask app 构建 + 共享基础设施（鉴权/CORS/限速/�
 import json
 import logging
 import os
+import secrets
 import threading
 import time
 from datetime import datetime, timedelta
@@ -45,6 +46,7 @@ from flask import Flask, Response, jsonify, request
 
 from framework.dual_auth import DualRequestAuthSystem
 from framework.log_broker import log_broker
+from framework.api.honeypot import tarpit as _tarpit_sleep
 
 logger = logging.getLogger('zcbot')
 
@@ -64,6 +66,86 @@ def create_web_app(framework) -> Flask:
     db = framework.db
     plugins_dir = framework.plugin_loader.plugins_dir
 
+    # ---- 解析安全等级：一个 security.level 档位决定蜜罐 / 响应头 / 拉黑等全部默认值 ----
+    from framework.api.security_levels import resolve as _resolve_security
+    _sec = _resolve_security(framework.config.get('security'))
+    _hdr_cfg = _sec['headers']
+    _hp_cfg = _sec['honeypot']
+    _hc_cfg = _sec['human_check']
+    _SILENT_AUTH = bool(_sec.get('silent_auth', True))
+    logger.info(f"[安全] 等级={_sec['level']}({_sec['level_label']}) "
+                f"响应头={_hdr_cfg.get('enabled')} 蜜罐={_hp_cfg.get('enabled')} "
+                f"诱饵集={_hp_cfg.get('decoy_set')} 人机验证={_hc_cfg.get('enabled')} "
+                f"认证静默={_SILENT_AUTH}")
+
+    # ---- 端口隔离：WebUI 与 API 可各自独立监听 ----
+    # web.api_port 非空且 != web.port 时启用：
+    #   WebUI 端口 → 只提供前端静态文件 + 蜜罐诱饵，不暴露任何真实 API
+    #   API   端口 → 只提供 /api/*
+    # 两者在同一进程内，共享黑名单 / 票据 / 会话状态（天然同步）。
+    _web_port = str(int(web_cfg.get('port', 8080) or 8080))
+    _raw_api_port = int(web_cfg.get('api_port', 0) or 0)
+    _api_port = str(_raw_api_port) if _raw_api_port else _web_port
+    SPLIT_PORTS = _api_port != _web_port
+    if SPLIT_PORTS:
+        logger.info(f"[端口隔离] 已启用：WebUI={_web_port}（无真实 API）  API={_api_port}")
+
+    # ---- 纯 API 模式：ui_enabled=false 时只起 API 监听，不提供 WebUI 前端 ----
+    _ui_raw = web_cfg.get('ui_enabled', True)
+    if isinstance(_ui_raw, bool):
+        _UI_ENABLED = _ui_raw
+    elif isinstance(_ui_raw, str):
+        _UI_ENABLED = str(_ui_raw).strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+    else:
+        _UI_ENABLED = bool(_ui_raw)
+    _API_ONLY = not _UI_ENABLED
+    if _API_ONLY:
+        logger.info(f"[纯API模式] ui_enabled=false：本进程仅 API 端口={_api_port} 提供真实 /api/*"
+                    f"（不启动 WebUI 前端，非 /api/* 一律 404）")
+
+    @app.route('/webui-config.js')
+    def _webui_config():
+        """前端配置：告诉页面真实 API 在哪（端口隔离时用，同源外部脚本，CSP 允许）"""
+        if not SPLIT_PORTS:
+            base = ''
+        else:
+            host = (request.host or '').split(':')[0]
+            scheme = 'https' if request.is_secure else 'http'
+            base = f'{scheme}://{host}:{_api_port}'
+        resp = Response(f'window.__ZC_API_BASE__ = "{base}";\n',
+                        mimetype='application/javascript')
+        resp.headers['Cache-Control'] = 'no-store'
+        return resp
+
+    @app.before_request
+    def _port_split_guard():
+        """按监听端口隔离职责：WebUI 端口无真实 API，API 端口无静态页面；
+        纯 API 模式下本进程只认 /api/*，其余一律 404（不提供前端、也不挂诱饵）。"""
+        path = request.path or ''
+        # 纯 API 模式：本进程只监听 API，非 /api/* 一律 404
+        if _API_ONLY:
+            if not path.startswith('/api/'):
+                return jsonify({'code': 404, 'msg': 'Not Found'}), 404
+            return None
+        if not SPLIT_PORTS:
+            return None
+        srv = str(request.environ.get('SERVER_PORT') or '')
+
+        # API 端口：只服务 /api/*
+        if srv == _api_port:
+            if not path.startswith('/api/'):
+                return jsonify({'code': 404, 'msg': 'Not Found'}), 404
+            return None
+
+        # WebUI 端口：不暴露真实 API，一律交给诱饵
+        if srv == _web_port and path.startswith('/api/'):
+            endpoint = getattr(request.url_rule, 'endpoint', '') or ''
+            if not endpoint.startswith('_honeypot'):
+                from framework.api import honeypot as _hpm
+                _hpm.record_hit(path, 'WebUI 端口探测真实 API')
+                return _hpm.body_generic_decoy()
+        return None
+
     # ---- 跨域支持（自定义网页 / 第三方面板跨源调用 API 用）----
     _cors_cfg = (
         framework.config.get('security', {}).get('cors_allowed_origins')
@@ -74,6 +156,16 @@ def create_web_app(framework) -> Flask:
         origin = request.headers.get('Origin')
         if not origin:
             return None
+        # 端口隔离：同一主机的 WebUI 端口始终允许调用 API 端口
+        if SPLIT_PORTS:
+            try:
+                scheme = 'https' if request.is_secure else 'http'
+                if origin.startswith(scheme + '://'):
+                    ohost = origin[len(scheme) + 3:].split(':')[0]
+                    if ohost == (request.host or '').split(':')[0]:
+                        return origin
+            except Exception:
+                pass
         if _cors_cfg:
             if isinstance(_cors_cfg, str):
                 allowed = [o.strip() for o in _cors_cfg.split(',') if o.strip()]
@@ -99,6 +191,77 @@ def create_web_app(framework) -> Flask:
     def _cors_preflight():
         if request.method == 'OPTIONS':
             return ('', 204)
+
+    # ---- 安全响应头 + 技术栈指纹隐藏 ----
+    # 生效值来自 security.level 档位解析（见上方 _hdr_cfg）
+    _HEADERS_ENABLED = bool(_hdr_cfg.get('enabled', True))
+    _SERVER_IDENT = str(_hdr_cfg.get('server', '') or '')
+
+    def _build_csp(relaxed: bool = False) -> str:
+        """构建 CSP。relaxed=True 用于插件自建页面（含内联脚本），放宽 script-src。"""
+        custom = _hdr_cfg.get('csp')
+        if isinstance(custom, str) and custom.strip():
+            return custom.strip()
+        script_src = "'self' 'unsafe-inline'" if relaxed else "'self'"
+        return (
+            "default-src 'self'; "
+            f"script-src {script_src}; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "font-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'; "
+            "frame-ancestors 'self'"
+        )
+
+    @app.after_request
+    def _security_headers(resp):
+        if not _HEADERS_ENABLED:
+            return resp
+        resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        resp.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+        resp.headers.setdefault('Referrer-Policy', 'same-origin')
+        resp.headers.setdefault(
+            'Permissions-Policy',
+            'geolocation=(), microphone=(), camera=(), payment=(), usb=()')
+        resp.headers.setdefault('Cross-Origin-Opener-Policy', 'same-origin')
+        resp.headers.setdefault('X-Permitted-Cross-Domain-Policies', 'none')
+        resp.headers.setdefault('X-Robots-Tag', 'noindex, nofollow')
+        # 插件自建页面允许内联脚本，其余走严格 CSP
+        relaxed = (request.path or '').startswith('/api/plugin_webui/')
+        resp.headers.setdefault('Content-Security-Policy', _build_csp(relaxed))
+        # 指纹隐藏：删除/覆盖 Server 与 X-Powered-By
+        if _SERVER_IDENT:
+            resp.headers['Server'] = _SERVER_IDENT
+        else:
+            resp.headers.pop('Server', None)
+        resp.headers.pop('X-Powered-By', None)
+        return resp
+
+    # ---- 统一错误页（不泄露框架指纹与堆栈）----
+    @app.errorhandler(404)
+    def _err_404(e):
+        return jsonify({'code': 404, 'msg': 'Not Found'}), 404
+
+    @app.errorhandler(405)
+    def _err_405(e):
+        return jsonify({'code': 405, 'msg': 'Method Not Allowed'}), 405
+
+    @app.errorhandler(500)
+    def _err_500(e):
+        logger.exception("Web 请求内部错误")
+        return jsonify({'code': 500, 'msg': 'Internal Server Error'}), 500
+
+    @app.errorhandler(Exception)
+    def _err_any(e):
+        from werkzeug.exceptions import HTTPException
+        if isinstance(e, HTTPException):
+            return e
+        logger.exception("Web 未捕获异常")
+        return jsonify({'code': 500, 'msg': 'Internal Server Error'}), 500
 
     # ---- 登录防爆破（内存限速：同一 IP 10 分钟内最多失败 5 次）----
     _login_failures = {}  # ip -> list[timestamp]
@@ -147,6 +310,109 @@ def create_web_app(framework) -> Flask:
         if dual_auth.is_whitelisted(ip) or not dual_auth.is_blacklisted(ip):
             return None
         return jsonify({'code': 403, 'msg': '访问被拒绝'}), 403
+
+    # ---- JS 人机验证（工作量证明）----
+    # 客户端必须先执行 JS 求解 challenge，换取通行票据（请求头 X-ZC-Pass），
+    # 之后所有 API 请求携带该票据。纯脚本不执行 JS → 拿不到票据 → 被静默丢弃。
+    from framework.api import human_check as _hc
+    _HC_ENABLED = bool(_hc_cfg.get('enabled', True))
+    _HC_APPLY_TO = str(_hc_cfg.get('apply_to', 'all') or 'all').lower()
+    _HC_BYPASS_WL = bool(_hc_cfg.get('bypass_whitelist', False))
+    _HC_DIFFICULTY = int(_hc_cfg.get('difficulty', 4) or 4)
+    _HC_CHALLENGE_TTL = int(_hc_cfg.get('challenge_ttl', 120) or 120)
+    _HC_TICKET_TTL = int(_hc_cfg.get('ticket_ttl', 1800) or 1800)
+
+    @app.route('/api/challenge', methods=['GET'])
+    def _issue_challenge():
+        """下发人机验证 challenge（无需票据）"""
+        return jsonify({'code': 0,
+                        'data': _hc.issue_challenge(_HC_DIFFICULTY, _HC_CHALLENGE_TTL)})
+
+    @app.route('/api/challenge/verify', methods=['POST'])
+    def _verify_challenge():
+        """复核工作量证明并签发通行票据"""
+        data = request.get_json(silent=True) or {}
+        ticket = _hc.verify(data.get('challenge'), data.get('nonce'), _HC_TICKET_TTL)
+        if not ticket:
+            return jsonify({'code': 400, 'msg': '验证失败'}), 400
+        return jsonify({'code': 0, 'data': {'ticket': ticket, 'ttl': _HC_TICKET_TTL}})
+
+    @app.before_request
+    def _human_check_guard():
+        """未携带有效通行票据的 API 请求 → 静默丢弃（诱饵端点与插件路由除外）"""
+        if not _HC_ENABLED or _HC_APPLY_TO == 'none':
+            return None
+        path = request.path or ''
+        if not path.startswith('/api/'):
+            return None
+        # 挑战接口本身、以及插件自建页面（iframe 无法携带票据）免检
+        if path.startswith('/api/challenge') or path.startswith('/api/plugin_webui'):
+            return None
+        # 诱饵端点与插件自注册路由不受拦截：诱饵要让扫描器咬到才有价值，
+        # 插件页面（iframe）也无法携带票据。
+        endpoint = getattr(request.url_rule, 'endpoint', '') or ''
+        if endpoint.startswith('_honeypot') or endpoint.startswith('_zcbot_api_'):
+            return None
+        if _HC_APPLY_TO == 'login' and path != '/api/login':
+            return None
+        ip = get_client_ip()
+        if _HC_BYPASS_WL and (dual_auth.is_whitelisted(ip) or dual_auth.is_internal(ip)):
+            return None
+        if _hc.is_valid_ticket(request.headers.get('X-ZC-Pass')):
+            return None
+        logger.info(f"[人机验证] 未通过，静默丢弃: {request.method} {path} ← {ip}")
+        return _silent_drop()
+
+    # ---- 认证失败防护：tarpit 延迟 + 中性响应 + 阈值自动拉黑 ----
+    # 目标：无效/缺失 token 不再返回「令牌无效或已过期」这类可区分信息，
+    #      改为统一的 Unauthorized + 随机延迟 + 记风险；同一 IP 反复失败则拉黑。
+    # 生效值来自 security.level 档位解析（见上方 _hp_cfg）
+    _AUTH_FAIL_LIMIT = int(_hp_cfg.get('auth_fail_blacklist', 20) or 0)
+    _AUTH_FAIL_WINDOW = int(_hp_cfg.get('auth_fail_window', 300) or 300)
+    _AUTH_TARPIT_MS = int(_hp_cfg.get('tarpit_auth_ms', 800) or 0)
+    _AUTH_DECOY = bool(_hp_cfg.get('invalid_token_decoy', False))
+    _AUTH_BLACKLIST_TTL = int(_hp_cfg.get('blacklist_ttl', 3600) or 0)
+    _auth_failures = {}      # ip -> list[timestamp]
+    _auth_fail_lock = threading.Lock()
+
+    def _record_auth_failure(ip: str):
+        """记录认证失败；达到阈值自动拉黑（内网/白名单由 dual_auth 豁免）"""
+        if not ip or ip == 'unknown':
+            return
+        now = time.time()
+        hit = False
+        with _auth_fail_lock:
+            lst = [t for t in _auth_failures.get(ip, []) if now - t < _AUTH_FAIL_WINDOW]
+            lst.append(now)
+            _auth_failures[ip] = lst
+            if len(_auth_failures) > 4096:
+                stale = [k for k, v in _auth_failures.items()
+                         if not v or now - v[-1] >= _AUTH_FAIL_WINDOW]
+                for k in stale:
+                    _auth_failures.pop(k, None)
+            if _AUTH_FAIL_LIMIT > 0 and len(lst) >= _AUTH_FAIL_LIMIT:
+                hit = True
+        if hit:
+            try:
+                expires_at = (time.time() + _AUTH_BLACKLIST_TTL) if _AUTH_BLACKLIST_TTL > 0 else None
+                dual_auth.blacklist(ip, reason=f'认证连续失败 {len(lst)} 次',
+                                    source='honeypot', expires_at=expires_at)
+                logger.warning(f"[认证防护] IP 因连续认证失败被拉黑: {ip}")
+            except Exception as e:
+                logger.warning(f"[认证防护] 拉黑失败 {ip}: {e}")
+
+    def _deny_auth():
+        """统一的认证拒绝：延迟 + （按配置）静默丢弃 / 中性文案"""
+        _record_auth_failure(get_client_ip())
+        _tarpit_sleep(_AUTH_TARPIT_MS)
+        if _AUTH_DECOY:
+            # 诱饵模式：返回看似成功的假数据（会让前端无法感知过期，谨慎开启）
+            return jsonify({'code': 0, 'msg': 'ok',
+                            'data': {'server': 'node-01', 'token': secrets.token_hex(16)}})
+        if _SILENT_AUTH:
+            # 「不对就不理」：不返回任何有意义内容，仅关闭连接
+            return _silent_drop()
+        return jsonify({'code': 401, 'msg': 'Unauthorized'}), 401
 
     # ---- 刷新过快检测（同一 IP 5 秒内刷新页面 ≥2 次 → 引导到 /reset）----
     _refresh_windows = {}          # ip -> list[timestamp]（仅记录页面导航请求）
@@ -245,6 +511,17 @@ def create_web_app(framework) -> Flask:
             return auth[7:]
         return req.cookies.get('zcbot_token')
 
+    def _silent_drop():
+        """
+        静默丢弃：不返回任何有意义的内容，仅关闭连接。
+        语义等同 nginx 的 444（"不理会"），用于「认证不对就不理」的场景：
+        扫描器/脚本拿不到 401 JSON，也就无法据此判断端点是否存在。
+
+        注意：不能设置 Connection: close —— 按 PEP 3333，hop-by-hop 头
+        不允许由 WSGI 应用设置，waitress 会直接抛 AssertionError。
+        """
+        return Response(b'', status=444, mimetype='text/plain')
+
     def _verify_token(token):
         """验证 token，返回 admin 字典或 None（支持用户会话 token 与接口令牌 API Key）"""
         if not token:
@@ -307,11 +584,10 @@ def create_web_app(framework) -> Flask:
         @wraps(fn)
         def wrapper(*args, **kwargs):
             token = _extract_token(request)
-            if not token:
-                return jsonify({'code': 401, 'msg': '未提供认证令牌'}), 401
-            admin = _verify_token(token)
+            admin = _verify_token(token) if token else None
             if not admin:
-                return jsonify({'code': 401, 'msg': '令牌无效或已过期'}), 401
+                # 统一中性拒绝：不区分「未提供」「无效」「过期」，并计入风险
+                return _deny_auth()
             if super_only and admin.get('role') != 'super':
                 return jsonify({'code': 403, 'msg': '权限不足，需要超级管理员'}), 403
             request.admin = admin
@@ -355,6 +631,8 @@ def create_web_app(framework) -> Flask:
         _record_login_failure=_record_login_failure,
         _clear_login_failures=_clear_login_failures,
         _check_public_rate=_check_public_rate,
+        # 端口隔离（True 时首页需注入 /webui-config.js）
+        api_split=SPLIT_PORTS,
         # 通用工具 / yaml / 插件市场 / GitHub（app_helpers 工厂）
         **helpers,
         # 日志经纪
@@ -365,7 +643,7 @@ def create_web_app(framework) -> Flask:
     from framework.api import (
         auth, admins, apikeys, dashboard, plugins, commands, users_groups, tasks,
         logs, config, db_gateway, framework_ops, webui, files, stats, perm_api,
-        static_routes,
+        static_routes, honeypot,
     )
     auth.register(ctx)
     admins.register(ctx)
@@ -384,6 +662,8 @@ def create_web_app(framework) -> Flask:
     stats.register(ctx)
     perm_api.register(ctx)
     static_routes.register(ctx)
+    # 蜜罐最后注册：其兜底规则权重最低，仅在无真实路由匹配时生效
+    honeypot.register(ctx)
 
     # ---- 插件自定义 API 路由挂载（framework.api.registry）----
     from framework.api import registry as _api_registry

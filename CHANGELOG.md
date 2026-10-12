@@ -30,6 +30,27 @@
 
 > 暂无。
 
+## v1.8.6（2026-10-12）
+
+> 主题：**WebUI 安全加固收口——端口隔离 + 纯 API 模式 + 黑盒测试启动器 + 安全等级体系 + 文档修正**。
+
+### 新功能
+- **WebUI 端口隔离（双端口模式）**：`config.yaml` 的 `web.api_port` 可配置独立 API 端口。设置后，**WebUI 端口只提供前端页面 + 蜜罐诱饵，不再暴露任何真实 `/api/*`**；真实 API 全部搬到 `api_port`。两者同进程，黑名单 / 人机验证票据 / 会话状态天然同步——适合把 WebUI 端口暴露在公网、API 端口留在内网的部署。
+  - 路由层 `_port_split_guard` 在 WebUI 端口命中 `/api/*` 时一律按诱饵处理；`webserver.py` 另起一个同进程线程只跑真实 API。
+- **纯 API 模式（`web.ui_enabled: false`）**：只起 API 端口（取 `web.api_port`，未设则用 `web.port`），**完全不启动 WebUI 前端 / 蜜罐**，本进程只提供真实 `/api/*`。适合「只开 API、不开 WebUI」的纯接口部署。
+- **三种部署模式**正式确立并写入文档（`webui-security-plan.html`）：
+  1. **单端口合并**（不配 `api_port`）：WebUI + 真实 API + 诱饵同端口（文档仍标注真实接口，不伪装）；
+  2. **双端口隔离**（`api_port` 与 `web.port` 不同）：WebUI 端口无真实 API、API 端口专属真实接口；
+  3. **纯 API**（`ui_enabled=false`）：仅 API 端口，无 WebUI。
+- **黑盒测试启动器 `test/webui_blackbox_launcher.py`**：给安全审计 / AI 黑盒测试用的「从零开始、凭据随机、环境隔离」启动器。随机生成管理密码与端口（均可参数覆盖），写入隔离的临时 `config.yaml` + 临时 SQLite 库（**绝不碰真实 `data/zcbot.db`**），拉起框架待端口就绪后把随机密码以 bcrypt 注入 `admin_users`，打印访问地址与账号密码并尝试打开浏览器；Ctrl-C 自动清理临时文件。支持 `--host/--port/--api-port/--security/--username/--password/--api-only/--no-open/--keep/--timeout/--print-only/--root`，跨平台（Windows / Linux / macOS）。
+  - 修复框架强依赖仓库 `core_plugins.yaml` 的 `webui.port`、会覆盖 `config.yaml` 的 `web.port` 导致端口随机失效的问题：新增环境变量 **`ZCBOT_CORE_PLUGINS_YAML`** 覆盖插件配置路径，启动器借此把插件配置指向隔离副本（仅覆盖 `webui` 端口/host），**真实仓库零改动**。
+- **安全等级体系（`security.level`）**：`off / low / medium / high / paranoid` 五档统管蜜罐诱饵集、tarpit 延迟、自动拉黑、安全响应头、Server 指纹隐藏、JS 人机验证、认证静默丢弃；单项（honeypot / headers / human_check）仍可显式覆盖，显式值优先。
+
+### 修复 / 文档
+- 修正 `webui-security-plan.html` 等文档：此前暴露了 WebUI 的 API 端点结构；现已明确「WebUI 端口不绑定真实 API、真实 API 是独立端口」的设计，并补齐三种部署模式说明与端点清单。
+- 默认管理员账号 `admin/admin123` 仅在隔离/首次初始化时播种；密码以 bcrypt（`gensalt(12)`）存储于 `admin_users` 表，随机密码注入即覆盖该哈希。
+- `framework/config.py` 支持 `ZCBOT_CORE_PLUGINS_YAML` 环境变量覆盖 `core_plugins.yaml` 路径（默认仍读仓库根目录，行为不变）。
+
 ## v1.8.5-alpha.1（2026-10-10）
 
 > 我靠我脑残发布1.8.5-alpha.0忘了推送了。

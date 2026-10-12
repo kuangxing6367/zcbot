@@ -1,0 +1,1073 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZCBOT 管理后台安全加固方案（小白版）</title>
+<style>
+  :root{
+    --primary:#5D87FF;
+    --primary-soft:#eef3ff;
+    --ink:#1f2430;
+    --ink-2:#4d5875;
+    --ink-3:#7987a1;
+    --line:#e2e8ee;
+    --bg:#fafbfc;
+    --card:#ffffff;
+    --danger:#e5484d;
+    --warn:#f9901f;
+    --ok:#3fb950;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    line-height:1.85;font-size:15px;
+  }
+  .wrap{max-width:960px;margin:0 auto;padding:0 22px 90px}
+
+  /* ---------- 封面 ---------- */
+  header.cover{
+    background:linear-gradient(150deg,#4a6fe0 0%,#5D87FF 48%,#38bdf8 100%);
+    color:#fff;padding:56px 0 48px;margin-bottom:34px;
+  }
+  header.cover .wrap{padding-bottom:0}
+  .badge{display:inline-block;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);
+    border-radius:999px;padding:4px 14px;font-size:13px;letter-spacing:.02em}
+  h1.title{font-size:34px;line-height:1.3;margin:18px 0 10px;font-weight:800}
+  .subtitle{font-size:16px;opacity:.92;margin:0 0 22px;max-width:640px}
+  .meta{font-size:13px;opacity:.8;border-top:1px solid rgba(255,255,255,.25);padding-top:14px;
+    display:flex;gap:26px;flex-wrap:wrap}
+
+  /* ---------- 通用 ---------- */
+  h2{font-size:23px;margin:52px 0 8px;padding-left:14px;border-left:5px solid var(--primary);
+     line-height:1.4;font-weight:700}
+  h3{font-size:17.5px;margin:30px 0 8px;font-weight:700}
+  h4{font-size:15.5px;margin:20px 0 6px;font-weight:700;color:var(--ink-2)}
+  p{margin:10px 0}
+  a{color:var(--primary);text-decoration:none;border-bottom:1px solid rgba(93,135,255,.35)}
+  a:hover{border-bottom-color:var(--primary)}
+  ul,ol{padding-left:22px;margin:10px 0}
+  li{margin:5px 0}
+  code{background:#f2f4f5;border:1px solid var(--line);border-radius:6px;padding:1px 6px;
+    font-family:Consolas,Menlo,monospace;font-size:13px;color:#c7254e}
+  .lead{font-size:16px;color:var(--ink-2)}
+  .muted{color:var(--ink-3);font-size:13.5px}
+
+  /* ---------- 目录 ---------- */
+  nav.toc{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:20px 26px;margin-bottom:10px}
+  nav.toc h3{margin:0 0 10px;font-size:15px;color:var(--ink-3);letter-spacing:.06em;font-weight:600}
+  nav.toc ol{margin:0;columns:2;column-gap:32px}
+  nav.toc a{border:none;color:var(--ink-2)}
+  nav.toc a:hover{color:var(--primary)}
+
+  /* ---------- 卡片 ---------- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:20px 24px;margin:16px 0}
+  .case{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:0;margin:18px 0;overflow:hidden}
+  .case .case-head{padding:16px 22px 12px;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#fbfcfe,#fff)}
+  .case .case-head .no{display:inline-block;background:var(--primary-soft);color:var(--primary);
+    font-weight:700;font-size:12.5px;border-radius:6px;padding:2px 9px;margin-right:8px}
+  .case .case-head h4{margin:0;display:inline;font-size:16px;color:var(--ink)}
+  .case .case-body{padding:16px 22px 20px}
+  .case .src{font-size:12.5px;color:var(--ink-3);margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+
+  /* ---------- 提示块 ---------- */
+  .tip{border-radius:10px;padding:14px 18px;margin:16px 0;font-size:14.5px;border:1px solid}
+  .tip .t{font-weight:700;display:block;margin-bottom:4px}
+  .tip.plain{background:#f5f9ff;border-color:#cfe0ff}
+  .tip.plain .t{color:var(--primary)}
+  .tip.warn{background:#fff8ec;border-color:#ffe0b2}
+  .tip.warn .t{color:#c77700}
+  .tip.danger{background:#fff2f2;border-color:#ffd6d6}
+  .tip.danger .t{color:var(--danger)}
+  .tip.ok{background:#f2fbf4;border-color:#c8ecd2}
+  .tip.ok .t{color:#1a7f37}
+
+  /* ---------- 表格 ---------- */
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;
+    background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f7f9fb;font-weight:600;color:var(--ink-2);font-size:13.5px;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;font-size:12px;border-radius:6px;padding:1px 8px;white-space:nowrap;
+    font-weight:600;line-height:1.7}
+  .tag.red{background:#ffecec;color:#c22}
+  .tag.orange{background:#fff4e5;color:#b26a00}
+  .tag.green{background:#eaf7ee;color:#1a7f37}
+  .tag.blue{background:var(--primary-soft);color:#3f63c9}
+
+  /* ---------- 防线 ---------- */
+  .layer{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--primary);
+    border-radius:var(--radius);padding:20px 24px;margin:18px 0}
+  .layer .ln{font-size:12.5px;color:var(--primary);font-weight:700;letter-spacing:.08em}
+  .layer h3{margin:4px 0 6px}
+  .analogy{background:#f7f9fb;border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14.5px;
+    color:var(--ink-2);border-left:3px solid #cdd9ee}
+  .analogy b{color:var(--ink)}
+
+  /* ---------- 词典 ---------- */
+  dl.dict{margin:14px 0}
+  dl.dict dt{font-weight:700;margin-top:16px;color:var(--ink)}
+  dl.dict dd{margin:3px 0 0;color:var(--ink-2);font-size:14.5px}
+
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);
+    color:var(--ink-3);font-size:13px;text-align:center}
+  .kbd{background:#f2f4f5;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
+    padding:0 6px;font-family:Consolas,monospace;font-size:12.5px}
+  @media(max-width:680px){
+    nav.toc ol{columns:1}
+    h1.title{font-size:26px}
+    .wrap{padding:0 16px 70px}
+  }
+</style>
+</head>
+<body>
+
+<header class="cover">
+  <div class="wrap">
+    <span class="badge">安全加固方案 · 小白也能看懂</span>
+    <h1 class="title">ZCBOT 管理后台安全加固方案</h1>
+    <p class="subtitle">把"被扫描、被爆破、被顺手牵羊"这三件事，用六道防线挡住。<br>全文不含任何需要你懂编程才能理解的内容。</p>
+    <div class="meta">
+      <span>适用对象：ZCBOT 使用者 / 运维小白</span>
+      <span>配套版本：v1.8.6</span>
+      <span>更新日期：2026-10-12</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <h3>目 录</h3>
+  <ol>
+    <li><a href="#c0">一句话说清我们要干什么</a></li>
+    <li><a href="#c1">先搞懂：到底在防什么？</a></li>
+    <li><a href="#c2">真实案例：别人踩过的坑</a></li>
+    <li><a href="#c3">我们的方案：六道防线</a></li>
+    <li><a href="#c3b">扫描器来了 vs 黑客来了（实测）</a></li>
+    <li><a href="#c4">配置说明书：安全等级一档搞定</a></li>
+    <li><a href="#c5">怎么确认它真的生效了</a></li>
+    <li><a href="#c6">边界与注意事项（很重要）</a></li>
+    <li><a href="#c7">还建议你顺手做的事</a></li>
+    <li><a href="#c8">小白词典</a></li>
+    <li><a href="#c_modes">三种部署模式（部署前先看这一节）</a></li>
+    <li><a href="#c9">进阶：端口隔离（前台后台分两道门）</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ -->
+<h2 id="c0">一、一句话说清我们要干什么</h2>
+
+<p class="lead">
+你的 ZCBOT 管理后台，就像一栋房子的门。门本身（账号密码）我们是有的，
+但问题是：<b>房子外面是条大街，每天都有人在挨家挨户拉门把手。</b>
+</p>
+
+<p>这套方案要做的，不是把门换成银行金库（那要花大钱），而是做六件便宜又管用的事：</p>
+
+<ol>
+  <li><b>在门口放一堆假保险箱</b> —— 让来拉门把手的人先被假的吸引走，同时我们记下他是谁。</li>
+  <li><b>把门牌号摘掉</b> —— 让摸到门口的人搞不清这是谁家的房子、里面有什么。</li>
+  <li><b>给门装上"猫眼和防盗链"</b> —— 浏览器层面的规矩，防止有人从窗户（网页漏洞）爬进来。</li>
+  <li><b>把屋里的说明书烧成"天书"</b> —— 就算有人捡到一份，也看不懂。</li>
+  <li><b>门口加一道"现场做题"</b> —— 只会照章办事的机器人做不出来，直接被请走。</li>
+  <li><b>暗号不对就当没听见</b> —— 不回"你错了"，直接关门，让对方无从下手。</li>
+</ol>
+
+<div class="tip plain">
+  <span class="t">💡 一句话总结</span>
+  我们无法阻止别人来扫描（这是互联网的常态），但我们可以做到：
+  <b>让他扫到的全是假的、让他找不到真东西、让他连"这里有没有东西"都判断不了、
+  并且把他的行为全部记录在案。</b>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="c1">二、先搞懂：到底在防什么？</h2>
+
+<p>攻击者（其实多半是自动化脚本，不是人）每天在网上做三件事，成本极低、收益极高：</p>
+
+<h3>1. 扫"不该出现在公网的文件"</h3>
+<p>
+脚本会挨个去试 <code>/.env</code>、<code>/.git/config</code>、<code>/backup.sql</code> 这类路径。
+这些文件里通常装着数据库密码、密钥、源码。<b>只要有一个真的挂在那里，一次命中就是事故。</b>
+</p>
+
+<h3>2. 猜后台密码（业内叫"弱口令爆破"）</h3>
+<p>
+用一本几万条的密码字典，对着登录框一秒试几十次。
+<code>admin/admin</code>、<code>admin/123456</code> 这种组合，至今仍是攻破系统最主要的方式之一。
+</p>
+
+<h3>3. 翻"监控/接口文档"这类默认开着的东西</h3>
+<p>
+很多框架默认会开一些"调试、监控、接口文档"页面。
+开发者图方便没关，攻击者一访问就能拿到数据库配置、密钥，甚至直接远程执行命令。
+</p>
+
+<div class="tip warn">
+  <span class="t">⚠️ 关键认知</span>
+  <b>被扫描是常态，不是你的错。</b>一台刚上线的公网服务器，几小时内就会开始被扫。
+  真正的风险从来不是"被扫"，而是"被扫到了真东西"。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="c2">三、真实案例：别人踩过的坑</h2>
+
+<p class="muted">以下均为 2022–2026 年公开的真实案例/实战记录，来源见每篇末尾链接。</p>
+
+<!-- 案例 1 -->
+<div class="case">
+  <div class="case-head">
+    <span class="no">案例 1</span><h4>有人埋了 8 个假文件，12 天被扫了 502 次</h4>
+  </div>
+  <div class="case-body">
+    <p>一位作者在自己的公网服务器上放了 8 个"假文件"，12 天后的统计结果：</p>
+    <ul>
+      <li><b>502 次访问、119 个独立 IP</b>，天天有人来，没有一天空过。</li>
+      <li>被找得最多的是 <code>.env</code>，<b>一个文件就占了总访问量的一大半</b>。</li>
+      <li>来的人里有：专业的泄露情报平台（扫了 48 次）、某知名安全厂商的攻击面扫描服务、网络空间测绘爬虫、以及大量伪装成浏览器的脚本。</li>
+      <li>有人明显"上钩"了：开始尝试路径变形绕过，比如 <code>/.//.env</code>、<code>/%2eenv</code>、<code>/api/uploads/%2e%2e%2f...env</code>（路径穿越）。</li>
+      <li>还有人直奔一个假备份文件 <code>xxx.sql.gz</code> 去下载 —— <b>下载比浏览更能说明意图</b>。</li>
+    </ul>
+    <p>作者的核心结论有三条：</p>
+    <ol>
+      <li>被扫是常态，跟你做得好不好没关系。</li>
+      <li>诱饵要做得像"人疏忽了"，比如在假配置里留一句"割接时临时放的，割完记得删"—— 攻击者看到"临时""忘了删"，判断力会立刻下降。</li>
+      <li><b>诱饵宁可少，也别做得太花</b>；最怕的不是没人上钩，而是被人一眼看穿。</li>
+    </ol>
+    <div class="src">来源：《蜜罐实战：我在服务器上埋了 8 个假文件，12 天记录 502 次扫描》· 阿里云开发者社区 · 2026-10-06 ·
+      <a href="https://developer.aliyun.com/article/1768186" target="_blank">原文</a></div>
+  </div>
+</div>
+
+<!-- 案例 2 -->
+<div class="case">
+  <div class="case-head">
+    <span class="no">案例 2</span><h4>一个配置写成了 <code>"*"</code>，企业数据被拖走</h4>
+  </div>
+  <div class="case-body">
+    <p>
+      某企业 Spring Boot 应用被入侵。应急响应排查发现原因非常简单：<b>开发者图方便，把监控端点全开了，又没做访问控制。</b>
+    </p>
+    <p>危险点在于这些端点会直接吐敏感信息：</p>
+    <table>
+      <tr><th>端点</th><th>用途</th><th>风险</th></tr>
+      <tr><td><code>/actuator/env</code></td><td>环境变量</td><td><span class="tag red">高危</span> 泄露密钥</td></tr>
+      <tr><td><code>/actuator/configprops</code></td><td>配置属性</td><td><span class="tag red">高危</span> 泄露数据库密码</td></tr>
+      <tr><td><code>/actuator/heapdump</code></td><td>JVM 堆转储</td><td><span class="tag red">极高危</span> 含内存中的密钥与用户数据</td></tr>
+      <tr><td><code>/actuator/jolokia</code></td><td>JMX over HTTP</td><td><span class="tag red">极高危</span> 可直接远程执行命令</td></tr>
+      <tr><td><code>/actuator/trace</code></td><td>请求记录</td><td><span class="tag red">高危</span> 含 Authorization 头</td></tr>
+    </table>
+    <p>攻击者用几条 <code>curl</code> 就把数据库配置和密钥拿走了，最终导致数据泄露。</p>
+    <div class="tip danger" style="margin-top:14px">
+      <span class="t">教训</span>
+      默认配置 ≠ 安全配置。框架的默认设置是为了让开发方便，生产环境必须自己加固。
+    </div>
+    <div class="src">来源：《Spring Boot Actuator 未授权访问：一个注解引发的血案》· 博客园 · 2026-06-02 ·
+      <a href="https://www.cnblogs.com/mliu/p/20269394" target="_blank">原文</a></div>
+  </div>
+</div>
+
+<!-- 案例 3 -->
+<div class="case">
+  <div class="case-head">
+    <span class="no">案例 3</span><h4><code>.git</code> 目录跟着网站一起上线，源码"裸奔"</h4>
+  </div>
+  <div class="case-body">
+    <p>
+      开发人员用 Git 做版本管理，部署时不小心把 <code>.git</code> 文件夹也一起传到了公网。
+      攻击者只要访问 <code>/.git/config</code>、<code>/.git/refs/heads/main</code> 等路径，
+      就能用现成工具（如 <code>Git_Extract</code>）<b>把整个项目的源码完整还原出来</b>。
+    </p>
+    <p>拿到源码之后，攻击者可以在本地慢慢找漏洞（SQL 注入、越权、硬编码密码），再回来精准打击 —— 防不胜防。</p>
+    <div class="src">来源：《渗透测试实战：从 .Git 目录泄露导致信息泄露和任意文件读取》· FreeBuf · 2024-09-11 ·
+      <a href="https://www.freebuf.com/articles/web/410701" target="_blank">原文</a></div>
+  </div>
+</div>
+
+<!-- 案例 4 -->
+<div class="case">
+  <div class="case-head">
+    <span class="no">案例 4</span><h4>接口文档没关，等于把 API 清单送人</h4>
+  </div>
+  <div class="case-body">
+    <p>
+      很多项目集成了 Swagger / OpenAPI 来自动生成接口文档，方便前后端联调。
+      但上线时忘了关，任何人访问 <code>/swagger-ui.html</code>、<code>/v2/api-docs</code>、<code>/openapi.json</code>
+      就能看到<b>全部接口的名称、参数、返回结构</b>。
+    </p>
+    <p>这相当于把小区的<b>户型图 + 监控点位图</b>贴在门口。攻击者不用猜，直接照着清单逐个试。</p>
+    <div class="src">来源：《Swagger 未授权访问漏洞》· 腾讯云开发者社区 ·
+      <a href="https://cloud.tencent.com/developer/article/2160217" target="_blank">原文</a></div>
+  </div>
+</div>
+
+<!-- 案例 5 -->
+<div class="case">
+  <div class="case-head">
+    <span class="no">案例 5</span><h4>Docker 管理接口没上锁，服务器直接沦陷</h4>
+  </div>
+  <div class="case-body">
+    <p>
+      某企业的 Docker Remote API（2375 端口）暴露在公网且没有认证。
+      攻击者连密码都不用猜，直接通过这个接口启动一个容器，把宿主机挂进去 —— <b>整台服务器到手</b>，随后被用来挖矿。
+    </p>
+    <div class="tip warn" style="margin-top:14px">
+      <span class="t">注意</span>
+      这类"管理接口"的危险之处在于：它不是"泄露信息"，而是<b>直接给你执行命令的权限</b>。
+      哪怕只开放 127.0.0.1（仅本机），也比开放公网安全一万倍。
+    </div>
+    <div class="src">来源：《从"未上锁的门"到服务器沦陷：Docker Remote API 实战案例》· CSDN · 2025-09-08 ·
+      <a href="https://blog.csdn.net/qq_40037555/article/details/149768544" target="_blank">原文</a></div>
+  </div>
+</div>
+
+<!-- 案例 6 -->
+<div class="case">
+  <div class="case-head">
+    <span class="no">案例 6</span><h4>弱口令爆破：后台密码被字典"猜"出来了</h4>
+  </div>
+  <div class="case-body">
+    <p>
+      一次渗透实战记录中，攻击者先用常见用户名 <code>admin</code>，再挂上密码字典跑，
+      最终爆出了后台密码。值得注意的是：<b>那个密码其实并不算弱</b>（含大小写字母和数字），
+      只是因为它是"字典里出现过的组合"，就被撞出来了。
+    </p>
+    <p>这说明：<b>对抗爆破的关键不是"密码够长"，而是"别让人无限次尝试"。</b></p>
+    <div class="src">来源：《渗透实战：记一次弱口令的挖掘》· 阿里云先知社区 ·
+      <a href="https://xz.aliyun.com/news/11396" target="_blank">原文</a></div>
+  </div>
+</div>
+
+<h3>案例对照：每个坑对应我们的哪道防线</h3>
+<table>
+  <tr><th>真实案例</th><th>攻击手法</th><th>我们的对策</th></tr>
+  <tr>
+    <td>案例 1（12 天 502 次扫描）</td>
+    <td>扫 <code>.env</code> 等敏感文件</td>
+    <td><span class="tag blue">第一道</span> 假 .env 诱饵 + 记录拉黑</td>
+  </tr>
+  <tr>
+    <td>案例 2（Actuator 泄露）</td>
+    <td>访问 <code>/actuator/env</code></td>
+    <td><span class="tag blue">第一道</span> 假 Actuator 端点 + <span class="tag blue">第二道</span> 未知接口不暴露真伪</td>
+  </tr>
+  <tr>
+    <td>案例 3（.git 泄露）</td>
+    <td>访问 <code>/.git/config</code></td>
+    <td><span class="tag blue">第一道</span> 假 Git 仓库文件</td>
+  </tr>
+  <tr>
+    <td>案例 4（Swagger 泄露）</td>
+    <td>访问接口文档</td>
+    <td><span class="tag blue">第一道</span> 假接口文档（内容全是虚构的）</td>
+  </tr>
+  <tr>
+    <td>案例 5（Docker API 沦陷）</td>
+    <td>未授权的管理接口</td>
+    <td><span class="tag blue">第七节</span> 建议：管理端口只监听本机</td>
+  </tr>
+  <tr>
+    <td>案例 6（弱口令爆破）</td>
+    <td>字典爆破登录框</td>
+    <td><span class="tag blue">第二道</span> 失败限速 + 阈值自动拉黑</td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="c3">四、我们的方案：六道防线</h2>
+
+<p>下面每道防线，我都会先说<b>"打比方"</b>，再说<b>"具体做了什么"</b>，最后说<b>"你需要注意什么"</b>。</p>
+
+<!-- 防线 1 -->
+<div class="layer">
+  <div class="ln">防线 一</div>
+  <h3>放诱饵：让扫描器先咬到假的</h3>
+
+  <div class="analogy">
+    <b>打比方：</b>小偷踩点时，如果看到门口摆着一个保险箱，他会先去撬保险箱，
+    而不是继续敲门。我们要做的，就是在门口摆一堆"看起来很值钱"的假保险箱。
+  </div>
+
+  <p><b>具体做了什么：</b>后台里内置了 <b>125 个诱饵端点</b>，分成几大类：</p>
+  <table>
+    <tr><th>诱饵类别</th><th>长什么样</th><th>钓什么人</th></tr>
+    <tr><td>假配置文件</td><td><code>/.env</code>、<code>/config.json</code>，里面有假的数据库密码、假的密钥</td><td>案例 1 里最爱扫的那批脚本</td></tr>
+    <tr><td>假版本控制</td><td><code>/.git/config</code>、<code>/.git/HEAD</code></td><td>案例 3 里还原源码的工具</td></tr>
+    <tr><td>假数据库备份</td><td><code>/backup.sql</code>、<code>/db.sql</code>、<code>/backup.zip</code></td><td>直奔"下载"而不是"浏览"的定向攻击者</td></tr>
+    <tr><td>假后台登录页</td><td><code>/admin</code>、<code>/wp-admin</code>、<code>/phpmyadmin</code></td><td>批量扫后台入口的脚本</td></tr>
+    <tr><td>假监控端点</td><td><code>/actuator/env</code>、<code>/server-status</code>、<code>/phpinfo.php</code></td><td>案例 2 里的 Actuator 探测器</td></tr>
+    <tr><td>假接口文档</td><td><code>/swagger-ui.html</code>、<code>/openapi.json</code></td><td>案例 4 里找接口清单的人</td></tr>
+    <tr><td>假密钥文件</td><td><code>/.aws/credentials</code>、<code>/.ssh/id_rsa</code>、<code>/.kube/config</code></td><td>专门偷云凭据的脚本</td></tr>
+    <tr><td>假内部接口</td><td><code>/api/v1/*</code>、<code>/api/internal/*</code></td><td>按命名习惯猜路径的扫描器</td></tr>
+  </table>
+
+  <p><b>命中之后会发生什么：</b></p>
+  <ol>
+    <li><b>记录</b>：把访问者的 IP、用的工具（User-Agent）、请求了哪个地址、带了什么内容，全部记进审计日志。</li>
+    <li><b>拉黑</b>：把这个 IP 加入黑名单，之后他访问任何页面都会被拒绝。</li>
+    <li><b>拖时间</b>：随机延迟一小会儿再回应，让扫描器变慢（业内叫 tarpit，中文叫"蜜罐拖拽"）。</li>
+  </ol>
+
+  <div class="tip danger">
+    <span class="t">🔒 安全声明（重要）</span>
+    所有诱饵返回的密码、密钥、令牌，<b>都是程序随机生成的假数据</b>，
+    不具备任何真实系统的访问能力。它们唯一的作用就是"钓"和"留痕"。
+  </div>
+
+  <div class="tip plain">
+    <span class="t">小白要记住的一点</span>
+    诱饵最怕的不是没人上钩，而是<b>做得太假被人一眼看穿</b>（案例 1 作者的结论）。
+    所以我们的假数据都遵循一个原则：<b>格式正确、内容专业、留一点"人味"</b>，
+    而不是写一句"这是蜜罐文件"。
+  </div>
+</div>
+
+<!-- 防线 2 -->
+<div class="layer">
+  <div class="ln">防线 二</div>
+  <h3>摘门牌：错误密码和错误地址，都不给有效回应</h3>
+
+  <div class="analogy">
+    <b>打比方：</b>陌生人敲门，如果你回答"密码错了"或"这里没有这个人"，
+    他就知道你家的规则了，可以继续试。正确做法是：<b>什么都不透露，只是慢一点、冷一点。</b>
+  </div>
+
+  <p><b>问题在哪：</b>以前的做法会明确告诉对方——"令牌无效或已过期"、"页面不存在"。
+这等于在教攻击者：<b>这个地址是存在的、只是我密码不对</b>。他可以据此不断调整。</p>
+
+  <p><b>现在的做法：</b></p>
+  <ul>
+    <li>密码/token 错误时，<b>统一回一句冷冰冰的 "Unauthorized"</b>，
+      不区分"没给密码""密码错""密码过期"—— 让对方无从判断。</li>
+    <li>每次失败都<b>加一点随机延迟</b>，让爆破脚本从"一秒几十次"降到很慢。</li>
+    <li>同一个 IP 反复失败达到阈值（默认 20 次 / 5 分钟），<b>直接拉黑</b>（对应案例 6）。</li>
+    <li>访问一个不存在的接口时，<b>不再返回"404 找不到"</b>，而是返回一份看起来正常的假数据。</li>
+    <li>访问不存在的页面时，返回一个<b>伪装成 nginx 的假 404 页面</b>，不暴露我们的真实技术栈。</li>
+  </ul>
+
+  <div class="tip ok">
+    <span class="t">✅ 效果</span>
+    攻击者拿到的信息从"清晰的错误提示"变成了"模糊的、慢吞吞的、看不出所以然的回应"，
+    很难判断自己是在打真系统还是空壳。
+  </div>
+</div>
+
+<!-- 防线 3 -->
+<div class="layer">
+  <div class="ln">防线 三</div>
+  <h3>装猫眼和防盗链：给浏览器立规矩</h3>
+
+  <div class="analogy">
+    <b>打比方：</b>浏览器就像你请的保安。我们要事先给保安一张"规则清单"：
+    只准执行本小区的脚本、只准连本小区的服务器、不准把页面嵌到别人家网页里。
+    这张清单就叫 <b>安全响应头</b>。
+  </div>
+
+  <p><b>具体做了什么：</b>后台给每一个页面都附上一张规则清单，主要包括：</p>
+  <table>
+    <tr><th>规则名</th><th>大白话解释</th></tr>
+    <tr><td><code>Content-Security-Policy</code></td><td>只准运行本网站自己的脚本，堵死"从别人服务器偷偷加载恶意脚本"这条路</td></tr>
+    <tr><td><code>X-Frame-Options</code></td><td>不准把我们的页面嵌到别的网站里（防"点击劫持"：你以为在点按钮，其实点的是陷阱）</td></tr>
+    <tr><td><code>X-Content-Type-Options</code></td><td>不准浏览器"自作聪明"猜测文件类型（防伪装成图片的脚本被执行）</td></tr>
+    <tr><td><code>Referrer-Policy</code></td><td>跳到外部网站时，不带我们的内部地址信息</td></tr>
+    <tr><td><code>X-Robots-Tag</code></td><td>告诉搜索引擎：别收录我（管理后台不该被百度/Google 搜到）</td></tr>
+  </table>
+
+  <p><b>同时"擦掉指纹"：</b>服务器原本会在响应里自报家门，比如
+  <code>Server: waitress</code>、<code>X-Powered-By: Flask</code>。
+  这就等于在门口挂着"我家用的是 XX 牌门锁"。现在这些信息被统一改成了一个中性的 <code>Server: web</code>。</p>
+
+  <div class="tip plain">
+    <span class="t">为什么这很重要</span>
+    攻击者通常会"按品牌找漏洞"。知道你是 Flask + waitress，他就去找这两个的已知漏洞。
+    指纹藏起来，他就得先花时间猜，成本上去了。
+  </div>
+</div>
+
+<!-- 防线 4 -->
+<div class="layer">
+  <div class="ln">防线 四</div>
+  <h3>烧说明书：把前端代码搅成"天书"</h3>
+
+  <div class="analogy">
+    <b>打比方：</b>网页的代码是"送货上门"的——只要打开浏览器开发者工具，谁都能看到。
+    我们能做的，是把一本排版工整的说明书，变成一叠<b>被打乱顺序、字被拆散、还夹着废纸</b>的稿子。
+  </div>
+
+  <p><b>具体做了什么（JS 混淆）：</b>发布时自动把代码处理成"天书"，手段包括：</p>
+  <ul>
+    <li><b>字符串加密</b>：把代码里所有文字（比如接口地址）抽出来、加密、打乱顺序存放，用到时才解密。</li>
+    <li><b>控制流扁平化</b>：把本来从上到下执行的逻辑，改成"跳来跳去"，读起来极其费劲。</li>
+    <li><b>死代码注入</b>：掺入大量永远执行不到的废代码，干扰分析。</li>
+    <li><b>变量改名</b>：把 <code>getUserToken</code> 这种一看就懂的名字，改成 <code>_0x2e3a</code> 这种。</li>
+    <li><b>抹掉调试输出</b>：去掉所有 console 打印，不留线索。</li>
+  </ul>
+
+  <div class="tip warn">
+    <span class="t">⚠️ 必须诚实说明：混淆 ≠ 不可破解</span>
+    混淆只是<b>提高门槛、拖慢速度</b>，不能让代码变成绝对秘密。懂逆向的人花时间还是能还原。
+    它的真正价值是：<b>把"随手一看就懂"变成"需要专门花时间分析"</b>，
+    从而挡掉 99% 的"顺手抄一下"的人。安全上从来不指望单一手段。
+  </div>
+</div>
+
+<!-- 防线 5 -->
+<div class="layer">
+  <div class="ln">防线 五</div>
+  <h3>验真人：不执行 JavaScript 的请求，一概不理</h3>
+
+  <div class="analogy">
+    <b>打比方：</b>以前的门口保安只检查"你有没有带钥匙"。现在的保安多问一句：
+    <b>"你能不能现场做一道小算术题？"</b>——人（浏览器）随手就能算出来，
+    而只会照章办事的机器人（curl / Python 脚本）根本不会算，直接被请出去。
+  </div>
+
+  <p><b>具体做了什么（JS 人机验证 / 工作量证明）：</b></p>
+  <ol>
+    <li>页面一打开，后台悄悄向服务器要一道<b>随机题</b>。</li>
+    <li>浏览器用 JavaScript 暴力试算，找出一个能让哈希值满足条件的答案（约 0.3 秒）。</li>
+    <li>算对了，服务器发一张<b>通行票据</b>，之后所有请求都带着它。</li>
+    <li>没票据的请求 —— <b>服务器直接不理</b>（返回空响应，连错误提示都不给）。</li>
+  </ol>
+
+  <div class="tip plain">
+    <span class="t">💡 为什么这招管用</span>
+    扫描器/脚本大多<b>不会执行 JavaScript</b>，所以拿不到票据，直接被静默丢弃。
+    想绕过就得自己把算法重新实现一遍——而这段代码已经跟着前端一起被混淆了，
+    抄不了。每一次求解都要付出真实算力，扫描成本被显著抬高。
+  </div>
+
+  <div class="tip danger">
+    <span class="t">⚠️ 同样要诚实说明</span>
+    这是<b>抬高成本</b>，不是密码学意义上的身份认证。懂技术的人可以实现同样的算法。
+    它的定位和"混淆"一致：挡掉绝大多数自动化脚本，让定向攻击变贵。
+  </div>
+</div>
+
+<!-- 防线 6 -->
+<div class="layer">
+  <div class="ln">防线 六</div>
+  <h3>不理会：认证不对，就当没听见</h3>
+
+  <div class="analogy">
+    <b>打比方：</b>陌生人报错了暗号，旧做法是回答"暗号错误"——这等于告诉他
+    <b>"这里确实有个暗号，你继续试"</b>。新做法是：<b>什么都不说，直接关门。</b>
+  </div>
+
+  <p><b>具体做了什么：</b>令牌（token）不对、没带令牌、令牌过期 —— 一律返回
+    <b>空的 444 响应</b>（业界沿用 nginx 的 "444 = 不回应" 约定），
+    既没有 JSON，也没有错误文案。扫描器拿不到任何可以判断"端点是否存在"的反馈。</p>
+
+  <div class="tip ok">
+    <span class="t">✅ 对你自己没有影响</span>
+    正常用户登录后浏览器一直带着有效令牌；万一令牌过期，前端会识别到这个空响应，
+    自动清掉本地登录态并跳回登录页 —— 你只会看到"请重新登录"，不会卡住。
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="c3b">五、扫描器来了 vs 黑客来了（实测对照）</h2>
+
+<p class="lead">下面全部是<b>实测抓包</b>，不是想象。用来回答一个问题：<b>这套东西真的动起来是什么样？</b></p>
+
+<h3>① 自动扫描器撞上来时</h3>
+<p>它用的是一个一眼假的 UA（伪装成"iPod 上装火狐"），连撞常见敏感路径：</p>
+<table>
+  <tr><th>它请求</th><th>它收到</th><th>它以为</th></tr>
+  <tr><td><code>/.env</code></td><td>200 · 一份完整的配置文件（含数据库密码、JWT、AWS 密钥）</td><td>捡到漏了</td></tr>
+  <tr><td><code>/.git/config</code></td><td>200 · 一个正常的 Git 仓库配置</td><td>可以还原源码</td></tr>
+  <tr><td><code>/backup.sql</code></td><td>200 · 一份带 <code>admin_users</code> 表的 SQL 导出</td><td>拿到管理员哈希了</td></tr>
+  <tr><td><code>/actuator/env</code></td><td>200 · 明文数据库密码</td><td>找到配置泄露了</td></tr>
+  <tr><td><code>/actuator/heapdump</code></td><td>200 · 2KB 二进制（<code>JAVA PROFILE</code> 魔数）</td><td>可以下载分析内存</td></tr>
+  <tr><td><code>/version</code>（Docker API）</td><td>200 · Docker 20.10.24 + 容器列表</td><td>宿主机没上锁</td></tr>
+  <tr><td><code>任意 /api/xxx 路径</code></td><td>200 · 看起来正常的业务 JSON（实际是诱饵）</td><td>接口存在</td></tr>
+</table>
+
+<p><b>全部 200，全部是假的。</b>而它不知道的是，每一个响应背后都同时发生了六件事：</p>
+<ol>
+  <li><b>取证</b>：IP / UA / Referer / 完整请求头 / 请求体，全部写进审计日志</li>
+  <li><b>canary</b>：响应体里埋了一个唯一追踪串</li>
+  <li><b>绕过检测</b>：检查原始 URI 有没有做手脚</li>
+  <li><b>统计</b>：按 IP、按路径、按原因各记一笔</li>
+  <li><b>拉黑</b>：<b>公网 IP 第 1 次命中就被拉黑</b>（默认 1 小时）</li>
+  <li><b>tarpit</b>：随机拖延 0~600 毫秒，让扫描变慢</li>
+</ol>
+
+<div class="tip danger">
+  <span class="t">被拉黑之后</span>
+  <code>GET /.env</code> → <b>403 访问被拒绝</b>；<code>任意 /api/xxx 接口</code> → <b>403</b>。
+  <b>连诱饵都不再服务</b>——从"以为捡到漏"变成"什么都摸不到"。
+</div>
+
+<div class="tip plain">
+  <span class="t">💡 关键：前台端口不挂真实后台（端口隔离）</span>
+  这份文档刻意<b>不列出任何真实接口路径</b>。原因见下方"进阶：端口隔离"一章：
+  扫描者敲开的几乎一定是<b>前台（WebUI）端口</b>，而那个端口上<b>任何 /api/* 请求都只会拿到诱饵</b>，
+  真实后台接口只活在另一个端口上。对攻击者来说，他从头到尾摸到的都是"假门"，
+  连真实接口长什么样都看不到——这正是把端点藏起来的根本办法。
+</div>
+
+<h3>② 人工黑客来的时候（行为完全不一样）</h3>
+<p>真人的特征是：<b>发现"能访问"之后会开始试探</b>，而不是一直傻扫。</p>
+
+<h4>第一步：路径变形绕过</h4>
+<table>
+  <tr><th>他的尝试</th><th>系统判定</th><th>后果</th></tr>
+  <tr><td><code>/.//.env</code></td><td>重复斜杠</td><td rowspan="4">标记为"<b>已上钩</b>"，<br>拉黑时长<b>翻倍</b></td></tr>
+  <tr><td><code>/%2eenv</code></td><td>URL 编码路径字符</td></tr>
+  <tr><td><code>/api/uploads/%2e%2e%2f%2e%2e%2f.env</code></td><td>URL 编码路径字符</td></tr>
+  <tr><td><code>/%252e%252e/config</code></td><td>双重 URL 编码</td></tr>
+</table>
+<div class="tip plain">
+  <span class="t">为什么这一步是分水岭</span>
+  会做路径变形的，说明他<b>已经上钩</b>并在琢磨怎么拿更多。所以这一步的处置会加重。
+</div>
+
+<h4>第二步：试登录假后台、下载假备份</h4>
+<ul>
+  <li><code>POST /admin/login</code> → 返回一张假登录页（不是报错，是页面）</li>
+  <li><code>GET /backup.zip</code> → 真下载下来一个 1KB 的假 zip（<code>PK</code> 魔数正确），他以为拿到了数据库备份</li>
+</ul>
+
+<h4>第三步：canary 追踪串（事后追溯的关键）</h4>
+<p>他下载走的每一份"内部资料"里，都藏着一个唯一编号，长得像运维留下的构建标记：</p>
+<table>
+  <tr><th>他拿到的文件</th><th>里面藏着的追踪串</th></tr>
+  <tr><td><code>.env</code></td><td><code># deployed-build: zcbot-e71e765678d6</code></td></tr>
+  <tr><td>某个真实业务接口（JSON）</td><td><code>"request_id": "zcbot-ce51d4437a7c"</code></td></tr>
+  <tr><td>假后台页面</td><td><code>&lt;!-- build zcbot-xxxxxxxx --&gt;</code></td></tr>
+  <tr><td>SQL 导出</td><td><code>-- dump-id: zcbot-xxxxxxxx</code></td></tr>
+</table>
+<p><b>它的价值：</b>一年后如果网上流出某份"ZCBOT 内部配置"截图，
+你把那个编号拿去后台一查，就能反查到
+<b>是几点几分、哪个 IP、用什么工具、从哪个文件漏出去的</b>。</p>
+
+<h4>第四步：他永远碰不到真实后台</h4>
+<table>
+  <tr><th>他的请求</th><th>结果</th></tr>
+  <tr><td>在前台端口试探任意业务接口（假令牌）</td><td><b>空的 444 响应</b> —— 什么都不告诉他（端口隔离下连诱饵都不再给真实反面的内容）</td></tr>
+  <tr><td>直接打真实后台端口、令牌却错误</td><td><b>空的 444 响应</b> —— 令牌不对就当没听见</td></tr>
+</table>
+<div class="tip plain">
+  <span class="t">为什么"真实接口"这里不说名字</span>
+  诚如上文所说，真实后台接口只在独立端口上，且需要人机验证票据 + 正确令牌。
+  文档把它们的名字隐去，是为了<b>不替攻击者画出攻击地图</b>。
+</div>
+
+<h3>③ 事后你在后台能看到什么</h3>
+<div class="card">
+  <p class="mono small" style="white-space:pre-wrap;margin:0">总命中 25 次 | 独立 IP 1 | 绕过命中 4 | 已签发 canary 25 | 已拉黑 1
+
+被探测最多的路径 TOP5:
+   3 次  /.env
+   1 次  /.git/config   /backup.sql   /admin   /actuator/env …
+
+命中原因分布:
+   4 次  配置文件/密钥探测
+   4 次  容器/编排接口探测
+   4 次  未知 API 路径探测
+   2 次  备份/数据库导出探测
+   2 次  后台入口扫描
+   2 次  框架管理端点探测</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="c4">六、配置说明书：安全等级一档搞定</h2>
+
+<p>所有开关都在项目根目录的 <code>config.yaml</code> 文件里，找到 <code>security:</code> 这一段。
+<b>好消息是：你只需要改一个数字。</b></p>
+
+<h3>安全等级：一行搞定全部</h3>
+<p>蜜罐、诱饵数量、拖延时长、拉黑时长、失败阈值、安全响应头、人机验证、认证静默 ——
+全部由这一个档位决定。不需要逐项调参。</p>
+
+<table>
+  <tr><th>档位</th><th>蜜罐</th><th>诱饵数量</th><th>拖延</th><th>自动拉黑</th><th>失败几次封</th><th>适合</th></tr>
+  <tr>
+    <td><code>off</code></td><td>关</td><td>—</td><td>0</td><td>不拉黑</td><td>不限</td>
+    <td>本地开发调试</td>
+  </tr>
+  <tr>
+    <td><code>low</code></td><td>开</td><td>核心 45 个</td><td>0.2 秒</td><td>不拉黑</td><td>50 次</td>
+    <td>刚上线，还在观察</td>
+  </tr>
+  <tr style="background:#eef3ff">
+    <td><code>medium</code><br><span class="tag blue">默认</span></td><td>开</td><td>全量 125 个</td><td>0.6 秒</td><td>封 1 小时</td><td>20 次</td>
+    <td><b>推荐，绝大多数人用这个</b></td>
+  </tr>
+  <tr>
+    <td><code>high</code></td><td>开</td><td>全量 125 个</td><td>1.5 秒</td><td>封 24 小时</td><td>10 次</td>
+    <td>后台需要外网访问</td>
+  </tr>
+  <tr>
+    <td><code>paranoid</code></td><td>开</td><td>全量 125 个</td><td>3 秒</td><td><b>永久封禁</b></td><td>5 次</td>
+    <td>已经被盯上了</td>
+  </tr>
+</table>
+
+<div class="tip plain">
+  <span class="t">💡 怎么改</span>
+  打开 <code>config.yaml</code>，把 <code>security:</code> 下面的
+  <code>level: medium</code> 改成你要的档位，<b>重启即可</b>。
+</div>
+
+<h3>进阶开关：把前台和后台分到两个端口（端口隔离）</h3>
+<p>
+除了安全等级，还有一个强烈推荐的开关 <code>web.api_port</code>。它做的事很简单：
+</p>
+<ul>
+  <li><b>前台端口（web.port）</b>：只提供网页 + 蜜罐诱饵，<b>不暴露任何真实接口</b>。任何 <code>/api/*</code> 请求到这里都当成诱饵处理。</li>
+  <li><b>后台端口（web.api_port）</b>：只提供真实 <code>/api/*</code> 接口，且需要令牌 + 人机验证。</li>
+  <li>两者<b>同一进程</b>，黑名单、登录票据、会话状态天然同步，不需要你额外做数据库或缓存。</li>
+</ul>
+<div class="card">
+  <p class="mono small" style="margin:0;white-space:pre-wrap">web:
+  port: 8080          # 前台（WebUI）端口：只给网页和诱饵
+  api_port: 8090      # 后台接口端口：只给真实 API（留空 = 与 port 合并）</p>
+</div>
+<div class="tip ok">
+  <span class="t">✅ 这样最直接的好处</span>
+  扫描者顺着公网端口摸进来的，永远是前台端口——他看到的每一个接口都是诱饵，
+  <b>连真实接口的路径都摸不到</b>。真实后台藏在另一个端口，且必须带正确令牌。
+  这也是为什么本方案文档<b>不列出真实接口名称</b>的根本原因。
+</div>
+
+<h3>如果某个项目想单独调整</h3>
+<p>在 <code>security:</code> 下面写上对应的名字，就会覆盖档位的默认值。例如
+  「我用 medium，但不想自动拉黑」：</p>
+<div class="card">
+  <p class="mono small" style="margin:0;white-space:pre-wrap">security:
+  level: medium
+  honeypot:
+    blacklist: false      # 只记录，不封禁</p>
+</div>
+<p class="muted">可单独覆盖的项：<code>silent_auth</code>（认证静默）、
+  <code>headers.enabled / server / csp</code>、
+  <code>human_check.enabled / difficulty / apply_to / bypass_whitelist</code>、
+  <code>honeypot.enabled / decoy_set / tarpit_ms / blacklist / blacklist_ttl /
+  log_body / unknown_api_decoy / auth_fail_blacklist / canary / evasion_detect / fake_404</code>。
+  没写到的项一律跟档位走。</p>
+
+<h3>白名单：你永远不会被自己封住</h3>
+<p>
+默认是 <code>127.0.0.1</code>，意思是"本机自己不被检查"。
+<b>内网地址（192.168.x.x、10.x.x.x、172.16~31.x.x）会自动豁免拉黑</b>，
+所以不用担心把自己或同事误封。如果你从公司局域网访问，也不用额外配置。
+</p>
+
+  <div class="tip danger">
+    <span class="t">🚫 唯一会让你被自己封住的情况</span>
+    你从<b>公网 IP</b> 访问后台，并且多次输错密码 / 触发了诱饵。
+    如果真被封了：<b>把那个 IP 加进 <code>whitelist_ips</code>，重启即可</b>；
+    或者直接在数据库里删掉 <code>ip_blacklist</code> 表的记录。
+  </div>
+
+<!-- ============================================================ -->
+<h2 id="c5">七、怎么确认它真的生效了</h2>
+
+<p>不需要懂编程，按顺序做这几步就行：</p>
+
+<ol>
+  <li><b>重启 ZCBOT</b>，在日志里搜 <code>安全</code>，应该能看到类似
+    <code>[安全] 等级=medium(标准（推荐）) … 人机验证=True</code> 和
+    <code>[蜜罐] … 已注册 125 个诱饵端点</code> 的提示。</li>
+  <li><b>用浏览器访问</b> <code>http://你的地址:8080/.env</code>。
+    如果看到一段像配置文件的文字（里面写着假的数据库密码），说明诱饵生效了。</li>
+  <li><b>访问</b> <code>http://前台地址:8080/任意乱打一串</code>（或任意 <code>/api/xxx</code>）。
+    如果返回的是一段看起来正常的 JSON / 假数据，而不是"404 找不到"，说明兜底与诱饵生效了。</li>
+  <li><b>打开浏览器开发者工具（F12）→ 网络（Network）</b>，刷新页面。
+    应该能看到 <code>challenge</code> 和 <code>challenge/verify</code> 两个请求 ——
+    这说明人机验证在正常工作。之后每个请求都会带一个 <code>X-ZC-Pass</code> 请求头。</li>
+  <li><b>在地址栏直接访问</b> 前台端口的任意 <code>/api/xxx</code>（不带票据）。
+    如果浏览器显示<b>空白 / 无法显示</b>而不是一段 JSON，说明「认证不对就不理」生效了
+    （端口隔离开启时，前台端口会把它当成诱饵探测并记录，而不是暴露真实接口）。</li>
+  <li><b>登录后台，进入「日志中心」</b>，应该能看到 <code>honeypot_hit</code> 的审计记录 ——
+    里面清楚写着谁、什么时候、访问了哪个诱饵、有没有做路径变形。</li>
+  <li><b>在任意请求的 Response Headers 里找</b> <code>Content-Security-Policy</code>。
+    能找到，说明安全响应头生效了。</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="c6">八、边界与注意事项（很重要）</h2>
+
+<p>任何安全措施都有适用范围。下面这些"丑话"，比上面所有内容都重要。</p>
+
+<h3>1. 蜜罐是会被识破的</h3>
+<p>
+安全圈有专门研究"怎么识别蜜罐"的红队。常见的破绽包括：
+<b>响应速度过于一致、文件内容和服务器类型对不上、一个"生产环境"却开着调试端点</b>等。
+所以我们的原则是"<b>宁可少、别做花</b>"，并且所有假数据都要前后一致（同一个假公司名、同一个假内网 IP 段），
+不要东一个西一个，否则一眼假。
+</p>
+
+<h3>2. 别把防护做成"自我攻击"</h3>
+<p>
+"拖延时间"这个手段有副作用：如果攻击者用海量请求打过来，每个请求都拖延，
+服务器的处理线程会被占满，<b>反而把正常用户挡在外面</b>（业内叫"自我拒绝服务"）。
+</p>
+<div class="tip ok">
+  <span class="t">我们的处理</span>
+  已经加了并发闸门：<b>同时被拖延的请求超过 16 个，就自动跳过拖延、直接放行</b>。
+  这样既保留了干扰效果，又不会把自己拖死。
+</div>
+
+<h3>3. 法律与合规边界</h3>
+<p>
+部署蜜罐在国内是<b>合法的被动防御手段</b>，但有几条红线不能碰：
+</p>
+<ul>
+  <li><b>不能反攻</b>：不能反过来去入侵攻击者的机器（那你自己就违法了）。</li>
+  <li><b>不能过度收集个人信息</b>：记录 IP、请求内容用于安全取证是合理的，但不要拿去滥用。</li>
+  <li><b>诱饵不能放真实数据</b>：如果蜜罐里放的是真实密码，那就不是防御，而是"自己制造泄露"。
+    我们的诱饵<b>全部是随机生成的假数据</b>，这点必须保持。</li>
+</ul>
+
+<h3>4. 混淆不是保险箱</h3>
+<p>
+前端代码终究要送到用户的浏览器里，<b>混淆只是让偷看变难，不是让偷看变成不可能</b>。
+真正不能外泄的东西（数据库密码、密钥），<b>绝对不能写在前端代码里</b>，
+必须放在后端。混淆只是最后一道"防顺手牵羊"的薄墙。
+</p>
+
+<h3>5. 安全是"叠加"，不是"替换"</h3>
+<p>
+这六道防线是<b>叠加</b>关系，不是"有了蜜罐就不用改密码了"。
+请务必同时做到：<b>改掉默认密码、后台只监听本机或内网、定期更新版本</b>。
+</p>
+
+<!-- ============================================================ -->
+<h2 id="c7">九、还建议你顺手做的事</h2>
+
+<p>下面这几件事我们<b>没有擅自帮你改</b>（怕影响你现有的使用），但强烈建议你确认一下：</p>
+
+<table>
+  <tr><th>项目</th><th>现状</th><th>建议</th><th>风险等级</th></tr>
+  <tr>
+    <td>HTTP API 的数据库开关</td>
+    <td><code>allow_db: true</code>（允许通过接口执行任意 SQL）</td>
+    <td>如果没在用，改成 <code>false</code></td>
+    <td><span class="tag red">高</span></td>
+  </tr>
+  <tr>
+    <td>HTTP 事件注入的令牌</td>
+    <td><code>token: ''</code>（空 = 不校验）</td>
+    <td>设一个随机字符串</td>
+    <td><span class="tag orange">中</span></td>
+  </tr>
+  <tr>
+    <td>默认管理员密码</td>
+    <td><code>admin / admin123</code></td>
+    <td>登录后立刻修改（对应案例 6）</td>
+    <td><span class="tag red">高</span></td>
+  </tr>
+  <tr>
+    <td>后台监听地址</td>
+    <td>当前 <code>127.0.0.1</code>（仅本机）</td>
+    <td>保持！除非确需外网访问，否则别改成 0.0.0.0</td>
+    <td><span class="tag green">已安全</span></td>
+  </tr>
+  <tr>
+    <td>HTTPS</td>
+    <td><code>ssl.enabled: false</code></td>
+    <td>有域名的话建议开启，防止密码在传输中被截</td>
+    <td><span class="tag orange">中</span></td>
+  </tr>
+</table>
+
+<div class="tip plain">
+  <span class="t">如果只能做一件事</span>
+  那就做这一件：<b>确保后台不要直接暴露在公网</b>。
+  案例 1 的作者说得最到位 —— 12 天 500 多次访问什么事都没有，
+  是因为里面全是假的；<b>但如果那台机器上真的挂着一个 .env，其中任何一次命中都是事故。</b>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="c8">十、小白词典</h2>
+
+<dl class="dict">
+  <dt>扫描器 / 扫描脚本</dt>
+  <dd>自动在互联网上挨个试地址的程序。它不认识你，也不针对你，只是"扫到谁算谁"。</dd>
+
+  <dt>蜜罐（Honeypot）</dt>
+  <dd>故意做成"看起来有价值"的假目标，专门用来吸引攻击者、并记录他的行为。就像警察设的诱饵车。</dd>
+
+  <dt>诱饵端点</dt>
+  <dd>"端点"就是网址。诱饵端点 = 那些假网址，比如 <code>/.env</code>。</dd>
+
+  <dt>Tarpit（拖拽 / 蜜罐拖延）</dt>
+  <dd>故意把回应速度放慢，让攻击者的扫描变慢。就像让对方陷在糖浆里。</dd>
+
+  <dt>人机验证 / 工作量证明（PoW）</dt>
+  <dd>让浏览器现场做一道"小算术题"才能进门。人能瞬间算完，不会执行 JavaScript 的脚本算不出来，
+    于是被挡在门外。叫"工作量证明"是因为它逼对方付出真实算力。</dd>
+
+  <dt>静默丢弃 / 444</dt>
+  <dd>收到不该理的请求时，<b>什么都不回</b>（连"错误"都不说），直接把连接关掉。
+    这是 nginx 的约定（444 = 不回应），比返回"密码错误"更让攻击者摸不着头脑。</dd>
+
+  <dt>canary（追踪串）</dt>
+  <dd>藏在每份诱饵文件里的唯一编号。将来某份"内部资料"泄露到网上，可以凭它反查
+    "是哪一次、哪个人、从哪个文件拿走的"。</dd>
+
+  <dt>路径变形 / 绕过</dt>
+  <dd>把 <code>/.env</code> 写成 <code>/.//.env</code>、<code>/%2eenv</code> 之类，
+    试图骗过服务器的路径匹配。会做这一步的说明已经上钩，属于高价值告警。</dd>
+
+  <dt>弱口令 / 爆破</dt>
+  <dd>弱口令 = 容易被猜到的密码。爆破 = 用一本密码字典，一条一条去试。</dd>
+
+  <dt>未授权访问</dt>
+  <dd>某个接口/页面本该要登录才能看，但忘了加验证，谁都能直接访问。案例 2、4、5 都是这个毛病。</dd>
+
+  <dt>安全响应头</dt>
+  <dd>服务器在回复网页时附带的"规则说明"，浏览器会照着执行。相当于给保安的规则清单。</dd>
+
+  <dt>指纹</dt>
+  <dd>服务器无意中暴露的"身份信息"，比如用的什么框架、什么版本。攻击者据此找对应漏洞。</dd>
+
+  <dt>JS 混淆</dt>
+  <dd>把前端代码变成"天书"，让人难以阅读和抄袭。是提高门槛，不是绝对保护。</dd>
+
+  <dt>拉黑 / 黑名单</dt>
+  <dd>把某个 IP 记进"不受欢迎名单"，之后它访问一律拒绝。</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2 id="c_modes">三种部署模式（部署前先看这一节）</h2>
+
+<p class="lead">ZCBOT 管理后台共有三种部署姿态，区别只在于「真实 API 落在哪个端口、WebUI 前端是否启动」。
+选错模式，要么把真实接口暴露在前台端口，要么想开 WebUI 却只起了 API。部署前先看这一节。</p>
+
+<div class="layer">
+  <div class="ln">模式对照</div>
+  <table>
+    <tr><th>模式</th><th>配置</th><th>WebUI 端口</th><th>API 端口</th><th>真实 /api/* 在哪</th><th>典型场景</th></tr>
+    <tr>
+      <td><b>① 单端口合并</b></td>
+      <td>不配 <code>api_port</code></td>
+      <td><code>web.port</code>（前端 + 诱饵）</td>
+      <td>同 <code>web.port</code></td>
+      <td>就在该端口（文档如实列出真实接口，<b>不伪装</b>）</td>
+      <td>纯内网 / 本机开发，攻击面小</td>
+    </tr>
+    <tr>
+      <td><b>② 双端口隔离</b></td>
+      <td><code>api_port</code> ≠ <code>port</code></td>
+      <td><code>web.port</code>（仅前端 + 诱饵，<b>无真实 API</b>）</td>
+      <td><code>web.api_port</code>（仅真实 /api/*）</td>
+      <td>只在 <code>api_port</code></td>
+      <td>WebUI 放公网、API 留内网（<b>推荐</b>）</td>
+    </tr>
+    <tr>
+      <td><b>③ 纯 API</b></td>
+      <td><code>ui_enabled: false</code></td>
+      <td><b>不启动</b></td>
+      <td><code>api_port</code>（未设则用 <code>web.port</code>）</td>
+      <td>只在 API 端口</td>
+      <td>只对外提供接口、不开放 WebUI</td>
+    </tr>
+  </table>
+</div>
+
+<h3>① 单端口合并（默认，兼容旧部署）</h3>
+<p>什么都不用改，<code>web.port</code> 一个端口既提供前端页面 + 蜜罐诱饵，也承载真实 <code>/api/*</code>。
+适合纯内网或本机使用。注意：此模式下前台端口就是真实接口端口，文档会如实列出端点，<b>不做伪装</b>——它靠的是六道防线（诱饵 / 静默 / 人机验证 / 拉黑）挡攻击，而不是藏端口。</p>
+
+<h3>② 双端口隔离（推荐用于任何外网暴露）</h3>
+<p>在 <code>config.yaml</code> 加一行 <code>web.api_port</code>（与 <code>web.port</code> 不同）：</p>
+<pre class="cfg">web:
+  port: 8080        # 前台：只给网页 + 蜜罐诱饵
+  api_port: 8090    # 后台：只给真实 /api/*（令牌 + 人机验证）</pre>
+<p>WebUI 端口命中任意 <code>/api/*</code> 一律按诱饵处理（记录 + 拉黑，不返回真实数据）；真实接口整批搬到 <code>api_port</code>。
+两者同进程，黑名单 / 票据 / 会话状态天然同步。详见下方「进阶：端口隔离」。</p>
+
+<h3>③ 纯 API 模式（不启动 WebUI）</h3>
+<p>在 <code>config.yaml</code> 设 <code>web.ui_enabled: false</code>：</p>
+<pre class="cfg">web:
+  ui_enabled: false   # 不启动 WebUI 前端与蜜罐
+  api_port: 8090      # 仅起 API 端口（未设则用 web.port）</pre>
+<p>本进程只提供真实 <code>/api/*</code>，不监听任何 WebUI 端口、不挂诱饵。
+适合「只开 API、不开后台」的纯接口部署（如给前端 / App / 第三方系统调用）。</p>
+
+<div class="tip plain">
+  <span class="t">小白怎么选</span>
+  <ul>
+    <li><b>只在局域网 / 本机用后台</b> → ① 单端口合并即可（公网摸不到）。</li>
+    <li><b>要让后台从公网访问</b> → ② 双端口隔离（把 WebUI 端口暴露出去、API 端口留在内网/反代背后）。</li>
+    <li><b>根本不打算开 WebUI、只对外提供 API</b> → ③ 纯 API（<code>ui_enabled: false</code>）。</li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="c9">进阶：端口隔离（把前台和后台放在两道门上）</h2>
+
+<p class="lead">这是整个方案里<b>最容易被忽略、却最能藏住攻击面</b>的一步。前面六道防线是"在同一扇门里做文章"；
+端口隔离则是<b>直接再开一扇门，把真东西挪过去</b>。</p>
+
+<div class="layer">
+  <div class="ln">进阶架构</div>
+  <h3>前台端口 vs 后台端口</h3>
+  <div class="analogy">
+    <b>打比方：</b>你家的<b>店面（前台端口）</b>对所有人敞开，里面摆着各种"样品"；
+    但真正的<b>金库（后台端口）</b>在另一个房间，只有拿着正确钥匙 + 做过现场验证的人才能进。
+    贼闯进店面，翻遍了也只能摸到样品。
+  </div>
+
+  <table>
+    <tr><th>端口</th><th>对外提供什么</th><th>攻击者打到这会得到</th></tr>
+    <tr>
+      <td><b>前台端口</b><br><code>web.port</code></td>
+      <td>网页静态文件 + 蜜罐诱饵</td>
+      <td>任意 <code>/api/*</code> 都被当成<b>诱饵</b>返回假数据；真实接口路径<b>完全不暴露</b></td>
+    </tr>
+    <tr>
+      <td><b>后台端口</b><br><code>web.api_port</code></td>
+      <td>仅真实 <code>/api/*</code> 接口</td>
+      <td>无令牌 → <b>444 静默丢弃</b>；有令牌但错 → 444；正确令牌 + 人机票据 → 正常响应</td>
+    </tr>
+  </table>
+
+  <h4>为什么这能"藏住端点"</h4>
+  <ol>
+    <li>扫描器从公网摸到的大概率是前台端口。而前台端口上<b>压根没有真实接口</b>，
+      它只能拿到诱饵——所以即便攻击者把路径猜个遍，也画不出真实接口的地图。</li>
+    <li>后台端口即使被摸到，也架着<b>人机验证 + 令牌 + 静默丢弃</b>三道防线，
+      没有合法票据的请求一律 444，连"这个接口存在吗"都判断不了。</li>
+    <li>两点<b>同一进程</b>：黑名单、登录票据、会话状态天然共享，<b>不用你配数据库、不用配缓存</b>，
+      重启一次就同步生效。</li>
+  </ol>
+
+  <div class="tip warn">
+    <span class="t">⚠️ 一个常见误解</span>
+    端口隔离<b>不等于</b>"把后台端口藏起来就安全了"。后台端口该上的令牌、人机验证、静默丢弃一样不能少。
+    它真正的价值是：<b>把"扫描者必然先撞上的前台"变成一座只有诱饵的空城</b>，
+    让真实接口从一开始就不出现在他的视野里。
+  </div>
+
+  <h4>要不要开？</h4>
+  <ul>
+    <li><b>不配置 <code>api_port</code></b>：前后台共用一个端口（兼容旧部署），真实接口和诱饵在同一端口。</li>
+    <li><b>配置 <code>api_port</code> 为另一个端口</b>：启用端口隔离，推荐用于任何需要外网访问后台的场景。</li>
+  </ul>
+  <div class="tip plain">
+    <span class="t">小白怎么判断自己需不需要</span>
+    如果你<b>只在局域网 / 本机</b>用后台，不开也行（本来就摸不到公网）。
+    如果你<b>要让后台从公网访问</b>，强烈建议开——这是把"端点暴露面"砍到最小的最便宜一步。
+  </div>
+</div>
+
+<footer>
+  ZCBOT 管理后台安全加固方案（小白版） · 2026-10-12<br>
+  文中案例均来自公开渠道，已标注来源链接；所有诱饵数据均为程序随机生成的假数据。
+</footer>
+
+</div>
+</body>
+</html>

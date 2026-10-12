@@ -19,6 +19,20 @@ class WebServer:
         web_cfg = framework.config.get('web', {})
         self.host = web_cfg.get('host', '0.0.0.0')
         self.port = web_cfg.get('port', 8080)
+        # 端口隔离：api_port 非空且不同 → 另起一个服务只跑 /api/*
+        # 两者同进程，共享黑名单 / 票据 / 会话状态（天然同步）
+        self.api_port = int(web_cfg.get('api_port', 0) or 0)
+        self.split_ports = bool(self.api_port) and self.api_port != self.port
+        # 纯 API 模式：ui_enabled=false → 不启动 WebUI 端口，仅起 API 监听
+        _ui_raw = web_cfg.get('ui_enabled', True)
+        if isinstance(_ui_raw, bool):
+            self.ui_enabled = _ui_raw
+        elif isinstance(_ui_raw, str):
+            self.ui_enabled = str(_ui_raw).strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+        else:
+            self.ui_enabled = bool(_ui_raw)
+        self.api_only = not self.ui_enabled
+        self.api_listen = self.api_port if self.api_port else self.port
         # SSL：与 OneBot WSS 共用 config['ssl']；证书路径支持相对/绝对。
         # waitress 不支持 TLS，故启用 SSL 时改用 werkzeug（支持 ssl_context）。
         self.ssl_context = None
@@ -29,33 +43,89 @@ class WebServer:
         self.scheme = 'https' if self.ssl_context else 'http'
         self._thread = None
         self._server = None
+        self._api_thread = None
+        self._api_server = None
         self._running = False
 
     def start(self):
         """启动 Web 服务器"""
         self._running = True
+        if self.api_only:
+            # 纯 API 模式：只起 API 监听，不启动 WebUI 前端端口
+            self._api_thread = threading.Thread(
+                target=self._run_api, daemon=True, name="api-server")
+            self._api_thread.start()
+            logger.info(f"[纯API模式] 仅 API 已启动: {self.scheme}://{self.host}:{self.api_listen}"
+                        f"（未启动 WebUI 前端）")
+            return
         self._thread = threading.Thread(target=self._run, daemon=True, name="web-server")
         self._thread.start()
         logger.info(f"Web UI 已启动: {self.scheme}://{self.host}:{self.port}")
+        if self.split_ports:
+            self._api_thread = threading.Thread(
+                target=self._run_api, daemon=True, name="api-server")
+            self._api_thread.start()
+            logger.info(f"API 已独立监听: {self.scheme}://{self.host}:{self.api_port}"
+                        f"（WebUI 端口不再提供真实 API）")
+
+    def _run_api(self):
+        """API 端口的独立服务（与 WebUI 同进程，状态天然同步）"""
+        try:
+            from waitress.server import create_server as waitress_create_server
+            try:
+                self._api_server = waitress_create_server(
+                    self.app, host=self.host, port=self.api_listen, threads=8, ident='web')
+            except TypeError:
+                self._api_server = waitress_create_server(
+                    self.app, host=self.host, port=self.api_listen, threads=8)
+            self._api_server.run()
+        except Exception as e:
+            self._api_server = None
+            logger.error(f"[端口隔离] API 端口 {self.api_port} 启动失败: {e}")
 
     def _run(self):
         """运行 Web 服务器（保存 server 句柄，供 stop() 真正停止并释放端口）"""
+        # 指纹隐藏：Server 头统一为一个中性标识（留空则用 'web'，避免暴露 waitress/werkzeug）
+        # 生效值来自 security.level 档位解析（headers.enabled=false 时同样不暴露真实服务器名）
+        try:
+            from framework.api.security_levels import resolve as _resolve_security
+            _hdr = _resolve_security(self.framework.config.get('security'))['headers']
+            _ident = str(_hdr.get('server', '') or '') or 'web'
+        except Exception:
+            _ident = 'web'
         try:
             if self.ssl_context is not None:
                 # HTTPS：waitress 不支持 TLS，使用 werkzeug 的 ssl_context
-                from werkzeug.serving import make_server
+                from werkzeug.serving import make_server, WSGIRequestHandler
+
+                class _QuietHandler(WSGIRequestHandler):
+                    def version_string(self):
+                        return _ident
+
                 self._server = make_server(self.host, self.port, self.app,
-                                           threaded=True, ssl_context=self.ssl_context)
+                                           threaded=True, ssl_context=self.ssl_context,
+                                           request_handler=_QuietHandler)
                 self._server.serve_forever()
                 return
             try:
                 from waitress.server import create_server as waitress_create_server
-                self._server = waitress_create_server(
-                    self.app, host=self.host, port=self.port, threads=8)
+                try:
+                    self._server = waitress_create_server(
+                        self.app, host=self.host, port=self.port, threads=8, ident=_ident)
+                except TypeError:
+                    # 旧版 waitress 不支持 ident：回退为默认参数
+                    self._server = waitress_create_server(
+                        self.app, host=self.host, port=self.port, threads=8)
                 self._server.run()
             except ImportError:
-                from werkzeug.serving import make_server
-                self._server = make_server(self.host, self.port, self.app)
+                from werkzeug.serving import make_server, WSGIRequestHandler
+
+                class _QuietHandler(WSGIRequestHandler):
+                    def version_string(self):
+                        return _ident
+
+                self._server = make_server(self.host, self.port, self.app,
+                                           request_handler=_QuietHandler)
                 self._server.serve_forever()
         except Exception as e:
             self._server = None
@@ -82,6 +152,22 @@ class WebServer:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
         self._thread = None
+
+        # 端口隔离：一并停掉 API 端口
+        if self.split_ports:
+            asrv = self._api_server
+            self._api_server = None
+            if asrv is not None:
+                try:
+                    if hasattr(asrv, 'close'):
+                        asrv.close()
+                    elif hasattr(asrv, 'shutdown'):
+                        asrv.shutdown()
+                except Exception as e:
+                    logger.warning(f"API 服务器关闭异常: {e}")
+            if self._api_thread and self._api_thread.is_alive():
+                self._api_thread.join(timeout=5)
+            self._api_thread = None
         logger.info("Web UI 已停止")
 
 

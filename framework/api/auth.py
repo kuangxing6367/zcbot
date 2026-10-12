@@ -14,6 +14,7 @@ logger = logging.getLogger('zcbot')
 def register(ctx):
     app = ctx.app
     db = ctx.db
+    framework = ctx.framework
     dual_auth = ctx.dual_auth
     require_auth = ctx.require_auth
     require_super = ctx.require_super
@@ -169,8 +170,38 @@ def register(ctx):
     @app.route('/api/security/status', methods=['GET'])
     @require_super
     def security_status():
-        """查看双请求认证系统状态（风险 IP / 黑名单 / 配置）"""
-        return jsonify({'code': 0, 'data': dual_auth.get_status()})
+        """查看安全系统状态（等级 / 风险 IP / 黑名单 / 蜜罐命中画像）"""
+        from framework.api import honeypot as _hp
+        from framework.api.security_levels import resolve as _resolve, all_levels
+        data = dual_auth.get_status()
+        sec = _resolve(framework.config.get('security'))
+        data['security_level'] = sec['level']
+        data['security_level_label'] = sec['level_label']
+        data['effective'] = sec
+        data['honeypot'] = _hp.get_stats()
+        data['levels'] = all_levels()
+        return jsonify({'code': 0, 'data': data})
+
+    @app.route('/api/security/honeypot', methods=['GET'])
+    @require_super
+    def security_honeypot():
+        """蜜罐命中统计；带 ?canary=xxx 可反查该追踪串对应的访问记录"""
+        from framework.api import honeypot as _hp
+        data = _hp.get_stats()
+        canary = str(request.args.get('canary') or '').strip()
+        if canary:
+            data['canary_lookup'] = _hp.lookup_canary(canary)
+        return jsonify({'code': 0, 'data': data})
+
+    @app.route('/api/security/honeypot/reset', methods=['POST'])
+    @require_super
+    def security_honeypot_reset():
+        """重置蜜罐命中统计"""
+        from framework.api import honeypot as _hp
+        admin = request.admin
+        _hp.reset_stats()
+        audit_log(admin['id'], admin['username'], 'honeypot_stats_reset', 'security')
+        return jsonify({'code': 0, 'msg': '蜜罐统计已重置'})
 
     @app.route('/api/security/blacklist', methods=['GET'])
     @require_super

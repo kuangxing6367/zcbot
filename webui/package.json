@@ -16,6 +16,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.1.2",
+    "javascript-obfuscator": "^4.2.2",
+    "terser": "^5.51.2",
     "vite": "^5.4.2"
   }
 }
