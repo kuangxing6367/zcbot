@@ -11,6 +11,16 @@
   · 登录失败文案统一（防用户名枚举）
   · 数据库文件下载对普通管理员 403
 
+注意：本测试验证的是「应用层」401/403 鉴权契约（认证是否生效、角色隔离是否生效）。
+框架默认安全档位为 medium，其中 silent_auth 与 human_check 会让未携带通行票据 /
+认证失败的请求被「静默丢弃」为 444（nginx 约定，扫描器拿不到任何反馈）——那是
+网络层防护，由 tests/smoke_webui_security.py 另测。为避免两种语义混淆，本 fixture
+显式关闭两项主动防御（silent_auth / human_check），从而稳定断言 401/403 行为。
+
+⚠️ 不要用 `security.level: off` 来关闭：YAML 会把 `off` 解析成布尔 False，
+normalize_level(False) 得不到合法档位会回落为默认 medium（仍静默丢弃），导致本测试
+继续拿到 444。故这里走「逐键显式覆盖」：`silent_auth: false` + `human_check.enabled: false`。
+
 实现说明：用真实 Framework（SQLite，全新临时库，core_plugins 全关）初始化，
 仅 Framework() 不 start()，避免拉起网络/等待线程（CI 友好）；init_db 在建表时
 会插入默认 admin/super 账号（admin/admin123），本测试再插入一个普通管理员与一个
@@ -42,6 +52,10 @@ def _write_config(tmp):
             "database:\n  type: sqlite\n  path: {db}\n"
             "plugin:\n  heartbeat_interval: 60\n"
             "log:\n  level: ERROR\n"
+            # 关闭主动防御（silent_auth / human_check 默认会把未认证请求静默丢弃为 444），
+            # 让本测试稳定断言「应用层」401/403 鉴权契约；444 静默逻辑另由 smoke 测试覆盖。
+            # 注意：用 security.level: off 不行——YAML 会把 off 解析成布尔 False 并回落 medium。
+            "security:\n  silent_auth: false\n  human_check:\n    enabled: false\n"
             "web:\n  host: 127.0.0.1\n  port: 0\n"
             "core_plugins:\n"
             "  onebot_adapter: false\n  webui: false\n  http_api: false\n"
