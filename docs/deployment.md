@@ -143,11 +143,58 @@ location / {
     proxy_pass http://127.0.0.1:8080;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For $remote_addr;
 }
 ```
 
 WebSocket 反向连接端口（6830）按需单独放行或代理（需要 `Upgrade` 头）。
+
+:::warning 为什么这里必须覆盖式写 XFF
+`security.trusted_proxies` 一旦非空，框架的 `get_client_ip()` 就取 `X-Forwarded-For` 的
+**第一段**。而 nginx 的 `$proxy_add_x_forwarded_for` 是**追加**——客户端自带的 XFF 会留在最
+左边。攻击者只要发一个 `X-Forwarded-For: 127.0.0.1`，就能让风控把攻击者识别成本机/内网 IP
+（内网 IP 自动豁免拉黑）。所以面向公网的那一跳必须用 `$remote_addr` **覆盖**。
+:::
+
+## FRP 内网穿透
+
+FRP **自己不会写 `X-Forwarded-For`**：frps 的 `vhostHTTP` 只是把流量转给 frpc，frpc 再转给本地
+端口，链路上没人补这个头。结果是所有请求的 `remote_addr` 都是 `127.0.0.1`，框架的 IP 风控
+（登录限速、黑名单、蜜罐命中、审计日志）全部失效。
+
+标准拓扑是「公网先进一层 Nginx，再入 FRP」：
+
+```text
+用户 ──HTTPS──> 公网 Nginx ──> frps ──> frpc ──> ZCBOT (127.0.0.1:8080)
+                    └─ 这一跳写真实客户端 IP（覆盖式）
+```
+
+**① 公网 Nginx**
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name zcbot.example.com;
+    location / {
+        proxy_pass http://127.0.0.1:<frps 监听端口>;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+}
+```
+
+**② 框架 `config.yaml`**
+
+```yaml
+security:
+  whitelist_ips: []           # 不要再留 127.0.0.1：FRP 下所有请求都是它，留它等于全网免检
+  trusted_proxies:
+    - "127.0.0.1"             # frpc 与框架同机；不同机/容器则填那台的内网 IP
+```
+
+**③ 验证**：从外网访问一次后，看审计日志 / `/api/security/honeypot`（需 super）/ `ip_blacklist`
+表里记的是不是真实来源 IP，而不是 `127.0.0.1`。
 
 ## 多账号部署
 
