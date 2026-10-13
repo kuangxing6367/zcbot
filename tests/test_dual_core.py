@@ -232,6 +232,65 @@ def test_event_batch_roundtrip():
         server.close()
 
 
+# ── 5. 跨进程事务 op 分派（回归：元数据 / 批量 / 池状态） ──────
+
+def test_remote_tx_run_all_ops():
+    """RemoteTxManager.run 必须覆盖 db.* 的全部 op。
+
+    旧实现固定签名 (tx_id, op, sql, params=None) 且 op 分派缺 table_* / pool_status：
+    事务内调用 table_exists / table_info / table_has_column / pool_status 会 TypeError，
+    execute_many 会因多出 params_list 而 TypeError。本用例逐项回归。
+    """
+    import sqlite3
+    import tempfile
+    from framework.ipc.remote_tx import RemoteTxManager
+
+    class _Db:
+        db_type = 'sqlite'
+
+        @property
+        def pool_status(self):
+            return {'pool': 'stub'}
+
+    d = tempfile.mkdtemp(prefix='txtest_')
+    path = os.path.join(d, 'tx.db')
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+    c.commit()
+    c.close()
+
+    db = _Db()
+    db._db_path = path
+    mgr = RemoteTxManager(db)
+    tx = mgr.begin()
+    try:
+        assert mgr.run(tx, 'table_exists', table_name='t') is True
+        assert mgr.run(tx, 'table_exists', table_name='nope') is False
+        info = mgr.run(tx, 'table_info', table_name='t')
+        assert any(r.get('name') == 'name' for r in info), info
+        assert mgr.run(tx, 'table_has_column', table_name='t', column_name='name') is True
+        assert mgr.run(tx, 'table_has_column', table_name='t', column_name='zzz') is False
+        assert mgr.run(tx, 'pool_status') == {'pool': 'stub'}
+        n = mgr.run(tx, 'execute_many', sql="INSERT INTO t (name) VALUES (%s)",
+                    params_list=[('a',), ('b',), ('c',)])
+        assert n == 3, n
+        assert mgr.run(tx, 'count', sql="SELECT COUNT(*) FROM t") == 3
+        assert mgr.run(tx, 'exists', sql="SELECT 1 FROM t WHERE name=%s", params=('a',)) is True
+        assert mgr.run(tx, 'scalar', sql="SELECT name FROM t WHERE id=%s", params=(1,)) == 'a'
+        assert mgr.run(tx, 'insert', sql="INSERT INTO t (name) VALUES (%s)", params=('d',)) == 4
+        mgr.commit(tx)
+    except Exception:
+        try:
+            mgr.rollback(tx)
+        except Exception:
+            pass
+        raise
+    c = sqlite3.connect(path)
+    cnt = c.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+    c.close()
+    assert cnt == 4, cnt
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

@@ -139,8 +139,10 @@ def register_tx_handlers(server, tx):
     async def _begin():
         return await asyncio.to_thread(tx.begin)
 
-    async def _run(tx_id, op, sql, params=None):
-        return await asyncio.to_thread(tx.run, tx_id, op, sql, params)
+    async def _run(tx_id, op, **kw):
+        # 透传方法各自的 kwargs（与 db.* 路径一致）：sql/params/params_list/
+        # table_name/column_name 等，由 RemoteTxManager.run 按 op 分派
+        return await asyncio.to_thread(tx.run, tx_id, op, **kw)
 
     async def _commit(tx_id):
         return await asyncio.to_thread(tx.commit, tx_id)
