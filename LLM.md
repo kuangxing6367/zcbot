@@ -9,7 +9,7 @@
 - **官方插件默认全部 `enabled: false`**(发现即禁用),需显式启用:`core_plugins.yaml` 改 true 或 `python tools/scan_core_plugins.py --enable <名>`
 - 数据在 `data/`(db/logs/plugins_dat),代码目录更新会被覆盖,数据禁止写代码目录
 - 配置两份:`config.yaml`(全局) + `core_plugins.yaml`(官方插件开关,启动自动同步)
-- 适用版本 v1.8.2;文档站 docs/(VitePress)
+- 适用版本 v1.8.7;文档站 docs/(VitePress);可 pip 安装(`pip install zcbot`,入口 `zcbot`,状态落 `~/.zcbot`)
 
 ## 内核设计哲学
 
