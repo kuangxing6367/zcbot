@@ -37,7 +37,7 @@ export default defineConfig({
       { text: '进阶', link: '/advanced/architecture', activeMatch: '/advanced/' },
       { text: '品牌标识', link: '/brand/', activeMatch: '/brand/' },
       { text: '更新日志', link: 'https://gitee.com/liquanfeng123/zcbot/blob/main/CHANGELOG.md' },
-      { text: 'GitHub', link: 'https://gitee.com/liquanfeng123/zcbot' }
+      { text: 'Gitee', link: 'https://gitee.com/liquanfeng123/zcbot' }
     ],
 
     sidebar: {
