@@ -618,7 +618,7 @@ def test_host_log_relay_batch_compat():
 
 
 def test_bind_ipc_dispatch():
-    """事件分发替换：fw.dispatch_event → IPC 推送到宿主"""
+    """事件分发替换：fw.dispatch_event → 攒批后 IPC 推送到宿主"""
     from framework.ipc.core_services import bind_ipc_dispatch
 
     class _Srv:
@@ -628,12 +628,21 @@ def test_bind_ipc_dispatch():
         async def asend_event(self, event):
             self.sent.append(event)
 
+        async def asend_event_batch(self, events):
+            self.sent.extend(events)
+
     srv = _Srv()
     fw = _FakeFramework()
     fw.dispatch_event = None
     bind_ipc_dispatch(srv, fw)
     assert fw.dispatch_event is not None
-    asyncio.run(fw.dispatch_event({'type': 'x'}))
+
+    async def _run():
+        await fw.dispatch_event({'type': 'x'})
+        # 批量优化：单条事件先在缓冲中，flush 后才推送（满批/到窗口亦自动 flush）
+        await fw._ipc_event_batcher.flush()
+
+    asyncio.run(_run())
     assert srv.sent == [{'type': 'x'}]
 
 
