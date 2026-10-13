@@ -3,7 +3,7 @@
 > **通用化 IM 平台**：不绑定任何聊天协议——能接 QQ、Telegram、Discord，也能不接平台，只跑定时任务或收 HTTP 事件。
 > 需要哪种能力就启用对应的扩展，业务写在自己的插件里。
 
-**当前正式版：v1.8.3** ｜ 预发布：**v1.8.5-alpha.1** ｜ [CHANGELOG.md](CHANGELOG.md)
+**当前版本：v1.8.7** ｜ [CHANGELOG.md](CHANGELOG.md) ｜ [PyPI](https://pypi.org/project/zcbot/)
 
 - 项目地址：https://github.com/kuangxing6367/zcbot
 - 官方扩展仓库：https://github.com/kuangxing6367/zcbot_plugins
@@ -13,6 +13,17 @@
 ---
 
 ## 一分钟跑起来
+
+**方式 A · pip（推荐）**
+
+```bash
+pip install zcbot
+zcbot
+```
+
+配置与数据落在 `~/.zcbot`（可用环境变量 `ZCBOT_HOME` 指定其它目录）。
+
+**方式 B · 源码**
 
 ```bash
 git clone https://github.com/kuangxing6367/zcbot.git
