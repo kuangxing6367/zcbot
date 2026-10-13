@@ -38,7 +38,7 @@
 - **WebUI 端口隔离（双端口模式）**：`config.yaml` 的 `web.api_port` 可配置独立 API 端口。设置后，**WebUI 端口只提供前端页面 + 蜜罐诱饵，不再暴露任何真实 `/api/*`**；真实 API 全部搬到 `api_port`。两者同进程，黑名单 / 人机验证票据 / 会话状态天然同步——适合把 WebUI 端口暴露在公网、API 端口留在内网的部署。
   - 路由层 `_port_split_guard` 在 WebUI 端口命中 `/api/*` 时一律按诱饵处理；`webserver.py` 另起一个同进程线程只跑真实 API。
 - **纯 API 模式（`web.ui_enabled: false`）**：只起 API 端口（取 `web.api_port`，未设则用 `web.port`），**完全不启动 WebUI 前端 / 蜜罐**，本进程只提供真实 `/api/*`。适合「只开 API、不开 WebUI」的纯接口部署。
-- **三种部署模式**正式确立并写入文档（`webui-security-plan.html`）：
+- **三种部署模式**正式确立并写入文档：
   1. **单端口合并**（不配 `api_port`）：WebUI + 真实 API + 诱饵同端口（文档仍标注真实接口，不伪装）；
   2. **双端口隔离**（`api_port` 与 `web.port` 不同）：WebUI 端口无真实 API、API 端口专属真实接口；
   3. **纯 API**（`ui_enabled=false`）：仅 API 端口，无 WebUI。
@@ -47,9 +47,20 @@
 - **安全等级体系（`security.level`）**：`off / low / medium / high / paranoid` 五档统管蜜罐诱饵集、tarpit 延迟、自动拉黑、安全响应头、Server 指纹隐藏、JS 人机验证、认证静默丢弃；单项（honeypot / headers / human_check）仍可显式覆盖，显式值优先。
 
 ### 修复 / 文档
-- 修正 `webui-security-plan.html` 等文档：此前暴露了 WebUI 的 API 端点结构；现已明确「WebUI 端口不绑定真实 API、真实 API 是独立端口」的设计，并补齐三种部署模式说明与端点清单。
+- 修正安全相关文档：此前暴露了 WebUI 的 API 端点结构；现已明确「WebUI 端口不绑定真实 API、真实 API 是独立端口」的设计，并补齐三种部署模式说明。
 - 默认管理员账号 `admin/admin123` 仅在隔离/首次初始化时播种；密码以 bcrypt（`gensalt(12)`）存储于 `admin_users` 表，随机密码注入即覆盖该哈希。
 - `framework/config.py` 支持 `ZCBOT_CORE_PLUGINS_YAML` 环境变量覆盖 `core_plugins.yaml` 路径（默认仍读仓库根目录，行为不变）。
+
+### 重发补充（2026-10-13）
+
+> 本版 tag 曾因随附一份内部安全方案文档而撤回；以下为清理与后续改进，重发同一版本号。
+
+- **移除内部文档 `webui-security-plan.html`**：该文件含完整防御设计（静默丢弃 / 人机 PoW / 蜜罐 canary / 双请求防破解 / 各档位配置键 / 三种部署模式），属内部「作战手册」，不应随公开仓库外传。已从工作树移除，并删除/重打旧 tag。
+- **反向代理下获取真实客户端 IP（文档 + 配置）**：`security.trusted_proxies` 说明；`docs/deployment.md` 新增「FRP 内网穿透」小节；反向代理示例的 `X-Forwarded-For` 由追加式 `$proxy_add_x_forwarded_for` 改为覆盖式 `$remote_addr`（`get_client_ip` 取 XFF 第一段，追加式会被客户端伪造绕过风控）。
+- **双核心 IPC 性能优化**：
+  - `acall` 原生异步化：`asyncio.Future` 直挂 pending，去掉 `asyncio.to_thread` 线程池跳转（单次往返约 132µs → 88µs）。
+  - core→host **事件批量传输**（新增 `_EventBatcher`）：满 `event_batch_max`=64 条或到 `event_batch_delay_ms`=5ms 即 flush；基准 `tools/bench_db_path.py` 显示把「每事件一帧」降为「每批一帧」，N=2000 时 87µs/次 → 1.1µs/次（约 80×）。
+  - 新增配置 `dual_process.event_batch_max` / `event_batch_delay_ms`；新增基准脚本 `tools/bench_db_path.py`。
 
 ## v1.8.5-alpha.1（2026-10-10）
 
