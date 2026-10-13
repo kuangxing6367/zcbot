@@ -190,6 +190,13 @@ class CoreRuntime:
                 self.host_proc.join(5)
             except Exception:
                 pass
+        # 冲刷在途事件批次（关停前落最后一帧，避免窗口内事件丢失）
+        batcher = getattr(self.framework, '_ipc_event_batcher', None)
+        if batcher is not None:
+            try:
+                await batcher.flush()
+            except Exception:
+                pass
         if self.server is not None:
             self.server.close()
         try:

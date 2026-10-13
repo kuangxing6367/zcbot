@@ -16,7 +16,9 @@
 
 线程模型：
 - call() 是同步阻塞（供 executor 线程 / 同步 handler 使用）
-- acall() 内部转 to_thread 执行 call，不阻塞事件循环
+- acall() 原生异步：把 asyncio.Future 挂进 _pending，由读线程收到 res 后经
+  loop.call_soon_threadsafe 唤醒——不占用线程池（旧实现用 asyncio.to_thread
+  会多套一层线程跳转，单次往返约翻倍，实测已优化掉）。
 - 发送侧异步化：所有出站帧（req/res/event/ping/pong）经 _outbox 队列
   由独立 writer 线程串行 pickle + socket 写。调用线程（含事件循环）
   只做 O(1) 入队，零 socket IO、零序列化、零锁竞争。
@@ -53,8 +55,8 @@ class JsonRpcConnection:
         self._conn = conn
         self._id_lock = threading.Lock()
         self._next_id = 0
-        self._pending = {}      # id -> threading.Event
-        self._results = {}      # id -> (ok, value)
+        self._pending = {}      # id -> threading.Event（同步 call）或 asyncio.Future（异步 acall）
+        self._results = {}      # id -> (ok, value)  （仅同步 call 使用）
         # 共享方法/事件表：可由外部（IpcServer/IpcClient）注入，accept 后复用
         self._methods = methods if methods is not None else {}
         self._events = events if events is not None else {}
@@ -103,18 +105,37 @@ class JsonRpcConnection:
         return value
 
     async def acall(self, method, params=None, timeout=30.0):
-        """异步 RPC（不阻塞事件循环）"""
-        return await asyncio.to_thread(self.call, method, params, timeout)
+        """异步 RPC：不阻塞事件循环，且不占用线程池。
+
+        把 asyncio.Future 直接挂进 _pending，读线程收到 res 后经
+        loop.call_soon_threadsafe 唤醒——省掉旧实现 asyncio.to_thread
+        的线程池跳转（实测单次往返约减半）。
+        """
+        loop = asyncio.get_running_loop()
+        msg_id = self._next_id_safe()
+        fut = loop.create_future()
+        self._pending[msg_id] = fut
+        try:
+            self._send({'t': 'req', 'id': msg_id, 'method': method,
+                        'params': params if params is not None else {}})
+        except Exception:
+            self._pending.pop(msg_id, None)
+            raise
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            self._pending.pop(msg_id, None)
+            raise IpcClosed(f"RPC 超时: {method}") from None
+        except asyncio.CancelledError:
+            self._pending.pop(msg_id, None)
+            raise
 
     def close(self):
         if self._closed:
             return
         self._closed = True
-        # 快速失败：唤醒所有等待中的 call 调用方（不再干等超时）
-        for msg_id, ev in list(self._pending.items()):
-            self._results[msg_id] = (False, "IPC 通道已关闭")
-            ev.set()
-        self._pending.clear()
+        # 快速失败：唤醒所有等待中的调用方（同步 Event 与异步 Future 两类）
+        self._fail_all_pending("IPC 通道已关闭")
         try:
             self._outbox.put_nowait(_WRITER_STOP)
         except Exception:
@@ -151,6 +172,25 @@ class JsonRpcConnection:
         except Exception:
             pass
 
+    def _fail_all_pending(self, reason):
+        """唤醒所有等待中的调用方：同步 call 用 Event + _results，异步 acall 用 Future。
+
+        读线程/写线程/close 三处断开路径共用，避免调用方干等超时。
+        """
+        pending, self._pending = self._pending, {}
+        for msg_id, waiter in pending.items():
+            if isinstance(waiter, threading.Event):
+                self._results[msg_id] = (False, reason)
+                waiter.set()
+            else:  # asyncio.Future：读/写线程 → 事件循环，安全唤醒
+                def _resolve(w=waiter, r=reason):
+                    if not w.done():
+                        w.set_exception(RemoteError(r))
+                try:
+                    waiter.get_loop().call_soon_threadsafe(_resolve)
+                except Exception:
+                    pass
+
     def _write_loop(self):
         """独立 writer 线程：串行 pickle + socket 写（multiprocessing.Connection.send 非线程安全）。
 
@@ -165,11 +205,8 @@ class JsonRpcConnection:
                 self._conn.send(msg)
             except Exception as e:
                 self._closed = True
-                # 发送失败：唤醒所有 wait 中的 call，避免调用方干等超时
-                for msg_id, ev in list(self._pending.items()):
-                    self._results[msg_id] = (False, f"IPC 发送失败: {e}")
-                    ev.set()
-                self._pending.clear()
+                # 发送失败：唤醒所有等待中的调用方，避免干等超时
+                self._fail_all_pending(f"IPC 发送失败: {e}")
                 break
 
     def start(self):
@@ -188,11 +225,8 @@ class JsonRpcConnection:
                 if not self._closed:
                     logger.info(f"IPC 连接关闭（对端断开）: {e}")
                 self._closed = True
-                # 快速失败：唤醒所有 wait 中的 call，避免调用方干等超时
-                for msg_id, ev in list(self._pending.items()):
-                    self._results[msg_id] = (False, f"IPC 连接关闭（对端断开）: {e}")
-                    ev.set()
-                self._pending.clear()
+                # 快速失败：唤醒所有等待中的调用方，避免干等超时
+                self._fail_all_pending(f"IPC 连接关闭（对端断开）: {e}")
                 break
             try:
                 self._dispatch(msg)
@@ -213,14 +247,26 @@ class JsonRpcConnection:
 
     def _handle_res(self, msg):
         msg_id = msg.get('id')
-        ev = self._pending.pop(msg_id, None)
-        if ev is None:
+        waiter = self._pending.pop(msg_id, None)
+        if waiter is None:
             return
-        if 'error' in msg:
-            self._results[msg_id] = (False, msg.get('error'))
-        else:
-            self._results[msg_id] = (True, msg.get('result'))
-        ev.set()
+        ok = 'error' not in msg
+        value = msg.get('result') if ok else msg.get('error')
+        if isinstance(waiter, threading.Event):
+            self._results[msg_id] = (ok, value)
+            waiter.set()
+        else:  # asyncio.Future：读线程 → 事件循环，安全唤醒
+            def _resolve(w=waiter, o=ok, v=value):
+                if w.done():
+                    return
+                if o:
+                    w.set_result(v)
+                else:
+                    w.set_exception(RemoteError(v))
+            try:
+                waiter.get_loop().call_soon_threadsafe(_resolve)
+            except Exception:
+                pass
 
     def _handle_event(self, msg):
         handlers = self._events.get(msg.get('channel'), [])

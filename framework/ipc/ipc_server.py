@@ -109,6 +109,17 @@ class IpcServer:
             raise IpcClosed("宿主未连接，事件丢弃")
         self.conn.notify('event', event)
 
+    async def asend_event_batch(self, events: list):
+        """批量推送事件到宿主（一次帧承载多条，减少帧数与序列化次数）。
+
+        信封为 {'batch': [...]}；宿主侧新旧格式都能收（单条 dict 亦兼容）。
+        """
+        if not events:
+            return
+        if not self.connected:
+            raise IpcClosed("宿主未连接，事件丢弃")
+        self.conn.notify('event', {'batch': list(events)})
+
     def close(self):
         self._closed = True
         if self.conn is not None:
