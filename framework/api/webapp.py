@@ -643,7 +643,7 @@ def create_web_app(framework) -> Flask:
     from framework.api import (
         auth, admins, apikeys, dashboard, plugins, commands, users_groups, tasks,
         logs, config, db_gateway, framework_ops, webui, files, stats, perm_api,
-        static_routes, honeypot,
+        static_routes, session_tokens, honeypot,
     )
     auth.register(ctx)
     admins.register(ctx)
@@ -661,6 +661,9 @@ def create_web_app(framework) -> Flask:
     files.register(ctx)
     stats.register(ctx)
     perm_api.register(ctx)
+    # 会话令牌：默认关闭（security.session_tokens.enabled），开启后才注册握手端点与闸门。
+    # 必须早于蜜罐注册 —— 蜜罐的 /api/<path> 兜底会吃掉未匹配的路径。
+    session_tokens.register(ctx)
     static_routes.register(ctx)
     # 蜜罐最后注册：其兜底规则权重最低，仅在无真实路由匹配时生效
     honeypot.register(ctx)
