@@ -176,9 +176,81 @@ def register_host_log_relay(server):
     server.on('log', _on_host_log)
 
 
+class _EventBatcher:
+    """核心→宿主事件攒批：满 max_batch 条、或到 max_delay 秒即 flush。
+
+    基准结论：core→host 的瓶颈是「每事件一帧」的帧数与序列化，批量传输是主收益
+    （见 tools/bench_db_path.py：批量把 2000 帧降到 8 帧，58~80x）。这里把事件攒批，
+    一次 notify 携带 {'batch': [...]}，宿主侧新旧格式都能收（同 host_log 的做法）。
+
+    - max_batch <= 1 → 退化为逐条（保持旧行为，可配置关闭）。
+    - flush 定时任务在首个事件到达时（已处于运行中的事件循环）惰性启动。
+    - wait=True 的事件不参与攒批，立即 flush 后单独发，避免被窗口延迟。
+    """
+
+    def __init__(self, server, max_batch=64, max_delay=0.005):
+        self._server = server
+        self._max_batch = max(1, int(max_batch))
+        self._max_delay = max(0.0, float(max_delay))
+        self._buf = []
+        self._task = None
+
+    async def push(self, event, wait: bool = False):
+        if self._max_batch <= 1:
+            await self._server.asend_event_batch([event])
+            return
+        if wait:
+            # 同步语义事件：先冲刷在途批次，再单独发，保证不被窗口延迟
+            await self.flush()
+            await self._server.asend_event_batch([event])
+            return
+        self._ensure_flush_task()
+        self._buf.append(event)
+        if len(self._buf) >= self._max_batch:
+            await self.flush()
+
+    async def flush(self):
+        if not self._buf:
+            return
+        batch = self._buf
+        self._buf = []
+        try:
+            await self._server.asend_event_batch(batch)
+        except Exception as e:
+            logger.warning(f"事件批量推送失败（丢弃 {len(batch)} 条）: {e}")
+
+    async def _flush_loop(self):
+        try:
+            while True:
+                await asyncio.sleep(self._max_delay)
+                await self.flush()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"事件批量 flush 定时任务异常: {e}")
+
+    def _ensure_flush_task(self):
+        if self._task is None and self._max_delay > 0:
+            try:
+                self._task = asyncio.get_running_loop().create_task(
+                    self._flush_loop(), name='ipc-event-batch-flush')
+            except RuntimeError:
+                self._task = None
+
+
 def bind_ipc_dispatch(server, framework):
-    """替换事件分发：协议接入端收到事件 → 推送到宿主"""
-    async def _ipc_dispatch(event):
-        await server.asend_event(event)
+    """替换事件分发：协议接入端收到事件 → 攒批后推送到宿主。
+
+    批大小 / 窗口由 config.yaml → dual_process 读取（event_batch_max /
+    event_batch_delay_ms）；默认 64 条 / 5ms。max_batch<=1 时逐条发送（旧行为）。
+    """
+    dual = framework.config.get('dual_process', {}) or {}
+    max_batch = int(dual.get('event_batch_max', 64))
+    max_delay = float(dual.get('event_batch_delay_ms', 5)) / 1000.0
+    batcher = _EventBatcher(server, max_batch=max_batch, max_delay=max_delay)
+    framework._ipc_event_batcher = batcher
+
+    async def _ipc_dispatch(event, wait: bool = False):
+        await batcher.push(event, wait=wait)
 
     framework.dispatch_event = _ipc_dispatch

@@ -122,6 +122,116 @@ def test_remote_db_connection_unsupported():
     assert raised, "双进程下 db.get_connection() 应抛 NotImplementedError"
 
 
+# ── 4. 事件批量（core→host，批量传输优化） ────────────────────
+
+from framework.ipc.core_services import _EventBatcher
+
+
+class _FakeServer:
+    """记录 asend_event_batch 调用（不落真实连接）"""
+
+    def __init__(self):
+        self.batches = []
+
+    async def asend_event_batch(self, events):
+        self.batches.append(list(events))
+
+
+def test_event_batcher_threshold():
+    import asyncio
+
+    async def run():
+        srv = _FakeServer()
+        b = _EventBatcher(srv, max_batch=4, max_delay=0)
+        for i in range(9):
+            await b.push({'i': i})
+        # 阈值触发 2 批（4+4），余 1 条在途
+        assert [len(x) for x in srv.batches] == [4, 4], srv.batches
+        await b.flush()
+        assert [len(x) for x in srv.batches] == [4, 4, 1], srv.batches
+        flat = [e['i'] for x in srv.batches for e in x]
+        assert flat == list(range(9)), flat          # 顺序保持
+
+    asyncio.run(run())
+
+
+def test_event_batcher_passthrough():
+    import asyncio
+
+    async def run():
+        srv = _FakeServer()
+        b = _EventBatcher(srv, max_batch=1, max_delay=0)   # <=1 → 逐条
+        for i in range(5):
+            await b.push({'i': i})
+        assert [len(x) for x in srv.batches] == [1, 1, 1, 1, 1], srv.batches
+
+    asyncio.run(run())
+
+
+def test_event_batcher_window_flush():
+    import asyncio
+
+    async def run():
+        srv = _FakeServer()
+        b = _EventBatcher(srv, max_batch=1000, max_delay=0.01)
+        for i in range(5):
+            await b.push({'i': i})
+        assert srv.batches == []                     # 未满批 → 等时间窗口
+        await asyncio.sleep(0.06)
+        assert [len(x) for x in srv.batches] == [5], srv.batches
+        await b.flush()
+
+    asyncio.run(run())
+
+
+def test_event_batcher_wait_immediate():
+    import asyncio
+
+    async def run():
+        srv = _FakeServer()
+        b = _EventBatcher(srv, max_batch=1000, max_delay=10.0)
+        await b.push({'i': 0})
+        await b.push({'i': 1}, wait=True)            # 同步语义：立即冲刷并单发
+        assert [len(x) for x in srv.batches] == [1, 1], srv.batches
+
+    asyncio.run(run())
+
+
+def test_event_batch_roundtrip():
+    """真实 IpcServer/IpcClient：批量帧端到端，宿主按序还原全部事件"""
+    import asyncio
+    token = b'\x02' * 32
+    server = IpcServer(token)
+    server.start_accept_thread()
+    client = IpcClient(server.address, token)
+    try:
+        client.connect(timeout=10)
+        got = []
+        got_ev = threading.Event()
+
+        def on_ev(payload):
+            batch = payload.get('batch') if isinstance(payload, dict) else None
+            items = batch if isinstance(batch, list) else [payload]
+            got.extend(items)
+            if len(got) >= 10:
+                got_ev.set()
+
+        client.on('event', on_ev)
+        b = _EventBatcher(server, max_batch=4, max_delay=0.02)
+
+        async def push_all():
+            for i in range(10):
+                await b.push({'i': i})
+            await b.flush()
+
+        asyncio.run(push_all())
+        assert got_ev.wait(5), f"未收满: {got}"
+        assert [e['i'] for e in got] == list(range(10)), got
+    finally:
+        client.close()
+        server.close()
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]
