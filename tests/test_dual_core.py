@@ -291,6 +291,41 @@ def test_remote_tx_run_all_ops():
     assert cnt == 4, cnt
 
 
+# ── 6. 宿主侧事件批量注入 ─────────────────────────────────────
+
+def test_ipc_adapter_batch_injection_order():
+    """宿主 _on_event 批量帧：整批一次调度、按序派发（兼容单条）"""
+    import asyncio
+    from framework.ipc.ipc_adapter import IpcAdapter
+
+    got = []
+
+    class _Fw:
+        async def dispatch_event(self, ev):
+            got.append(ev['i'])
+
+    class _Client:
+        def __init__(self):
+            self.handler = None
+
+        def on(self, channel, handler):
+            self.handler = handler
+
+        def call(self, *a, **k):
+            return []
+
+    adapter = IpcAdapter(_Fw(), _Client())
+
+    async def run():
+        adapter.bind_event_loop(asyncio.get_running_loop())
+        adapter._client.handler({'batch': [{'i': i} for i in range(5)]})
+        adapter._client.handler({'i': 99})          # 单条兼容
+        await asyncio.sleep(0.05)                   # 等注入完成
+
+    asyncio.run(run())
+    assert got == [0, 1, 2, 3, 4, 99], got
+
+
 if __name__ == '__main__':
     tests = [v for k, v in sorted(globals().items())
              if k.startswith('test_') and callable(v)]

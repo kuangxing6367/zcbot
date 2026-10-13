@@ -52,15 +52,25 @@ class IpcAdapter(ProtocolAdapter):
         def _on_event(payload):
             if self._loop is None or not self._loop.is_running():
                 return
-            # 兼容单条 dict（旧）与 {'batch': [...]}（新，批量帧）；按序逐条注入
+            # 兼容单条 dict（旧）与 {'batch': [...]}（新，批量帧）
             batch = payload.get('batch') if isinstance(payload, dict) else None
             events = batch if isinstance(batch, list) else [payload]
-            for ev in events:
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        self.framework.dispatch_event(ev), self._loop)
-                except Exception as e:
-                    logger.error(f"IPC 事件注入失败: {e}")
+            if not events:
+                return
+
+            async def _dispatch_all():
+                # 整批在一个协程内顺序派发：跨线程调度从「每事件一次」降为「每批一次」，
+                # 且天然保序（旧实现每事件一次 run_coroutine_threadsafe）。
+                for ev in events:
+                    try:
+                        await self.framework.dispatch_event(ev)
+                    except Exception as e:
+                        logger.error(f"IPC 事件注入失败: {e}")
+
+            try:
+                asyncio.run_coroutine_threadsafe(_dispatch_all(), self._loop)
+            except Exception as e:
+                logger.error(f"IPC 事件批注入失败: {e}")
 
         self._client.on('event', _on_event)
         self._inject_bound = True
