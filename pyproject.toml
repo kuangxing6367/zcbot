@@ -19,7 +19,7 @@ version = "1.8.7"
 description = "ZCBOT 事件驱动 IM 平台：内核 + 扩展点契约 + 协议无关接入端（内置 OneBot 11 / QQ 官方 / Telegram / Discord）"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT OR Apache-2.0" }
+license = "MIT OR Apache-2.0"
 authors = [{ name = "kuangxing6367" }]
 keywords = ["onebot", "telegram", "discord", "qq", "bot", "plugin", "event-driven", "framework"]
 
@@ -56,3 +56,31 @@ plugins = [
 Homepage = "https://github.com/kuangxing6367/zcbot"
 Repository = "https://github.com/kuangxing6367/zcbot"
 Issues = "https://github.com/kuangxing6367/zcbot/issues"
+
+# ============================================================
+# 打包（PyPI / pip install）
+# ============================================================
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+zcbot = "zcbot_cli:main"
+
+[tool.setuptools]
+include-package-data = true
+py-modules = ["main", "zcbot_cli"]
+
+[tool.setuptools.packages.find]
+include = ["framework*", "core_plugins*", "plugins*", "sql*"]
+exclude = ["*.__pycache__", "*.native.target*"]
+
+# 非 package 目录下的原生二进制（image_renderer 按插件目录相对定位 native/bin/<平台>/）
+# + sql 建表脚本（init_db._find_sql_file 运行时读取）
+[tool.setuptools.package-data]
+"core_plugins.image_renderer" = [
+    "native/bin/*/zcbot_render.pyd",
+    "native/bin/*/zcbot_render.so",
+    "native/bin/*/.gitkeep",
+]
+"sql" = ["*.sql"]

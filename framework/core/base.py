@@ -45,8 +45,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self._ipc_client = ipc_client
         # 记录实际使用的配置文件路径（供 Web API 读写 config.yaml 使用）
         if config_path is None:
-            config_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'config.yaml')
+            from framework.config import get_home
+            config_path = os.path.join(get_home(), 'config.yaml')
         self.config_path = os.path.abspath(config_path)
         self.config = load_config(config_path)
         # 数据目录统一迁移（logs / plugins_dat → data/ 下），必须在日志与插件加载前执行
@@ -130,8 +130,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self._event_queue_maxsize = int(eq_cfg.get('maxsize', 2000))
         self._event_workers_count = max(1, int(eq_cfg.get('workers', 1)))
         self._event_drain_timeout = float(eq_cfg.get('drain_timeout', 5))
-        _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self._event_buffer = EventBuffer(eq_cfg, os.path.join(_project_root, 'data'))
+        from framework.config import get_home
+        self._event_buffer = EventBuffer(eq_cfg, os.path.join(get_home(), 'data'))
         self._event_workers = []   # worker task 引用集（start() 填充）
         # 会话分片并行（event_queue.workers > 1 时启用）：单一分发器从缓冲取事件、
         # 盖内部唯一代号 _seq（0~9_999_999 轮转）后按会话键投入对应 worker 队列；
@@ -218,7 +218,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         数据目录统一迁移：将旧版分散在项目根的 logs/、plugins_dat/ 迁移到 data/ 下。
         仅当目标目录不存在时执行一次，避免覆盖新数据。
         """
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        from framework.config import get_home
+        project_root = get_home()
         data_dir = os.path.join(project_root, 'data')
         os.makedirs(data_dir, exist_ok=True)
 
@@ -234,7 +235,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
     def _setup_logging(self):
         """配置日志（统一存放于 data/logs/ 下）"""
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        from framework.config import get_home
+        project_root = get_home()
         log_level = self.config.get('log', {}).get('level', 'INFO')
 
         # 日志文件路径：优先配置 log.file，默认 data/logs/zcbot.log
@@ -300,13 +302,14 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         logging.getLogger('websocket').setLevel(logging.WARNING)
 
     def _get_plugins_dir(self) -> str:
-        """获取插件代码目录路径（优先使用配置）"""
+        """获取插件代码目录路径（优先使用配置；默认落在可写 home 下）"""
+        from framework.config import get_home
         plugin_dir = self.config.get('plugin', {}).get('dir', '')
         if plugin_dir:
             if os.path.isabs(plugin_dir):
                 return plugin_dir
-            return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), plugin_dir)
-        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'plugins')
+            return os.path.join(get_home(), plugin_dir)
+        return os.path.join(get_home(), 'plugins')
 
     def _get_core_plugins_dir(self) -> str:
         """获取官方插件目录路径（core_plugins/，与 framework 同级）"""
@@ -315,12 +318,13 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
     def _get_plugins_dat_dir(self) -> str:
         """获取插件数据/配置目录路径（与 plugins 同级，统一存放于 data/ 下）"""
+        from framework.config import get_home
         dat_dir = self.config.get('plugin', {}).get('dat_dir', '')
         if dat_dir:
             if os.path.isabs(dat_dir):
                 return dat_dir
-            return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), dat_dir)
-        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'plugins_dat')
+            return os.path.join(get_home(), dat_dir)
+        return os.path.join(get_home(), 'data', 'plugins_dat')
 
     async def start(self, wait_ready: bool = True):
         """启动框架（异步）

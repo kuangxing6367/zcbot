@@ -255,6 +255,41 @@ def _env_replace(value):
     return value
 
 
+def get_code_root() -> str:
+    """代码根目录：包含 framework/ 的目录（源码模式=仓库根；pip 模式=site-packages）。"""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _in_site_packages(path: str) -> bool:
+    try:
+        import sysconfig
+        p = os.path.abspath(path)
+        for key in ('purelib', 'platlib'):
+            d = sysconfig.get_paths().get(key)
+            if d and p.startswith(os.path.abspath(d)):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def get_home() -> str:
+    """可写状态目录：config.yaml / core_plugins.yaml / data / logs 都落在这里。
+
+    解析顺序：
+    1. 环境变量 ZCBOT_HOME（显式指定，最高优先）；
+    2. 代码在 site-packages 内（pip 安装）→ ~/.zcbot；
+    3. 否则（源码方式运行）→ 代码根，行为与旧版完全一致。
+    """
+    env = os.environ.get('ZCBOT_HOME')
+    if env:
+        return os.path.abspath(env)
+    root = get_code_root()
+    if _in_site_packages(root):
+        return os.path.join(os.path.expanduser('~'), '.zcbot')
+    return root
+
+
 def _generate_default_config(config_path: str):
     """生成默认配置文件"""
     config_dir = os.path.dirname(config_path)
@@ -271,7 +306,7 @@ def load_config(config_path: str = None) -> dict:
     如果配置文件不存在，自动生成默认配置并加载
     """
     if config_path is None:
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+        config_path = os.path.join(get_home(), 'config.yaml')
 
     if not os.path.isfile(config_path):
         _get_logger().warning(f"配置文件不存在，正在生成默认配置: {config_path}")
@@ -320,7 +355,7 @@ def get_config() -> dict:
 # test/webui_blackbox_launcher.py 借此把插件配置指向一份隔离副本，
 # 从而在不改动真实仓库的前提下自定义 webui 监听端口等）。
 CORE_PLUGINS_YAML = os.environ.get('ZCBOT_CORE_PLUGINS_YAML') or os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), 'core_plugins.yaml')
+    get_home(), 'core_plugins.yaml')
 
 
 # 官方插件 → 主 config 段名映射（仅列段名与插件名不同的）

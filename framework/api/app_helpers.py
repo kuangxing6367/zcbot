@@ -137,7 +137,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
             return ''
 
     def _data_dir() -> str:
-        d = os.path.join(_project_root(), 'data')
+        from framework.config import get_home
+        d = os.path.join(get_home(), 'data')
         os.makedirs(d, exist_ok=True)
         return d
 
@@ -149,7 +150,7 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
 
     def _yaml_config_path() -> str:
         """返回框架实际加载的配置文件路径（支持自定义 config 启动）"""
-        return getattr(framework, 'config_path', None) or os.path.join(_project_root(), 'config.yaml')
+        return getattr(framework, 'config_path', None) or os.path.join(get_home(), 'config.yaml')
 
     def _read_yaml_section(section: str) -> dict:
         """读取 config.yaml 指定段的原始 dict（不做环境变量替换）"""
