@@ -8,7 +8,7 @@ description: zcbot 标志的形态释义、变体家族、色彩系统与使用�
 标志是一个**几何 Z**：上下两横完整，斜笔画断成三节等长块。
 
 所有图形均为手工矢量构造（非位图、非截图、无水印），源文件见[文末清单](#源文件)。
-仓库内的同名文档见 [`BRAND.md`](https://github.com/kuangxing6367/zcbot/blob/main/BRAND.md)，两处内容保持一致。
+仓库内的同名文档见 [`BRAND.md`](https://gitee.com/liquanfeng123/zcbot/blob/main/BRAND.md)，两处内容保持一致。
 
 ## 总 logo
 
@@ -193,7 +193,7 @@ npm run build      # 产物输出到 ../core_plugins/webui/web/
 
 ## 源文件
 
-全部存放于 [`docs/public/brand/`](https://github.com/kuangxing6367/zcbot/tree/main/docs/public/brand)：
+全部存放于 [`docs/public/brand/`](https://gitee.com/liquanfeng123/zcbot/tree/main/docs/public/brand)：
 
 | 文件 | 说明 |
 | ---- | ---- |

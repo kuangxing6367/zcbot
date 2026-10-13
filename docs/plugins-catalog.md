@@ -36,7 +36,7 @@
 
 ## 官方扩展仓库（20+ 现成扩展）
 
-把 `config.yaml → plugin.dir` 指向 [zcbot_plugins](https://github.com/kuangxing6367/zcbot_plugins) 仓库，或在后台插件市场安装。
+把 `config.yaml → plugin.dir` 指向 [zcbot_plugins](https://gitee.com/liquanfeng123/zcbot_plugins) 仓库，或在后台插件市场安装。
 
 | 扩展 | 作用 | 扩展 | 作用 |
 | ---- | ---- | ---- | ---- |

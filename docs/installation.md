@@ -26,7 +26,7 @@ zcbot
 ## 第 1 步：下载代码
 
 ```bash
-git clone https://github.com/kuangxing6367/zcbot.git
+git clone https://gitee.com/liquanfeng123/zcbot.git
 cd zcbot
 ```
 
