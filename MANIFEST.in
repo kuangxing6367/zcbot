@@ -1,0 +1,10 @@
+# 随包分发的运行时资源（wheel/sdist）
+include VERSION
+include requirements.txt
+recursive-include framework *.yaml *.yml *.json *.sql *.txt
+recursive-include core_plugins *.yaml *.yml *.json *.txt *.sql *.html *.js *.css *.so *.pyd *.ttf *.otf
+recursive-include plugins *.yaml *.yml *.json *.txt *.html *.js *.css
+recursive-include sql *.sql
+exclude core_plugins/*/native/target/*
+exclude core_plugins/rust_accel/rust_accel/target/*
+global-exclude __pycache__ *.py[cod] *.db *.db-shm *.db-wal *.db-journal
