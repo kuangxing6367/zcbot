@@ -36,8 +36,8 @@ export default defineConfig({
       { text: 'API', link: '/api/', activeMatch: '/api/' },
       { text: '进阶', link: '/advanced/architecture', activeMatch: '/advanced/' },
       { text: '品牌标识', link: '/brand/', activeMatch: '/brand/' },
-      { text: '更新日志', link: 'https://github.com/kuangxing6367/zcbot/blob/main/CHANGELOG.md' },
-      { text: 'GitHub', link: 'https://github.com/kuangxing6367/zcbot' }
+      { text: '更新日志', link: 'https://gitee.com/liquanfeng123/zcbot/blob/main/CHANGELOG.md' },
+      { text: 'GitHub', link: 'https://gitee.com/liquanfeng123/zcbot' }
     ],
 
     sidebar: {
@@ -110,7 +110,7 @@ export default defineConfig({
     outline: { label: '本页目录', level: [2, 3] },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/kuangxing6367/zcbot' }
+      { icon: 'github', link: 'https://gitee.com/liquanfeng123/zcbot' }
     ],
 
     search: {

@@ -3,11 +3,11 @@
 > **通用化 IM 平台**：不绑定任何聊天协议——能接 QQ、Telegram、Discord，也能不接平台，只跑定时任务或收 HTTP 事件。
 > 需要哪种能力就启用对应的扩展，业务写在自己的插件里。
 
-**当前版本：v1.8.8** ｜ [CHANGELOG](https://github.com/kuangxing6367/zcbot/blob/main/CHANGELOG.md) ｜ [PyPI](https://pypi.org/project/zcbot/)
+**当前版本：v1.8.8** ｜ [CHANGELOG](https://gitee.com/liquanfeng123/zcbot/blob/main/CHANGELOG.md) ｜ [PyPI](https://pypi.org/project/zcbot/)
 
-- 项目地址：https://github.com/kuangxing6367/zcbot
-- 官方扩展仓库：https://github.com/kuangxing6367/zcbot_plugins
-- **LLM / Agent 文档**：[LLM.md](https://github.com/kuangxing6367/zcbot/blob/main/LLM.md) —— 给 AI 编码助手的按需加载索引
+- 项目地址：https://gitee.com/liquanfeng123/zcbot
+- 官方扩展仓库：https://gitee.com/liquanfeng123/zcbot_plugins
+- **LLM / Agent 文档**：[LLM.md](https://gitee.com/liquanfeng123/zcbot/blob/main/LLM.md) —— 给 AI 编码助手的按需加载索引
 - 反馈交流：群组 **1060129201**
 
 ---
@@ -26,7 +26,7 @@ zcbot
 **方式 B · 源码**
 
 ```bash
-git clone https://github.com/kuangxing6367/zcbot.git
+git clone https://gitee.com/liquanfeng123/zcbot.git
 cd zcbot
 pip install -r requirements.txt
 python main.py
@@ -39,7 +39,7 @@ python main.py
 > 进 Web 后台启用 `webui`（`127.0.0.1:8080`，默认账号 `admin` / `admin123`，**登录后立即改密**）；
 > 要收发聊天消息就启用某个接入端（如 `onebot_adapter`）。
 
-详见 [安装](https://github.com/kuangxing6367/zcbot/blob/main/docs/installation.md) · [开始使用](https://github.com/kuangxing6367/zcbot/blob/main/docs/getting-started.md) · [配置系统](https://github.com/kuangxing6367/zcbot/blob/main/docs/configuration.md)。
+详见 [安装](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/installation.md) · [开始使用](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/getting-started.md) · [配置系统](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/configuration.md)。
 
 ## 写个插件
 
@@ -59,17 +59,17 @@ async def handle_hello(event, match):
 ```
 
 放进 `plugins/` 后点「重载」即可。权限用 `require_perm="myplugin.ban"` 声明式拦截；
-想插到几乎每个运行环节就用 `ctx.hook(...)`（见 [扩展点](https://github.com/kuangxing6367/zcbot/blob/main/docs/hooks.md)）。
-完整教程见 [编写插件](https://github.com/kuangxing6367/zcbot/blob/main/docs/writing-plugins.md)。
+想插到几乎每个运行环节就用 `ctx.hook(...)`（见 [扩展点](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/hooks.md)）。
+完整教程见 [编写插件](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/writing-plugins.md)。
 
 ## 文档
 
-全部文档平铺在 `docs/` 一层，入口 [docs/index.md](https://github.com/kuangxing6367/zcbot/blob/main/docs/index.md)。
+全部文档平铺在 `docs/` 一层，入口 [docs/index.md](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/index.md)。
 
-- **指南**：[安装](https://github.com/kuangxing6367/zcbot/blob/main/docs/installation.md) · [开始使用](https://github.com/kuangxing6367/zcbot/blob/main/docs/getting-started.md) · [配置](https://github.com/kuangxing6367/zcbot/blob/main/docs/configuration.md) · [对接 IM](https://github.com/kuangxing6367/zcbot/blob/main/docs/connect-im.md) · [编写插件](https://github.com/kuangxing6367/zcbot/blob/main/docs/writing-plugins.md) · [多轮会话](https://github.com/kuangxing6367/zcbot/blob/main/docs/session.md) · [接入 LLM](https://github.com/kuangxing6367/zcbot/blob/main/docs/llm-chat.md) · [最佳实践](https://github.com/kuangxing6367/zcbot/blob/main/docs/best-practices.md)
-- **API**：[ctx](https://github.com/kuangxing6367/zcbot/blob/main/docs/ctx.md) · [Event](https://github.com/kuangxing6367/zcbot/blob/main/docs/event.md) · [扩展点 Hook](https://github.com/kuangxing6367/zcbot/blob/main/docs/hooks.md) · [协议适配器](https://github.com/kuangxing6367/zcbot/blob/main/docs/protocol_adapter.md) · [Framework](https://github.com/kuangxing6367/zcbot/blob/main/docs/framework.md) · [服务注册表](https://github.com/kuangxing6367/zcbot/blob/main/docs/services.md) · [插件装饰器](https://github.com/kuangxing6367/zcbot/blob/main/docs/plugin-decorators.md)
-- **进阶**：[内核设计哲学](https://github.com/kuangxing6367/zcbot/blob/main/docs/core-philosophy.md) · [架构详解](https://github.com/kuangxing6367/zcbot/blob/main/docs/architecture.md) · [加载机制](https://github.com/kuangxing6367/zcbot/blob/main/docs/loader.md) · [数据库](https://github.com/kuangxing6367/zcbot/blob/main/docs/database.md) · [定时任务](https://github.com/kuangxing6367/zcbot/blob/main/docs/scheduler.md) · [权限](https://github.com/kuangxing6367/zcbot/blob/main/docs/permission.md) · [接口令牌](https://github.com/kuangxing6367/zcbot/blob/main/docs/api-tokens.md) · [部署](https://github.com/kuangxing6367/zcbot/blob/main/docs/deployment.md) · [双核心](https://github.com/kuangxing6367/zcbot/blob/main/docs/dual-core.md) · [项目结构](https://github.com/kuangxing6367/zcbot/blob/main/docs/project-structure.md) · [扩展清单](https://github.com/kuangxing6367/zcbot/blob/main/docs/plugins-catalog.md)
-- **LLM**：[LLM.md](https://github.com/kuangxing6367/zcbot/blob/main/LLM.md) · [框架结构](https://github.com/kuangxing6367/zcbot/blob/main/docs/llm-framework.md) · [插件开发](https://github.com/kuangxing6367/zcbot/blob/main/docs/llm-plugins.md) · [调试排错](https://github.com/kuangxing6367/zcbot/blob/main/docs/llm-debugging.md)
+- **指南**：[安装](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/installation.md) · [开始使用](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/getting-started.md) · [配置](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/configuration.md) · [对接 IM](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/connect-im.md) · [编写插件](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/writing-plugins.md) · [多轮会话](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/session.md) · [接入 LLM](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/llm-chat.md) · [最佳实践](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/best-practices.md)
+- **API**：[ctx](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/ctx.md) · [Event](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/event.md) · [扩展点 Hook](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/hooks.md) · [协议适配器](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/protocol_adapter.md) · [Framework](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/framework.md) · [服务注册表](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/services.md) · [插件装饰器](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/plugin-decorators.md)
+- **进阶**：[内核设计哲学](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/core-philosophy.md) · [架构详解](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/architecture.md) · [加载机制](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/loader.md) · [数据库](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/database.md) · [定时任务](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/scheduler.md) · [权限](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/permission.md) · [接口令牌](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/api-tokens.md) · [部署](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/deployment.md) · [双核心](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/dual-core.md) · [项目结构](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/project-structure.md) · [扩展清单](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/plugins-catalog.md)
+- **LLM**：[LLM.md](https://gitee.com/liquanfeng123/zcbot/blob/main/LLM.md) · [框架结构](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/llm-framework.md) · [插件开发](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/llm-plugins.md) · [调试排错](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/llm-debugging.md)
 
 ## 开源协议
 
