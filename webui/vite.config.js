@@ -3,6 +3,113 @@ import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 import obfuscatorPlugin from './vite-plugin-obfuscator.js'
 
+// ---------------------------------------------------------------------------
+// 混淆形态表
+// ---------------------------------------------------------------------------
+// 全站共用一套参数时，每个 chunk 的头部会一模一样（同样的 _0x 字符串数组 +
+// 同样的自执行轮转函数）—— 这是极强的指纹，一眼看出「整站被同一工具刷过」。
+// 这里准备几套差异明显的形态按 chunk 分配，再叠加每 chunk 独立 seed，让产物
+// 看起来像「多年迭代、不同模块不同时期分别处理过」的真实项目。
+const _PROFILE = {
+  // A：十六进制命名 + 控制流扁平化（最重）—— 给最敏感的 chunk
+  heavyHex: {
+    compact: true,
+    target: 'browser',
+    controlFlowFlattening: true,
+    controlFlowFlatteningThreshold: 1.0,
+    deadCodeInjection: true,
+    deadCodeInjectionThreshold: 0.4,
+    stringArray: true,
+    stringArrayThreshold: 1.0,
+    stringArrayEncoding: ['rc4'],
+    stringArrayRotate: true,
+    stringArrayShuffle: true,
+    stringArrayWrappersCount: 2,
+    stringArrayWrappersType: 'function',
+    splitStrings: true,
+    splitStringsChunkLength: 8,
+    identifierNamesGenerator: 'hexadecimal',
+    numbersToExpressions: true,
+    simplify: true,
+    transformObjectKeys: true,
+    unicodeEscapeSequence: false,
+    disableConsoleOutput: true,
+    renameGlobals: false,
+    selfDefending: false,
+  },
+  // B：mangled 命名 + 中度控制流 —— 标识符不再是 _0x，指纹完全不同
+  heavyMangled: {
+    compact: true,
+    target: 'browser',
+    controlFlowFlattening: true,
+    controlFlowFlatteningThreshold: 0.75,
+    deadCodeInjection: true,
+    deadCodeInjectionThreshold: 0.2,
+    stringArray: true,
+    stringArrayThreshold: 0.9,
+    stringArrayEncoding: ['base64'],
+    stringArrayRotate: true,
+    stringArrayShuffle: true,
+    stringArrayWrappersCount: 1,
+    stringArrayWrappersType: 'variable',
+    splitStrings: true,
+    splitStringsChunkLength: 12,
+    identifierNamesGenerator: 'mangled',
+    numbersToExpressions: true,
+    simplify: true,
+    transformObjectKeys: true,
+    disableConsoleOutput: true,
+    renameGlobals: false,
+    selfDefending: false,
+  },
+  // C：中等 —— 不做控制流扁平化，以字符串数组为主
+  medium: {
+    compact: true,
+    target: 'browser',
+    controlFlowFlattening: false,
+    deadCodeInjection: true,
+    deadCodeInjectionThreshold: 0.15,
+    stringArray: true,
+    stringArrayThreshold: 0.8,
+    stringArrayEncoding: [],
+    stringArrayRotate: true,
+    stringArrayShuffle: true,
+    stringArrayWrappersCount: 1,
+    stringArrayWrappersType: 'variable',
+    splitStrings: true,
+    splitStringsChunkLength: 10,
+    identifierNamesGenerator: 'mangled-shuffled',
+    numbersToExpressions: false,
+    simplify: true,
+    transformObjectKeys: true,
+    disableConsoleOutput: true,
+    renameGlobals: false,
+    selfDefending: false,
+  },
+  // D：低程度 —— 只改名 + 压少量字符串（诱饵：看起来"有保护但不强"）
+  light: {
+    compact: true,
+    target: 'browser',
+    controlFlowFlattening: false,
+    deadCodeInjection: false,
+    stringArray: true,
+    stringArrayThreshold: 0.3,
+    stringArrayEncoding: [],
+    stringArrayRotate: false,
+    stringArrayShuffle: false,
+    stringArrayWrappersCount: 1,
+    stringArrayWrappersType: 'variable',
+    splitStrings: false,
+    identifierNamesGenerator: 'mangled',
+    numbersToExpressions: false,
+    simplify: false,
+    transformObjectKeys: false,
+    disableConsoleOutput: true,
+    renameGlobals: false,
+    selfDefending: false,
+  },
+}
+
 export default defineConfig(({ mode }) => {
   const isProd = mode === 'production'
 
@@ -15,38 +122,18 @@ export default defineConfig(({ mode }) => {
             obfuscatorPlugin({
               // 仅混淆业务代码；element-plus / vue-vendor 为开源库，混淆收益低、代价高
               exclude: [/^js\/element-plus\./, /^js\/vue-vendor\./],
-              obfuscatorOptions: {
-                compact: true,
-                target: 'browser',
-                // 控制流扁平化：打乱执行路径，显著提高逆向成本
-                controlFlowFlattening: true,
-                controlFlowFlatteningThreshold: 0.5,
-                // 死代码注入
-                deadCodeInjection: true,
-                deadCodeInjectionThreshold: 0.2,
-                // 字符串数组：把字面量抽到加密数组里，base64 编码 + 轮转 + 洗牌
-                stringArray: true,
-                stringArrayThreshold: 0.75,
-                stringArrayEncoding: ['base64'],
-                stringArrayRotate: true,
-                stringArrayShuffle: true,
-                stringArrayWrappersCount: 1,
-                stringArrayWrappersType: 'variable',
-                splitStrings: true,
-                splitStringsChunkLength: 10,
-                // 标识符重命名 / 数字与对象键变形
-                identifierNamesGenerator: 'hexadecimal',
-                numbersToExpressions: true,
-                simplify: true,
-                transformObjectKeys: true,
-                unicodeEscapeSequence: false,
-                // 抹除 console 输出（与 terser drop_console 双保险）
-                disableConsoleOutput: true,
-                // 保持 ESM 稳定性
-                renameGlobals: false,
-                selfDefending: false,
-                seed: 0,
-              },
+              // 默认形态（最敏感 chunk：app / api / Login / Permissions 走这套）
+              obfuscatorOptions: _PROFILE.heavyHex,
+              // 多形态分层：打破「全站同一套壳」的指纹
+              profiles: [
+                // 诱饵 · 低程度：看起来"有保护但不强"，诱导逆向、消耗其时间
+                { name: 'light', test: /^js\/(sidebar|PluginWebUI)\./, options: _PROFILE.light },
+                // 中等：常规视图
+                { name: 'medium', test: /^js\/(Dashboard|Tasks|Groups|Commands|Logs|Connection|Users|ApiKeys|Database|FileBrowser|Runtime)\./, options: _PROFILE.medium },
+                // mangled 重度：标识符不再是 _0x，指纹完全不同
+                { name: 'heavyMangled', test: /^js\/(Settings|Plugins|Marketplace|Layout)\./, options: _PROFILE.heavyMangled },
+                // 其余（app / api / Login / Permissions）走默认 heavyHex
+              ],
             }),
           ]
         : []),
