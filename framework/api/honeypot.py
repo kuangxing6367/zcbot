@@ -1342,6 +1342,7 @@ def register(ctx):
 
     tarpit_ms = int(hp.get('tarpit_ms', 600) or 0)
     do_blacklist = bool(hp.get('blacklist', True))
+    ban_internal_ips = bool(hp.get('ban_internal_ips', False))
     blacklist_ttl = int(hp.get('blacklist_ttl', 3600) or 0)
     log_body = bool(hp.get('log_body', True))
     max_body_log = int(hp.get('max_body_log', 2048) or 2048)
@@ -1406,9 +1407,13 @@ def register(ctx):
             pass
 
         if do_blacklist and ban:
-            # 内网 / 白名单 IP 豁免：既不拉黑也不计数（避免"已拉黑"统计虚高）
+            # 默认对内网 / 白名单 IP 豁免拉黑（避免误伤本机/局域网、统计虚高）。
+            # 开启 ban_internal_ips 后只认显式白名单，内网/回环也会被正常拉黑
+            # （用于本地 / 同网段黑盒测试，让 /admin 陷阱对 127.0.0.1 也能生效）。
             try:
-                exempt = dual_auth.is_internal(ip) or dual_auth.is_whitelisted(ip)
+                exempt = dual_auth.is_whitelisted(ip)
+                if not ban_internal_ips:
+                    exempt = exempt or dual_auth.is_internal(ip)
             except Exception:
                 exempt = False
             if exempt:

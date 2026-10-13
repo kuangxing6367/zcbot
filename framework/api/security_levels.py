@@ -64,6 +64,7 @@ _PRESETS = {
         },
         'honeypot': {
             'enabled': False,
+            'ban_internal_ips': False,    # 关闭时内网/白名单 IP 仍豁免拉黑；开启后只认显式白名单（本地/同网段黑盒测试用）
             'decoy_set': 'off',          # off / basic / full
             'tarpit_ms': 0,
             'blacklist': False,
@@ -97,6 +98,7 @@ _PRESETS = {
         },
         'honeypot': {
             'enabled': True,
+            'ban_internal_ips': False,
             'decoy_set': 'basic',
             'tarpit_ms': 200,
             'blacklist': False,           # 只记录不封禁，适合还在调参的阶段
@@ -130,6 +132,7 @@ _PRESETS = {
         },
         'honeypot': {
             'enabled': True,
+            'ban_internal_ips': False,
             'decoy_set': 'full',
             'tarpit_ms': 600,
             'blacklist': True,
@@ -163,6 +166,7 @@ _PRESETS = {
         },
         'honeypot': {
             'enabled': True,
+            'ban_internal_ips': False,
             'decoy_set': 'full',
             'tarpit_ms': 1500,
             'blacklist': True,
@@ -196,6 +200,7 @@ _PRESETS = {
         },
         'honeypot': {
             'enabled': True,
+            'ban_internal_ips': False,
             'decoy_set': 'full',
             'tarpit_ms': 3000,
             'blacklist': True,

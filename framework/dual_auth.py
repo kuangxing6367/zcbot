@@ -83,6 +83,11 @@ class DualRequestAuthSystem:
         self.nonce_expiry = int(sec.get("nonce_expiry", 60))
         self.blacklist_enabled = bool(sec.get("blacklist_enabled", True))
         self.whitelist_ips = set(sec.get("whitelist_ips", ["127.0.0.1"]))
+        # 内网 IP 是否参与蜜罐自动拉黑（默认 False：内网/回环豁免，避免误伤本机/局域网；
+        # 开启后仅认显式 whitelist_ips，用于本地/同网段黑盒测试让陷阱对 127 也能生效）。
+        # 与安全等级预设（security_levels）及 honeypot 保持一致，统一从
+        # security.honeypot.ban_internal_ips 读取，避免顶层键与 honeypot 子键不一致导致豁免失效。
+        self.ban_internal_ips = bool(sec.get("honeypot", {}).get("ban_internal_ips", False))
 
         # 数据库引用（用于黑名单持久化；为空则退化为纯内存模式）
         self.db = db
@@ -282,8 +287,9 @@ class DualRequestAuthSystem:
         """
         if not self.blacklist_enabled or not ip:
             return
-        # 内网 IP 自动豁免（不自动拉黑，避免误伤本机/局域网）
-        if source == 'honeypot' and self.is_internal(ip):
+        # 内网 IP 默认豁免（不自动拉黑，避免误伤本机/局域网）；
+        # 开启 ban_internal_ips 后只认显式 whitelist_ips，内网/回环也会被拉黑
+        if source == 'honeypot' and self.is_internal(ip) and not self.ban_internal_ips:
             logger.info(f"[双请求认证] 内网 IP 豁免拉黑: {ip}")
             return
         with self._lock:
