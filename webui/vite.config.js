@@ -35,7 +35,9 @@ const _PROFILE = {
     unicodeEscapeSequence: false,
     disableConsoleOutput: true,
     renameGlobals: false,
-    selfDefending: false,
+    // 自防御（防调试/防格式化重排）：最敏感 chunk 才开，代价是与部分 ESM 形态
+    // 兼容性差、有白屏风险，改动后务必浏览器冒烟验证一次。
+    selfDefending: true,
   },
   // B：mangled 命名 + 中度控制流 —— 标识符不再是 _0x，指纹完全不同
   heavyMangled: {
@@ -72,7 +74,8 @@ const _PROFILE = {
     stringArray: true,
     stringArrayThreshold: 0.8,
     stringArrayEncoding: [],
-    stringArrayRotate: true,
+    // 关掉轮转：否则这批 chunk 都带同一个 while(!![]){} 自执行轮转壳，仍是指纹
+    stringArrayRotate: false,
     stringArrayShuffle: true,
     stringArrayWrappersCount: 1,
     stringArrayWrappersType: 'variable',
@@ -122,6 +125,8 @@ export default defineConfig(({ mode }) => {
             obfuscatorPlugin({
               // 仅混淆业务代码；element-plus / vue-vendor 为开源库，混淆收益低、代价高
               exclude: [/^js\/element-plus\./, /^js\/vue-vendor\./],
+              // API 路径字面量编码：产物里 grep 不到 /api/，运行时才拼装
+              encodeApiPaths: true,
               // 默认形态（最敏感 chunk：app / api / Login / Permissions 走这套）
               obfuscatorOptions: _PROFILE.heavyHex,
               // 多形态分层：打破「全站同一套壳」的指纹
