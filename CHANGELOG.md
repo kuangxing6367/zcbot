@@ -30,6 +30,18 @@
 
 > 暂无。
 
+## v1.8.7（2026-10-13）
+
+> 主题：**双核心 IPC 性能续优化 + 跨进程事务修复**。
+
+### 性能
+- **宿主侧事件批量注入**：`IpcAdapter._on_event` 对批量帧**整批一次** `run_coroutine_threadsafe`，跨线程调度从「每事件一次」降为「每批一次」（实测 ~23.8µs/条 → ~0.01µs/条），且天然保序。
+- 承接 v1.8.6 重发的 core→host **事件批量传输** `_EventBatcher`（满 `event_batch_max`=64 条 / `event_batch_delay_ms`=5ms 即 flush）与 **`acall` 原生异步化**；两者叠加后事件路径的帧数与线程调度开销大幅下降。
+
+### 修复
+- **跨进程事务 op 分派**：`db.transaction()` 块内调用 `table_exists` / `table_info` / `table_has_column` / `pool_status` / `execute_many` 会抛 `TypeError` 或「未知事务操作」——旧 tx RPC 固定签名 `(tx_id, op, sql, params)` 接不住元数据/批量参数，且 op 分派未覆盖这些操作。改为与 `db.*` 路径一致地**透传 kwargs** 并补齐全部 op（元数据类自建 SQL，`pool_status` 回落真实 db，`execute_many` 取 `params_list`）。新增回归 `test_remote_tx_run_all_ops`。
+- CI：`test_bind_ipc_dispatch` 适配事件攒批新契约。
+
 ## v1.8.6（2026-10-12）
 
 > 主题：**WebUI 安全加固收口——端口隔离 + 纯 API 模式 + 黑盒测试启动器 + 安全等级体系 + 文档修正**。
