@@ -217,6 +217,11 @@ def test_event_batch_roundtrip():
                 got_ev.set()
 
         client.on('event', on_ev)
+        # 等核心侧 accept 完成（否则 server.conn 仍为 None，asend_event_batch 会丢弃 → 竞态）
+        deadline = time.time() + 5
+        while not server.connected and time.time() < deadline:
+            time.sleep(0.05)
+        assert server.connected, "核心侧未完成 accept（IPC 未就绪）"
         b = _EventBatcher(server, max_batch=4, max_delay=0.02)
 
         async def push_all():
