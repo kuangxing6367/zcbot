@@ -1,6 +1,7 @@
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getPass, ensurePass, clearPass } from './human-check'
+import { ensureSession, sessionSetHeader, clearSession } from './session-tokens'
 import { API_BASE } from './config'
 
 export const TOKEN_KEY = 'zcbot_token'
@@ -38,6 +39,11 @@ export async function api(url, options = {}) {
   // 人机验证通行票据（首次调用会自动求解并缓存）
   const pass = getPass() || await ensurePass()
   if (pass) opts.headers['X-ZC-Pass'] = pass
+  // 会话令牌：服务端开启时才生效，未开启 ensureSession 立即返回 false（行为不变）
+  if (await ensureSession()) {
+    const set = sessionSetHeader()
+    if (set) opts.headers['X-ZC-Set'] = set
+  }
   if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(opts.body)
@@ -52,6 +58,7 @@ export async function api(url, options = {}) {
   // 票据过期 / 服务端重启 → 重新求解一次再试
   if (res.status === 444 && !options.__retried) {
     clearPass()
+    clearSession()   // 令牌集可能整体过期，重新握手
     const fresh = await ensurePass()
     if (fresh) return api(url, { ...options, __retried: true })
   }
@@ -62,6 +69,7 @@ export async function api(url, options = {}) {
   if (isSilentDrop(res)) {
     clearToken()
     clearPass()
+    clearSession()
     gotoLogin()
     throw new Error('会话已失效，请重新登录')
   }
