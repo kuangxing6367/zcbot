@@ -30,6 +30,13 @@
 
 > 暂无。
 
+## v1.8.8（2026-10-13）
+
+> 主题：**PyPI 文档修正**。
+
+- README 的相对链接（`CHANGELOG.md` / `docs/*.md` / `LLM.md`）改为**绝对 GitHub URL**——此前在 PyPI 项目页会被解析成 `pypi.org/project/zcbot/<版本>/docs/...` 而**全部 404**（GitHub 上正常，PyPI 不解析相对路径）。
+- README 补 pip 安装方式（`pip install zcbot`），版本号对齐当前发布；`LLM.md` / `docs/installation.md` 同步补 pip 说明。
+
 ## v1.8.7（2026-10-13）
 
 > 主题：**双核心 IPC 性能续优化 + 跨进程事务修复**。
