@@ -837,6 +837,120 @@ def body_generic_text() -> Response:
         mimetype='text/html', status=404)
 
 
+# ---------------------------------------------------------------------------
+# 真实感错误页（噪声诱饵用）
+# ---------------------------------------------------------------------------
+# 大多数探测路径在真实系统里只会得到 404/403/401/405…，而不是「有求必应」的 200。
+# 用不同服务器的错误页风格，让整片噪声看起来像一台真实的 Web 服务器。
+_ERR_SIG = {
+    'nginx': 'nginx/1.24.0',
+    'apache': 'Apache/2.4.58 (Ubuntu)',
+    'tomcat': 'Apache Tomcat/9.0.85',
+    'iis': 'Microsoft-IIS/10.0',
+}
+_ERR_TITLE = {
+    400: '400 Bad Request', 401: '401 Unauthorized', 403: '403 Forbidden',
+    404: '404 Not Found', 405: '405 Method Not Allowed',
+    429: '429 Too Many Requests', 500: '500 Internal Server Error',
+}
+
+
+def body_error(status: int, style: str = 'nginx') -> Response:
+    """生成一张「像真服务器」的错误页（状态码即传入值）"""
+    title = _ERR_TITLE.get(status, f'{status} Error')
+    short = title.split(' ', 1)[1] if ' ' in title else title
+    if status in (301, 302, 307, 308):
+        resp = Response('', status=status, mimetype='text/html')
+        resp.headers['Location'] = '/login'
+        return resp
+    if style == 'tomcat':
+        html = (f'<!DOCTYPE html><html><head><title>{title}</title></head><body>'
+                f'<h1>{title}</h1><p><b>Message</b> {title}</p>'
+                f'<p><b>Description</b> The requested resource is not available.</p>'
+                f'<hr><h3>{_ERR_SIG["tomcat"]}</h3></body></html>')
+    elif style == 'iis':
+        html = (f'<!DOCTYPE html><html><head><title>{title}</title>'
+                f'<style>body{{font-family:"Segoe UI",sans-serif;margin:40px}}</style></head><body>'
+                f'<h1 style="font-weight:400">{title}</h1>'
+                f'<p>Server Error in "/" Application.</p>'
+                f'<hr><p>{_ERR_SIG["iis"]}</p></body></html>')
+    elif style == 'apache':
+        html = (f'<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN"><html><head>'
+                f'<title>{status} {short}</title></head><body>'
+                f'<h1>{title}</h1><hr><address>{_ERR_SIG["apache"]}</address></body></html>')
+    else:
+        html = (f'<html><head><title>{status} {short}</title></head>'
+                f'<body><center><h1>{title}</h1></center>'
+                f'<hr><center>{_ERR_SIG["nginx"]}</center></body></html>')
+    return Response(html, status=status, mimetype='text/html')
+
+
+# ---------------------------------------------------------------------------
+# /admin 陷阱协议
+# ---------------------------------------------------------------------------
+# 诱饵不是「有求必应」的静态页，而是一条「看起来像普通后台登录」的链：
+#   1. GET /admin         → 返回一个普通样子的登录页，并下发一个不透明会话令牌
+#                           （藏在隐藏字段 / Cookie 里）。**绝不标注长度 / 算法 / 位数**
+#                           —— 一旦自报「2048 位」，反而暴露这是伪造的（自报家门）。
+#   2. 任何后续 POST/直连 → 判定为自动化脚本，立即封 IP：
+#      - 真实用户不会 POST 一个自己从未登录过的后台；
+#      - 脚本无论带不带令牌、怎么构造，都是脚本。
+#   内部仍静默记录「提交长度是否恰为下发令牌的一半」用于取证画像，但页面上
+#   不透露任何长度信息（连"校验码"这类字样都不出现）。
+_TRAP_LOCK = threading.Lock()
+_TRAP_STATE = {}          # ip -> {'token': str, 'issued_at': float}
+_TRAP_TTL = 600           # 登录页有效期（秒）
+_TRAP_MAX = 4096
+_TRAP_TOKEN_HEX = 512     # 下发令牌长度（hex）；不对外标注位数
+
+
+def _trap_issue(ip: str) -> str:
+    """为来源 IP 下发一个 2048 位假令牌（覆盖旧值）"""
+    token = _rand_hex(_TRAP_TOKEN_HEX)
+    now = time.time()
+    with _TRAP_LOCK:
+        for k in [k for k, v in _TRAP_STATE.items() if now - v['issued_at'] > _TRAP_TTL]:
+            _TRAP_STATE.pop(k, None)
+        if len(_TRAP_STATE) > _TRAP_MAX:
+            for k in list(_TRAP_STATE)[:len(_TRAP_STATE) // 2]:
+                _TRAP_STATE.pop(k, None)
+        _TRAP_STATE[ip] = {'token': token, 'issued_at': now}
+    return token
+
+
+def body_admin_challenge(ip: str) -> Response:
+    """假后台登录页：普通后台的样子，下发不透明会话令牌（隐藏字段 + Cookie），
+    页面不标注任何长度 / 算法 / 位数，避免「自报家门」暴露伪造。"""
+    token = _trap_issue(ip)
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>系统管理后台 - {_FAKE_DOMAIN}</title>
+<meta name="generator" content="AdminPanel/2.4">
+<style>
+ body{{font-family:-apple-system,"Segoe UI",sans-serif;background:#f2f4f5;margin:0;
+   display:flex;align-items:center;justify-content:center;height:100vh}}
+ .box{{background:#fff;padding:36px 32px;border-radius:12px;width:340px;
+   box-shadow:0 8px 30px rgba(0,0,0,.08)}}
+ h1{{font-size:18px;margin:0 0 4px}} p{{color:#8a94a6;font-size:12px;margin:0 0 20px}}
+ input{{width:100%;box-sizing:border-box;padding:10px 12px;margin-bottom:12px;
+   border:1px solid #dbdfe1;border-radius:8px;font-size:14px}}
+ button{{width:100%;padding:10px;border:0;border-radius:8px;background:#5D87FF;
+   color:#fff;font-size:14px;cursor:pointer}}
+ .f{{text-align:center;color:#a5adbb;font-size:11px;margin-top:16px}}
+</style></head>
+<body><form class="box" method="post" action="/admin/login">
+ <h1>系统管理后台</h1><p>{_FAKE_DOMAIN} · AdminPanel v2.4</p>
+ <input name="username" placeholder="用户名" autocomplete="off">
+ <input name="password" type="password" placeholder="密码" autocomplete="off">
+ <button type="submit">登 录</button>
+ <div class="f">Copyright &copy; {time.strftime('%Y')} {_FAKE_DOMAIN}</div>
+ <input type="hidden" name="csrf" value="{token}">
+</form></body></html>"""
+    resp = Response(html, mimetype='text/html')
+    resp.set_cookie('admin_sid', token, path='/', httponly=True, samesite='Lax')
+    return resp
+
+
 # ===========================================================================
 # 诱饵路由表
 #   basic = 核心诱饵（最高频、最具代表性）
@@ -867,8 +981,7 @@ _DECOY_BASIC = {
     '/backup.zip': (('GET',), body_backup_zip, '备份/数据库导出探测'),
     '/www.zip': (('GET',), body_backup_zip, '备份/数据库导出探测'),
     # ---- 假后台 / 面板 ----
-    '/admin': (('GET', 'POST'), body_admin_login_page, '后台入口扫描'),
-    '/admin/login': (('GET', 'POST'), body_admin_login_page, '后台入口扫描'),
+    # 注意：/admin 与 /admin/login 不在此表 —— 它们由「陷阱协议」单独注册（见 _admin_trap）
     '/wp-admin': (('GET',), body_admin_login_page, '后台入口扫描'),
     '/wp-login.php': (('GET', 'POST'), body_admin_login_page, '后台入口扫描'),
     '/phpmyadmin': (('GET',), body_admin_login_page, '后台入口扫描'),
@@ -1008,6 +1121,164 @@ _DECOY_FULL = {
 }
 
 
+# ===========================================================================
+# 噪声诱饵表（decoy_set = full 时并入）
+#   —— 让整片扫描面「像一台真实服务器」：绝大多数路径返回 404/403/401/405，
+#      只有极少数（见 _DECOY_BASIC/_DECOY_FULL）才「碰巧泄露」出假 200。
+#   条目格式：(path, methods, status, style)
+# ===========================================================================
+_NOISE = [
+    # ---- CMS / 后台入口 ----
+    ('/wp-admin/admin-ajax.php', ('GET', 'POST'), 403, 'nginx'),
+    ('/wp-content/', ('GET',), 403, 'nginx'),
+    ('/wp-json/wp/v2/users', ('GET',), 404, 'nginx'),
+    ('/xmlrpc.php', ('POST',), 405, 'nginx'),
+    ('/administrator/index.php', ('GET',), 404, 'apache'),
+    ('/joomla/administrator/', ('GET',), 404, 'apache'),
+    ('/admin.php', ('GET',), 404, 'nginx'),
+    ('/admin1/', ('GET',), 404, 'nginx'),
+    ('/admin_area/', ('GET',), 404, 'nginx'),
+    ('/manage/', ('GET',), 404, 'nginx'),
+    ('/management/', ('GET',), 404, 'nginx'),
+    ('/portal/', ('GET',), 302, 'nginx'),
+    ('/dashboard/', ('GET',), 302, 'nginx'),
+    ('/login.php', ('GET',), 404, 'nginx'),
+    ('/signin', ('GET',), 404, 'nginx'),
+    ('/user/login', ('GET',), 404, 'nginx'),
+    # ---- 配置 / 备份 ----
+    ('/.env.dev', ('GET',), 404, 'nginx'),
+    ('/.env.test', ('GET',), 404, 'nginx'),
+    ('/.env.staging', ('GET',), 404, 'nginx'),
+    ('/.env.backup', ('GET',), 404, 'nginx'),
+    ('/env', ('GET',), 404, 'nginx'),
+    ('/config.php.bak', ('GET',), 404, 'apache'),
+    ('/config.yaml.bak', ('GET',), 404, 'nginx'),
+    ('/settings.py', ('GET',), 404, 'nginx'),
+    ('/web.config', ('GET',), 404, 'iis'),
+    ('/nginx.conf', ('GET',), 403, 'nginx'),
+    ('/httpd.conf', ('GET',), 403, 'apache'),
+    ('/docker-compose.yaml', ('GET',), 404, 'nginx'),
+    ('/docker-compose.prod.yml', ('GET',), 404, 'nginx'),
+    ('/Makefile', ('GET',), 403, 'nginx'),
+    ('/Gemfile', ('GET',), 404, 'nginx'),
+    ('/go.mod', ('GET',), 404, 'nginx'),
+    ('/composer.lock', ('GET',), 404, 'nginx'),
+    ('/yarn.lock', ('GET',), 404, 'nginx'),
+    ('/package-lock.json', ('GET',), 404, 'nginx'),
+    # ---- 版本控制 ----
+    ('/.git/index', ('GET',), 403, 'nginx'),
+    ('/.git/packed-refs', ('GET',), 403, 'nginx'),
+    ('/.git/COMMIT_EDITMSG', ('GET',), 403, 'nginx'),
+    ('/.gitignore', ('GET',), 404, 'nginx'),
+    ('/.svn/wc.db', ('GET',), 404, 'apache'),
+    ('/.hg/hgrc', ('GET',), 404, 'nginx'),
+    # ---- 假 API 命名空间（v1/v2/v3 / internal）----
+    ('/api/v2/profile', ('GET',), 404, 'nginx'),
+    ('/api/v2/auth', ('POST',), 404, 'nginx'),
+    ('/api/v2/config', ('GET',), 404, 'nginx'),
+    ('/api/v3/users', ('GET',), 404, 'nginx'),
+    ('/api/v1/health', ('GET',), 404, 'nginx'),
+    ('/api/v1/status', ('GET',), 404, 'nginx'),
+    ('/api/v1/metrics', ('GET',), 404, 'nginx'),
+    ('/api/v1/orders', ('GET',), 404, 'nginx'),
+    ('/api/v1/callback', ('POST',), 500, 'nginx'),
+    ('/api/v1/webhook', ('POST',), 400, 'nginx'),
+    ('/api/v1/upload', ('POST',), 429, 'nginx'),
+    ('/api/v1/files', ('GET',), 404, 'nginx'),
+    ('/api/v1/backup', ('GET',), 403, 'nginx'),
+    ('/api/v1/dump', ('GET',), 403, 'nginx'),
+    ('/api/v1/shell', ('POST',), 403, 'nginx'),
+    ('/api/v1/exec', ('POST',), 403, 'nginx'),
+    ('/api/v1/eval', ('POST',), 403, 'nginx'),
+    ('/api/v1/rpc', ('POST',), 404, 'nginx'),
+    ('/api/v1/debug', ('GET',), 403, 'nginx'),
+    ('/api/v1/admin', ('GET',), 404, 'nginx'),
+    ('/api/internal/backup', ('GET',), 403, 'nginx'),
+    ('/api/internal/exec', ('POST',), 403, 'nginx'),
+    ('/api/internal/health', ('GET',), 404, 'nginx'),
+    ('/api/internal/status', ('GET',), 401, 'nginx'),
+    # ---- Actuator 扩展 ----
+    ('/actuator/beans', ('GET',), 404, 'nginx'),
+    ('/actuator/conditions', ('GET',), 404, 'nginx'),
+    ('/actuator/startup', ('GET',), 404, 'nginx'),
+    ('/actuator/prometheus', ('GET',), 404, 'nginx'),
+    # ---- 健康检查 / 调试 / 运维 ----
+    ('/nginx_status', ('GET',), 403, 'nginx'),
+    ('/status', ('GET',), 404, 'nginx'),
+    ('/health', ('GET',), 404, 'nginx'),
+    ('/healthz', ('GET',), 404, 'nginx'),
+    ('/readyz', ('GET',), 404, 'nginx'),
+    ('/livez', ('GET',), 404, 'nginx'),
+    ('/ping', ('GET',), 404, 'nginx'),
+    ('/debug/pprof', ('GET',), 403, 'nginx'),
+    ('/debug/vars', ('GET',), 403, 'nginx'),
+    ('/_status', ('GET',), 404, 'nginx'),
+    ('/_cat/indices', ('GET',), 403, 'nginx'),
+    ('/_cluster/health', ('GET',), 403, 'nginx'),
+    ('/solr/', ('GET',), 404, 'nginx'),
+    ('/jenkins/script', ('POST',), 403, 'nginx'),
+    ('/jenkins/manage', ('GET',), 403, 'nginx'),
+    ('/script', ('POST',), 403, 'nginx'),
+    ('/shell', ('POST',), 403, 'nginx'),
+    ('/cgi-bin/', ('GET',), 404, 'apache'),
+    ('/cgi-bin/luci', ('GET',), 404, 'apache'),
+    ('/jmx-console/', ('GET',), 403, 'tomcat'),
+    ('/invoker/JMXInvokerServlet', ('GET',), 403, 'tomcat'),
+    ('/web-console/', ('GET',), 403, 'tomcat'),
+    ('/weblogic/', ('GET',), 404, 'nginx'),
+    # ---- 云元数据（SSRF 探测）----
+    ('/latest/meta-data/', ('GET',), 403, 'nginx'),
+    ('/latest/user-data/', ('GET',), 403, 'nginx'),
+    ('/computeMetadata/v1/', ('GET',), 403, 'nginx'),
+    ('/metadata/instance', ('GET',), 403, 'nginx'),
+    # ---- IDE / 系统文件 ----
+    ('/.idea/', ('GET',), 403, 'nginx'),
+    ('/.vscode/', ('GET',), 403, 'nginx'),
+    ('/.project', ('GET',), 404, 'nginx'),
+    ('/.classpath', ('GET',), 404, 'nginx'),
+    ('/Thumbs.db', ('GET',), 404, 'iis'),
+    ('/desktop.ini', ('GET',), 404, 'iis'),
+    # ---- 日志 ----
+    ('/logs/', ('GET',), 403, 'nginx'),
+    ('/log/', ('GET',), 403, 'nginx'),
+    ('/app.log', ('GET',), 404, 'nginx'),
+    ('/error.log', ('GET',), 404, 'nginx'),
+    ('/access.log', ('GET',), 404, 'nginx'),
+    ('/catalina.out', ('GET',), 404, 'tomcat'),
+    # ---- 杂项 ----
+    ('/phpinfo', ('GET',), 404, 'nginx'),
+    ('/test.php', ('GET',), 404, 'nginx'),
+    ('/info.php', ('GET',), 404, 'nginx'),
+    ('/readme.html', ('GET',), 404, 'nginx'),
+    ('/README.md', ('GET',), 404, 'nginx'),
+    ('/CHANGELOG.md', ('GET',), 404, 'nginx'),
+    ('/license.txt', ('GET',), 404, 'nginx'),
+    ('/crossdomain.xml', ('GET',), 404, 'nginx'),
+    ('/clientaccesspolicy.xml', ('GET',), 404, 'nginx'),
+    ('/axis2/', ('GET',), 404, 'tomcat'),
+    ('/services/', ('GET',), 404, 'tomcat'),
+    ('/ws/', ('GET',), 404, 'nginx'),
+    ('/rpc/', ('POST',), 404, 'nginx'),
+    ('/.well-known/security.txt', ('GET',), 404, 'nginx'),
+]
+
+
+def _noise_builder(status: int, style: str):
+    """为一条噪声诱饵生成「返回指定状态码」的构造器"""
+    def _b():
+        return body_error(status, style)
+    return _b
+
+
+_DECOY_NOISE = {
+    # 噪声节点统一至少接受 GET/POST：否则换个方法就会落到 /api/<path> 兜底，
+    # 反而返回「有求必应」的假 200，露馅。
+    path: (tuple(sorted({'GET', 'POST'} | set(methods))),
+           _noise_builder(status, style), '噪声诱饵探测')
+    for (path, methods, status, style) in _NOISE
+}
+
+
 # register() 完成后由内部赋值，供 record_hit() 复用命中处理链
 _hit_fn = None
 _canary_fn = None
@@ -1047,6 +1318,8 @@ def _decoy_table(decoy_set: str) -> dict:
         return dict(_DECOY_BASIC)
     table = dict(_DECOY_BASIC)
     table.update(_DECOY_FULL)
+    # full 档并入噪声诱饵：让整片扫描面像一台真实服务器（多数 404/403）
+    table.update(_DECOY_NOISE)
     return table
 
 
@@ -1081,8 +1354,8 @@ def register(ctx):
     def _tarpit():
         tarpit(tarpit_ms)
 
-    def _hit(path, reason, canary=None, evasion=''):
-        """命中诱饵：记录取证信息 + 统计 + 拉黑来源 IP"""
+    def _hit(path, reason, canary=None, evasion='', ban=True):
+        """命中诱饵：记录取证信息 + 统计 +（ban=True 时）拉黑来源 IP"""
         ip = get_client_ip()
         detail = {
             'path': path,
@@ -1132,7 +1405,7 @@ def register(ctx):
         except Exception:
             pass
 
-        if do_blacklist:
+        if do_blacklist and ban:
             # 内网 / 白名单 IP 豁免：既不拉黑也不计数（避免"已拉黑"统计虚高）
             try:
                 exempt = dual_auth.is_internal(ip) or dual_auth.is_whitelisted(ip)
@@ -1176,8 +1449,15 @@ def register(ctx):
 
     # ---- 注册诱饵路由 ----
     table = _decoy_table(decoy_set)
+    # 真实路由（非蜜罐）已占用的路径：诱饵绝不覆盖，避免规则歧义
+    real_paths = {r.rule for r in app.url_map.iter_rules()
+                  if not r.endpoint.startswith('_honeypot')}
     registered = 0
+    skipped = 0
     for path, (methods, builder, reason) in table.items():
+        if path in real_paths:
+            skipped += 1
+            continue
         try:
             app.add_url_rule(
                 path,
@@ -1188,6 +1468,65 @@ def register(ctx):
             registered += 1
         except Exception as e:
             logger.warning(f"[蜜罐] 注册诱饵路由失败 {path}: {e}")
+
+    # ---- /admin 陷阱协议：下发令牌 → 后续任何动作即封 ----
+    def _admin_trap():
+        ip = get_client_ip()
+        if request.method == 'GET':
+            # 第一步：只记录 + 下发令牌（这是诱饵，不封）
+            evasion = detect_evasion() if evasion_detect else ''
+            canary = _new_canary() if canary_enabled else None
+            if canary:
+                _remember_canary(canary, ip, '/admin',
+                                 (request.headers.get('User-Agent') or '')[:256])
+            _hit('/admin', '后台入口扫描', canary=canary, evasion=evasion, ban=False)
+            _tarpit()
+            resp = body_admin_challenge(ip)
+            if canary:
+                _inject_canary(resp, canary)
+            return resp
+
+        # 后续任何 POST / 直连 → 判定为自动化脚本，直接封 IP
+        submitted = ''
+        try:
+            j = request.get_json(silent=True) or {}
+            submitted = str(j.get('token') or j.get('csrf') or '')
+        except Exception:
+            pass
+        if not submitted:
+            try:
+                submitted = str(request.form.get('token') or request.form.get('csrf') or '')
+            except Exception:
+                pass
+        # 静默标记：提交长度是否恰为下发令牌的一半（仅取证画像；页面不透露任何长度）
+        issued_len = 0
+        with _TRAP_LOCK:
+            _ent = _TRAP_STATE.get(ip)
+            if _ent:
+                issued_len = len(_ent['token'])
+        if not submitted:
+            reason = '陷阱命中: 直连/无令牌探测'
+        elif issued_len and len(submitted) == issued_len // 2:
+            reason = '陷阱命中: 疑似按半长构造令牌(自动化脚本)'
+        else:
+            reason = '陷阱命中: 带令牌直连探测'
+        _hit('/admin', reason)
+        _tarpit()
+        return body_error(403, 'nginx')
+
+    for _tp in ('/admin', '/admin/login'):
+        if _tp in real_paths:
+            continue
+        try:
+            app.add_url_rule(
+                _tp,
+                endpoint=f'_honeypot_trap{_tp.replace("/", "_")}',
+                view_func=_admin_trap,
+                methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+            )
+            registered += 1
+        except Exception as e:
+            logger.warning(f"[蜜罐] 注册陷阱路由失败 {_tp}: {e}")
 
     # ---- 兜底：未知 /api/* 路径 ----
     if unknown_api_decoy:
