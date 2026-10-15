@@ -17,7 +17,7 @@ import (
 func main() {
 	pluginsDir := flag.String("plugins-dir", "../plugins", "插件目录")
 	ipcAddr := flag.String("ipc-addr", "127.0.0.1:18730", "IIPC 连接地址")
-	dbPath := flag.String("db", ":memory:", "SQLite 路径；mem=内存库，:memory:=真SQLite内存引擎")
+	dbPath := flag.String("db", ":memory:", "SQLite DSN；:memory: 或 mem=纯 Go 内存引擎，其它值=文件路径（可落盘）")
 	pluginHost := flag.String("plugin-host", "", "pluginhost.py 路径；设置则由单个 pluginhost 进程 fork/spawn 各插件（留空=内核逐插件直拉）")
 	adminFlag := flag.String("admin", "", "管理员 user_id 列表（逗号分隔），用于命令级权限")
 	logFile := flag.String("log-file", "", "日志文件路径（空=仅 stdout）")
@@ -30,8 +30,8 @@ func main() {
 	auth := "dev-auth"
 	store, err := NewStore(*dbPath)
 	if err != nil {
-		logWarn("db", "初始化失败(%v)，回退内存库", err)
-		store = NewMemoryStore()
+		logWarn("db", "SQLite 初始化失败(%v)，回退真内存引擎 :memory:", err)
+		store, _ = NewSqliteStore(":memory:")
 	}
 	EnsureSchema(store) // 核心表（1:1 数据面）：users/group_members/commands/plugin_configs/perm_*/audit_logs...
 	bus := NewEventBus()
