@@ -39,15 +39,23 @@ import secrets
 import threading
 import time
 
+from framework.api.ratelimit import SlidingWindow
+
 logger = logging.getLogger('zcbot')
 
 _MAX_ENTRIES = 20000
 _DEFAULT_DIFFICULTY = 4
 _MIN_DIFFICULTY, _MAX_DIFFICULTY = 1, 6
 
+# 计量化参数（解决「买断制」：一次 PoW 解出后票据被无限复用、零边际成本）
+_MAX_TICKET_USES = 200     # 单张票据最多服务请求数，超出需重新求解
+_ISSUE_MAX = 30           # 单 IP 滑动窗口内最多签发挑战次数（防票据农场 / 批量骗取）
+_ISSUE_WINDOW = 60.0
+
 _lock = threading.Lock()
 _challenges = {}   # challenge -> {"expires_at": float, "difficulty": int}
-_tickets = {}      # ticket -> expires_at
+_tickets = {}      # ticket -> {"expires_at": float, "ip": str, "uses": int}
+_issue_limiter = SlidingWindow(_ISSUE_MAX, _ISSUE_WINDOW)
 
 
 def _purge(store: dict, now: float):
@@ -95,16 +103,25 @@ def _pow_ok(challenge: str, nonce, difficulty: int) -> bool:
     return digest.startswith('0' * difficulty)
 
 
-def verify(challenge: str, nonce, ticket_ttl: int = 1800):
+def verify(challenge: str, nonce, ticket_ttl: int = 1800, client_ip: str = None):
     """
     校验 PoW 并签发通行票据。
     成功返回 ticket 字符串；失败返回 None。
     challenge 一次性：无论成功失败都作废，防重放。
     难度取「下发时记录的难度」，不接受客户端自报，避免被降级绕过。
+
+    计量化：
+    - 票据绑定签发来源 IP（remote_ip），换 IP 使用直接作废 → 阻止票据跨 IP 共享/轮转。
+    - 签发本身受单 IP 滑动窗口限速（_issue_limiter），阻止单 IP 批量骗取票据农场。
+    - 后续每次有效使用计入 uses，超过 _MAX_TICKET_USES 需重新求解 → 持续高并发需反复付算力。
     """
     if not challenge or not isinstance(challenge, str):
         return None
     now = time.time()
+    # 签发限速（先于 PoW 复核，廉价拦住票据农场）
+    if client_ip and not _issue_limiter.allow(client_ip):
+        logger.warning(f"[人机验证] 签发限速触发: {client_ip}")
+        return None
     with _lock:
         _purge(_challenges, now)
         entry = _challenges.pop(challenge, None)   # 一次性
@@ -117,22 +134,42 @@ def verify(challenge: str, nonce, ticket_ttl: int = 1800):
     ticket = secrets.token_urlsafe(24)
     with _lock:
         _purge(_tickets, now)
-        _tickets[ticket] = now + max(60, int(ticket_ttl))
+        _tickets[ticket] = {
+            'expires_at': now + max(60, int(ticket_ttl)),
+            'ip': client_ip or '',
+            'uses': 0,
+        }
     return ticket
 
 
-def is_valid_ticket(ticket) -> bool:
-    """校验通行票据是否有效"""
+def is_valid_ticket(ticket, remote_ip: str = None) -> bool:
+    """
+    校验通行票据是否有效（并计入使用次数，实现计量）。
+    - 不存在 / 已过期 → 无效
+    - 绑定 IP 与当前来源不一致 → 无效（阻止跨 IP 复用）
+    - 使用次数超过 _MAX_TICKET_USES → 无效，需重新求解
+    返回 True 时原子地 +1 uses。
+    """
     if not ticket or not isinstance(ticket, str):
         return False
     now = time.time()
     with _lock:
-        exp = _tickets.get(ticket)
-        if exp is None:
+        rec = _tickets.get(ticket)
+        if rec is None:
             return False
-        if exp <= now:
+        if rec['expires_at'] <= now:
             _tickets.pop(ticket, None)
             return False
+        # IP 绑定：签发时记录了来源 IP 且当前来源不同 → 作废（防共享/轮转）
+        if rec['ip'] and remote_ip and rec['ip'] != remote_ip:
+            _tickets.pop(ticket, None)
+            logger.info(f"[人机验证] 票据 IP 不匹配作废: {remote_ip} != {rec['ip']}")
+            return False
+        if rec['uses'] >= _MAX_TICKET_USES:
+            _tickets.pop(ticket, None)
+            logger.info(f"[人机验证] 票据用量耗尽作废: {remote_ip}")
+            return False
+        rec['uses'] += 1
         return True
 
 

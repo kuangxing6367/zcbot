@@ -1,0 +1,21 @@
+{
+  "id": "api_parity",
+  "name": "API 1:1 验收插件",
+  "author": "zcbot_go",
+  "version": "1.0.0",
+  "description": "覆盖原 zcbot 插件全 API 面：模块装饰器/ctx 方法/Event/命令匹配/会话/群开关/权限/DB/动作代理",
+  "deps": [],
+  "event_types": ["message", "parity.ping", "command.before", "task.tick"],
+  "commands": [
+    { "name": "/parity", "perm": "", "desc": "DB/配置/数据目录/审计全链自检" },
+    { "name": "/askss", "perm": "", "desc": "多轮会话 wait_for" },
+    { "name": "/switch", "perm": "", "desc": "群插件开关" },
+    { "name": "/acts", "perm": "", "desc": "actions/onebot 代理" },
+    { "name": "/grp", "perm": "", "desc": "群成员角色查询" },
+    { "name": "/emit", "perm": "", "desc": "广播自定义事件" },
+    { "name": "/data", "perm": "", "desc": "dict 式事件访问" },
+    { "name": "/whoami", "perm": "", "desc": "身份查询" },
+    { "name": "/raise", "perm": "", "desc": "触发 on_error 钩子" },
+    { "name": "/help", "perm": "", "desc": "帮助" }
+  ]
+}

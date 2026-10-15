@@ -190,3 +190,11 @@ htmlcov/
 !core_plugins/image_renderer/native/bin/**/zcbot_render.so
 !core_plugins/image_renderer/native/bin/**/zcbot_render.pyd
 !core_plugins/image_renderer/native/bin/**/.gitkeep
+
+# ============================================================
+# IIPC 内核链路（framework/iipc）：只提交源码，产物由本地编译产出
+# ============================================================
+framework/iipc/go_kernel/*.exe
+framework/iipc/rust_adapter/target/
+framework/iipc/**/plugins_dat/
+framework/iipc/data/

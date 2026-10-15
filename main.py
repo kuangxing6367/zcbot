@@ -151,13 +151,22 @@ def _print_usage():
   python main.py -a              同上（attach 的简写）
   python main.py -a --agent      智能体对话模式（纯文本通道里跟 AI 对话）
   python main.py code            全屏 AI 界面（需要真正的终端 / TTY）
+  python main.py --iipc          走 IIPC 内核链路（Go 内核 + Rust 协议端，插件独立进程）
   python main.py --help          显示本帮助
 
 attach 常用参数：
   --config <path>   指定 config.yaml（据此定位数据库里的控制台凭证）
   --db <path>       直接指定 SQLite 库路径
   --port/--token    直接指定控制台端口与 token（跳过读库）
-  --agent           每行都交给 AI（正常模式下也可用行首 `!` 单条交给 AI）""")
+  --agent           每行都交给 AI（正常模式下也可用行首 `!` 单条交给 AI）
+
+--iipc 常用参数（其余见 framework/iipc/README.md；端口等也可在 config.yaml 的 iipc: 段配置）：
+  --ipc-addr ADDR      内核 IPC 监听 [ip:]port（默认 127.0.0.1:18730）
+  --plugins-dir DIR    插件目录（默认 framework/iipc/plugins）
+  --admin IDS          管理员 user_id（逗号分隔，供 require_admin 鉴权）
+  --onebot-url URL     正向 WS：适配器主动连 ws://host:port
+  --onebot-listen ADDR 反向 WS：监听 [ip:]port 等 OneBot 实现连入（默认 127.0.0.1:6701）
+  --no-rust            不启动 Rust 协议端（send 类动作不可用，事件注入仍可）""")
 
 
 def _resolve_db_config(config_path=None):
@@ -303,6 +312,20 @@ def main():
     # 子命令：attach（别名 -a）→ 接入运行中的框架调试控制台（无需 TTY / 无需重启）
     if argv[:1] and argv[0] in ('attach', '-a'):
         sys.exit(_run_attach(argv[1:]))
+
+    # 子命令：--iipc / -iipc → 走 IIPC 内核链路（Go 内核 + Rust 协议端 + 独立进程插件）
+    #   与上面的 asyncio 框架是并列的两条启动路径：插件、DB、事件语义 1:1 对齐，
+    #   但进程拓扑不同（插件在独立进程、DB 在 Go 侧执行，不占 Python GIL）。
+    #   不带此开关时框架行为完全不变。
+    if argv[:1] and argv[0] in ('--iipc', '-iipc'):
+        try:
+            from framework.iipc import run as _iipc_run
+        except Exception as e:  # noqa: BLE001
+            print('[iipc] 无法加载 IIPC 链路: %s' % e)
+            print('[iipc] 确认 framework/iipc/ 源码完整；首次运行需要 go / cargo 工具链'
+                  '（也可设 ZCBOT_GO_BIN / ZCBOT_CARGO 指定路径）')
+            sys.exit(1)
+        sys.exit(_iipc_run(argv[1:]) or 0)
 
     # 未知选项：不要静默忽略（历史坑：`main.py -a` 被当无事发生、`main.py argparse`
     # 被当成配置文件路径并在根目录生成一个叫 argparse 的默认配置）

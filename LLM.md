@@ -9,7 +9,10 @@
 - **官方插件默认全部 `enabled: false`**(发现即禁用),需显式启用:`core_plugins.yaml` 改 true 或 `python tools/scan_core_plugins.py --enable <名>`
 - 数据在 `data/`(db/logs/plugins_dat),代码目录更新会被覆盖,数据禁止写代码目录
 - 配置两份:`config.yaml`(全局) + `core_plugins.yaml`(官方插件开关,启动自动同步)
-- 适用版本 v1.8.7;文档站 docs/(VitePress);可 pip 安装(`pip install zcbot`,入口 `zcbot`,状态落 `~/.zcbot`)
+- 适用版本 v1.8.9-beta.1;文档站 docs/(VitePress);可 pip 安装(`pip install zcbot`,入口 `zcbot`,状态落 `~/.zcbot`)
+- **三条启动路径并存**:单进程(默认) / `dual_process` 双 Python 进程 / **`python main.py --iipc`**
+  (IIPC:Go 内核 + Rust 协议端 + 独立进程插件)。后两者**不是一回事**,别混:IIPC 内核是 Go 进程,
+  DB 在 Go 侧执行不占 GIL;不带 `--iipc` 时主框架行为完全不变
 
 ## 内核设计哲学
 
@@ -22,5 +25,7 @@
 | 写插件 / 调插件 API | [docs/llm-plugins.md](docs/llm-plugins.md) |
 | 改框架 / 找模块 / 理解事件流 | [docs/llm-framework.md](docs/llm-framework.md) |
 | 跑测试 / 排查报错 / 避坑 | [docs/llm-debugging.md](docs/llm-debugging.md) |
+| **IIPC 链路（`--iipc`）** | [docs/llm-iipc.md](docs/llm-iipc.md) |
+| **加固 API / 前端安全** | [docs/llm-security.md](docs/llm-security.md) |
 
 人类文档:[README.md](README.md) · [docs/](docs/index.md)
