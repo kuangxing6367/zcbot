@@ -5,7 +5,6 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 
 	_ "modernc.org/sqlite"
 )
@@ -126,14 +125,17 @@ func normalizeSqliteVal(v interface{}) interface{} {
 
 var _ Store = (*sqliteStore)(nil)
 
-// NewStore 优先返回 SQLite；失败回退内存库，保证内核始终能起。
+// NewStore 返回存储实现。
+// db 取值语义：
+//   - "" / "mem" / ":memory:" → 真 SQLite 内存引擎（纯 Go、无 cgo），支持完整 DDL/DML；
+//   - 其它值 → 该路径的 SQLite 文件（可落盘、可 WAL）。
+//
+// 历史上曾有一个"仅支持极简 SQL 子集的玩具正则内存库"作为 mem 模式后端，
+// 但它无法执行 CREATE INDEX / ORDER BY / 多列查询，导致核心表与插件表静默建表失败，
+// 表现为"内存更省"的功能残缺假象。现已移除：mem 与 :memory: 统一走真 SQLite 引擎。
 func NewStore(path string) (Store, error) {
-	if path == "mem" {
-		return NewMemoryStore(), nil
+	if path == "" || path == "mem" || path == ":memory:" {
+		return NewSqliteStore(":memory:")
 	}
-	s, err := NewSqliteStore(path)
-	if err != nil {
-		return nil, fmt.Errorf("sqlite 初始化失败 (%s): %w", path, err)
-	}
-	return s, nil
+	return NewSqliteStore(path)
 }

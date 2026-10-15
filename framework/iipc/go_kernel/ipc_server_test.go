@@ -49,7 +49,10 @@ func recvFrame(t *testing.T, sc *bufio.Scanner) map[string]interface{} {
 func TestAdapterRoleAndRouting(t *testing.T) {
 	addr := "127.0.0.1:18799"
 	bus := NewEventBus()
-	store := NewMemoryStore()
+	store, err := NewSqliteStore(":memory:")
+	if err != nil {
+		t.Fatalf("NewSqliteStore(:memory:) 失败: %v", err)
+	}
 	InitServices(bus, store) // 编排附属件（调度/会话/群开关/权限），handlers 依赖
 	srv := NewIpcServer(addr, "dev-auth", bus, store)
 	srv.SetOrchestration(sessMgr, sched, grpSw)

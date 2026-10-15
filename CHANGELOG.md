@@ -30,6 +30,28 @@
 
 > 暂无。
 
+## v1.8.9-beta.3（2026-10-15）
+
+> 主题：**修复 IIPC `mem` 模式建表失败的真实 bug**（功能残缺，非内存优化）。
+> 预发布：Linux/amd64 预编译产物随 tag 提供。
+
+### Bug 修复
+
+- **`mem` 模式建表失败（真 bug）**：`--db mem`（字面量）此前落到「只支持极简 SQL 子集的玩具正则内存库」，
+  其 `CREATE TABLE` 正则仅匹配 `IF NOT EXISTS`、且 `SELECT` 只支持单列 `WHERE`，**不支持 `CREATE INDEX`/`ORDER BY`/多列查询**。
+  结果：内核核心表（`users`/`commands`/`perm_*`…）与所有插件的 `create_table` 静默建表失败 → 表不存在 → 插件启动失败。
+  所谓「mem 更省内存」实为**功能残缺的假象**（数据没存进去，自然占用低）。
+- **修复方式**：删除该残缺玩具库；`NewStore` 现在将 `""` / `mem` / `:memory:` 统一路由到**真 SQLite 内存引擎**
+  （`modernc.org/sqlite`，纯 Go、无 cgo、支持完整 DDL/DML）。`main.go` 的初始化失败回退也改为回退到真 `:memory:` 而非玩具库。
+- 新增 `go_kernel/store_test.go` 回归测试：锁死 `mem`/`:memory:`/空 必须返回 `sqliteStore` 且支持 CREATE INDEX / ORDER BY 等玩具库做不到的语句。
+
+## v1.8.9-beta.2（2026-10-15）
+
+> 主题：**IIPC launcher 跨平台扩展名修复** + 正确命名的 Linux 预编译产物。
+
+- `launcher.py` 新增 `_bin_ext()`：Windows 用 `.exe`，其他平台无扩展名；Linux 启动不再寻找 `*.exe`。
+- 重新打包 Linux/amd64 预编译产物（无扩展名 ELF）。
+
 ## v1.8.9-beta.1（2026-10-15）
 
 > 主题：**IIPC 内核链路合入主框架（源码分发）+ 全 API 面穷举验收 + Web 安全加固（全局限速 / PoW 票据计量化 / 诱饵真实化 / 前端调用型诱饵）**。
