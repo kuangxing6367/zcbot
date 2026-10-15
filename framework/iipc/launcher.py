@@ -5,7 +5,7 @@
 拓扑（对应用户定稿）：
     python main.py -iipc
       └─ 本启动器：日志总出口 + 终端交互（不承载业务）
-          ├─ Go 内核（iipc/go_kernel/zcbot_kernel.exe）：事件总线 / SQLite / 插件编排
+          ├─ Go 内核（iipc/go_kernel/zcbot_kernel[.exe]）：事件总线 / SQLite / 插件编排
           ├─ Rust 协议端（core_plugins/IIPC_onebot_adapter/）：OneBot 协议层，连入内核
           └─ Python 插件（iipc/plugins/，或 --plugins-dir 指定）：每插件独立进程
 
@@ -87,9 +87,16 @@ def _load_iipc_config():
 
 
 KERNEL_DIR = os.path.join(HERE, "go_kernel")
-KERNEL_EXE = os.path.join(KERNEL_DIR, "zcbot_kernel.exe")
 RUST_DIR = os.path.join(HERE, "rust_adapter")   # 协议端源码自带（以源码方式分发）
-RUST_EXE = os.path.join(RUST_DIR, "target", "release", "zcbot_adapter.exe")
+
+
+def _bin_ext():
+    """按平台决定二进制扩展名：Windows 用 .exe，Linux/macOS 无扩展名。"""
+    return ".exe" if (os.name == "nt" or sys.platform.startswith("win")) else ""
+
+
+KERNEL_EXE = os.path.join(KERNEL_DIR, "zcbot_kernel" + _bin_ext())
+RUST_EXE = os.path.join(RUST_DIR, "target", "release", "zcbot_adapter" + _bin_ext())
 PLUGINS = os.path.join(HERE, "plugins")
 PLUGINHOST = os.path.join(HERE, "py_sdk", "pluginhost.py")
 PY = sys.executable
