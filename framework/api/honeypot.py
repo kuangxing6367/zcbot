@@ -31,6 +31,7 @@
 import base64
 import json
 import logging
+import os
 import random
 import re
 import string
@@ -901,11 +902,11 @@ _TRAP_LOCK = threading.Lock()
 _TRAP_STATE = {}          # ip -> {'token': str, 'issued_at': float}
 _TRAP_TTL = 600           # 登录页有效期（秒）
 _TRAP_MAX = 4096
-_TRAP_TOKEN_HEX = 512     # 下发令牌长度（hex）；不对外标注位数
+_TRAP_TOKEN_HEX = 2048    # 下发令牌长度（hex）；与会话令牌真实规格一致（webapp._verify_token: len==2048），不对外标注位数
 
 
 def _trap_issue(ip: str) -> str:
-    """为来源 IP 下发一个 2048 位假令牌（覆盖旧值）"""
+    """为来源 IP 下发一个与会话令牌同规格（2048 hex）的假令牌（覆盖旧值）"""
     token = _rand_hex(_TRAP_TOKEN_HEX)
     now = time.time()
     with _TRAP_LOCK:
@@ -1003,9 +1004,9 @@ _DECOY_BASIC = {
     '/openapi.json': (('GET',), body_swagger, '未公开 API 命名空间探测'),
     '/v2/api-docs': (('GET',), body_swagger, '未公开 API 命名空间探测'),
     # ---- 假 API 命名空间 ----
-    '/api/v1/users': (('GET',), body_users_json, '未公开 API 命名空间探测'),
-    '/api/v1/auth/login': (('POST',), body_login_success_json, '未公开 API 命名空间探测'),
-    '/api/v1/config': (('GET',), body_env_json, '未公开 API 命名空间探测'),
+    '/api/users': (('GET',), body_users_json, '未公开 API 命名空间探测'),
+    '/api/auth/login': (('POST',), body_login_success_json, '未公开 API 命名空间探测'),
+    '/api/config': (('GET',), body_env_json, '未公开 API 命名空间探测'),
     '/api/internal/config': (('GET',), body_env_json, '未公开 API 命名空间探测'),
     '/api/internal/secrets': (('GET',), body_keys_json, '未公开 API 命名空间探测'),
     '/api/internal/users': (('GET',), body_users_json, '未公开 API 命名空间探测'),
@@ -1110,10 +1111,10 @@ _DECOY_FULL = {
     '/.git/refs/heads/master': (('GET',), body_git_ref, '版本控制泄露探测'),
     '/.git/logs/HEAD': (('GET',), body_log_file, '版本控制泄露探测'),
     # ---- 扩展 API 命名空间 ----
-    '/api/v1/admin/users': (('GET',), body_users_json, '未公开 API 命名空间探测'),
-    '/api/v1/admin/token': (('POST',), body_login_success_json, '未公开 API 命名空间探测'),
-    '/api/v1/keys': (('GET',), body_keys_json, '未公开 API 命名空间探测'),
-    '/api/v1/db/query': (('POST',), body_sql_dump, '未公开 API 命名空间探测'),
+    '/api/admin/users': (('GET',), body_users_json, '未公开 API 命名空间探测'),
+    '/api/admin/token': (('POST',), body_login_success_json, '未公开 API 命名空间探测'),
+    '/api/keys': (('GET',), body_keys_json, '未公开 API 命名空间探测'),
+    '/api/db/query': (('POST',), body_sql_dump, '未公开 API 命名空间探测'),
     '/api/internal/env': (('GET',), body_env_json, '未公开 API 命名空间探测'),
     '/api/internal/token': (('GET',), body_login_success_json, '未公开 API 命名空间探测'),
     '/api/internal/debug': (('GET',), body_actuator_env, '未公开 API 命名空间探测'),
@@ -1177,22 +1178,22 @@ _NOISE = [
     ('/api/v2/auth', ('POST',), 404, 'nginx'),
     ('/api/v2/config', ('GET',), 404, 'nginx'),
     ('/api/v3/users', ('GET',), 404, 'nginx'),
-    ('/api/v1/health', ('GET',), 404, 'nginx'),
-    ('/api/v1/status', ('GET',), 404, 'nginx'),
-    ('/api/v1/metrics', ('GET',), 404, 'nginx'),
-    ('/api/v1/orders', ('GET',), 404, 'nginx'),
-    ('/api/v1/callback', ('POST',), 500, 'nginx'),
-    ('/api/v1/webhook', ('POST',), 400, 'nginx'),
-    ('/api/v1/upload', ('POST',), 429, 'nginx'),
-    ('/api/v1/files', ('GET',), 404, 'nginx'),
-    ('/api/v1/backup', ('GET',), 403, 'nginx'),
-    ('/api/v1/dump', ('GET',), 403, 'nginx'),
-    ('/api/v1/shell', ('POST',), 403, 'nginx'),
-    ('/api/v1/exec', ('POST',), 403, 'nginx'),
-    ('/api/v1/eval', ('POST',), 403, 'nginx'),
-    ('/api/v1/rpc', ('POST',), 404, 'nginx'),
-    ('/api/v1/debug', ('GET',), 403, 'nginx'),
-    ('/api/v1/admin', ('GET',), 404, 'nginx'),
+    ('/api/health', ('GET',), 404, 'nginx'),
+    ('/api/status', ('GET',), 404, 'nginx'),
+    ('/api/metrics', ('GET',), 404, 'nginx'),
+    ('/api/orders', ('GET',), 404, 'nginx'),
+    ('/api/callback', ('POST',), 500, 'nginx'),
+    ('/api/webhook', ('POST',), 400, 'nginx'),
+    ('/api/upload', ('POST',), 429, 'nginx'),
+    ('/api/files', ('GET',), 404, 'nginx'),
+    ('/api/backup', ('GET',), 403, 'nginx'),
+    ('/api/dump', ('GET',), 403, 'nginx'),
+    ('/api/shell', ('POST',), 403, 'nginx'),
+    ('/api/exec', ('POST',), 403, 'nginx'),
+    ('/api/eval', ('POST',), 403, 'nginx'),
+    ('/api/rpc', ('POST',), 404, 'nginx'),
+    ('/api/debug', ('GET',), 403, 'nginx'),
+    ('/api/admin', ('GET',), 404, 'nginx'),
     ('/api/internal/backup', ('GET',), 403, 'nginx'),
     ('/api/internal/exec', ('POST',), 403, 'nginx'),
     ('/api/internal/health', ('GET',), 404, 'nginx'),
@@ -1321,6 +1322,67 @@ def _decoy_table(decoy_set: str) -> dict:
     # full 档并入噪声诱饵：让整片扫描面像一台真实服务器（多数 404/403）
     table.update(_DECOY_NOISE)
     return table
+
+
+# ===========================================================================
+# 前端「主动调用」型诱饵（由真实 WebUI 前端在正常运行中调用）
+# ---------------------------------------------------------------------------
+# 背景：以往诱饵全是静态路由，真实前端从不调用 → 浏览器抓包只见真端点，
+#       deception 等于零（用户核心指控）。本组诱饵由前端 JS 主动发起请求，
+#       于是真实浏览器流量里混入「看起来与真端点别无二致」的伪端点：
+#         - 对扫描器而言，这些端点出现在真实抓包流量中，无法与真端点区分；
+#         - GET（前端正常调用）→ 返回确定性良性数据，记录但不拉黑，绝不影响真实用户；
+#         - 非 GET（POST/PUT/...，即把伪端点当真 API 去利用）→ 判定为攻击，拉黑。
+#      同时前端 JS 源码里嵌有诱饵路径字符串（参考 WebDecoy：在 JS 中植入难以察觉的
+#      诱饵内容），供做源码审计的扫描器发现——发现即上钩。
+# 条目格式：path -> (methods, builder, reason)
+# ===========================================================================
+_FRONTEND_DECOYS = {
+    '/api/internal/telemetry': ('GET', '前端保活/遥测(良性)'),
+    '/api/internal/bootstrap': ('GET', '前端引导配置(良性)'),
+    '/api/internal/feature_flags': ('GET', '前端特性开关(良性)'),
+    '/api/internal/debug-config': ('GET', '前端调试配置(良性)'),
+}
+
+
+def body_fe_telemetry() -> Response:
+    """伪遥测端点：返回看起来真实的客户端遥测回执"""
+    return jsonify({
+        "code": 0, "msg": "ok",
+        "data": {"accepted": True, "sample_rate": 0.01, "region": "ap-east-1"},
+    })
+
+
+def body_fe_bootstrap() -> Response:
+    """伪前端引导配置：含一个假 apiBase 与一个明显是占位的假 token（绝无真实凭据）"""
+    return jsonify({
+        "code": 0, "msg": "ok",
+        "data": {
+            "apiBase": f"https://{_FAKE_DOMAIN}/api",
+            "build": time.strftime('%Y%m%d'),
+            "debugToken": _rand_hex(32),   # 假调试令牌，被拿去用即暴露
+            "flags": {"newUi": True, "beta": False},
+        },
+    })
+
+
+def body_fe_flags() -> Response:
+    """伪特性开关"""
+    return jsonify({
+        "code": 0, "msg": "ok",
+        "data": {"features": {"a_b_test": "v2", "enable_telemetry": True}},
+    })
+
+
+def body_fe_debug_config() -> Response:
+    """伪调试配置：呼应 local.debug.js 的占位调试入口（受控 honeytoken 同源）"""
+    return jsonify({
+        "code": 0, "msg": "ok",
+        "data": {"debug": False, "mirror": f"/js/{_DEBUG_FILE}", "note": "see local.debug.js"},
+    })
+
+
+_DEBUG_FILE = 'local.debug.js'
 
 
 def register(ctx):
@@ -1532,6 +1594,75 @@ def register(ctx):
             registered += 1
         except Exception as e:
             logger.warning(f"[蜜罐] 注册陷阱路由失败 {_tp}: {e}")
+
+    # ---- 前端「主动调用」型诱饵（真实前端会调用，混入真实流量）----
+    _fe_builders = {
+        '/api/internal/telemetry': body_fe_telemetry,
+        '/api/internal/bootstrap': body_fe_bootstrap,
+        '/api/internal/feature_flags': body_fe_flags,
+        '/api/internal/debug-config': body_fe_debug_config,
+    }
+
+    def _make_frontend_handler(path, builder, benign_reason):
+        def _handler():
+            if request.method == 'GET':
+                # 前端正常调用：记录但不拉黑，返回确定性良性数据（绝不影响真实用户）
+                _hit(path, benign_reason, ban=False)
+                return builder()
+            # 非 GET：把伪端点当真 API 利用 → 判定攻击，拉黑
+            _hit(path, '前端诱饵利用探测:' + benign_reason, ban=True)
+            return body_error(403, 'nginx')
+        _handler.__name__ = '_honeypot_fe' + (path.strip('/').replace('/', '_').replace('.', '_'))
+        return _handler
+
+    for _fp, _fr in _FRONTEND_DECOYS.items():
+        _methods, _reason = _fr
+        if _fp in real_paths:
+            skipped += 1
+            continue
+        try:
+            app.add_url_rule(
+                _fp,
+                endpoint='_honeypot_fe' + _fp.replace('/', '_').replace('.', '_'),
+                view_func=_make_frontend_handler(_fp, _fe_builders[_fp], _reason),
+                methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+            )
+            registered += 1
+        except Exception as e:
+            logger.warning(f"[蜜罐] 注册前端诱饵路由失败 {_fp}: {e}")
+
+    # ---- local.debug.js 转正：把「明文假凭据文件」变为受控陷阱 ----
+    # 此前它进产物但未被 index.html 加载，扫描器发现不了。现由 zc-decoy.js 在源码中
+    # 埋入路径字符串（mirror: /js/local.debug.js），做源码审计的扫描器会发现并 fetch；
+    # 该路径由本陷阱接管（优先于静态 /js/<path>），返回假凭据并标记命中→拉黑。
+    # 真实前端从不加载它，故任何访问都是侦察/利用。
+    def _local_debug_trap():
+        _hit('/js/local.debug.js', '明文调试凭据文件探测', ban=True)
+        _tarpit()
+        body_text = None
+        _pr = getattr(ctx, '_project_root', None)
+        if callable(_pr):
+            try:
+                with open(os.path.join(_pr(), 'core_plugins', 'webui', 'web', 'js',
+                                       'local.debug.js'), 'r', encoding='utf-8') as _f:
+                    body_text = _f.read()
+            except Exception:
+                body_text = None
+        if not body_text:
+            body_text = (
+                'window.__ZC_LOCAL__={api:"http://10.20.30.15:8080/api",'
+                'mysql:"mysql://zcbot:Zc0t_Pr0d_2024@10.20.30.15:3306/zcbot",'
+                'admin:{user:"admin",pass:"Zcbot@2024"}};'
+            )
+        return Response(body_text, mimetype='application/javascript')
+
+    try:
+        if '/js/local.debug.js' not in real_paths:
+            app.add_url_rule('/js/local.debug.js', endpoint='_honeypot_local_debug',
+                             view_func=_local_debug_trap, methods=['GET', 'POST'])
+            registered += 1
+    except Exception as e:
+        logger.warning(f"[蜜罐] 注册 local.debug.js 陷阱失败: {e}")
 
     # ---- 兜底：未知 /api/* 路径 ----
     if unknown_api_decoy:

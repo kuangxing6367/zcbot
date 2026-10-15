@@ -1,0 +1,15 @@
+{
+  "id": "echo",
+  "name": "Echo 示例插件",
+  "author": "zcbot_go",
+  "version": "0.1.0",
+  "description": "IIPC 端到端示例：echo + ping + 配置持久化测试",
+  "deps": [],
+  "event_types": ["message"],
+  "commands": [
+    { "name": "/ping", "perm": "", "desc": "回显 pong 并写 SQLite" },
+    { "name": "/info", "perm": "", "desc": "调用 get_login_info API" },
+    { "name": "/cfg", "perm": "", "desc": "测试配置持久化 set/get" },
+    { "name": "/secret", "perm": "admin", "desc": "仅管理员可执行的命令" }
+  ]
+}

@@ -311,6 +311,35 @@ def create_web_app(framework) -> Flask:
             return None
         return jsonify({'code': 403, 'msg': '访问被拒绝'}), 403
 
+    # ---- 全局 / 分级限速（此前仅个别端点有限速，其余 ~136 个 /api/* 零限速）----
+    # 设计依据：ipferret / stacklesson / renode / blue.tymyrddin 关于滑动窗口优于固定窗口、
+    # 多维度(全局 QPS + 单 IP + 路由分档)同时限速、路径需归一化的结论。
+    from framework.api import ratelimit as _rl
+    _RL_CFG = (framework.config.get('security', {}) or {}).get('rate_limit', {}) or {}
+    _rate_guard = _rl.RateLimitGuard(
+        _RL_CFG,
+        is_exempt=lambda ip: dual_auth.is_whitelisted(ip) or dual_auth.is_internal(ip),
+    )
+
+    @app.before_request
+    def _global_rate_guard():
+        """全局限速闸门：覆盖全部 /api/*（含此前零限速的端点）。
+        白名单/内网 IP 默认豁免；命中认证/挑战等高危前缀走更严档；
+        超限返回 429 + Retry-After（便于正常客户端退避，而非 444 静默）。"""
+        path = request.path or ''
+        if not path.startswith('/api/'):
+            return None
+        ip = get_client_ip()
+        allowed, retry = _rate_guard.check(ip, path)
+        if not allowed:
+            logger.info(f"[限速] 拦截: {request.method} {path} ← {ip} retry={retry}s")
+            resp = jsonify({'code': 429, 'msg': '请求过于频繁，请稍后再试'})
+            resp.status_code = 429
+            if retry:
+                resp.headers['Retry-After'] = str(retry)
+            return resp
+        return None
+
     # ---- JS 人机验证（工作量证明）----
     # 客户端必须先执行 JS 求解 challenge，换取通行票据（请求头 X-ZC-Pass），
     # 之后所有 API 请求携带该票据。纯脚本不执行 JS → 拿不到票据 → 被静默丢弃。
@@ -332,7 +361,8 @@ def create_web_app(framework) -> Flask:
     def _verify_challenge():
         """复核工作量证明并签发通行票据"""
         data = request.get_json(silent=True) or {}
-        ticket = _hc.verify(data.get('challenge'), data.get('nonce'), _HC_TICKET_TTL)
+        ticket = _hc.verify(data.get('challenge'), data.get('nonce'), _HC_TICKET_TTL,
+                           client_ip=get_client_ip())
         if not ticket:
             return jsonify({'code': 400, 'msg': '验证失败'}), 400
         return jsonify({'code': 0, 'data': {'ticket': ticket, 'ttl': _HC_TICKET_TTL}})
@@ -358,7 +388,7 @@ def create_web_app(framework) -> Flask:
         ip = get_client_ip()
         if _HC_BYPASS_WL and (dual_auth.is_whitelisted(ip) or dual_auth.is_internal(ip)):
             return None
-        if _hc.is_valid_ticket(request.headers.get('X-ZC-Pass')):
+        if _hc.is_valid_ticket(request.headers.get('X-ZC-Pass'), remote_ip=ip):
             return None
         logger.info(f"[人机验证] 未通过，静默丢弃: {request.method} {path} ← {ip}")
         return _silent_drop()
@@ -631,6 +661,7 @@ def create_web_app(framework) -> Flask:
         _record_login_failure=_record_login_failure,
         _clear_login_failures=_clear_login_failures,
         _check_public_rate=_check_public_rate,
+        _rate_guard=_rate_guard,
         # 端口隔离（True 时首页需注入 /webui-config.js）
         api_split=SPLIT_PORTS,
         # 通用工具 / yaml / 插件市场 / GitHub（app_helpers 工厂）

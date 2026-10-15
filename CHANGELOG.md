@@ -30,6 +30,68 @@
 
 > 暂无。
 
+## v1.8.9-beta.1（2026-10-15）
+
+> 主题：**IIPC 内核链路合入主框架（源码分发）+ 全 API 面穷举验收 + Web 安全加固（全局限速 / PoW 票据计量化 / 诱饵真实化 / 前端调用型诱饵）**。
+> 测试版：与主框架并列的新启动路径，不带开关时主框架行为**完全不变**。
+
+### 新功能
+
+- **IIPC 内核链路（`framework/iipc/`）合入主框架**，以**源码方式**分发（不含编译产物，约 410KB），
+  首次运行自动编译（也可 `python -c "from framework.iipc import build; build()"` 预编译）。
+  进程拓扑与现有单/双进程模式并列且不同：**Go 内核**（事件总线 / SQLite / 插件编排）+
+  **Rust 协议端**（OneBot 11，正向 WS 客户端或反向 WS 服务端）+ **Python 插件独立进程**
+  ——DB 在 Go 侧执行，不占 Python GIL。
+  - 启动：`python main.py --iipc`（等价 `python -m framework.iipc`）。
+  - 插件 API 面、Event 对象、SQL 方言（`%s`→`?`）、核心表、cron、多轮会话、
+    群级插件开关、节点权限均**1:1 对齐**现有框架语义（见 `framework/iipc/README.md` 现状与边界清单）。
+- **IIPC 端口/参数可在 `config.yaml` 的 `iipc:` 段配置**（`ipc_addr` / `db` / `admin` /
+  `plugins_dir` / `onebot_url` / `onebot_listen` / `onebot_token` / `no_rust` / `max_rss_mb`）。
+  优先级：**命令行 > config.yaml > 环境变量 > 内置默认**——本机同时跑着主框架（WebUI /
+  OneBot 反向 WS）时可直接改配置避开端口占用，不必动代码。
+- **基准脚本端口全部改为动态分配**（`tools/portutil.py`，bind :0 向 OS 要空闲端口），
+  不再写死 18777/18781/18785；一键总跑 `tools/run_all_bench.py` 末尾新增**性能三口径汇总**
+  （① 轻载延迟 P50/P95/P99，取**入队时刻**起算；② 饱和吞吐条/秒，按**端到端 span**算；
+  ③ 丢失率与 15s 级卡顿检测）。
+
+### 修复（均由拖真插件 / 穷举调用暴露，非读代码推断）
+
+- `Event.has_perm` **参数错位**：`group_id` 被当作 `context` 传入（int 调 `.items()` 抛错又被
+  `except: return False` 吞掉），且漏传 `role` —— 表现为「超管也判无权限」而非报错。
+  已按原框架 `context_from_event` 构造 `{bot, group, msgtype}` 并注入 `self.role`。
+- IIPC 插件加载**未注入模块级 `ctx`**（原框架 `loader/base.py` 会做 `module.ctx = ctx`），
+  导致官方示例「handler 里裸用 `ctx`」的写法直接 `NameError`。
+- 补 `ctx.create_table`（官方签到示例建表第一句即用到，原框架经 `ctx/db.py` + `ipc/remote_db.py` 转发）。
+- 补 `Event.is_group` / `is_private` / `sender_nickname` / `sender_card` / `at_all`；
+  `first_image` 等 `first_*` 无值时由 `None` 改为 `{}`（对齐原框架）。
+  > 该缺口在 `plugins/llm_blacklist` 上表现为「能跑」（它用 `getattr(event, "is_group", False)` 兜底），
+  > 在官方签到示例上表现为 `send_msg` 静默不发——同一缺口在不同插件上症状完全不同。
+
+### 测试
+
+- 新增 `tools/official_plugin_check.py`（32 项）：把 `docs/writing-plugins.md` 的签到示例
+  与真实 `plugins/llm_blacklist` **逐字**拖进 IIPC 内核跑。
+- 新增 `tools/api_surface_check.py`（154 项）：反射枚举 SDK 全部公开面
+  （PluginContext 68 + ActionProxy 24 + Event 属性 37/方法 8）逐项真实调用；
+  **插件只报真实返回值，判定写死在脚本侧**，避免自证。
+- 全量回归 **240 项**（e2e 25 + official 32 + surface 154 + adapter 13 + stress 16 + latency）。
+
+### 其它
+
+- `main.py` 新增 `--iipc` 分支（插在「未知选项报错」之前），usage 补充 IIPC 参数段；
+  `.gitignore` 忽略 IIPC 编译产物（`go_kernel/*.exe`、`rust_adapter/target/`、`plugins_dat/`）。
+
+### Web 安全加固（用户实测复现后落地）
+
+> 四个问题均来自用户在真浏览器抓包 + 黑盒压测中的复现，已逐项源码核实并修复。详见 [docs/llm-security.md](docs/llm-security.md)。
+
+- **全局限速闸门（`framework/api/ratelimit.py` + `webapp._global_rate_guard`）**：每 IP 滑动窗口 + 全局令牌桶（QPS）+ 路由分档，**覆盖全部 `/api/*`**（此前 138 个端点仅 2 个有限速，可秒刷）。超限返 `429` + `Retry-After`。配置 `security.rate_limit`，默认内网 / 回环豁免。
+- **PoW 票据计量化（`human_check`）**：ticket 绑定签发 IP（跨 IP 作废）、单次签发限速、用量计数超上限（默认 200）作废需重解——解决此前「一次验证无限复用」的买断制。
+- **诱饵真实化（`honeypot`）**：命名去 `/api/v1/` 改 `/api/`（真实端点零 v1，避免一条正则废整张表）；陷阱 token 长度 `512 → 2048` 对齐真实会话令牌（实测 `len==2048`）。
+- **前端调用型诱饵（关键）**：新增 `webui/public/js/zc-decoy.js`，前端主动 `GET` 四个伪端点（`/api/internal/{telemetry,bootstrap,feature_flags,debug-config}`），让真实浏览器抓包流量混入真诱饵；`zc-decoy.js` 源码埋 `/js/local.debug.js` 受控 honeytoken 路径，扫描器 `fetch` 即被拉黑。此前诱饵前端从不调用，deception 等于零。
+- 早期重复造轮子的 `shadow.py` / `honeytoken.py` 已废弃删除，防御逻辑统一收敛到 `honeypot` + `ratelimit` + `human_check` 三件套。
+- 新增 `tools/security_check.py`（15 断言全绿）：高并发必被拦 / 票据绑 IP 计量 / 诱饵命名与 token 规格 / 前端 decoy 良性。
+
 ## v1.8.8（2026-10-13）
 
 > 主题：**PyPI 文档修正**。

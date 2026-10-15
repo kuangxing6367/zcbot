@@ -51,6 +51,23 @@ event 字段:`message`(提取后文本)、`raw_message`、`user_id/group_id/is_g
   返回 None 不回灌；参数校验失败会回灌错误信息让模型自纠
 - 详见 [docs/llm-chat.md](llm-chat.md)
 
+## IIPC 链路下写插件（`python main.py --iipc`）
+
+插件写法**基本照抄**本页即可（`register(ctx)`、装饰器、`ctx.*`、Event 字段都 1:1 对齐），
+但有几条只对 IIPC 成立的差异：
+
+1. **handler 里裸用 `ctx` 可以**——IIPC 已对齐 `module.ctx = ctx` 注入（原框架在 `loader/base.py`）。
+2. **内建服务型插件跑不了**：依赖 `ctx._framework.services` 的（如 `core_plugins/scheduler`、
+   `session`）是 host 进程内 API，IIPC 插件在独立进程没有 `_framework`。能对口的只有
+   `plugins/*` 这类用户态插件。
+3. **`call_async` 只给同步 handler 用**：在 async handler 里 `fut.result()` 会阻塞插件
+   自己的事件循环，必然超时。
+4. **插件进程的 stdout 不进内核日志**：插件内异常要自己落文件才看得到（排查时最容易踩）。
+5. 端口 / DB / 管理员等走 `config.yaml` 的 `iipc:` 段，不写死在插件里。
+
+未覆盖：`Event.perms/perm_groups/primary_group`、WebUI 等价物、真 OneBot 对接。
+详见 [docs/llm-iipc.md](llm-iipc.md)。
+
 ## 跨插件访问
 
 `sys.modules.get("plugin_<id>")`(官方插件 `core_plugin_<name>`;html_assembler 兼容别名
