@@ -47,7 +47,8 @@ export default defineConfig({
             { text: '安装', link: '/指南/安装' },
             { text: '快速开始', link: '/指南/快速开始' },
             { text: '对接 IM 平台', link: '/指南/对接IM平台' },
-            { text: '配置系统', link: '/指南/配置系统' }
+            { text: '配置系统', link: '/指南/配置系统' },
+            { text: '多语言', link: '/指南/多语言' }
           ]
         },
         {
