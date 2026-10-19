@@ -104,4 +104,4 @@ python framework/iipc/tools/run_all_bench.py --only e2e,stress
 
 ## 排查
 
-见 [llm-debugging.md](llm-debugging.md#iipc-链路) 的 IIPC 症状表。
+见 [调试排错](./调试排错.md#iipc-链路) 的 IIPC 症状表。

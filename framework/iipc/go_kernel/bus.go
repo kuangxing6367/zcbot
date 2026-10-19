@@ -13,6 +13,7 @@ type EventBus struct {
 	subs      map[string]map[int64]*Conn
 	hook      func(ev Event) // 发布钩子：用于扇出到 Go 原生插件等
 	preHook   func(ev Event) // 前置钩子：会话配对等在扇出前同步执行
+	xformHook func(ev *Event) bool // 变换钩子：全局变换管线，返回 true 表示丢弃该事件
 	fanFilter func(pluginID string, ev Event) bool
 }
 
@@ -25,6 +26,10 @@ func (b *EventBus) SetPublishHook(h func(ev Event)) { b.hook = h }
 
 // SetPreHook 注册前置钩子（扇出前同步调用：会话配对等需要"先于插件看到事件"的场景）。
 func (b *EventBus) SetPreHook(h func(ev Event)) { b.preHook = h }
+
+// SetTransformHook 注册变换钩子（扇出前同步调用：全局变换管线；
+// 返回 true 表示丢弃该事件，不再扇出）。
+func (b *EventBus) SetTransformHook(h func(ev *Event) bool) { b.xformHook = h }
 
 // SetFanFilter 注册扇出过滤器（返回 false 的连接不收该事件）。
 func (b *EventBus) SetFanFilter(f func(pluginID string, ev Event) bool) { b.fanFilter = f }
@@ -55,6 +60,13 @@ func (b *EventBus) Unsubscribe(eventType string, c *Conn) {
 func (b *EventBus) Publish(ev Event) {
 	if b.preHook != nil {
 		b.preHook(ev) // 同步：会话配对必须先于插件侧 handler 执行
+	}
+	// 全局变换管线：扇出前按 priority 调用各变换节点，改写 event.data；
+	// 任一节点返回"丢弃"则整条事件不再扇出。零变换节点时此分支为空操作。
+	if b.xformHook != nil {
+		if b.xformHook(&ev) {
+			return
+		}
 	}
 	b.mu.RLock()
 	conns := make([]*Conn, 0, 4)

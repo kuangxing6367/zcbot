@@ -4,6 +4,7 @@ Event 对象
 """
 import re
 import time
+from collections import OrderedDict
 
 from framework.messaging.segments import (
     data_list, first as first_seg, is_media_only, media_ref, media_segments,
@@ -13,11 +14,14 @@ from framework.messaging.segments import (
 # 权限查询 TTL 缓存（热路径性能：避免每个事件反复查库）
 # 用户：user_id -> (role, is_blacklist, ts) ；群成员：(`group_id`,`user_id`) -> (role, ts)
 _ROLE_CACHE_TTL = 60.0
-# 角色缓存上限：超过后清理过期条目，防止长期运行内存无限增长
+# 角色缓存上限：超过后淘汰最久未使用条目，防止长期运行内存无限增长
 # （不活跃用户/群的条目永不刷新但一直驻留，属内存泄漏）
 _ROLE_CACHE_MAX = 5000
-_user_role_cache: dict = {}
-_group_role_cache: dict = {}
+# 用 OrderedDict 承载 LRU 顺序：命中 move_to_end(O(1))，溢出 popitem(last=False)(O(1))。
+# 旧实现每 256 次查询做一次 O(n) 全量重建，且条目全新鲜时压不下去（实际无界增长）；
+# 改为增量淘汰后无周期性抖动，内存严格有界。clear()/pop()/len() 等接口保持不变。
+_user_role_cache = OrderedDict()
+_group_role_cache = OrderedDict()
 _role_cache_checks = 0
 
 
@@ -183,23 +187,17 @@ class Event:
             now = time.time()
             uid = self.user_id
 
-            # 惰性上限清理：每 256 次查询检查一次缓存规模，超限剔除过期条目
-            # 注意：必须声明这三个 global！本函数内会重新绑定 _user_role_cache /
-            # _group_role_cache（压缩清理时），不声明会被编译成局部变量，
-            # 导致下方任何读取都抛 UnboundLocalError，被 except 吞掉后全员降级 member。
-            global _role_cache_checks, _user_role_cache, _group_role_cache
+            # 惰性上限清理：每 256 次查询检查一次缓存规模，超限从 LRU 尾部（最久未用）淘汰。
+            # 只声明 _role_cache_checks 为 global：本函数不再重新绑定缓存字典本身，
+            # 仅调用其方法（popitem / move_to_end），故无需 global 缓存名。
+            global _role_cache_checks
             _role_cache_checks += 1
             if _role_cache_checks % 256 == 0:
-                if len(_user_role_cache) > _ROLE_CACHE_MAX:
-                    _user_role_cache = {
-                        k: v for k, v in _user_role_cache.items()
-                        if now - v[2] <= _ROLE_CACHE_TTL
-                    }
-                if len(_group_role_cache) > _ROLE_CACHE_MAX:
-                    _group_role_cache = {
-                        k: v for k, v in _group_role_cache.items()
-                        if now - v[1] <= _ROLE_CACHE_TTL
-                    }
+                # 增量淘汰：O(超额量)，且必然收敛（旧实现在条目全新鲜时压不下去）
+                while len(_user_role_cache) > _ROLE_CACHE_MAX:
+                    _user_role_cache.popitem(last=False)
+                while len(_group_role_cache) > _ROLE_CACHE_MAX:
+                    _group_role_cache.popitem(last=False)
 
             # 用户级（super / blacklist）查询（60s TTL 内存缓存）
             u_entry = _user_role_cache.get(uid)
@@ -215,6 +213,10 @@ class Event:
                 else:
                     u_entry = ('', 0, now)
                 _user_role_cache[uid] = u_entry
+                _user_role_cache.move_to_end(uid)
+            else:
+                # 命中：移到 LRU 尾部，避免活跃用户被误淘汰（O(1)）
+                _user_role_cache.move_to_end(uid)
             role, is_blacklist, _ = u_entry
 
             if role == 'super':
@@ -235,8 +237,10 @@ class Event:
                     )
                     grole = (grp.get('role') or 'member') if grp else 'member'
                     _group_role_cache[gkey] = (grole, now)
+                    _group_role_cache.move_to_end(gkey)
                 else:
                     grole = grp_cached[0]
+                    _group_role_cache.move_to_end(gkey)
                 if grole in ('owner', 'admin'):
                     self._role_cache = grole
                     return grole

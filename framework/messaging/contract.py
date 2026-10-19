@@ -113,8 +113,39 @@ CAP_GROUP_ADMIN = 'group_admin'  # 禁言/踢人/改名片等群管动作
 CAP_NOTICE = 'notice'          # 能收到 notice 类事件
 CAP_REQUEST = 'request'        # 能收到加好友/加群请求
 
+# ── 补全能力（与 segments.py 的补全段一一对应）────────────────
+CAP_CARD = 'card'              # 交互卡片（飞书/钉钉/企微）
+CAP_POST = 'post'              # 富文本多段落
+CAP_ANIMATION = 'animation'    # 动图
+CAP_AUDIO = 'audio'            # 音频文件
+CAP_VIDEO_NOTE = 'video_note'  # 视频便签
+CAP_POLL = 'poll'              # 投票
+CAP_VENUE = 'venue'            # 地点（带名称）
+CAP_BUTTON = 'button'          # 按钮
+CAP_QUOTE = 'quote'            # 引用 / 话题
+CAP_EMBED = 'embed'            # 富嵌入
+CAP_EPHEMERAL = 'ephemeral'    # 仅指定接收者可见
+CAP_CONTACT = 'contact'        # 名片
+CAP_SYSTEM = 'system'          # 系统服务消息
+CAP_EDIT = 'edit'              # 编辑已发消息
+CAP_PIN = 'pin'                # 置顶
+CAP_THREAD = 'thread'          # 话题 / 子区（Discord thread、Telegram forum）
+
 #: 媒体类能力（用于"这条媒体能不能过"的快速判断）
-MEDIA_CAPS = (CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE, CAP_STICKER)
+MEDIA_CAPS = (CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE, CAP_STICKER,
+              CAP_ANIMATION, CAP_AUDIO, CAP_VIDEO_NOTE)
+
+#: 全部能力（接入端自述与契约自检的枚举来源）
+ALL_CAPS = (
+    CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE, CAP_STICKER,
+    CAP_AT, CAP_REPLY, CAP_FACE, CAP_SHARE, CAP_JSON, CAP_LOCATION,
+    CAP_POKE, CAP_MARKDOWN, CAP_KEYBOARD, CAP_FORWARD,
+    CAP_RECALL, CAP_REACT, CAP_TYPING, CAP_GROUP_ADMIN, CAP_NOTICE,
+    CAP_REQUEST,
+    CAP_CARD, CAP_POST, CAP_ANIMATION, CAP_AUDIO, CAP_VIDEO_NOTE,
+    CAP_POLL, CAP_VENUE, CAP_BUTTON, CAP_QUOTE, CAP_EMBED,
+    CAP_EPHEMERAL, CAP_CONTACT, CAP_SYSTEM, CAP_EDIT, CAP_PIN, CAP_THREAD,
+)
 
 IN = 'in'
 OUT = 'out'

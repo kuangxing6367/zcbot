@@ -30,6 +30,7 @@ const (
 	MethodApiCall         = "api.call"
 	MethodDebugInject     = "debug.inject"
 	MethodLogBatch        = "log.batch"
+	MethodDebugProcStats  = "debug.proc_stats"
 
 	// 1:1 补齐：定时任务 / 会话 / 群插件开关 / 权限 / 数据目录 / 命令注册
 	MethodTaskRegister    = "task.register"
@@ -41,7 +42,33 @@ const (
 	MethodDataDir         = "data.dir"
 	MethodPluginCommands  = "plugin.commands"
 	MethodEventEmit       = "event.emit"
+
+	// 扩展面（EV 内核）：服务注册表 / 插件间调用 / 共享 KV / 指标 / 能力声明 / 生命周期
+	MethodServiceRegister    = "service.register"
+	MethodServiceUnregister  = "service.unregister"
+	MethodServiceResolve     = "service.resolve"
+	MethodServiceList        = "service.list"
+	MethodPluginCall         = "plugin.call"
+	MethodPluginList         = "plugin.list"
+	MethodKVGet              = "kv.get"
+	MethodKVSet              = "kv.set"
+	MethodKVDel              = "kv.del"
+	MethodKVIncr             = "kv.incr"
+	MethodKVKeys             = "kv.keys"
+	MethodMetricObserve      = "metric.observe"
+	MethodMetricSnapshot     = "metric.snapshot"
+	MethodCapabilityDeclare  = "capability.declare"
+	MethodCapabilityQuery    = "capability.query"
+	MethodLifecycleState     = "lifecycle.state"
+
+	// 全局变换管线（节点间数据变换的等价物）：内核在事件扇出前按 priority 调用
+	// 各变换节点，把返回的 event.data 作为新事件；返回 null 则全局丢弃该事件。
+	MethodPipelineTransform = "pipeline.transform"
+	MethodPipelineList      = "pipeline.list"
 )
+
+// 内核回调插件的固定方法名：插件侧用 client.register(MethodPluginInvoke, fn) 接。
+const MethodPluginInvoke = "plugin.invoke"
 
 // EventChannel 事件广播通道名
 const EventChannel = "event"

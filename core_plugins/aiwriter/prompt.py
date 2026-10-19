@@ -21,7 +21,7 @@ _BASE = """你是运行在 ZCBOT 框架里的 AI 智能体。**你的主要职�
 # 写 ZCBOT 插件
 - 新插件用 `plugin_new` 工具生成骨架，或直接写 `plugins/<插件名>/main.py`（全小写下划线）。
 - 必须遵守下方「ZCBOT 插件开发」一节里的 API 与约定；不确定就去读仓库里的
-  `docs/llm-plugins.md` / `docs/writing-plugins.md` / `docs/ctx.md` 与现有插件源码。
+  `docs/速查/插件开发.md` / `docs/指南/编写插件.md` / `docs/接口/基础/插件上下文.md` 与现有插件源码。
 - 写完提示用户在后台点「重载」或重启框架生效；不要绕过框架直接跑插件。
 
 # 在代码库里工作

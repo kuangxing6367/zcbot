@@ -29,6 +29,27 @@ from concurrent.futures import ThreadPoolExecutor
 from iipc_client import IIPCClient
 from event import Event, _RoleCache
 
+# 扩展面（服务注册表 / 插件间调用 / 共享 KV / 指标 / 依赖注入）
+try:
+    from ext import (
+        attach as _attach_ext,
+        bind_args as _bind_args,
+        flush_pending as _flush_pending,
+        KVProxy,
+        ConfigProxy,
+        _LazyHTTP,
+    )
+except ImportError:  # 兜底：sdk_dir 不在 sys.path 时（如被当作包导入）
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from ext import (
+        attach as _attach_ext,
+        bind_args as _bind_args,
+        flush_pending as _flush_pending,
+        KVProxy,
+        ConfigProxy,
+        _LazyHTTP,
+    )
+
 # ─────────────────────────── 注册表 ───────────────────────────
 # 单插件进程内收集装饰器/ctx 注册（register(ctx) 与模块级装饰器都汇入这里）
 _registry = {
@@ -42,6 +63,13 @@ _registry = {
     "user_extension": [],
     "raw_message": [],     # 原始消息处理器（返回 True 接管）
     "webui": None,
+    # 多阶段中间件：在事件生命周期节点拦截/变换/短路（对齐"节点间数据变换"模型）
+    "middleware": {
+        "pre": [],    # 事件入站后、命令匹配前；handler(event, ctx)，返回 False 中止分发
+        "post": [],   # 分发完成后；handler(event, ctx)，事后处理/指标
+        "send": [],   # 出站消息 flush 前；handler(params, ctx)，返回 None/False 拦截，返回 dict 改写
+        "error": [],  # handler 抛异常时；handler(event, exc, ctx) 中央异常处理
+    },
 }
 
 # 内核下发的命令权限策略与全局管理员（plugin.register 响应带回）
@@ -505,6 +533,37 @@ class PluginContext:
             _registry["hook"].pop(point, None)
         return True
 
+    def middleware(self, stage="pre", priority=50, handler=None):
+        """多阶段中间件：在事件生命周期的不同节点拦截 / 变换 / 短路。
+
+        这是把"命令 + 消息"两阶段模型升级为可编排管线的核心扩展点——
+        任意插件都能在事件流经自己 handler 之前/之后、出站之前、异常之时
+        插入逻辑，而不必改写框架本身或接管整个消息。
+
+        stage 取值：
+          - "pre"   事件入站后、命令匹配前。handler(event, ctx)；
+                    可就地改写 event（如翻译/脱敏/补全字段），返回 False 中止后续分发。
+          - "post"  本事件分发完成后。handler(event, ctx)；用于事后统计/审计/落库。
+          - "send"  每条出站消息 flush 前。handler(params, ctx)；
+                    params 为 {"message","user_id","group_id",...}；
+                    返回 None / False 拦截该条；返回 dict 改写为出站参数。
+          - "error" 任意 handler 抛异常时。handler(event, exc, ctx)；中央异常处理/告警。
+
+        仅"有效注册"才影响热路径：未注册任何中间件时，分发路径与以前完全一致。
+        """
+        if stage not in ("pre", "post", "send", "error"):
+            raise ValueError("未知中间件阶段: %s（应为 pre/post/send/error）" % stage)
+        if handler is None:
+            def deco(fn):
+                self.middleware(stage, priority=priority, handler=fn)
+                return fn
+            return deco
+        if not callable(handler):
+            raise TypeError("middleware handler 必须可调用")
+        with _registry_lock:
+            _registry["middleware"][stage].append({"priority": priority, "handler": handler})
+        return handler
+
     def task(self, cron_expr, executor=None, description=None):
         """注册 cron 定时任务（对齐 ctx.task；到期内核推 task.tick，本地执行）。"""
         if executor is None:
@@ -629,6 +688,17 @@ class PluginContext:
                 return
             batch = self._queue[:]
             self._queue.clear()
+        # send 阶段中间件：逐条出站前经过（未注册则原样发出，零成本）
+        if _has_mw("send"):
+            out = []
+            for item in batch:
+                mw = _run_mw_send(item, self)
+                if mw is None:
+                    continue  # 被中间件拦截
+                out.append(mw)
+            if not out:
+                return
+            batch = out
         try:
             if len(batch) == 1:
                 self._client.call("msg.send", batch[0])
@@ -1046,6 +1116,70 @@ class PluginContext:
     def plugin_name(self):
         return self.plugin_id
 
+    # ── 扩展面类型声明（仅供 IDE / 类型检查器静态识别）──
+    # 以下方法/属性的真正实现由 ext.attach 在运行时绑定（见 py_sdk/ext.py），
+    # 此处仅声明签名与返回类型，不改变任何运行时行为。
+    # 因为动态挂载，静态分析器默认看不到它们——这段声明补上补全能力。
+
+    @property
+    def kv(self) -> "KVProxy":
+        """插件级共享 KV（命名空间隔离，跨事件/跨调用持久）。"""
+        ...
+
+    @property
+    def config(self) -> "ConfigProxy":
+        """插件配置读写代理（带本地 TTL 缓存，落内核持久层）。"""
+        ...
+
+    @property
+    def http(self) -> "_LazyHTTP":
+        """懒加载 HTTP 客户端（首次调用才 import requests，不进启动路径）。"""
+        ...
+
+    def provide(self, name, version="", caps=None, meta=None):
+        """注册一个可被其它插件解析的服务（服务注册表）。可作装饰器用。"""
+        ...
+
+    def resolve_service(self, name=None, cap=None):
+        """按名称或能力解析服务；返回服务描述 dict，未命中返回 None。"""
+        ...
+
+    def services(self):
+        """列出当前已注册的全部服务（list[ServiceEntry]）。"""
+        ...
+
+    def expose(self, action=None):
+        """声明本插件可被其它插件跨进程调用的动作（装饰器：@ctx.expose("foo")）。"""
+        ...
+
+    def call_plugin(self, plugin, action, params=None, timeout=10):
+        """跨插件 RPC：调用其它插件的 expose 动作，返回其结果。"""
+        ...
+
+    def metric(self, name, value=1.0):
+        """上报一个指标点（用于监控/看板）。"""
+        ...
+
+    def metrics(self):
+        """取回当前指标快照（dict）。"""
+        ...
+
+    def declare_caps(self, caps):
+        """声明本插件具备的能力集合（供 who_has 反向查询）。"""
+        ...
+
+    def who_has(self, cap):
+        """反查具备某能力的插件列表（list[str]）。"""
+        ...
+
+    def plugins(self):
+        """当前在线插件清单（list[str] of plugin_id）。"""
+        ...
+
+    def transform(self, priority=50, action="transform", handler=None):
+        """注册内核级全局变换节点：事件扇出前按 priority 改写/丢弃 event.data。"""
+        ...
+
 
 # ─────────────────────────── 事件分发 ───────────────────────────
 
@@ -1061,8 +1195,111 @@ def _perm_denied(prefix):
     return perm == "admin"
 
 
+def _has_mw(stage):
+    """中间件是否存在（热路径零成本判断）。"""
+    with _registry_lock:
+        return bool(_registry["middleware"].get(stage))
+
+
+def _run_mw(stage, ev, ctx):
+    """运行 pre/post 阶段中间件：按 priority 升序执行。
+
+    返回 False 表示被某个中间件短路（中止后续中间件与分发）；
+    True 表示放行。handler 抛异常不影响链路（记录后继续），与 hook 同语义。
+    """
+    with _registry_lock:
+        mws = sorted(list(_registry["middleware"].get(stage, [])),
+                     key=lambda m: m["priority"])
+    if not mws:
+        return True
+    for m in mws:
+        h = m["handler"]
+        try:
+            if inspect.iscoroutinefunction(h):
+                loop = ctx._loop if ctx else None
+                if loop is not None and loop.is_running():
+                    fut = asyncio.run_coroutine_threadsafe(h(ev, ctx), loop)
+                    r = fut.result(timeout=30)
+                else:
+                    r = asyncio.run(h(ev, ctx))
+            else:
+                r = h(ev, ctx)
+        except Exception as e:
+            print("[sdk] middleware(%s) 异常: %s" % (stage, e))
+            continue
+        if r is False:
+            return False
+    return True
+
+
+def _run_mw_send(item, ctx):
+    """运行 send 阶段中间件：逐条出站消息在 flush 前经过。
+
+    handler(params, ctx) 返回：
+      - None / False  → 拦截该条（不发出）
+      - dict          → 以改写后的参数发出
+      - 其它          → 维持原参数
+    按 priority 升序；异常不影响链路。
+    """
+    with _registry_lock:
+        mws = sorted(list(_registry["middleware"].get("send", [])),
+                     key=lambda m: m["priority"])
+    if not mws:
+        return item
+    for m in mws:
+        h = m["handler"]
+        try:
+            if inspect.iscoroutinefunction(h):
+                loop = ctx._loop if ctx else None
+                if loop is not None and loop.is_running():
+                    fut = asyncio.run_coroutine_threadsafe(h(item, ctx), loop)
+                    r = fut.result(timeout=30)
+                else:
+                    r = asyncio.run(h(item, ctx))
+            else:
+                r = h(item, ctx)
+        except Exception as e:
+            print("[sdk] send 中间件异常: %s" % e)
+            continue
+        if r is None or r is False:
+            return None  # 拦截
+        if isinstance(r, dict):
+            item = r
+    return item
+
+
+def _run_mw_error(event, exc, ctx):
+    """运行 error 阶段中间件：任意 handler 抛异常时按 priority 升序通知。
+
+    handler(event, exc, ctx)；事件缺失时 event 为 None。异常不影响链路。
+    """
+    with _registry_lock:
+        mws = sorted(list(_registry["middleware"].get("error", [])),
+                     key=lambda m: m["priority"])
+    if not mws:
+        return
+    for m in mws:
+        h = m["handler"]
+        try:
+            if inspect.iscoroutinefunction(h):
+                loop = ctx._loop if ctx else None
+                if loop is not None and loop.is_running():
+                    fut = asyncio.run_coroutine_threadsafe(h(event, exc, ctx), loop)
+                    fut.result(timeout=30)
+                else:
+                    asyncio.run(h(event, exc, ctx))
+            else:
+                h(event, exc, ctx)
+        except Exception as e:
+            print("[sdk] error 中间件异常: %s" % e)
+
+
 def _on_event(payload):
-    """内核事件 → Event 对象 → 原框架式分发（raw → command → on）。"""
+    """内核事件 → Event 对象 → 多阶段分发（pre → raw → command → on → post）。
+
+    多阶段中间件管线让任意插件能在事件流经自己 handler 之前/之后插入逻辑，
+    不必改写框架或整体接管消息——这是把"命令 + 消息"两阶段升级为可编排管线的核心。
+    """
     ctx = _current_ctx
     etype = payload.get("type")
     data = payload.get("data", {}) or {}
@@ -1073,6 +1310,10 @@ def _on_event(payload):
     if ctx is not None:
         ev._ctx = ctx  # 便捷反引（部分插件写法需要从事件拿回 ctx）
 
+    # 0) 全局 pre 中间件（任意事件类型；返回 False 中止后续分发）
+    if _has_mw("pre") and _run_mw("pre", ev, ctx) is False:
+        return
+
     # 1) 原始消息处理器（框架命令匹配之前的注入点；返回 True 接管）
     if etype == "message":
         with _registry_lock:
@@ -1080,67 +1321,18 @@ def _on_event(payload):
         for h in raw_handlers:
             try:
                 if h(ev, bot_name) is True:
+                    if _has_mw("post"):
+                        _run_mw("post", ev, ctx)
                     return
             except Exception as e:
                 print("[sdk] raw_message 处理器异常: %s" % e)
 
     # 2) 命令匹配（每插件首个命中即执行，与原框架一致；返回 False 继续匹配）
     if etype == "message":
-        text = ev.message or ""
-        uid = str(ev.user_id)
-        with _registry_lock:
-            commands = list(_registry["command"])
-        for c in commands:
-            match = None
-            kind, matcher = c["matcher"]
-            if kind == "rx":
-                match = _regex_search(matcher, text)
-            else:
-                match = _match_simple(matcher, text)
-            if not match and c["alias"]:
-                for alias in c["alias"].split(','):
-                    alias = alias.strip()
-                    if alias:
-                        match = _match_simple(alias, text)
-                        if match:
-                            break
-            if not match:
-                continue
-            # 黑名单拦截（对齐框架：命中黑名单直接拒绝执行）
-            if ev.role == 'blacklist':
-                return
-            # 权限检查（require_level / require_perm / 内核下发表）
-            require = c["require_level"]
-            if require == "admin" and not ev.is_admin:
-                ctx.send_msg(user_id=ev.user_id or None, group_id=ev.group_id or None,
-                             message="权限不足（需要 admin 权限，当前身份: %s）" % ev.role)
-                return
-            if require == "super" and not ev.is_superuser:
-                ctx.send_msg(user_id=ev.user_id or None, group_id=ev.group_id or None,
-                             message="权限不足（需要超级管理员权限）")
-                return
-            if c["require_perm"] and not ev.has_perm(c["require_perm"]):
-                ctx.send_msg(user_id=ev.user_id or None, group_id=ev.group_id or None,
-                             message="权限不足（需要权限节点: %s）" % c["require_perm"])
-                return
-            # command.before 扩展点（对齐框架 router_match：权限通过后、执行前触发；
-            # handler 收单参 payload dict，返回 False 跳过该命令继续尝试其它匹配）
-            with _registry_lock:
-                has_cb_hook = bool(_registry["hook"].get("command.before"))
-            if has_cb_hook:
-                payload = {
-                    "plugin": getattr(ctx, "plugin_id", ""),
-                    "handler": getattr(c["handler"], "__name__", ""),
-                    "command_id": c["pattern"],
-                    "pattern": c["pattern"],
-                    "event": ev,
-                    "match": match,
-                }
-                if False in _trigger_hooks("command.before", payload):
-                    continue
-            # 执行（线程池：单 handler 慢不阻塞其他事件；异常走 on_error 钩子）
-            _invoke(c["handler"], ev, match)
-            return  # 一个命令命中即止（对齐框架 _match_plugin_commands）
+        if _match_command(ev, ctx):  # True = 命中并执行（含黑名单/权限拒拦，视为已处理）
+            if _has_mw("post"):
+                _run_mw("post", ev, ctx)
+            return
 
     # 3) 定时任务 tick（内核定向推送）
     if etype == "task.tick":
@@ -1151,6 +1343,8 @@ def _on_event(payload):
             fn = by_name.get(name)
             if fn:
                 _invoke_task(fn)
+        if _has_mw("post"):
+            _run_mw("post", ev, ctx)
         return
 
     # 4) on(etype) 处理器 + hook(point) 非命令扩展点（按同名事件分发，收 Event 单参；
@@ -1161,6 +1355,73 @@ def _on_event(payload):
                      if p != "command.before" and p == etype for h in hs]
     for h in handlers:
         _invoke(h, ev)
+
+    if _has_mw("post"):
+        _run_mw("post", ev, ctx)
+
+
+def _match_command(ev, ctx):
+    """命令匹配（从 _on_event 抽出，保持原框架语义）。
+
+    返回 True 表示已处理（命中执行 / 黑名单拒拦 / 权限拒拦），False 表示未命中。
+    未命中时调用方继续走 on/hook 分发。
+    """
+    text = ev.message or ""
+    uid = str(ev.user_id)
+    with _registry_lock:
+        commands = list(_registry["command"])
+    for c in commands:
+        match = None
+        kind, matcher = c["matcher"]
+        if kind == "rx":
+            match = _regex_search(matcher, text)
+        else:
+            match = _match_simple(matcher, text)
+        if not match and c["alias"]:
+            for alias in c["alias"].split(','):
+                alias = alias.strip()
+                if alias:
+                    match = _match_simple(alias, text)
+                    if match:
+                        break
+        if not match:
+            continue
+        # 黑名单拦截（对齐框架：命中黑名单直接拒绝执行）
+        if ev.role == 'blacklist':
+            return True
+        # 权限检查（require_level / require_perm / 内核下发表）
+        require = c["require_level"]
+        if require == "admin" and not ev.is_admin:
+            ctx.send_msg(user_id=ev.user_id or None, group_id=ev.group_id or None,
+                         message="权限不足（需要 admin 权限，当前身份: %s）" % ev.role)
+            return True
+        if require == "super" and not ev.is_superuser:
+            ctx.send_msg(user_id=ev.user_id or None, group_id=ev.group_id or None,
+                         message="权限不足（需要超级管理员权限）")
+            return True
+        if c["require_perm"] and not ev.has_perm(c["require_perm"]):
+            ctx.send_msg(user_id=ev.user_id or None, group_id=ev.group_id or None,
+                         message="权限不足（需要权限节点: %s）" % c["require_perm"])
+            return True
+        # command.before 扩展点（对齐框架 router_match：权限通过后、执行前触发；
+        # handler 收单参 payload dict，返回 False 跳过该命令继续尝试其它匹配）
+        with _registry_lock:
+            has_cb_hook = bool(_registry["hook"].get("command.before"))
+        if has_cb_hook:
+            payload = {
+                "plugin": getattr(ctx, "plugin_id", ""),
+                "handler": getattr(c["handler"], "__name__", ""),
+                "command_id": c["pattern"],
+                "pattern": c["pattern"],
+                "event": ev,
+                "match": match,
+            }
+            if False in _trigger_hooks("command.before", payload):
+                continue
+        # 执行（线程池：单 handler 慢不阻塞其他事件；异常走 on_error / error 中间件）
+        _invoke(c["handler"], ev, match)
+        return True
+    return False
 
 
 def _trigger_hooks(point, payload):
@@ -1196,7 +1457,15 @@ def _trigger_hooks(point, payload):
 
 
 def _invoke(fn, *args):
-    """执行 handler：同步直接跑在线程池；async 走进程内 loop（不阻塞分发）。"""
+    """执行 handler：同步直接跑在线程池；async 走进程内 loop（不阻塞分发）。
+
+    调用前按签名装配依赖：位置实参优先，缺的参数按名字注入（logger/kv/http…）。
+    老插件 (event, match) 签名不受影响——参数已给足时不介入。
+    """
+    try:
+        args = _bind_args(fn, args, _current_ctx)
+    except Exception:
+        pass  # 装配失败绝不阻碍调用，退回原始实参
     if inspect.iscoroutinefunction(fn):
         ctx = _current_ctx
         loop = ctx._loop if ctx else None
@@ -1236,6 +1505,13 @@ def _safe_call(fn, args):
         return fn(*args)
     except Exception as e:
         print("[sdk] handler %s 异常: %s" % (getattr(fn, '__name__', '?'), e))
+        # error 阶段中间件：中央异常处理（先于模块 on_error）
+        if _has_mw("error"):
+            event = args[0] if args and isinstance(args[0], Event) else None
+            try:
+                _run_mw_error(event, e, _current_ctx)
+            except Exception:
+                pass
         on_error = getattr(_current_module, 'on_error', None) if _current_module else None
         if callable(on_error):
             try:
@@ -1247,6 +1523,10 @@ def _safe_call(fn, args):
 
 # 当前插件模块（供 on_error 钩子定位）
 _current_module = None
+
+
+# 挂上扩展面方法（服务注册表 / 插件间调用 / KV / 指标 / 依赖代理）
+_attach_ext(PluginContext)
 
 
 # ─────────────────────────── 插件装配 ───────────────────────────
@@ -1292,7 +1572,7 @@ def run_plugin(plugin_dir, plugin_id, addr, auth):
     mod, module_name = _load_plugin_module(plugin_dir, plugin_id)
     _current_module = mod
     # 与原框架 loader/base.py:231（module.ctx = ctx）对齐：把 ctx 注入插件模块全局。
-    # 官方插件（含 docs/writing-plugins.md 的示例与 plugins/llm_blacklist）在 handler
+    # 官方插件（含 docs/指南/编写插件.md 的示例与 plugins/llm_blacklist）在 handler
     # 内直接使用裸 ctx，register(ctx) 里并没有 global 声明 —— 缺这一步会 NameError。
     try:
         mod.ctx = ctx
@@ -1335,6 +1615,12 @@ def run_plugin(plugin_dir, plugin_id, addr, auth):
     if isinstance(res, dict):
         _policy["cmd_perm"] = res.get("cmd_perm", {}) or {}
         _policy["admins"] = set(str(a) for a in (res.get("admins", []) or []))
+
+    # 握手完成：重放 register(ctx) 期间排队的扩展面声明（服务/能力）
+    try:
+        _flush_pending(ctx)
+    except Exception as e:
+        print("[plugin %s] 扩展面声明重放失败: %s" % (plugin_id, e))
 
     # cron 任务逐个登记到内核调度器
     for t in tasks:

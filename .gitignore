@@ -198,3 +198,15 @@ framework/iipc/go_kernel/*.exe
 framework/iipc/rust_adapter/target/
 framework/iipc/**/plugins_dat/
 framework/iipc/data/
+
+# ============================================================
+# 原生渲染二进制（zcbot_render.*）：已用 UPX -9 压缩存盘、
+# 进程加载时由 UPX 运行时解压，无需源码改动即可削减源码包体积。
+# 重新编译后请对生成的 .so/.pyd 再次执行 `upx -9`，
+# 注意 UPX 4.2.4 不支持 loongarch64，该平台保持未压缩。
+# ============================================================
+# (放行规则见上方 !core_plugins/image_renderer/native/bin/**/zcbot_render.*)
+
+# 孤儿测试夹具：全仓无代码/CI 引用，不进源码包；
+# 如本地需要可保留文件，仅不再纳入版本控制与发布包。
+test/iipc_linux_amd64.zip

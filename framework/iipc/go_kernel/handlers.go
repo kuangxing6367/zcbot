@@ -61,6 +61,11 @@ func registerCoreHandlers(srv *IpcServer, bus *EventBus, store Store, pm *Plugin
 		return map[string]interface{}{"ok": true}, nil
 	})
 
+	// 调试：返回内核自身 PID + 各插件进程 PID（供 launcher 侧 RSS 监控聚合真正的内存大户）。
+	srv.RegisterMethod(MethodDebugProcStats, func(c *Conn, p json.RawMessage) (interface{}, error) {
+		return pm.ProcStats(), nil
+	})
+
 	// 插件注册：订阅事件 + 下发命令权限表/管理员。
 	srv.RegisterMethod(MethodPluginRegister, func(c *Conn, p json.RawMessage) (interface{}, error) {
 		var req struct {
@@ -88,7 +93,8 @@ func registerCoreHandlers(srv *IpcServer, bus *EventBus, store Store, pm *Plugin
 			return nil, errors.New("plugin.register 缺 plugin_id")
 		}
 		c.pluginID = req.PluginID
-		grpSw.NotePlugin(req.PluginID) // 群插件开关需要知道插件存在
+		srv.notePlugin(req.PluginID, c) // 扩展面：插件间调用/清单需要按 ID 找到连接
+		grpSw.NotePlugin(req.PluginID)  // 群插件开关需要知道插件存在
 		for _, et := range req.EventTypes {
 			bus.Subscribe(et, c)
 		}
@@ -281,13 +287,19 @@ func registerCoreHandlers(srv *IpcServer, bus *EventBus, store Store, pm *Plugin
 			if len(rows) == 0 {
 				return map[string]interface{}{"value": req.Default}, nil
 			}
-			return map[string]interface{}{"value": strVal(rows[0]["config_value"])}, nil
+			// 配置若写入字面量 "null"（如 LLM JSON 配置），视作"未设置"回退默认值，
+			// 否则 SDK 端 json.loads("null") 解出 None，会让 int(None)/配置缺失类调用崩溃。
+			val := strVal(rows[0]["config_value"])
+			if val == "" || val == "null" {
+				return map[string]interface{}{"value": req.Default}, nil
+			}
+			return map[string]interface{}{"value": val}, nil
 		}
 		v, err := store.GetConfig(req.Key)
 		if err != nil {
 			return nil, err
 		}
-		if v == "" {
+		if v == "" || v == "null" {
 			v = req.Default
 		}
 		return map[string]interface{}{"value": v}, nil

@@ -305,6 +305,7 @@ def _mem_watchdog(max_mb):
 
     def loop():
         proc = psutil.Process(os.getpid())
+        client = None
         while not stop.wait(30):
             try:
                 total = proc.memory_info().rss / 1024 / 1024
@@ -320,6 +321,26 @@ def _mem_watchdog(max_mb):
                         total += rss
                     except Exception:
                         pass
+                # 各插件进程（内核逐插件直拉，每个是一个独立 Python 解释器，真正的内存大户）：
+                # 此前 launcher 监控只扫自身 procs（仅 kernel+rust），完全看不到它们，给出假安全感。
+                # 现经内核 debug.proc_stats 拿 PID，逐个累加到总 RSS，并在告警里点名。
+                try:
+                    if client is None or not client.is_alive():
+                        client = iipc_client()
+                    stats = client.call("debug.proc_stats", {}, timeout=5)
+                    if isinstance(stats, dict):
+                        for pl in (stats.get("plugins") or []):
+                            pid = pl.get("pid") or 0
+                            if pid <= 0:
+                                continue
+                            try:
+                                rss = psutil.Process(pid).memory_info().rss / 1024 / 1024
+                                parts.append("%s=%.0fMB" % (pl.get("plugin_id"), rss))
+                                total += rss
+                            except Exception:
+                                pass
+                except Exception:
+                    pass  # 内核未就绪/断开时跳过插件部分，不影响 kernel+rust 监控
                 if total > max_mb:
                     log("memwatch",
                         "子进程总 RSS %.0fMB 超阈值 %dMB（%s）——仅告警，不杀进程"

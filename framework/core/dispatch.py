@@ -301,21 +301,41 @@ class FrameworkDispatchMixin:
             if item['plugin_name'] != plugin_name
         ]
 
+    def _raw_handler_timeout(self):
+        """原始消息处理器超时（秒，None=不限制）
+
+        配置：framework.raw_handler_timeout，默认 10s，<=0 表示不限制。
+        这些 handler 是串行按优先级调用的，任一卡住会阻塞整条消息链，
+        故统一加超时保护（超时后跳过该插件，继续下一个）。
+        """
+        try:
+            cfg = (self.config or {}).get('framework', {})
+            timeout = float(cfg.get('raw_handler_timeout', 10.0))
+        except (TypeError, ValueError, AttributeError):
+            return 10.0
+        return timeout if timeout > 0 else None
+
     async def _dispatch_raw_message_handlers(self, data: dict, bot_name: str) -> bool:
         """
         按插件优先级分发原始消息事件（未提取纯文本、含全部消息段）
         任一 handler 返回 True 表示"已接管"（框架跳过该消息的后续处理，选择性使用）；
         返回 None/False 表示未处理，消息继续走正常流程。单个 handler 异常不影响其他。
+        单个 handler 超时（默认 10s）同样只跳过该插件，不拖垮后续 handler。
         """
         if not self._raw_message_handlers:
             return False
+        timeout = self._raw_handler_timeout()
         for item in list(self._raw_message_handlers):
             handler = item['handler']
             try:
                 if asyncio.iscoroutinefunction(handler):
-                    result = await handler(data, bot_name)
+                    result = await asyncio.wait_for(
+                        handler(data, bot_name), timeout=timeout)
                 else:
-                    result = await asyncio.to_thread(handler, data, bot_name)
+                    # 注意：wait_for 超时不会终止已在线程中执行的同步 handler
+                    # （线程池任务无法强制取消），仅保证事件循环不被拖住
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(handler, data, bot_name), timeout=timeout)
                 if result is True:
                     log_broker.log_plugin(item['plugin_name'], '原始消息接管', {
                         'bot': bot_name,
@@ -324,6 +344,12 @@ class FrameworkDispatchMixin:
                         'group_id': data.get('group_id'),
                     })
                     return True
+            except (asyncio.TimeoutError, TimeoutError):
+                logger.error(
+                    f"[{item['plugin_name']}] 原始消息处理器超时"
+                    f"（>{timeout}s），已跳过该插件继续执行后续处理器")
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"[{item['plugin_name']}] 原始消息处理器异常: {e}", exc_info=True)
         return False

@@ -1,3 +1,4 @@
+// util 层：真值判定小工具——把配置/DB 里可能出现的 "true"/"1"/"yes"/"是" 等归一到 bool。
 package main
 
 // truthy 把 DB 取值（0/1、true/false、"0"/"1"）归一为 bool。

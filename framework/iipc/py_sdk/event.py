@@ -332,7 +332,7 @@ class Event:
         return self.files[0] if self.files else {}
 
     # ── 消息形态 / 发送者（对齐 framework/messaging/event.py:530-551）──
-    # 官方示例（docs/writing-plugins.md 签到插件）直接用 event.is_group；
+    # 官方示例（docs/指南/编写插件.md 签到插件）直接用 event.is_group；
     # 官方插件 llm_blacklist 用 getattr(event, "is_group", False) 兜底，
     # 缺该属性会让前者直接 AttributeError —— 故必须 1:1 提供。
     @property

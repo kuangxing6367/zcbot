@@ -11,11 +11,8 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
 
-  // README.md 在 GitHub 上作为目录入口更好读，但站点需要 index.html
-  rewrites: {
-    'guide/README.md': 'guide/index.md',
-    'brand.md': 'brand/index.md'
-  },
+  // 目录即导航：文档按 指南/ 接口/ 进阶/ 品牌/ 速查/ 分目录存放，
+  // 每节都有真实的 index.md，不再依赖 rewrites 把平铺文件"虚拟"成目录页。
 
   head: [
     ['link', { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' }],
@@ -32,76 +29,95 @@ export default defineConfig({
     },
 
     nav: [
-      { text: '指南', link: '/guide/', activeMatch: '/guide/' },
-      { text: 'API', link: '/api/', activeMatch: '/api/' },
-      { text: '进阶', link: '/advanced/architecture', activeMatch: '/advanced/' },
-      { text: '品牌标识', link: '/brand/', activeMatch: '/brand/' },
+      { text: '指南', link: '/指南/', activeMatch: '/指南/' },
+      { text: '接口', link: '/接口/', activeMatch: '/接口/' },
+      { text: '进阶', link: '/进阶/', activeMatch: '/进阶/' },
+      { text: '速查', link: '/速查/', activeMatch: '/速查/' },
+      { text: '品牌标识', link: '/品牌/', activeMatch: '/品牌/' },
       { text: '更新日志', link: 'https://gitee.com/liquanfeng123/zcbot/blob/main/CHANGELOG.md' },
       { text: 'Gitee', link: 'https://gitee.com/liquanfeng123/zcbot' }
     ],
 
     sidebar: {
-      '/guide/': [
+      '/指南/': [
         {
           text: '入门',
           items: [
-            { text: '文档总入口', link: '/guide/' },
-            { text: '安装', link: '/guide/installation' },
-            { text: '开始使用', link: '/guide/getting-started' },
-            { text: '对接 IM 平台', link: '/guide/connect-im' },
-            { text: '配置系统', link: '/guide/configuration' }
+            { text: '指南总览', link: '/指南/' },
+            { text: '安装', link: '/指南/安装' },
+            { text: '快速开始', link: '/指南/快速开始' },
+            { text: '对接 IM 平台', link: '/指南/对接IM平台' },
+            { text: '配置系统', link: '/指南/配置系统' }
           ]
         },
         {
           text: '开发插件',
           items: [
-            { text: '编写插件', link: '/guide/writing-plugins' },
-            { text: '多轮会话', link: '/guide/session' },
-            { text: '接入大模型（LLM）', link: '/guide/llm-chat' },
-            { text: '接入端契约与规范消息', link: '/guide/adapter-contract' },
-            { text: '最佳实践', link: '/guide/best-practices' }
+            { text: '编写插件', link: '/指南/编写插件' },
+            { text: '多轮会话', link: '/指南/多轮会话' },
+            { text: '接入大模型（LLM）', link: '/指南/接入大模型' },
+            { text: '接入端契约与规范消息', link: '/指南/接入端契约' },
+            { text: '最佳实践', link: '/指南/最佳实践' }
           ]
         }
       ],
-      '/api/': [
+      '/接口/': [
         {
-          text: '基础参考',
+          text: '基础',
           items: [
-            { text: 'API 总览', link: '/api/' },
-            { text: 'PluginContext (ctx)', link: '/api/basic/ctx' },
-            { text: 'Event 事件对象', link: '/api/basic/event' },
-            { text: 'Framework 核心', link: '/api/basic/framework' },
-            { text: '服务注册表（DI）', link: '/api/basic/services' }
+            { text: '接口总览', link: '/接口/' },
+            { text: '插件上下文（ctx）', link: '/接口/基础/插件上下文' },
+            { text: '事件对象', link: '/接口/基础/事件对象' },
+            { text: '核心框架', link: '/接口/基础/核心框架' },
+            { text: '服务注册表（DI）', link: '/接口/基础/服务注册表' }
           ]
         },
         {
-          text: '进阶扩展',
+          text: '高级',
           items: [
-            { text: '插件装饰器 API', link: '/api/advanced/plugin-decorators' },
-            { text: '扩展点（Hook 系统）', link: '/api/advanced/hooks' },
-            { text: '协议适配器', link: '/api/advanced/protocol_adapter' }
+            { text: '插件装饰器 API', link: '/接口/高级/插件装饰器' },
+            { text: '扩展点（Hook 系统）', link: '/接口/高级/扩展点Hook' },
+            { text: '协议适配器', link: '/接口/高级/协议适配器' }
           ]
         }
       ],
-      '/advanced/': [
+      '/进阶/': [
         {
           text: '进阶主题',
           items: [
-            { text: '架构总览', link: '/advanced/architecture' },
-            { text: '插件加载与模块机制', link: '/advanced/loader' },
-            { text: '数据库', link: '/advanced/database' },
-            { text: '权限系统', link: '/advanced/permission' },
-            { text: '定时任务', link: '/advanced/scheduler' },
-            { text: '部署上线', link: '/advanced/deployment' },
-            { text: '双核心架构（实验）', link: '/advanced/dual-core' }
+            { text: '进阶总览', link: '/进阶/' },
+            { text: '内核设计哲学', link: '/进阶/设计哲学' },
+            { text: '架构总览', link: '/进阶/架构总览' },
+            { text: '插件加载与模块机制', link: '/进阶/插件加载机制' },
+            { text: '数据库', link: '/进阶/数据库' },
+            { text: '定时任务', link: '/进阶/定时任务' },
+            { text: '权限系统', link: '/进阶/权限系统' },
+            { text: '接口令牌（API Key）', link: '/进阶/接口令牌' },
+            { text: '部署上线', link: '/进阶/部署上线' },
+            { text: '双核心架构（实验）', link: '/进阶/双核心架构' },
+            { text: '项目结构', link: '/进阶/项目结构' },
+            { text: '扩展清单', link: '/进阶/扩展清单' }
           ]
         }
       ],
-      '/brand/': [
+      '/速查/': [
+        {
+          text: '给 AI 编码助手（LLM）',
+          items: [
+            { text: '速查总览', link: '/速查/' },
+            { text: '框架结构', link: '/速查/框架结构' },
+            { text: '插件开发', link: '/速查/插件开发' },
+            { text: '调试与测试', link: '/速查/调试排错' },
+            { text: 'IIPC 内核链路', link: '/速查/IIPC内核链路' },
+            { text: '安全加固', link: '/速查/安全加固' }
+          ]
+        }
+      ],
+      '/品牌/': [
         {
           text: '品牌标识',
           items: [
-            { text: '标志与规范', link: '/brand/' }
+            { text: '标志与规范', link: '/品牌/' }
           ]
         }
       ]

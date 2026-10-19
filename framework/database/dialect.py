@@ -9,7 +9,7 @@ SQL 方言翻译层（纯函数，无连接、无状态）
 
 适用边界提醒：方言层只是让同一套 SQL 双跑，不代表 SQLite 能扛大环境——
 SQLite 单写多读，仅适合小环境与开发环境；多群/高并发/大环境请用 MySQL
-（见 docs/advanced/database.md）。
+（见 docs/进阶/数据库.md）。
 """
 import re
 

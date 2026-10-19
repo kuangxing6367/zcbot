@@ -51,18 +51,45 @@ SEG_FORWARD = 'forward'
 SEG_MARKDOWN = 'markdown'
 SEG_KEYBOARD = 'keyboard'
 
+# ── 补全段（覆盖 Telegram / Discord / 飞书 / 钉钉 / 企微 / QQ 官方的富类型）──
+SEG_CARD = 'card'              # 交互卡片（飞书 interactive / 钉钉 / 企微模板卡）
+SEG_POST = 'post'              # 富文本多段落（飞书 post）
+SEG_CONTACT = 'contact'        # 名片 / 联系人
+SEG_POLL = 'poll'              # 投票
+SEG_ANIMATION = 'animation'    # 动图（GIF，区别于普通视频：无声、循环）
+SEG_AUDIO = 'audio'            # 音频文件（区别于 voice：语音短消息）
+SEG_VIDEO_NOTE = 'video_note'  # 视频便签（圆形短视频）
+SEG_VENUE = 'venue'            # 地点（带名称与地址，强于裸 location）
+SEG_BUTTON = 'button'          # 单按钮（可与 keyboard 组合，也可独立出现）
+SEG_REACTION = 'reaction'      # 表情回应（对既有消息的反应，不是新消息）
+SEG_QUOTE = 'quote'            # 引用 / 话题引用（比 reply 更宽：可跨消息串话题）
+SEG_SYSTEM = 'system'          # 系统服务消息（入群、移出、pin 等）
+SEG_EMBED = 'embed'            # 富嵌入（Discord embed / Telegram rich block）
+SEG_EPHEMERAL = 'ephemeral'    # 仅指定接收者可见（Telegram Bot API 10.3+）
+
 #: 承载二进制/文件的内容型段（有"文件引用"语义）
-MEDIA_TYPES = frozenset({SEG_IMAGE, SEG_VOICE, SEG_VIDEO, SEG_FILE, SEG_STICKER})
+MEDIA_TYPES = frozenset({
+    SEG_IMAGE, SEG_VOICE, SEG_VIDEO, SEG_FILE, SEG_STICKER,
+    SEG_ANIMATION, SEG_AUDIO, SEG_VIDEO_NOTE,
+})
 #: 纯文本语义
 TEXT_TYPES = frozenset({SEG_TEXT, SEG_MARKDOWN})
 #: 交互/结构化语义（不是给人直接读的）
-STRUCT_TYPES = frozenset({SEG_REPLY, SEG_JSON, SEG_XML, SEG_KEYBOARD, SEG_FORWARD})
+STRUCT_TYPES = frozenset({
+    SEG_REPLY, SEG_JSON, SEG_XML, SEG_KEYBOARD, SEG_FORWARD,
+    SEG_CARD, SEG_POST, SEG_CONTACT, SEG_POLL, SEG_VENUE,
+    SEG_BUTTON, SEG_REACTION, SEG_QUOTE, SEG_SYSTEM, SEG_EMBED,
+    SEG_EPHEMERAL,
+})
 
 ALL_TYPES = frozenset({
     SEG_TEXT, SEG_AT, SEG_FACE, SEG_IMAGE, SEG_VOICE, SEG_VIDEO, SEG_FILE,
     SEG_STICKER, SEG_REPLY, SEG_SHARE, SEG_JSON, SEG_XML, SEG_LOCATION,
     SEG_POKE, SEG_MUSIC, SEG_DICE, SEG_RPS, SEG_FORWARD, SEG_MARKDOWN,
     SEG_KEYBOARD,
+    SEG_CARD, SEG_POST, SEG_CONTACT, SEG_POLL, SEG_ANIMATION, SEG_AUDIO,
+    SEG_VIDEO_NOTE, SEG_VENUE, SEG_BUTTON, SEG_REACTION, SEG_QUOTE,
+    SEG_SYSTEM, SEG_EMBED, SEG_EPHEMERAL,
 })
 
 #: 各协议叫法 → 规范类型。接入端只要产出规范名，别名表只是为了兼容历史写法
@@ -92,6 +119,25 @@ _TYPE_ALIASES: Dict[str, str] = {
     'dice': SEG_DICE, 'rps': SEG_RPS,
     'forward': SEG_FORWARD, 'markdown': SEG_MARKDOWN, 'keyboard': SEG_KEYBOARD,
     'text': SEG_TEXT, 'plain': SEG_TEXT,
+    # ── 补全段别名：只新增未占用的叫法，不动 'animation'/'card'/'quote'
+    #    的既有映射（那三个已被存量适配器依赖，改了会静默改变行为）──
+    'gif': SEG_ANIMATION, 'animated_image': SEG_ANIMATION,
+    'audio_file': SEG_AUDIO, 'music_file': SEG_AUDIO,
+    'video_note': SEG_VIDEO_NOTE, 'video_message': SEG_VIDEO_NOTE,
+    'round_video': SEG_VIDEO_NOTE,
+    'interactive': SEG_CARD, 'template': SEG_CARD,
+    'message_card': SEG_CARD, 'interactive_card': SEG_CARD,
+    'post': SEG_POST, 'rich_text': SEG_POST,
+    'contact': SEG_CONTACT, 'vcard': SEG_CONTACT, 'business_card': SEG_CONTACT,
+    'poll': SEG_POLL, 'vote': SEG_POLL,
+    'venue': SEG_VENUE,
+    'button': SEG_BUTTON, 'buttons': SEG_BUTTON, 'inline_button': SEG_BUTTON,
+    'reaction': SEG_REACTION, 'emoji_reaction': SEG_REACTION,
+    'message_reaction': SEG_REACTION,
+    'thread': SEG_QUOTE, 'topic': SEG_QUOTE, 'quote_message': SEG_QUOTE,
+    'system': SEG_SYSTEM, 'service': SEG_SYSTEM, 'notice': SEG_SYSTEM,
+    'embed': SEG_EMBED, 'rich': SEG_EMBED, 'rich_message': SEG_EMBED,
+    'ephemeral': SEG_EPHEMERAL,
 }
 
 #: 内容型段 data 的约定键。除这些之外允许携带协议私有字段。

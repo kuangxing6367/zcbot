@@ -22,6 +22,9 @@ func NewSqliteStore(path string) (*sqliteStore, error) {
 	// 真实高并发场景改用 WAL + 连接池，此处优先正确性。
 	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
+		// 失败时务必关闭 *sql.DB，释放 modernc/sqlite 在 Ping 时打开的文件句柄，
+		// 否则 Windows 上后续 os.Rename 坏文件会因"句柄被占用"失败，退化成复制隔离且源文件残留。
+		_ = db.Close()
 		return nil, err
 	}
 	s := &sqliteStore{db: db}

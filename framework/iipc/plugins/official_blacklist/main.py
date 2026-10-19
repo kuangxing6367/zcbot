@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 真·官方插件：plugins/llm_blacklist（逐字照抄，仅摘除 host 进程专属依赖）
 
