@@ -50,6 +50,11 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             config_path = os.path.join(get_home(), 'config.yaml')
         self.config_path = os.path.abspath(config_path)
         self.config = load_config(config_path)
+        # 语言必须在 __init__ 早期就定下来：framework.initializing / init_done 两条日志
+        # 早于 start()，放到 start() 里设置会让这两条退回默认中文
+        i18n.set_language(os.environ.get('ZCBOT_LANG')
+                          or self.config.get('language')
+                          or i18n.DEFAULT_LANG)
         # 数据目录统一迁移（logs / plugins_dat → data/ 下），必须在日志与插件加载前执行
         self._migrate_legacy_data_dirs()
         # 日志合并器实例集（stop() 时统一停掉后台 flush 线程）
@@ -57,7 +62,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self._setup_logging()
 
         # 初始化各个模块
-        logger.info("正在初始化框架核心引擎...")
+        logger.info(i18n.t('framework.initializing'))
 
         # 服务注册表（官方插件注册自身为核心能力）
         self.services = ServiceRegistry()
@@ -171,7 +176,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self._ready_event = asyncio.Event()
         self._startup_load_task = None
 
-        logger.info("框架核心引擎初始化完成")
+        logger.info(i18n.t('framework.init_done'))
 
     def _format_uptime(self):
         """格式化运行时间"""
@@ -339,11 +344,6 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         """
         self.loop = asyncio.get_running_loop()
         self._running = True
-
-        # 语言：--language / ZCBOT_LANG 优先于 config.yaml 的 language
-        i18n.set_language(os.environ.get('ZCBOT_LANG')
-                          or self.config.get('language')
-                          or i18n.DEFAULT_LANG)
 
         logger.info("=" * 50)
         logger.info(i18n.t('framework.starting'))

@@ -12,6 +12,7 @@ import sys
 import threading
 
 from .command import terminal_commands
+from framework import i18n
 
 logger = logging.getLogger('zcbot')
 
@@ -36,10 +37,7 @@ class TerminalInput:
         except Exception:
             interactive = False
         if not interactive:
-            logger.info(
-                "终端交互已跳过：stdin 非交互终端（CI/守护进程/重定向环境），"
-                "终端命令仍可通过 API/IPC 触发"
-            )
+            logger.info(i18n.t('terminal.skipped'))
             return
         # terminal.panel_autostart：先进入面板（独占 stdin），退出后再拉起输入
         # 线程，二者不会同时读 stdin；面板随框架停机自动退出
