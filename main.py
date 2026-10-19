@@ -151,6 +151,8 @@ def _print_usage():
   python main.py -a              同上（attach 的简写）
   python main.py -a --agent      智能体对话模式（纯文本通道里跟 AI 对话）
   python main.py code            全屏 AI 界面（需要真正的终端 / TTY）
+  python main.py --language LANG 提示文案语言：zh（默认）/ ciallo（活泼版）/ en
+  python main.py -l LANG         同上（简写）。也可用环境变量 ZCBOT_LANG=ciallo
   python main.py --iipc          走 IIPC 内核链路（Go 内核 + Rust 协议端，插件独立进程）
   python main.py --help          显示本帮助
 
@@ -281,6 +283,29 @@ def _run_attach(argv):
     return 0
 
 
+def _pop_language_arg(argv):
+    """从 argv 中摘出语言选项：--language LANG / -l LANG / --language=LANG。
+
+    摘掉后剩余参数继续走原有的「子命令 / 配置文件路径」解析，避免被后面的
+    「未知选项」检查误杀。返回 (新 argv, 语言代码或 None)。
+    """
+    out = []
+    lang = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith('--language='):
+            lang = a.split('=', 1)[1].strip()
+        elif a in ('--language', '-l'):
+            if i + 1 < len(argv):
+                lang = argv[i + 1].strip()
+                i += 1
+        else:
+            out.append(a)
+        i += 1
+    return out, (lang or None)
+
+
 def main():
     """启动入口"""
     # 终端编码对齐：Python UTF-8 模式 vs Windows 控制台代码页不匹配会导致中文乱码
@@ -295,6 +320,14 @@ def main():
 
     # 解析参数：子命令 → 未知选项报错 → 可选的一个配置文件路径
     argv = sys.argv[1:]
+    # 语言选项（--language / -l）：优先于 config.yaml 的 language
+    argv, _lang = _pop_language_arg(argv)
+    if _lang:
+        os.environ['ZCBOT_LANG'] = _lang
+    # 同步回 sys.argv：amain() 等下游直接读 sys.argv[1] 取配置文件路径，
+    # 不同步会把摘掉的语言选项误当成配置文件路径（历史坑的同类问题：
+    # `python main.py argparse` 曾在根目录生成一个叫 argparse 的默认配置）
+    sys.argv = [sys.argv[0]] + argv
     if argv[:1] and argv[0] in ('-h', '--help', 'help'):
         _print_usage()
         return

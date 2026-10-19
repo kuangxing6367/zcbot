@@ -28,7 +28,35 @@
 
 ## 开发中（未发布）
 
-> 暂无。
+> 主题：**扩展面自由度补齐（中间件管线 / 全局变换节点）+ 开发体验（多语言、IDE 补全）+ 文档与构建规范化**。
+> 以下均为已落地并实测通过的在研变化，尚未发版。
+
+### 新增
+
+- **多语言（语言选项）**：新增 `framework/i18n.py`，支持 `zh`（默认，简体中文）/ `ciallo`（中文活泼版，Ciallo～(∠・ω< )⌒☆ 风格）/ `en`（English）三种提示文案语言。
+  已本地化 `framework.starting` / `framework.started` / `framework.stopping` / `framework.stopped` 四条生命周期日志。
+  三种设置方式，优先级 **启动参数 `--language` / `-l` → 环境变量 `ZCBOT_LANG` → `config.yaml` 的 `language` → 默认 `zh`**；
+  `config.yaml` 默认模板已加入 `language: zh`。
+- **IIPC 多阶段中间件管线**：`ctx.middleware(stage, priority, handler)`，四阶段 `pre`（入站后、命令匹配前，可改写 / 返回 `False` 短路）/ `post`（分发后）/ `send`（出站 flush 前，可改写或拦截）/ `error`（handler 抛异常时中央处理）。未注册任何中间件时热路径与原先完全一致（零成本）。
+- **内核级全局变换节点**：`ctx.transform(priority, handler)`，内核在把任意事件扇出给所有订阅者**之前**按 priority 依次调用变换节点，返回新 event data 继续分发、返回 `None` 则全局丢弃 —— 一个插件做脱敏 / 翻译 / 补全，所有订阅者（命令与 `on` 处理器）都看到变换后事件。
+- **IDE 补全与插件脚手架**：新增 `py_sdk/py.typed`（PEP 561）；`PluginContext` 补上 `ext.attach` 运行时动态挂载的 14 个扩展方法（`kv` / `config` / `http` / `provide` / `resolve_service` / `call_plugin` / `metric` / `transform` 等）的完整类型签名；新增 `plugins/_template/main.py` 插件模板（对标 `nb plugin create`，`register(ctx: PluginContext)` 带类型标注）。
+- **内核模块地图**：新增 `go_kernel/README.md`，把 28 个平铺 `.go` 按 core / store / ext / plugin / util 五层归类，附调用路径与「为何保持单 `package main`」说明；补齐 5 个缺失首行分层注释的文件。
+- **消息类型与能力扩充**：消息段类型 20 → 34（新增 card / post / contact / poll / animation / audio / video_note / venue / button / reaction / quote / system / embed / ephemeral），能力声明 22 → 38，并补别名映射。
+- **测试脚本**：新增 `tools/middleware_check.py`（进程内驱动，7 项）、`tools/pipeline_check.py`（真内核 + 双插件 e2e，5 项）、`tools/ext_check.py`（扩展面 e2e，12 项）。
+
+### 修复
+
+- **图片渲染 PIL 回退逐行重载字体**：`_CanvasPIL._font` 在指定 `font_path` 时绕过模块级缓存、每次 `ImageFont.truetype()` 读盘加载，多行 / 多元素渲染 CJK 字体（数 MB~数十 MB）被逐行重新解析。已加实例级 `_font_cache`，按 `(size, bold)` 命中复用（实测同 size 仅加载一次）。
+- **`main.py` 把 `--language` 当成配置文件路径**：`amain()` 直接读原始 `sys.argv[1]` 取配置路径，摘掉语言参数后未同步回 `sys.argv`，导致生成一个名为 `--language` 的垃圾默认配置（与历史坑「`main.py argparse` 生成叫 argparse 的配置」同源）。已在摘参后同步 `sys.argv`。
+- **aiwriter 两处真实 bug**：`db_execute` 向模型泄漏内部模式说明；独立（standalone）模式下 `plugin_action` 被误拦截。两处均已修复。
+- **文档改名导致 aiwriter 静默失效**：`_load_plugin_brief()` 读 `docs/llm-plugins.md`，文档目录重构后该文件不存在即静默跳过，AI 系统提示里的插件约定凭空消失。已同步修正 `aiwriter/main.py`、`LLM.md`、`README.md` 及 `framework/database/` 内的文档路径引用。
+- **IIPC 加固遗留**：`isolateCorruptDB` 在 Windows 上因 SQLite 仍持有句柄导致 `os.Rename` 失败并残留坏文件；已改为 Ping 失败时 `db.Close()` 释放句柄，且复制分支结束后删除源文件。
+- **pytest 配置缺失**：仓库此前无任何 pytest 配置，异步用例被 strict 模式静默判失败；已加 `asyncio_mode = "auto"`（不加 `testpaths`，避免脚本式测试文件导致收集 INTERNALERROR）。
+
+### 变更
+
+- **文档站目录重构（中文化）**：46 个平铺 md 按语义重组为 `指南/`（9）、`接口/基础/`（4）+ `接口/高级/`（3）、`进阶/`（11）、`品牌/`（1）、`速查/`（5），各目录补索引页；`config.mjs` 的 nav / sidebar 与首页导航表同步更新，链接校验 225 条零死链。
+- 新增 `docs/指南/多语言.md` 并接入侧边栏。
 
 ## v1.8.9-beta.3（2026-10-15）
 

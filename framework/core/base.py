@@ -24,6 +24,7 @@ from framework.log_broker import log_broker, FrameworkLogHandler
 from framework.messaging.protocol import ServiceRegistry
 from framework.terminal import TerminalInput, terminal_commands, register_builtins
 from framework.hooks import HookRegistry, HookPoints
+from framework import i18n
 
 logger = logging.getLogger('zcbot')
 
@@ -339,8 +340,13 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self.loop = asyncio.get_running_loop()
         self._running = True
 
+        # 语言：--language / ZCBOT_LANG 优先于 config.yaml 的 language
+        i18n.set_language(os.environ.get('ZCBOT_LANG')
+                          or self.config.get('language')
+                          or i18n.DEFAULT_LANG)
+
         logger.info("=" * 50)
-        logger.info("ZCBOT 框架 启动中...")
+        logger.info(i18n.t('framework.starting'))
         logger.info("=" * 50)
 
         # 安全提示
@@ -468,7 +474,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self._ready = True
         self._ready_event.set()
         import time
-        logger.info(f"框架启动完成，等待消息...（总耗时 {time.time() - self._start_time:.2f}s）")
+        logger.info(i18n.t('framework.started',
+                           elapsed="%.2f" % (time.time() - self._start_time)))
 
     async def _background_startup_load(self):
         """异步启动模式的后台插件加载任务"""
@@ -557,7 +564,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
     async def stop(self):
         """停止框架（异步）"""
-        logger.info("正在停止框架...")
+        logger.info(i18n.t('framework.stopping'))
         self._running = False
 
         # 取消异步启动模式下仍在进行的后台插件加载任务
@@ -684,4 +691,4 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             except Exception as e:
                 logger.warning(f"日志合并器停止异常: {e}")
 
-        logger.info("框架已停止")
+        logger.info(i18n.t('framework.stopped'))
