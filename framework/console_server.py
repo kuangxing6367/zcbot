@@ -23,6 +23,7 @@ import hmac
 import json
 import logging
 import os
+from framework import i18n
 import secrets
 import socket
 import threading
@@ -137,10 +138,8 @@ class ConsoleServer:
         self._thread = threading.Thread(target=self._accept_loop, daemon=True,
                                         name='console-server')
         self._thread.start()
-        logger.info(
-            "调试控制台已就绪：%s:%s（token %s 位，凭证存于数据库 console_access；"
-            "本地执行 `python main.py attach` 接入）",
-            self.host, self.port, self.token_bits)
+        logger.info(i18n.t('console.ready', addr=f"{self.host}:{self.port}",
+                           bits=self.token_bits))
         return True
 
     def _is_our_console(self, port) -> bool:

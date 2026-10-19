@@ -5,6 +5,7 @@ load_plugin / unload_plugin / 合成包子模块预载 / 字节码清理 / venv 
 依赖 PluginLoader.__init__ 与 deps/config/runtime mixin 能力。
 """
 import logging
+from framework import i18n
 import importlib.machinery
 import importlib.util
 import gc
@@ -360,7 +361,8 @@ class PluginLifecycleMixin:
                 with self._lock:
                     self._failed_mtimes.pop(plugin_name, None)
 
-                logger.info(f"[{plugin_name}] 加载成功 v{plugin_meta['version']}")
+                logger.info(i18n.t('plugin.loaded', name=plugin_name,
+                                   version=plugin_meta['version']))
                 return True
 
             except ImportError as e:

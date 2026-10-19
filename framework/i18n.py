@@ -47,22 +47,61 @@ DEFAULT_LANG = LANG_ZH
 # 约定：key 用「模块.语义」命名；{xxx} 为运行时填充的占位符。
 LANGS: dict[str, dict[str, str]] = {
     LANG_ZH: {
+        # ── 框架生命周期 ──
+        'framework.initializing': '正在初始化框架核心引擎...',
+        'framework.init_done': '框架核心引擎初始化完成',
         'framework.starting': 'ZCBOT 框架 启动中...',
         'framework.started': '框架启动完成，等待消息...（总耗时 {elapsed}s）',
         'framework.stopping': '正在停止框架...',
         'framework.stopped': '框架已停止',
+        'app.ctrl_c': '收到 Ctrl+C，已退出。',
+        # ── 插件 ──
+        'plugin.loaded': '[{name}] 加载成功 v{version}',
+        'plugin.disabled': '官方插件 [{name}] 已禁用 (core_plugins.{name}: {enabled})',
+        # ── 服务就绪 ──
+        'webui.started': 'Web UI 已启动: {url}',
+        'console.ready': '调试控制台已就绪：{addr}（token {bits} 位，凭证存于数据库 console_access；'
+                         '本地执行 `python main.py attach` 接入）',
+        'terminal.skipped': '终端交互已跳过：stdin 非交互终端（CI/守护进程/重定向环境），'
+                            '终端命令仍可通过 API/IPC 触发',
     },
     LANG_CIALLO: {
+        # ── 框架生命周期 ──
+        'framework.initializing': 'Ciallo～(∠・ω< )⌒☆ 正在给框架核心引擎热热身...',
+        'framework.init_done': 'Ciallo～(∠・ω< )⌒☆ 核心引擎准备好啦～',
         'framework.starting': 'Ciallo～(∠・ω< )⌒☆ ZCBOT 框架启动中咯～ 稍等一小下，马上就好喵～',
         'framework.started': 'Ciallo～(∠・ω< )⌒☆ 启动完成啦～ 正竖起耳朵等你的消息哦～（总共花了 {elapsed}s）',
         'framework.stopping': 'Ciallo～(∠・ω< )⌒☆ 要收工啦～ 正在把框架停下来...',
         'framework.stopped': 'Ciallo～(∠・ω< )⌒☆ 框架已经乖乖躺好咯～ 下次见！',
+        'app.ctrl_c': 'Ciallo～(∠・ω< )⌒☆ 收到 Ctrl+C，先退下啦～',
+        # ── 插件 ──
+        'plugin.loaded': 'Ciallo～(∠・ω< )⌒☆ [{name}] v{version} 装载完毕～',
+        'plugin.disabled': 'Ciallo～(∠・ω< )⌒☆ [{name}] 在睡懒觉（core_plugins.{name}: {enabled}），先不叫它～',
+        # ── 服务就绪 ──
+        'webui.started': 'Ciallo～(∠・ω< )⌒☆ 管理后台开门啦～ {url}',
+        'console.ready': 'Ciallo～(∠・ω< )⌒☆ 调试控制台就位～ {addr}（token {bits} 位，'
+                         '凭证在数据库 console_access；本地 `python main.py attach` 就能接入）',
+        'terminal.skipped': 'Ciallo～(∠・ω< )⌒☆ 这里不是交互终端，陪聊先跳过啦～'
+                            '（命令还能走 API/IPC 哦）',
     },
     LANG_EN: {
+        # ── 框架生命周期 ──
+        'framework.initializing': 'Initializing framework core engine...',
+        'framework.init_done': 'Framework core engine initialized',
         'framework.starting': 'ZCBOT framework starting...',
         'framework.started': 'Framework started, waiting for messages... (took {elapsed}s)',
         'framework.stopping': 'Stopping framework...',
         'framework.stopped': 'Framework stopped',
+        'app.ctrl_c': 'Received Ctrl+C, exiting.',
+        # ── 插件 ──
+        'plugin.loaded': '[{name}] loaded v{version}',
+        'plugin.disabled': 'Official plugin [{name}] disabled (core_plugins.{name}: {enabled})',
+        # ── 服务就绪 ──
+        'webui.started': 'Web UI started: {url}',
+        'console.ready': 'Debug console ready: {addr} (token {bits} bits, credentials stored in DB '
+                         'console_access; run `python main.py attach` locally)',
+        'terminal.skipped': 'Terminal interaction skipped: stdin is not an interactive terminal '
+                            '(CI/daemon/redirected); commands still available via API/IPC',
     },
 }
 

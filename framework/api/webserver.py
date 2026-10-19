@@ -5,6 +5,7 @@ Web UI 服务器（自 framework/api/webapp.py 剥离）
 """
 import logging
 import threading
+from framework import i18n
 
 logger = logging.getLogger('zcbot')
 
@@ -60,7 +61,8 @@ class WebServer:
             return
         self._thread = threading.Thread(target=self._run, daemon=True, name="web-server")
         self._thread.start()
-        logger.info(f"Web UI 已启动: {self.scheme}://{self.host}:{self.port}")
+        logger.info(i18n.t('webui.started',
+                           url=f"{self.scheme}://{self.host}:{self.port}"))
         if self.split_ports:
             self._api_thread = threading.Thread(
                 target=self._run_api, daemon=True, name="api-server")

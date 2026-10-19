@@ -5,6 +5,7 @@ import asyncio
 import gc
 import importlib.util
 import logging
+from framework import i18n
 import os
 import sys
 import time
@@ -75,7 +76,7 @@ class FrameworkRuntimeMixin:
             if isinstance(enabled, str):
                 enabled = enabled.strip().lower() in ('1', 'true', 'yes', 'on', 'y')
             if not enabled:
-                logger.info(f"官方插件 [{name}] 已禁用 (core_plugins.{name}: {enabled!r})")
+                logger.info(i18n.t('plugin.disabled', name=name, enabled=enabled))
                 continue
 
             try:

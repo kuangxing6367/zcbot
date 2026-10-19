@@ -34,9 +34,13 @@
 ### 新增
 
 - **多语言（语言选项）**：新增 `framework/i18n.py`，支持 `zh`（默认，简体中文）/ `ciallo`（中文活泼版，Ciallo～(∠・ω< )⌒☆ 风格）/ `en`（English）三种提示文案语言。
-  已本地化 `framework.starting` / `framework.started` / `framework.stopping` / `framework.stopped` 四条生命周期日志。
+  已本地化 **12 条**覆盖整条启动链路的文案：`framework.initializing` / `init_done` / `starting` / `started` / `stopping` / `stopped`、
+  `app.ctrl_c`、`plugin.loaded` / `plugin.disabled`、`webui.started`、`console.ready`、`terminal.skipped`（`ciallo` 实测一次启动输出 47 处）。
   三种设置方式，优先级 **启动参数 `--language` / `-l` → 环境变量 `ZCBOT_LANG` → `config.yaml` 的 `language` → 默认 `zh`**；
   `config.yaml` 默认模板已加入 `language: zh`。
+- **CLI 配置控制台**（对标 NoneBot `nb` 的配置入口）：新增 `python main.py config` 子命令 ——
+  `config` 显示配置摘要（含当前语言与可用语言）、`config get <key>` 查看、`config set <key> <value>` 写回 `config.yaml`。
+  `set` 采用**按行原地替换**而非 `yaml.dump`，`config.yaml` 里的中文注释完整保留；支持 `--config <path>` 指定配置文件。
 - **IIPC 多阶段中间件管线**：`ctx.middleware(stage, priority, handler)`，四阶段 `pre`（入站后、命令匹配前，可改写 / 返回 `False` 短路）/ `post`（分发后）/ `send`（出站 flush 前，可改写或拦截）/ `error`（handler 抛异常时中央处理）。未注册任何中间件时热路径与原先完全一致（零成本）。
 - **内核级全局变换节点**：`ctx.transform(priority, handler)`，内核在把任意事件扇出给所有订阅者**之前**按 priority 依次调用变换节点，返回新 event data 继续分发、返回 `None` 则全局丢弃 —— 一个插件做脱敏 / 翻译 / 补全，所有订阅者（命令与 `on` 处理器）都看到变换后事件。
 - **IDE 补全与插件脚手架**：新增 `py_sdk/py.typed`（PEP 561）；`PluginContext` 补上 `ext.attach` 运行时动态挂载的 14 个扩展方法（`kv` / `config` / `http` / `provide` / `resolve_service` / `call_plugin` / `metric` / `transform` 等）的完整类型签名；新增 `plugins/_template/main.py` 插件模板（对标 `nb plugin create`，`register(ctx: PluginContext)` 带类型标注）。
