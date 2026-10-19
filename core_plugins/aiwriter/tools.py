@@ -81,7 +81,14 @@ class ToolRegistry:
 
     def can(self, tool: str) -> bool:
         cap = self._CAPS.get(tool)
-        return cap is not None and cap in self.allowed_caps()
+        if cap is None:
+            return False
+        # 独立模式下 plugin_action 是「返回指引的空操作」（宿主不会真去动插件，
+        # 见宿主 plugin_action 的独立模式分支），不必要求 exec 权限——
+        # 否则模型连「为什么做不了、该怎么办」都拿不到，只会反复重试。
+        if tool == 'plugin_action' and getattr(self.host, 'standalone', False):
+            return True
+        return cap in self.allowed_caps()
 
     # ── 路径边界 ───────────────────────────────────────────────────────
     def _resolve(self, path):
@@ -231,10 +238,24 @@ class ToolRegistry:
         if fn is None:
             raise ToolError("未知工具：%s" % name)
         if not self.can(name):
-            raise PermissionDenied(
-                "工具 [%s] 在当前模式（mode=%s, allow_exec=%s）下不可用"
-                % (name, self.mode, self.allow_exec))
+            raise PermissionDenied(self._denied_hint(name))
         return fn(args or {})
+
+    def _denied_hint(self, name: str) -> str:
+        """越权提示：给人/模型看的必须是「为什么不能用 + 下一步怎么办」。
+
+        只抛内部字段（mode=workspace, allow_exec=False）对使用者毫无意义，
+        独立模式下尤其要说清「只读、不能写库」，否则模型会反复重试同一个动作。
+        """
+        standalone = bool(getattr(self.host, 'standalone', False))
+        if name == 'db_execute' and standalone:
+            return ("独立模式以只读方式打开业务库，不能写库（%s 不可用）。"
+                    "要改数据请在框架宿主模式下运行 aiwriter，或用 sqlite3 / 管理工具直接操作。" % name)
+        if name == 'db_execute':
+            return ("%s 需要写库权限：当前模式（mode=%s, allow_exec=%s）未开放。"
+                    "请在配置里开启 allow_exec，或在框架宿主模式下运行。" % (name, self.mode, self.allow_exec))
+        return ("工具 [%s] 在当前模式（mode=%s, allow_exec=%s）下不可用"
+                % (name, self.mode, self.allow_exec))
 
     def _clip(self, text: str) -> str:
         text = text or ''

@@ -31,7 +31,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)                      # iipc/
 PYSIDE = os.path.dirname(ROOT)                   # python_side/
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(ROOT, "py_sdk"))
 from onebot_fake import FakeOneBot, group_msg, private_msg  # noqa: E402
+from iipc_client import IIPCClient  # noqa: E402
 
 KERNEL_EXE = os.path.join(ROOT, "go_kernel", "zcbot_kernel.exe")
 
@@ -68,6 +70,34 @@ def free_port():
     p = s.getsockname()[1]
     s.close()
     return p
+
+
+def wait_plugins_ready(addr, needed, timeout=45):
+    """轮询内核 plugin.list，直到指定插件全部完成注册（或超时）。
+
+    固定 sleep 不可靠：插件进程要起解释器 + 载入 SDK，实测冷启动 4~7s，
+    机器忙时更久。首条用例因此落空会被误读成功能回归，这里改成条件等待。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        cli = None
+        try:
+            cli = IIPCClient(addr, "dev-auth")
+            r = cli.call("plugin.list", {}, timeout=3)
+            ids = set((r or {}).get("plugins", []) and
+                      [p.get("plugin_id") for p in (r or {}).get("plugins", [])])
+            if needed.issubset(ids):
+                return True
+        except Exception:
+            pass
+        finally:
+            if cli is not None:
+                try:
+                    cli.close()
+                except Exception:
+                    pass
+        time.sleep(0.5)
+    return False
 
 
 def wait_tcp(port, timeout=15):
@@ -219,8 +249,13 @@ def main():
             check("WS 握手", False, "适配器未连入")
             return 1
         check("WS 握手", True)
-        # 等插件注册（内核拉插件需数秒）
-        time.sleep(4)
+        # 等插件注册：插件进程启动耗时随机器负载波动很大（本机实测 4~7s），
+        # 固定 sleep 会在慢机器上让首条用例落空（表现为"第一条失败、后面全过"）。
+        # 这里改成条件等待——轮询 plugin.list 直到插件真正注册完。
+        if not wait_plugins_ready("127.0.0.1:%d" % ipc_port, {"echo"}, timeout=45):
+            check("插件注册就绪", False, "等待超时，后续用例不可信")
+        else:
+            check("插件注册就绪", True)
 
         # 4) 群消息 "/ping" → echo 插件：命令命中执行 /ping（回 "pong" +
         #    DB 往返回 "db=..."）。1:1 语义（对齐框架 router.route）：

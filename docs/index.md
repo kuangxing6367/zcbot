@@ -8,10 +8,10 @@ hero:
   actions:
     - theme: brand
       text: 5 分钟跑起来
-      link: /installation
+      link: /指南/安装
     - theme: alt
       text: ZCBOT 是什么？
-      link: /getting-started
+      link: /指南/快速开始
     - theme: alt
       text: GitHub
       link: https://gitee.com/liquanfeng123/zcbot
@@ -19,16 +19,16 @@ hero:
 features:
   - title: 一个平台，多种接入
     details: 接入端彼此并列——OneBot 11（QQ）、QQ 官方、Telegram、Discord、HTTP 注入、出站 WS；换接入端走统一事件与插件接口。
-    link: /connect-im
+    link: /指南/对接IM平台
   - title: 需要哪种能力就开哪个
     details: 官方扩展（接入端 / Web 后台 / 会话 / 定时 / 图片渲染…）默认全部关闭，在 core_plugins.yaml 里按需启用。
-    link: /configuration
+    link: /指南/配置系统
   - title: 改了就能重载
     details: 功能都在 plugins/ 里，一个文件夹一个插件；后台点「重载」立即生效，不影响在线。
-    link: /writing-plugins
+    link: /指南/编写插件
   - title: 每个环节都能挂钩子
     details: 启动、收消息、执行命令、发协议动作……几乎每个环节都能挂自己的逻辑（审计、限流、过滤）。
-    link: /hooks
+    link: /接口/高级/扩展点Hook
 ---
 
 ## 它解决什么问题
@@ -71,58 +71,68 @@ python main.py
 
 ---
 
-## 文档导航（全部平铺在 docs/ 一层）
+## 文档导航
+
+文档按主题分目录存放——`指南/` `接口/` `进阶/` `速查/` `品牌/`，每节都有自己的总览页。
 
 ### 指南
 
 | 文档 | 内容 |
 | ---- | ---- |
-| [安装](installation.md) | 环境、依赖、目录结构、升级 |
-| [开始使用](getting-started.md) | 启动、确定事件来源、进后台 |
-| [配置系统](configuration.md) | 两份 yaml、插件开关、安全清单 |
-| [对接 IM 平台](connect-im.md) | 反向 WS、多平台接入、富媒体与群管 |
-| [编写插件](writing-plugins.md) | 手把手做出签到类完整插件 |
-| [多轮会话](session.md) | `wait_for` / `create_session` |
-| [接入大模型（LLM）](llm-chat.md) | 模型提供商总线、函数（工具）调用、Agent 循环 |
-| [接入端契约与规范消息](adapter-contract.md) | 消息段跨协议统一、能力自述、通知事件命名 |
-| [最佳实践](best-practices.md) | 不依赖 IM 的用法 + 写插件规范 |
+| [安装](指南/安装.md) | 环境、依赖、目录结构、升级 |
+| [快速开始](指南/快速开始.md) | 启动、确定事件来源、进后台 |
+| [配置系统](指南/配置系统.md) | 两份 yaml、插件开关、安全清单 |
+| [对接 IM 平台](指南/对接IM平台.md) | 反向 WS、多平台接入、富媒体与群管 |
+| [编写插件](指南/编写插件.md) | 手把手做出签到类完整插件 |
+| [多轮会话](指南/多轮会话.md) | `wait_for` / `create_session` |
+| [接入大模型（LLM）](指南/接入大模型.md) | 模型提供商总线、函数（工具）调用、Agent 循环 |
+| [接入端契约与规范消息](指南/接入端契约.md) | 消息段跨协议统一、能力自述、通知事件命名 |
+| [最佳实践](指南/最佳实践.md) | 不依赖 IM 的用法 + 写插件规范 |
 
-### API（写插件时查）
+### 接口（写插件时查）
 
 | 你要做的事 | 打开这页 |
 | ---- | ---- |
-| 注册命令、发消息、查库、定时任务、WebUI、权限 | [PluginContext (ctx)](ctx.md) |
-| 读消息字段、判断图片/@/回复、拦事件 | [Event 事件对象](event.md) |
-| 改生命周期、拦 HTTP、审动作、自定义扩展点 | [扩展点（Hook 系统）](hooks.md) |
-| 接 Telegram / Discord / MQTT / 自定义事件源 | [协议适配器 ProtocolAdapter](protocol_adapter.md) |
-| 摸底层容器：生命周期、服务注册表、事件循环 | [Framework 核心](framework.md) |
-| 取官方能力、查内置服务名 | [服务注册表（DI）](services.md) |
-| 装饰器风格写插件 | [插件装饰器](plugin-decorators.md) |
+| 注册命令、发消息、查库、定时任务、WebUI、权限 | [插件上下文（ctx）](接口/基础/插件上下文.md) |
+| 读消息字段、判断图片/@/回复、拦事件 | [事件对象](接口/基础/事件对象.md) |
+| 改生命周期、拦 HTTP、审动作、自定义扩展点 | [扩展点（Hook 系统）](接口/高级/扩展点Hook.md) |
+| 接 Telegram / Discord / MQTT / 自定义事件源 | [协议适配器](接口/高级/协议适配器.md) |
+| 摸底层容器：生命周期、服务注册表、事件循环 | [核心框架](接口/基础/核心框架.md) |
+| 取官方能力、查内置服务名 | [服务注册表（DI）](接口/基础/服务注册表.md) |
+| 装饰器风格写插件 | [插件装饰器](接口/高级/插件装饰器.md) |
 
 ### 进阶
 
 | 文档 | 内容 |
 | ---- | ---- |
-| [内核设计哲学](core-philosophy.md) | 10 条设计信条 + 铁律（改框架前先读） |
-| [架构详解](architecture.md) | 分层、启动时序、消息流转 |
-| [插件加载机制](loader.md) | 多文件导入、热重载、踩坑 |
-| [数据库](database.md) | 建表、CRUD、SQLite/MySQL |
-| [定时任务](scheduler.md) | cron / interval / date |
-| [权限系统](permission.md) | 节点、组、继承、审计 |
-| [接口令牌（API Key）](api-tokens.md) | 两类 HTTP 接口、令牌创建与吊销 |
-| [部署上线](deployment.md) | systemd / Docker / 反代 / 安全 |
-| [双核心（core/host）](dual-core.md) | 双进程实验特性 |
-| [项目结构](project-structure.md) | 目录、前端构建、建表 SQL |
-| [扩展清单](plugins-catalog.md) | 官方扩展 / 内置用户扩展 / 官方扩展仓库 |
+| [内核设计哲学](进阶/设计哲学.md) | 10 条设计信条 + 铁律（改框架前先读） |
+| [架构详解](进阶/架构总览.md) | 分层、启动时序、消息流转 |
+| [插件加载机制](进阶/插件加载机制.md) | 多文件导入、热重载、踩坑 |
+| [数据库](进阶/数据库.md) | 建表、CRUD、SQLite/MySQL |
+| [定时任务](进阶/定时任务.md) | cron / interval / date |
+| [权限系统](进阶/权限系统.md) | 节点、组、继承、审计 |
+| [接口令牌（API Key）](进阶/接口令牌.md) | 两类 HTTP 接口、令牌创建与吊销 |
+| [部署上线](进阶/部署上线.md) | systemd / Docker / 反代 / 安全 |
+| [双核心（core/host）](进阶/双核心架构.md) | 双进程实验特性 |
+| [项目结构](进阶/项目结构.md) | 目录、前端构建、建表 SQL |
+| [扩展清单](进阶/扩展清单.md) | 官方扩展 / 内置用户扩展 / 官方扩展仓库 |
 
-### 给 AI 编码助手（LLM）
+### 速查（给 AI 编码助手）
 
 | 文档 | 内容 |
 | ---- | ---- |
 | [LLM 索引](https://gitee.com/liquanfeng123/zcbot/blob/main/LLM.md) | 按需加载入口，先读它（仓库根目录） |
-| [框架结构（LLM）](llm-framework.md) | 目录、事件流水线、扩展点、服务名 |
-| [插件开发（LLM）](llm-plugins.md) | 最小模板、ctx 常用面、坑 |
-| [调试排错（LLM）](llm-debugging.md) | 跑测试、排查报错 |
+| [框架结构](速查/框架结构.md) | 目录、事件流水线、扩展点、服务名 |
+| [插件开发](速查/插件开发.md) | 最小模板、ctx 常用面、坑 |
+| [调试排错](速查/调试排错.md) | 跑测试、排查报错 |
+| [IIPC 内核链路](速查/IIPC内核链路.md) | Go 内核 / Rust 适配器 / Python SDK 链路 |
+| [安全加固](速查/安全加固.md) | API / 前端抗探测与蜜罐体系 |
+
+### 品牌
+
+| 文档 | 内容 |
+| ---- | ---- |
+| [标志与规范](品牌/index.md) | logo、配色、使用约束 |
 
 ---
 

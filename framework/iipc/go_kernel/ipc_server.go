@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"time"
 )
@@ -240,6 +241,9 @@ type IpcServer struct {
 	adaptersBySelf map[string]*Conn
 	primaryAdapter *Conn
 
+	// 插件连接索引（pluginID -> 连接）：供插件间调用与插件清单使用
+	pluginConns map[string]*Conn
+
 	// 编排附属件（断开时按插件清理；均为可选，nil 时跳过）
 	sessMgr *SessionManager
 	sched   *TaskScheduler
@@ -263,10 +267,42 @@ func NewIpcServer(addr, auth string, bus *EventBus, store Store) *IpcServer {
 		conns:          make(map[int64]*Conn),
 		adapters:       make(map[int64]*Conn),
 		adaptersBySelf: make(map[string]*Conn),
+		pluginConns:    make(map[string]*Conn),
 	}
 }
 
 func (s *IpcServer) RegisterMethod(m string, h MethodHandler) { s.methods[m] = h }
+
+// notePlugin 记录插件连接（plugin.register 成功后调用）。
+func (s *IpcServer) notePlugin(pluginID string, c *Conn) {
+	s.mu.Lock()
+	s.pluginConns[pluginID] = c
+	s.mu.Unlock()
+}
+
+// pluginConn 取插件连接；不存在返回 nil。
+func (s *IpcServer) pluginConn(pluginID string) *Conn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.pluginConns[pluginID]
+	if c != nil && c.isClosed() {
+		delete(s.pluginConns, pluginID)
+		return nil
+	}
+	return c
+}
+
+// PluginIDs 返回当前在线插件 ID 列表（有序）。
+func (s *IpcServer) PluginIDs() []string {
+	s.mu.Lock()
+	ids := make([]string, 0, len(s.pluginConns))
+	for id := range s.pluginConns {
+		ids = append(ids, id)
+	}
+	s.mu.Unlock()
+	sort.Strings(ids)
+	return ids
+}
 
 // registerAdapter 标记连接为适配器，并按 self_id 建路由。
 func (s *IpcServer) registerAdapter(c *Conn, selfID string) {
@@ -350,7 +386,12 @@ func (s *IpcServer) publishFromConn(c *Conn, payload json.RawMessage) {
 func (s *IpcServer) dropConn(c *Conn) {
 	s.mu.Lock()
 	delete(s.conns, c.id)
+	if c.pluginID != "" && s.pluginConns[c.pluginID] == c {
+		delete(s.pluginConns, c.pluginID)
+	}
 	s.mu.Unlock()
+	// 插件退出：回收它声明的服务与能力，避免留下指向死进程的注册项
+	forgetPluginExtensions(c.pluginID)
 	if c.isAdapter {
 		s.unregisterAdapter(c)
 	}

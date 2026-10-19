@@ -16,16 +16,16 @@
 
 ## 内核设计哲学
 
-改 `framework/` 或写扩展前,先读 [docs/llm-framework.md](docs/llm-framework.md) 顶部的「内核设计哲学」段,以及人类版 [docs/core-philosophy.md](docs/core-philosophy.md)。核心一条:**扩展功能必须走 hook/服务注册,禁止往内核塞业务或特判某个接入端**。
+改 `framework/` 或写扩展前,先读 [docs/速查/框架结构.md](docs/速查/框架结构.md) 顶部的「内核设计哲学」段,以及人类版 [docs/进阶/设计哲学.md](docs/进阶/设计哲学.md)。核心一条:**扩展功能必须走 hook/服务注册,禁止往内核塞业务或特判某个接入端**。
 
 ## 按任务加载
 
 | 任务 | 读 |
 | ---- | ---- |
-| 写插件 / 调插件 API | [docs/llm-plugins.md](docs/llm-plugins.md) |
-| 改框架 / 找模块 / 理解事件流 | [docs/llm-framework.md](docs/llm-framework.md) |
-| 跑测试 / 排查报错 / 避坑 | [docs/llm-debugging.md](docs/llm-debugging.md) |
-| **IIPC 链路（`--iipc`）** | [docs/llm-iipc.md](docs/llm-iipc.md) |
-| **加固 API / 前端安全** | [docs/llm-security.md](docs/llm-security.md) |
+| 写插件 / 调插件 API | [docs/速查/插件开发.md](docs/速查/插件开发.md) |
+| 改框架 / 找模块 / 理解事件流 | [docs/速查/框架结构.md](docs/速查/框架结构.md) |
+| 跑测试 / 排查报错 / 避坑 | [docs/速查/调试排错.md](docs/速查/调试排错.md) |
+| **IIPC 链路（`--iipc`）** | [docs/速查/IIPC内核链路.md](docs/速查/IIPC内核链路.md) |
+| **加固 API / 前端安全** | [docs/速查/安全加固.md](docs/速查/安全加固.md) |
 
 人类文档:[README.md](README.md) · [docs/](docs/index.md)

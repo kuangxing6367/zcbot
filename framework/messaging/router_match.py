@@ -39,13 +39,106 @@ class SimpleMatch:
 
 
 class _PluginRoute:
-    """单个插件的内存路由条目"""
+    """单个插件的内存路由条目
 
-    __slots__ = ('module', 'commands')
+    index: 首字符倒排索引 {首字符|None: [命令]}，用于热路径剪枝候选集。
+           None 键存放"无法按首字符剪枝"的命令（正则命令 / 空 pattern），
+           每条消息都必须尝试。索引只做候选筛选，不改变任何匹配语义。
+    """
 
-    def __init__(self, module, commands=None):
+    __slots__ = ('module', 'commands', 'index')
+
+    def __init__(self, module, commands=None, index=None):
         self.module = module
         self.commands = commands or []
+        self.index = index
+
+    def candidates(self, message: str):
+        """返回该消息的候选命令（索引命中 + 不可剪枝桶），索引缺失时退化为全量。
+
+        索引存的是命令下标，候选按下标升序返回，保证与全量遍历的命中顺序一致
+        （命中即止的语义依赖命令表原顺序，不能打乱）。
+        """
+        index = self.index
+        if index is None:
+            return self.commands
+        # 每个首字符对应的候选在构建期已合并好（含不可剪枝桶）并有序，此处仅一次查表
+        idxs = index.get(message[0] if message else '')
+        if idxs is None:
+            # 首字符无任何命令特征 → 只剩不可剪枝（正则）命令
+            idxs = index.get(None)
+            if not idxs:
+                return []
+        commands = self.commands
+        return [commands[i] for i in idxs]
+
+
+def _index_keys_for(pattern: str):
+    """计算某个可前缀匹配字符串在哪些消息首字符下才可能命中，返回 None 表示无法剪枝。
+
+    对齐 _match_simple 的三条分支：
+      1. message 直接以 pattern 开头        → 首字符 == pattern[0]
+      2. message 带 "/" 且 pattern 不带 "/" → 首字符 == "/"
+      3. message 不带 "/" 且 pattern 带 "/" → 去掉 "/" 后前缀匹配 → 首字符 == pattern[1]
+    """
+    if not pattern:
+        return None
+    keys = {pattern[0]}
+    if pattern[0] == '/':
+        if len(pattern) > 1:
+            keys.add(pattern[1])
+    else:
+        keys.add('/')
+    return keys
+
+
+def build_command_index(commands):
+    """为单个插件的命令表构建首字符倒排索引（在路由表重建时调用一次）。
+
+    返回 {首字符: [命令下标(升序), ...], None: [不可剪枝命令下标, ...]}。
+    - 剪枝是保守的：只要原匹配逻辑可能命中，该命令必在候选集内；
+    - 候选按命令表原顺序（下标升序），保证"命中第一个即执行"语义不变；
+    - 不可剪枝命令（正则等）在构建期就并入每个首字符桶，热路径只做一次查表、
+      零合并开销；首字符未命中任何桶时返回 None 桶（仍尝试正则命令）。
+    """
+    buckets = {}
+    always = []
+    for i, cmd in enumerate(commands):
+        keys = None
+        if cmd.rx is None:
+            keys = set()
+            if cmd.simple is not None:
+                ks = _index_keys_for(cmd.simple)
+                if ks is None:
+                    keys = None
+                else:
+                    keys |= ks
+            if keys is not None and cmd.aliases:
+                for alias in cmd.aliases:
+                    ks = _index_keys_for(alias)
+                    if ks is None:
+                        keys = None
+                        break
+                    keys |= ks
+        if not keys:
+            # 无可用首字符特征（正则 / 禁用且无别名 / 空 pattern）→ 每条消息都尝试
+            always.append(i)
+            continue
+        for k in keys:
+            buckets.setdefault(k, []).append(i)
+
+    index = {}
+    if always:
+        # 预合并：每个首字符桶 = 该桶命令 + 全部不可剪枝命令（去重后升序）
+        for k, idxs in buckets.items():
+            merged = set(idxs)
+            merged.update(always)
+            index[k] = sorted(merged)
+        index[None] = list(always)
+    else:
+        for k, idxs in buckets.items():
+            index[k] = idxs
+    return index
 
 
 class RouterMatchMixin:
@@ -113,7 +206,8 @@ class RouterMatchMixin:
             log_broker.log_plugin(plugin_name, '模块未加载，跳过')
             return False
 
-        for cmd in entry.commands:
+        # 首字符倒排索引剪枝：只尝试"有可能命中"的命令（语义与全量遍历等价）
+        for cmd in entry.candidates(message):
             match = None
             matched_by = ''
 

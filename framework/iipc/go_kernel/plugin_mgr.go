@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+// maxPluginRestarts 插件连续崩溃自动重启的上限；超过后停止重启并告警，
+// 避免"崩溃炸弹"（启动即崩的插件每 1s 拉起一个完整 Python 解释器，吞内存/CPU）。
+// 干净退出（exit 0）会重置计数，故偶发崩溃（非持续崩溃循环）不会触发本上限。
+const maxPluginRestarts = 5
+
 type PluginManager struct {
 	addr       string
 	auth       string
@@ -19,6 +24,8 @@ type PluginManager struct {
 	sdkDir     string
 	procs      map[string]*exec.Cmd
 	manifests  map[string]*PluginManifest
+	restarts   map[string]int
+	stopped    bool
 	mu         sync.Mutex
 }
 
@@ -34,7 +41,29 @@ func NewPluginManager(addr, auth, python, pluginsDir, sdkDir string) *PluginMana
 		sdkDir:     sdkDir,
 		procs:      make(map[string]*exec.Cmd),
 		manifests:  make(map[string]*PluginManifest),
+		restarts:   make(map[string]int),
 	}
+}
+
+// isStopped 编排层是否已进入停止流程（优雅关闭时不再拉起任何子进程）。
+func (pm *PluginManager) isStopped() bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.stopped
+}
+
+// Stop 优雅关闭：置停止标志并杀掉全部子进程。看门狗随后检测到 stopped 不会重启。
+func (pm *PluginManager) Stop() {
+	pm.mu.Lock()
+	pm.stopped = true
+	for id, c := range pm.procs {
+		if c != nil && c.Process != nil {
+			_ = c.Process.Kill()
+		}
+		delete(pm.procs, id)
+	}
+	pm.mu.Unlock()
+	logInfo("pm", "已关闭全部子进程")
 }
 
 // DiscoverAndLaunch 扫描插件目录并启动所有插件，同时加载清单。
@@ -87,6 +116,12 @@ func (pm *PluginManager) cmdPermFor(id string) map[string]string {
 }
 
 func (pm *PluginManager) launch(id string) {
+	pm.mu.Lock()
+	if pm.stopped {
+		pm.mu.Unlock()
+		return
+	}
+	pm.mu.Unlock()
 	pm.loadManifest(id)
 	absPluginDir, _ := filepath.Abs(filepath.Join(pm.pluginsDir, id))
 	entry := filepath.Join(pm.sdkDir, "entry.py")
@@ -111,12 +146,58 @@ func (pm *PluginManager) launch(id string) {
 	go pm.watchdog(id, cmd)
 }
 
-// watchdog 监控插件进程，崩溃后限流重启（演示用：1s 间隔）。
+// watchdog 监控插件进程：干净退出（exit 0）重置崩溃计数；异常退出按指数退避重启，
+// 超过上限后停止重启并告警，杜绝"崩溃炸弹"。
 func (pm *PluginManager) watchdog(id string, cmd *exec.Cmd) {
 	_ = cmd.Wait()
-	logWarn("pm", "插件 %s 已退出，1s 后重启", id)
-	time.Sleep(1 * time.Second)
+	if pm.isStopped() {
+		return
+	}
+	pm.mu.Lock()
+	exitedClean := cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 0
+	if exitedClean {
+		pm.restarts[id] = 0
+		pm.mu.Unlock()
+		logInfo("pm", "插件 %s 干净退出", id)
+		return
+	}
+	pm.restarts[id]++
+	n := pm.restarts[id]
+	pm.mu.Unlock()
+	if n > maxPluginRestarts {
+		logError("pm", "插件 %s 连续崩溃 %d 次，已停止自动重启（请检查插件代码）", id, n)
+		return
+	}
+	// 指数退避 1s → 2s → 4s → 8s → 16s → 封顶 30s（避免崩溃炸弹）
+	backoff := time.Duration(1<<uint(min(n, 4))) * time.Second
+	if backoff > 30*time.Second {
+		backoff = 30 * time.Second
+	}
+	time.Sleep(backoff)
+	if pm.isStopped() {
+		return
+	}
 	pm.launch(id)
+}
+
+// ProcStats 返回内核自身 PID 与各插件进程 PID（含 pluginhost），供 launcher 侧 RSS
+// 监控聚合"每插件一个解释器"的真实内存（此前 launcher 监控完全看不到插件进程）。
+func (pm *PluginManager) ProcStats() map[string]interface{} {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	plugins := make([]map[string]interface{}, 0, len(pm.procs))
+	for id, c := range pm.procs {
+		pid := 0
+		running := false
+		if c != nil && c.Process != nil {
+			pid = c.Process.Pid
+			running = true
+		}
+		plugins = append(plugins, map[string]interface{}{
+			"plugin_id": id, "pid": pid, "running": running,
+		})
+	}
+	return map[string]interface{}{"kernel_pid": os.Getpid(), "plugins": plugins}
 }
 
 // LaunchHost 启动单个 pluginhost 进程；由它负责 fork/spawn 各插件（Linux fork 省内存，Windows spawn）。
@@ -159,16 +240,18 @@ func (pm *PluginManager) watchdogHost(cmd *exec.Cmd, absHost string) {
 	pm.LaunchHost(absHost)
 }
 
-// Shutdown 杀掉所有子进程（含 pluginhost / 各插件）。
+// Shutdown 优雅关闭：置停止标志并杀掉所有子进程（含 pluginhost / 各插件）。
+// 看门狗随后检测到 stopped 不会重启，避免内核退出后插件被重新拉起成孤儿。
 func (pm *PluginManager) Shutdown() {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
+	pm.stopped = true
 	for id, c := range pm.procs {
 		if c != nil && c.Process != nil {
 			_ = c.Process.Kill()
 		}
 		delete(pm.procs, id)
 	}
+	pm.mu.Unlock()
 	logInfo("pm", "已关闭全部子进程")
 }
 

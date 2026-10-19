@@ -84,3 +84,13 @@ exclude = ["*.__pycache__", "*.native.target*"]
     "native/bin/*/.gitkeep",
 ]
 "sql" = ["*.sql"]
+
+# ============================================================
+# pytest
+# ============================================================
+[tool.pytest.ini_options]
+# tests/ 下有一批裸 async def 用例（未加 @pytest.mark.asyncio）。
+# pytest-asyncio 默认 strict 模式不会执行它们，而是直接报
+# "async def functions are not natively supported" 判为失败
+# ——等于这些用例静默失去覆盖。开 auto 让它们真正跑起来。
+asyncio_mode = "auto"

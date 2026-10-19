@@ -1,3 +1,4 @@
+// store 层：SQLite 存储层单元测试。
 package main
 
 import "testing"

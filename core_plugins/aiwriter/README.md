@@ -224,7 +224,7 @@ conhost 的 F3 = 重复上一条命令。）设置弹窗内 Enter 保存、Esc �
 
 ## 写 ZCBOT 插件
 
-系统提示里会自动注入仓库的插件开发要点（`docs/llm-plugins.md` + `LLM.md`），
+系统提示里会自动注入仓库的插件开发要点（`docs/速查/插件开发.md` + `LLM.md`），
 所以它知道 `__plugin_meta__`、`ctx.command/on/hook/register_api`、`ctx.get_data_dir()`
 这些约定。典型用法：
 

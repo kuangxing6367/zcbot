@@ -46,7 +46,7 @@ class _RouteCommand:
 
 
 from framework.messaging.router_match import (  # noqa: E402
-    RouterMatchMixin, SimpleMatch, _PluginRoute,
+    RouterMatchMixin, SimpleMatch, _PluginRoute, build_command_index,
 )
 
 
@@ -194,8 +194,11 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                 if compiled is not None:
                     by_plugin.setdefault(c['plugin_name'], []).append(compiled)
             for name in order:
-                if name in by_plugin:
-                    table[name].commands = by_plugin[name]
+                cmds = by_plugin.get(name)
+                if cmds:
+                    table[name].commands = cmds
+                    # 首字符倒排索引（一次性构建，热路径剪枝用）
+                    table[name].index = build_command_index(cmds)
 
         # 4. 加载系统关键词自动回复（dynamic_commands 表，插件未命中时兜底）
         keyword_rules = self._load_keyword_rules()
@@ -326,7 +329,7 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                 if await self._broadcast_message_event(ev, message):
                     handled_plugin = 'message'
                     return
-                if not plugin_order:
+                if not plugin_order and logger.isEnabledFor(logging.WARNING):
                     log_broker.log_system('WARN', f'无可用插件处理消息: "{message[:50]}"')
 
             # ── 系统级关键词自动回复（dynamic_commands 表，动态命令）──
@@ -348,7 +351,9 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                 except Exception as e:
                     logger.error(f"router.message_unmatched 扩展点异常: {e}")
 
-            log_broker.log_system('DEBUG', f'消息未匹配任何命令: "{message[:80]}"')
+            # 热路径：闲聊消息每条都会走到这里，日志级别未开启时不做字符串格式化
+            if logger.isEnabledFor(logging.DEBUG):
+                log_broker.log_system('DEBUG', f'消息未匹配任何命令: "{message[:80]}"')
         finally:
             # 路由完成通知扩展点（无论命中与否、是否提前返回）
             try:

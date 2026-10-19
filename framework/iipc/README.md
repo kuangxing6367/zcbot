@@ -119,7 +119,7 @@ Event 37 属性 + 8 方法、`wait_for`/`create_session`。
 
 | 拖入对象 | 来源 | 结果 |
 |---|---|---|
-| 每日签到 | `docs/writing-plugins.md`「完整的签到插件」**逐字照抄** | 32/32 通过（`create_table`/`alias`/`task(cron)`/`on(notice)`/`%s` 方言/裸 `ctx`/`event.is_group` 全通） |
+| 每日签到 | `docs/指南/编写插件.md`「完整的签到插件」**逐字照抄** | 32/32 通过（`create_table`/`alias`/`task(cron)`/`on(notice)`/`%s` 方言/裸 `ctx`/`event.is_group` 全通） |
 | LLM 黑名单 | `plugins/llm_blacklist` 真仓库官方插件（仅摘除 host 进程专属的 `ctx._framework`） | MySQL 风格 DDL、`require_superuser`、正则命令、async handler、`get_config` 全通 |
 
 跑官方插件暴露并修掉的三个真缺口（**写测试时才发现，不是靠读代码想出来的**）：

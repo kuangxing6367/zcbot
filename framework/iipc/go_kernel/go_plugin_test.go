@@ -1,3 +1,4 @@
+// plugin 层：Go 原生插件路径（T5）单元测试。
 package main
 
 import (

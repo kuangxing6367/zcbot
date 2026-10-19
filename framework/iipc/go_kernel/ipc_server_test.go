@@ -1,3 +1,4 @@
+// core 层：IIPC 服务端单元测试。
 package main
 
 import (

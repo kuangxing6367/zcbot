@@ -744,14 +744,27 @@ class _CanvasPIL:
         self._img = Image.new("RGBA", (self._width, self._height), self._bg)
         self._draw = ImageDraw.Draw(self._img)
         self._font_path = font_path
+        self._font_cache = {}  # 按 (size, bold) 缓存字体对象，避免逐行/逐元素 truetype 重载
 
     def _font(self, size, bold=False):
+        """加载字体（带实例级缓存）。
+
+        Canvas 链式 API 每画一个文本/元素都会调本方法；若不缓存，多行渲染会逐行
+        重新 truetype 读盘（CJK 字体数 MB~数十 MB），性能骤降——即此前「每一行字体
+        都要重新加载」的根因。font_path 存在时优先按该路径加载并缓存；否则回退模块级
+        _get_font（自身亦有缓存）。
+        """
         if not self._font_path:
             raise ValueError("未设置字体，请在 Canvas.new 传入 font_path")
+        key = (int(size), bool(bold))
+        cached = self._font_cache.get(key)
+        if cached is not None:
+            return cached
         from PIL import ImageFont
-        if os.path.isfile(self._font_path):
-            return ImageFont.truetype(self._font_path, int(size))
-        return _get_font(int(size), bold)
+        f = ImageFont.truetype(self._font_path, int(size)) if os.path.isfile(self._font_path) else _get_font(int(size), bold)
+        if f is not None:
+            self._font_cache[key] = f
+        return f
 
     def get_size(self):
         return (self._width, self._height)

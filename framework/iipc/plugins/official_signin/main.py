@@ -1,12 +1,12 @@
+# -*- coding: utf-8 -*-
 """
-官方示例插件（逐字照抄 docs/writing-plugins.md「完整的签到插件」一节）
+官方示例插件（逐字照抄 docs/指南/编写插件.md「完整的签到插件」一节）
 
 本文件不修改官方示例的一行代码，用于验证 IIPC SDK 对官方文档承诺能力的 1:1 覆盖：
   ctx.create_table / ctx.command(alias=) / ctx.task(cron) / ctx.on(event)
   ctx.db_query_one(%s) / ctx.db_execute(%s) / ctx.send_msg
 且 handler 内直接使用裸 ctx（依赖框架把 ctx 注入插件模块全局的既有行为）。
 """
-# plugins/sign_in/main.py
 import time, random
 
 __plugin_meta__ = {

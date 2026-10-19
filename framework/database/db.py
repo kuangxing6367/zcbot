@@ -4,7 +4,7 @@
 
 设计原则：
 - 默认使用 SQLite —— 零配置开箱即用，但仅适合小环境与开发环境（单写多读）；
-  多群、高并发、多进程等大环境请配置 database.type: mysql（见 docs/advanced/database.md）
+  多群、高并发、多进程等大环境请配置 database.type: mysql（见 docs/进阶/数据库.md）
 - 自动处理 %s → ? 占位符转换（插件无需修改 SQL 方言）
 - 自动处理 DDL 语法差异（ENGINE=、COMMENT、AUTO_INCREMENT 等）
 - 自动处理 NOW() → datetime 参数转换
@@ -81,7 +81,7 @@ class Database(DatabaseConnMixin):
             logger.info(
                 "SQLite 模式：单文件零配置，仅适合小环境/开发环境（单写多读）；"
                 "多群、高并发、多进程等大环境请切换 database.type: mysql"
-                "（见 docs/advanced/database.md）"
+                "（见 docs/进阶/数据库.md）"
             )
 
     # ── 方言翻译统一入口（消解散落的 if db_type 分支）────────────

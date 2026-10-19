@@ -128,7 +128,7 @@ Lagrange、go-cqhttp 等同理：填同一个 `ws://地址` 和令牌即可。
 3. 给机器人发 `/echo 你好`
 
 Discord、QQ 官方同理：**开插件 → 填 token/app 凭证 → 重启 → 发消息自测**。
-详细字段说明见 [配置系统 · 各接入端](configuration.md)。
+详细字段说明见 [配置系统 · 各接入端](./配置系统.md)。
 
 ---
 
@@ -156,7 +156,7 @@ ctx.send_msg(group_id=gid, message=f"[CQ:reply,id={msg_id}] 收到")
 >
 > 需要跨协议统一处理图片/语音/视频的插件，请改用规范消息段：
 > `ev.images` / `ev.voices` / `ev.videos` / `ev.files` 在所有接入端上都能读到，
-> 详见 [接入端契约与规范消息](adapter-contract.md)。
+> 详见 [接入端契约与规范消息](./接入端契约.md)。
 
 ### 群管 / 查询（依赖 OneBot 接入端）
 
@@ -195,7 +195,7 @@ async def raw_handler(raw_event, bot_name):
 
 ## 下一步
 
-- [编写插件](writing-plugins.md) —— 业务怎么写
-- [开始使用](getting-started.md) —— 不接 IM 的两条路线
-- [配置系统](configuration.md) —— 各接入端完整字段
-- [架构 · 事件总线](architecture.md) —— 事件在框架里怎么流
+- [编写插件](./编写插件.md) —— 业务怎么写
+- [开始使用](./快速开始.md) —— 不接 IM 的两条路线
+- [配置系统](./配置系统.md) —— 各接入端完整字段
+- [架构 · 事件总线](../进阶/架构总览.md) —— 事件在框架里怎么流

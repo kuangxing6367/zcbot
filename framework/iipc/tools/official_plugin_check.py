@@ -3,7 +3,7 @@
 
 把「真·官方插件」原样拖进 IIPC 跑，验证 SDK 对官方文档承诺能力的覆盖：
 
-  A. docs/writing-plugins.md「完整的签到插件」—— 逐字照抄
+  A. docs/指南/编写插件.md「完整的签到插件」—— 逐字照抄
      ctx.create_table / ctx.command(alias=) / ctx.task(cron) / ctx.on(event)
      ctx.db_query_one(%s) / ctx.db_execute(%s) / ctx.send_msg
      且 handler 内裸用 ctx（依赖「框架把 ctx 注入插件模块全局」的既有行为）
@@ -180,7 +180,7 @@ def run_checks(a):
     check("官方插件注册(official_signin/official_blacklist)", ok)
 
     # ================================================================
-    # A. docs/writing-plugins.md 签到示例（逐字照抄）
+    # A. docs/指南/编写插件.md 签到示例（逐字照抄）
     # ================================================================
 
     # A1. 建表：ctx.create_table + AUTOINCREMENT 方言

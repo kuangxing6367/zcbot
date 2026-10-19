@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"os"
 	"os/signal"
@@ -30,7 +31,13 @@ func main() {
 	auth := "dev-auth"
 	store, err := NewStore(*dbPath)
 	if err != nil {
-		logWarn("db", "SQLite 初始化失败(%v)，回退真内存引擎 :memory:", err)
+		// 文件型 DB 损坏/不可用：先原子隔离坏文件，避免内核下次启动再次加载同一坏文件，
+		// 陷入"告警+静默丢数据"死循环；再明确告知运维持久化已失效，而非含糊的"回退真内存引擎"。
+		if *dbPath != "" && *dbPath != "mem" && *dbPath != ":memory:" {
+			isolateCorruptDB(*dbPath)
+		}
+		logWarn("db", "SQLite 初始化失败(%v)：已隔离坏文件并向内存引擎 :memory: 回退。" +
+			"【持久化已失效】本次运行写入的数据重启即丢失，请用隔离文件恢复备份后以原路径重启。", err)
 		store, _ = NewSqliteStore(":memory:")
 	}
 	EnsureSchema(store) // 核心表（1:1 数据面）：users/group_members/commands/plugin_configs/perm_*/audit_logs...
@@ -57,6 +64,52 @@ func main() {
 	srv.SetOrchestration(sessMgr, sched, grpSw)
 
 	registerCoreHandlers(srv, bus, store, pm, admins)
+
+	// 扩展面：服务注册表 / 插件间调用 / 共享 KV / 指标 / 能力声明
+	InitExtensions()
+	registerExtensionHandlers(srv, pm)
+
+	// 全局变换管线：内核在事件扇出给所有订阅者之前，按 priority 升序调用各变换节点，
+	// 把返回的 event.data 作为新事件；节点返回 null 则全局丢弃该事件。零节点时此钩子为空操作。
+	bus.SetTransformHook(func(ev *Event) bool {
+		if extPipeline == nil {
+			return false
+		}
+		xs := extPipeline.List()
+		if len(xs) == 0 {
+			return false
+		}
+		for _, x := range xs {
+			target := srv.pluginConn(x.PluginID)
+			if target == nil {
+				logWarn("pipeline", "变换节点 %s 不在线，跳过", x.PluginID)
+				continue
+			}
+			raw, err := target.Call(MethodPluginInvoke, map[string]interface{}{
+				"action": x.Action,
+				"params": ev.Data,
+				"from":   "kernel",
+			}, 2*time.Second)
+			if err != nil {
+				logWarn("pipeline", "变换节点 %s/%s 调用失败(已跳过): %v", x.PluginID, x.Action, err)
+				continue
+			}
+			var res map[string]interface{}
+			if len(raw) > 0 && string(raw) != "null" {
+				if uerr := json.Unmarshal(raw, &res); uerr != nil {
+					logWarn("pipeline", "变换节点 %s/%s 返回非 JSON(已跳过): %v", x.PluginID, x.Action, uerr)
+					continue
+				}
+			}
+			if res == nil {
+				// 变换节点显式返回 null → 丢弃该事件
+				logInfo("pipeline", "变换节点 %s/%s 丢弃事件 type=%s", x.PluginID, x.Action, ev.Type)
+				return true
+			}
+			ev.Data = res
+		}
+		return false
+	})
 
 	go func() {
 		if err := srv.Run(); err != nil {
@@ -124,6 +177,30 @@ func adminList(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// isolateCorruptDB 把损坏/不可用的数据库文件原子隔离为 <名>.corrupt-<时间戳>，
+// 避免内核下次启动再次加载同一坏文件、反复触发"告警+静默丢数据"死循环。
+// 改名失败（如文件被占用）则退化为复制隔离，绝不阻塞启动。
+func isolateCorruptDB(path string) {
+	ts := time.Now().Format("20060102-150405")
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	target := filepath.Join(dir, base+".corrupt-"+ts)
+		if err := os.Rename(path, target); err != nil {
+		logWarn("db", "坏文件隔离改名失败(%v)，尝试复制隔离", err)
+		if data, rerr := os.ReadFile(path); rerr == nil {
+			if werr := os.WriteFile(target, data, 0o600); werr != nil {
+				logWarn("db", "坏文件复制隔离也失败(%v)，仅告警不阻塞", werr)
+				return
+			}
+			// 复制成功：尽量删掉源文件，避免内核下次启动再次加载同一坏文件陷入"告警+静默丢数据"死循环。
+			if rerr2 := os.Remove(path); rerr2 != nil {
+				logWarn("db", "坏文件已复制隔离为 %s，但源文件删除失败(%v)；若仍残留，请手动清理以防重复告警", target, rerr2)
+			}
+		}
+	}
+	logWarn("db", "坏文件已隔离为: %s（如需恢复，请先校验再用它替换原路径）", target)
 }
 
 func toFloat(v interface{}) (float64, bool) {

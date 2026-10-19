@@ -7,6 +7,8 @@ DB 在 Go 侧执行（不占 Python GIL）→ 通用 api.call 通道（get_login
 本文件刻意使用与原 zcbot 插件完全相同的写法（ctx.command/ctx.on 实例方法形态），
 拖进真框架也能跑——IIPC 的 1:1 目标即此。
 """
+from sdk import PluginContext
+
 __plugin_meta__ = {
     "name": "回声插件",
     "version": "1.1.0",
@@ -25,7 +27,7 @@ def on_error(event, error):
 _ctx = None
 
 
-def register(ctx):
+def register(ctx: PluginContext):
     global _ctx
     _ctx = ctx
     # 日志接口演示：ctx.logger（logging 子集）→ IIPC log.batch → 内核 → launcher 统一落盘

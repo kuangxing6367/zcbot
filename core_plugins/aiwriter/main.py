@@ -170,19 +170,35 @@ _PLUGIN_BRIEF = None
 
 
 def _load_plugin_brief():
-    """读仓库里的插件开发要点（docs/llm-plugins.md + LLM.md），进程内缓存。"""
+    """读仓库里的插件开发要点（docs/速查/插件开发.md + LLM.md），进程内缓存。
+
+    注意：文档站目录调整过（原 docs/llm-plugins.md → docs/速查/插件开发.md）。
+    这里对每篇都给一组候选路径，逐个降级而不是"找不到就静默跳过"——
+    之前就是因为静默跳过，文档一改名，系统提示里注入的插件约定就凭空消失了。
+    """
     global _PLUGIN_BRIEF
     if _PLUGIN_BRIEF is not None:
         return _PLUGIN_BRIEF
+    # (候选路径列表)：第一个存在的生效
+    sources = (
+        ('docs/速查/插件开发.md', 'docs/llm-plugins.md'),
+        ('LLM.md',),
+    )
     parts = []
-    for rel in ('docs/llm-plugins.md', 'LLM.md'):
-        try:
-            p = os.path.join(_ROOT, *rel.split('/'))
-            if os.path.isfile(p):
-                with open(p, encoding='utf-8', errors='replace') as f:
-                    parts.append('# 来自仓库 %s\n%s' % (rel, f.read()))
-        except Exception:
-            continue
+    for cands in sources:
+        for rel in cands:
+            try:
+                p = os.path.join(_ROOT, *rel.split('/'))
+                if os.path.isfile(p):
+                    with open(p, encoding='utf-8', errors='replace') as f:
+                        parts.append('# 来自仓库 %s\n%s' % (rel, f.read()))
+                    break
+            except Exception:
+                continue
+        else:
+            # 全都找不到：显式告知，避免"约定悄悄消失"这类难以察觉的退化
+            print('[aiwriter] 警告：插件开发要点文档未找到（已试 %s），系统提示将缺少框架约定'
+                  % '/'.join(cands))
     _PLUGIN_BRIEF = '\n\n'.join(parts)
     return _PLUGIN_BRIEF
 
