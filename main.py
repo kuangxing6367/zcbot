@@ -309,115 +309,6 @@ def _pop_language_arg(argv):
     return out, (lang or None)
 
 
-def _print_config_item(key, value):
-    print('  %-22s %s' % (key, value))
-
-
-def _run_config(argv):
-    """CLI 配置控制台：查看 / 修改 config.yaml（对标 NoneBot `nb` 的配置入口）。
-
-    用法::
-
-        python main.py config                      显示当前配置摘要
-        python main.py config get language         查看某一项
-        python main.py config set language ciallo  修改某一项（写回 config.yaml）
-
-    可选 ``--config <path>`` 指定配置文件（缺省用 config.yaml）。
-    ``set`` 采用**按行原地替换**，不动 YAML 里的注释（直接 yaml.dump 会把注释全冲掉）。
-    """
-    import re as _re
-
-    from framework import i18n
-    from framework.config import get_home, load_config
-
-    # 摘出 --config <path> / --config=<path>
-    rest = []
-    cfg_path = None
-    i = 0
-    while i < len(argv):
-        a = argv[i]
-        if a == '--config' and i + 1 < len(argv):
-            cfg_path = argv[i + 1]
-            i += 1
-        elif a.startswith('--config='):
-            cfg_path = a.split('=', 1)[1]
-        else:
-            rest.append(a)
-        i += 1
-
-    path = cfg_path or os.path.join(get_home(), 'config.yaml')
-    action = rest[0] if rest else 'list'
-    key = rest[1] if len(rest) > 1 else None
-
-    try:
-        cfg = load_config(cfg_path) or {}
-    except Exception as e:  # noqa: BLE001
-        print('读取配置失败: %s' % e)
-        return 1
-
-    if action in ('list', 'show'):
-        print('配置文件: %s' % path)
-        print('ZCBOT 配置摘要')
-        print('-' * 46)
-        _print_config_item('language', cfg.get('language', 'zh'))
-        db = cfg.get('database', {}) or {}
-        if isinstance(db, str):
-            _print_config_item('database', db)
-        else:
-            _print_config_item('database.type', db.get('type', 'sqlite'))
-        _print_config_item('onebot.listen_port',
-                           (cfg.get('onebot', {}) or {}).get('listen_port'))
-        _print_config_item('web.port', (cfg.get('web', {}) or {}).get('port'))
-        print('-' * 46)
-        print('可用语言: %s' % ', '.join(i18n.available_languages()))
-        print('示例: python main.py config set language ciallo（重启后生效）')
-        return 0
-
-    if action == 'get':
-        if not key:
-            print('用法: python main.py config get <key>')
-            return 2
-        print('%s = %r' % (key, cfg.get(key)))
-        return 0
-
-    if action == 'set':
-        if not key or len(rest) < 3:
-            print('用法: python main.py config set <key> <value>')
-            return 2
-        value = ' '.join(rest[2:])
-        if key == 'language':
-            norm = i18n.normalize(value)
-            if norm != value.strip().lower():
-                print('提示: 语言 %r 将按 %r 生效' % (value, norm))
-        if not os.path.isfile(path):
-            print('配置文件不存在: %s（先启动一次让框架生成默认配置）' % path)
-            return 1
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                text = f.read()
-        except Exception as e:  # noqa: BLE001
-            print('读取失败: %s' % e)
-            return 1
-        # 只匹配「行首（可含空格）+ key:」，注释行以 # 开头不会被误伤
-        pattern = _re.compile(r'(?m)^([ \t]*' + _re.escape(key) + r'[ \t]*:[ \t]*).*$')
-        if pattern.search(text):
-            new_text = pattern.sub(lambda m: m.group(1) + value, text, count=1)
-        else:
-            new_text = text.rstrip() + '\n%s: %s\n' % (key, value)
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(new_text)
-        except Exception as e:  # noqa: BLE001
-            print('写入失败: %s' % e)
-            return 1
-        print('已设置 %s = %s（重启后生效）' % (key, value))
-        return 0
-
-    print('未知动作: %s' % action)
-    print('可用: list / get <key> / set <key> <value>')
-    return 2
-
-
 def main():
     """启动入口"""
     # 终端编码对齐：Python UTF-8 模式 vs Windows 控制台代码页不匹配会导致中文乱码
@@ -458,9 +349,18 @@ def main():
     if argv[:1] and argv[0] in ('attach', '-a'):
         sys.exit(_run_attach(argv[1:]))
 
-    # 子命令：config → CLI 配置控制台（查看 / 修改 config.yaml，对标 nb 的配置入口）
-    if argv[:1] and argv[0] == 'config':
-        sys.exit(_run_config(argv[1:]))
+    # 脚手架子命令 → 统一交给 framework.cli（等价于 `zb <cmd>`）：
+    #   create / init / run / generate / plugin / adapter / driver / self / clean / config
+    # 这些子命令不与「配置文件路径」语义冲突，优先识别并路由；其余位置参数仍当配置路径。
+    _CLI_GROUPS = ('create', 'init', 'run', 'generate', 'plugin',
+                   'adapter', 'driver', 'self', 'clean', 'config')
+    if argv[:1] and argv[0] in _CLI_GROUPS:
+        try:
+            from framework.cli import main as _cli_main
+        except Exception as e:  # noqa: BLE001
+            print('[cli] 无法加载 CLI 模块: %s' % e)
+            sys.exit(1)
+        sys.exit(_cli_main(argv))
 
     # 子命令：--iipc / -iipc → 走 IIPC 内核链路（Go 内核 + Rust 协议端 + 独立进程插件）
     #   与上面的 asyncio 框架是并列的两条启动路径：插件、DB、事件语义 1:1 对齐，

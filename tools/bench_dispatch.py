@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""框架端到端性能基准（与 NoneBot 式分发模型同口径对比）
+"""框架端到端性能基准（同口径分发模型对比）
 
 同口径定义：都是「收到 N 条 message 事件 → 空插件/空 handler 场景」，
 测每事件固定框架开销（吞吐 ev/s + 单事件端到端耗时 us）。
 
 场景：
-  1. pure_await   NoneBot 式：asyncio 直接 await 空 handler（无中间队列/线程交换）
+  1. pure_await   直接 await 式：asyncio 直接 await 空 handler（无中间队列/线程交换）
   2. event_bus    EventBus.aemit 空订阅 / 10 订阅（无操作 handler）
   3. buffer_put   EventBuffer 入队吞吐（put 直返 + worker 消费）
   4. fw_end2end   真实 Framework：dispatch_event 端到端（含 hooks/Event 构造/router 空路由）
@@ -36,7 +36,7 @@ def bench(name, coro):
 
 
 async def _pure_await():
-    """NoneBot 式基线：空 async handler 直接 await"""
+    """直接 await 基线：空 async handler 直接 await"""
     async def handler(ev):  # noqa: ARG001
         return None
     for _ in range(N):
@@ -128,7 +128,7 @@ async def _fw_end2end():
 
 if __name__ == '__main__':
     print(f"===== 框架端到端基准（同口径：空 handler / 空路由，N={N}）=====")
-    bench('pure_await(NoneBot式)', _pure_await)
+    bench('pure_await(直接await式)', _pure_await)
     bench('event_bus_空订阅', _event_bus_empty)
     bench('event_bus_10订阅', _event_bus_10subs)
     bench('fw_end2end(1worker)', _fw_end2end)

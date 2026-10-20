@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """插件模板（脚手架）：复制本目录即可开始写一个 zcbot IIPC 插件。
 
-对标 NoneBot 的 `nb plugin create`——给一份带完整类型标注的起点，
+给一份带完整类型标注的起点，
 让 IDE（pyright / pylance）对 `ctx.` 与 `event.` 都有补全。
 
 要点：

@@ -26,10 +26,10 @@
 
 ---
 
-## 开发中（未发布）
+## [1.8.9] - 2026-10-20
 
 > 主题：**扩展面自由度补齐（中间件管线 / 全局变换节点）+ 开发体验（多语言、IDE 补全）+ 文档与构建规范化**。
-> 以下均为已落地并实测通过的在研变化，尚未发版。
+> 以下均为已落地并实测通过的变化。
 
 ### 新增
 
@@ -38,12 +38,12 @@
   `app.ctrl_c`、`plugin.loaded` / `plugin.disabled`、`webui.started`、`console.ready`、`terminal.skipped`（`ciallo` 实测一次启动输出 47 处）。
   三种设置方式，优先级 **启动参数 `--language` / `-l` → 环境变量 `ZCBOT_LANG` → `config.yaml` 的 `language` → 默认 `zh`**；
   `config.yaml` 默认模板已加入 `language: zh`。
-- **CLI 配置控制台**（对标 NoneBot `nb` 的配置入口）：新增 `python main.py config` 子命令 ——
+- **CLI 配置控制台**（自带配置入口）：新增 `python main.py config` 子命令 ——
   `config` 显示配置摘要（含当前语言与可用语言）、`config get <key>` 查看、`config set <key> <value>` 写回 `config.yaml`。
   `set` 采用**按行原地替换**而非 `yaml.dump`，`config.yaml` 里的中文注释完整保留；支持 `--config <path>` 指定配置文件。
 - **IIPC 多阶段中间件管线**：`ctx.middleware(stage, priority, handler)`，四阶段 `pre`（入站后、命令匹配前，可改写 / 返回 `False` 短路）/ `post`（分发后）/ `send`（出站 flush 前，可改写或拦截）/ `error`（handler 抛异常时中央处理）。未注册任何中间件时热路径与原先完全一致（零成本）。
 - **内核级全局变换节点**：`ctx.transform(priority, handler)`，内核在把任意事件扇出给所有订阅者**之前**按 priority 依次调用变换节点，返回新 event data 继续分发、返回 `None` 则全局丢弃 —— 一个插件做脱敏 / 翻译 / 补全，所有订阅者（命令与 `on` 处理器）都看到变换后事件。
-- **IDE 补全与插件脚手架**：新增 `py_sdk/py.typed`（PEP 561）；`PluginContext` 补上 `ext.attach` 运行时动态挂载的 14 个扩展方法（`kv` / `config` / `http` / `provide` / `resolve_service` / `call_plugin` / `metric` / `transform` 等）的完整类型签名；新增 `plugins/_template/main.py` 插件模板（对标 `nb plugin create`，`register(ctx: PluginContext)` 带类型标注）。
+- **IDE 补全与插件脚手架**：新增 `py_sdk/py.typed`（PEP 561）；`PluginContext` 补上 `ext.attach` 运行时动态挂载的 14 个扩展方法（`kv` / `config` / `http` / `provide` / `resolve_service` / `call_plugin` / `metric` / `transform` 等）的完整类型签名；新增 `plugins/_template/main.py` 插件模板（`register(ctx: PluginContext)` 带类型标注）。
 - **内核模块地图**：新增 `go_kernel/README.md`，把 28 个平铺 `.go` 按 core / store / ext / plugin / util 五层归类，附调用路径与「为何保持单 `package main`」说明；补齐 5 个缺失首行分层注释的文件。
 - **消息类型与能力扩充**：消息段类型 20 → 34（新增 card / post / contact / poll / animation / audio / video_note / venue / button / reaction / quote / system / embed / ephemeral），能力声明 22 → 38，并补别名映射。
 - **测试脚本**：新增 `tools/middleware_check.py`（进程内驱动，7 项）、`tools/pipeline_check.py`（真内核 + 双插件 e2e，5 项）、`tools/ext_check.py`（扩展面 e2e，12 项）。
@@ -755,7 +755,7 @@
   `docs/loader.md` 维护者速查注明 deps / loader_ui / loader_config / loader_runtime 分工。
 - **全库定位改写为「事件驱动的 IM 平台」**：README / CHANGELOG / pyproject / docs /
   vitepress config / main.py / framework 注释 / sql / WebUI 登录与权限页文案统一口径；
-  清除「插件化服务宿主 / 借鉴 / 参考 AstrBot / 参考 Koishi / LuckPerms 风格 / xxx风格」等措辞；
+  统一历史文档与注释措辞为中性表述（装饰器 API 与扩展点作为框架一等公民呈现，不与任何第三方项目做对比）；
   权限系统与 SQL 注释改为「节点式权限」中性表述。
 - **微内核设计归属说明**：README 注明微内核设计独立在项目
   [zernus / Zero_Nexus](https://github.com/kuangxing6367/Zero_Nexus)，
