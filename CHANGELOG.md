@@ -56,6 +56,8 @@
 - **文档改名导致 aiwriter 静默失效**：`_load_plugin_brief()` 读 `docs/llm-plugins.md`，文档目录重构后该文件不存在即静默跳过，AI 系统提示里的插件约定凭空消失。已同步修正 `aiwriter/main.py`、`LLM.md`、`README.md` 及 `framework/database/` 内的文档路径引用。
 - **IIPC 加固遗留**：`isolateCorruptDB` 在 Windows 上因 SQLite 仍持有句柄导致 `os.Rename` 失败并残留坏文件；已改为 Ping 失败时 `db.Close()` 释放句柄，且复制分支结束后删除源文件。
 - **pytest 配置缺失**：仓库此前无任何 pytest 配置，异步用例被 strict 模式静默判失败；已加 `asyncio_mode = "auto"`（不加 `testpaths`，避免脚本式测试文件导致收集 INTERNALERROR）。
+- **原生渲染器 32 位架构整数溢出加固**：`image_renderer` 的 Rust 原生后端（`canvas.rs`/`lib.rs`）此前在 i386 / i686 / armv7 等 32 位平台存在隐患——像素缓冲按 `u32` 乘法分配、`r*r` 等平方距离按 `i32` 计算，画布尺寸或半径较大时会在 4 字节整数上回绕，导致分配出尺寸错误的缓冲或圆角判定错乱。已统一为「`u64` 计算缓冲总字节数并校验地址空间 + `usize` 线性索引 + 平方距离改 `i64`」，32/64 位行为一致；原生二进制已重建覆盖全部 7 个目标（含 `win32` / `linux-i686` / `linux-armv7`）。
+- **矩形倒置坐标归一化**：`_CanvasPIL.rect` 与 Rust 原生 `rect` 此前对 `x1<x0` / `y1<y0` 行为不一致（PIL 抛 `ValueError`、原生静默 no-op）。已统一为「倒置坐标视为同一矩形」（`rect(300,200,0,0)` == `rect(0,0,300,200)`），并新增回归测试 `tests/test_image_rect_normalization.py`（原生 / PIL 双路，4 项全过）。
 
 ### 变更
 
