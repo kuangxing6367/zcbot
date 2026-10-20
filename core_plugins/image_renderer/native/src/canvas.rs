@@ -29,7 +29,9 @@ fn blend_px(buf: &mut [u8], width: u32, x: i32, y: i32, c: [u8; 4]) {
     if x < 0 || y < 0 || x >= width as i32 {
         return;
     }
-    let idx = ((y as u32 * width + x as u32) * 4) as usize;
+    // 32 位安全：usize 索引
+    let w = width as usize;
+    let idx = ((y as usize) * w + (x as usize)) * 4;
     if idx + 4 > buf.len() {
         return;
     }
@@ -65,8 +67,9 @@ fn draw_line_thick(
         let px = x0 + ((x1 - x0) as f32 * t_).round() as i32;
         let py = y0 + ((y1 - y0) as f32 * t_).round() as i32;
         for dy in -t..=t {
-            for dx in -t..=t {
-                if dx * dx + dy * dy <= t * t {
+                for dx in -t..=t {
+                    // 平方距离改用 i64，避免 32 位下 i32 回绕
+                    if (dx as i64) * (dx as i64) + (dy as i64) * (dy as i64) <= (t as i64) * (t as i64) {
                     blend_px(buf, width, px + dx, py + dy, color);
                 }
             }
@@ -97,7 +100,14 @@ impl Canvas {
         bg: [u8; 4],
         font_path: Option<&str>,
     ) -> Result<Canvas, String> {
-        let mut buf = vec![0u8; (width * height * 4) as usize];
+        // 32 位平台 usize/u32 同为 4 字节：先用 u64 计算像素缓冲总字节数，
+        // 超出地址空间直接报错，避免 (u32) 乘法回绕后分配出尺寸错误的缓冲（i386 / armv7 等隐患）。
+        let total = (width as u64)
+            .saturating_mul(height as u64)
+            .saturating_mul(4);
+        let buf_len = usize::try_from(total)
+            .map_err(|_| "画布尺寸过大，超出当前平台可用地址空间".to_string())?;
+        let mut buf = vec![0u8; buf_len];
         for px in buf.chunks_exact_mut(4) {
             px.copy_from_slice(&bg);
         }
@@ -141,7 +151,14 @@ impl Canvas {
             Some(v) => parse_color(v)?.unwrap_or([0, 0, 0, 0]),
             None => [0, 0, 0, 0],
         };
-        let mut buf = vec![0u8; (width * height * 4) as usize];
+        // 32 位安全：见 new_raw 说明，usize 校验避免 u32 回绕
+        let total = (width as u64)
+            .saturating_mul(height as u64)
+            .saturating_mul(4);
+        let buf_len = usize::try_from(total).map_err(|_| {
+            PyRuntimeError::new_err("画布尺寸过大，超出当前平台可用地址空间")
+        })?;
+        let mut buf = vec![0u8; buf_len];
         for px in buf.chunks_exact_mut(4) {
             px.copy_from_slice(&bg);
         }
@@ -176,6 +193,10 @@ impl Canvas {
     ) -> PyResult<PyRefMut<'py, Self>> {
         let canvas = &mut *slf;
         let (w, h) = (canvas.width as i32, canvas.height as i32);
+        // 归一化坐标：允许 x1<x0 / y1<y0（倒置坐标），视为同一矩形，
+        // 与 PIL 回退行为一致（rect(300,200,0,0) == rect(0,0,300,200)）。
+        let (x0, x1) = (x0.min(x1), x0.max(x1));
+        let (y0, y1) = (y0.min(y1), y0.max(y1));
         let x0 = x0.max(0);
         let y0 = y0.max(0);
         let x1 = x1.min(w);
@@ -262,15 +283,17 @@ impl Canvas {
         let bw = width.max(1) as i32;
         for y in (cy - r)..=(cy + r) {
             for x in (cx - r)..=(cx + r) {
-                let d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-                let r2 = r * r;
+                // 平方距离改用 i64，避免 32 位下 r*r（r>46340）i32 回绕
+                let d2 = (x as i64 - cx as i64) * (x as i64 - cx as i64)
+                    + (y as i64 - cy as i64) * (y as i64 - cy as i64);
+                let r2 = (r as i64) * (r as i64);
                 if let Some(c) = fill_c {
                     if d2 <= r2 {
                         blend_px(&mut canvas.buf, canvas.width, x, y, c);
                     }
                 }
                 if let Some(oc) = outline_c {
-                    let inner_r = (r - bw).max(0);
+                    let inner_r = (r - bw).max(0) as i64;
                     if d2 <= r2 && d2 > inner_r * inner_r {
                         blend_px(&mut canvas.buf, canvas.width, x, y, oc);
                     }

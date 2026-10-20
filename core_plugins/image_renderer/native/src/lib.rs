@@ -317,7 +317,9 @@ pub(crate) fn set_px(buf: &mut [u8], width: u32, x: i32, y: i32, c: [u8; 4]) {
     if x < 0 || y < 0 || x >= width as i32 {
         return;
     }
-    let idx = ((y as u32 * width + x as u32) * 4) as usize;
+    // 32 位平台 usize/u32 同为 4 字节：直接以 usize 计算线性索引，避免 u32 乘法回绕
+    let w = width as usize;
+    let idx = ((y as usize) * w + (x as usize)) * 4;
     if idx + 4 <= buf.len() {
         buf[idx..idx + 4].copy_from_slice(&c);
     }
@@ -358,7 +360,8 @@ pub(crate) fn draw_text(
                 if bx < 0 || by < 0 || bx >= width as i32 || by >= height as i32 {
                     continue;
                 }
-                let idx = ((by as u32 * width + bx as u32) * 4) as usize;
+                // 32 位安全：usize 索引（by/bx 已通过边界检查，不会越界）
+                let idx = ((by as usize) * (width as usize) + (bx as usize)) * 4;
                 let src_a = (a as u32 * cov) / 255;
                 if src_a >= 255 {
                     buf[idx..idx + 4].copy_from_slice(&[r, g, b, 255]);
@@ -404,9 +407,10 @@ pub(crate) fn in_rounded(x: i32, y: i32, x0: i32, y0: i32, x1: i32, y1: i32, r: 
     } else {
         return true;
     };
-    let dx = x - cx;
-    let dy = y - cy;
-    dx * dx + dy * dy <= r * r
+    // 平方距离改用 i64，避免 32 位下 r*r（r>46340 时）i32 回绕导致圆角判定错乱
+    let dx = (x as i64) - (cx as i64);
+    let dy = (y as i64) - (cy as i64);
+    dx * dx + dy * dy <= (r as i64) * (r as i64)
 }
 
 pub(crate) fn lerp_color(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
@@ -464,15 +468,52 @@ fn draw_border(buf: &mut [u8], width: u32, height: u32, style: &Style) {
     }
 }
 
+/// 智能 PNG 编码（自动调优，调用方无需传任何参数）
+///
+/// 自动做三件事，输出仍是标准 PNG（不换格式），调用方无感知：
+///
+///   1. **通道自动收窄**：检测是否真的用到了 alpha。全不透明（每个像素 alpha=255）
+///      时按 RGB8 编码 —— 渲染类图片（卡片 / 文字 / 列表）几乎都是全不透明，
+///      丢掉 alpha 通道可直接省掉约 25% 体积，且视觉无损。
+///   2. **压缩级别自动选**：小图（≤ 100 万像素）用 `Best`（最高压缩）；
+///      超大图退回 `Default` —— `Best` 在大图上编码耗时可能翻数倍，
+///      对「只是想压一下」的场景不划算，这里按规模自动权衡。
+///   3. **过滤器 Adaptive**：由编码器按行自适应选滤波方式，
+///      对绝大多数内容都优于写死某一种过滤器。
 pub(crate) fn encode_png(width: u32, height: u32, buf: &[u8]) -> Result<Vec<u8>, String> {
-    use image::codecs::png::PngEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     use image::{ExtendedColorType, ImageEncoder};
+
+    let pixels = (width as u64).saturating_mul(height as u64);
+    // 自动调优：大图不硬上最高压缩（编码耗时换不回多少体积）
+    let compression = if pixels <= 1_000_000 {
+        CompressionType::Best
+    } else {
+        CompressionType::Default
+    };
+
+    // 是否真的用到 alpha 通道
+    let has_alpha = buf.chunks_exact(4).any(|px| px[3] != 255);
+
     let mut out: Vec<u8> = Vec::new();
     {
         let mut cursor = std::io::Cursor::new(&mut out);
-        PngEncoder::new(&mut cursor)
-            .write_image(buf, width, height, ExtendedColorType::Rgba8)
-            .map_err(|e| format!("PNG 编码失败: {e}"))?;
+        let encoder = PngEncoder::new_with_quality(&mut cursor, compression, FilterType::Adaptive);
+        if has_alpha {
+            encoder.write_image(buf, width, height, ExtendedColorType::Rgba8)
+        } else {
+            // 全不透明：丢掉 alpha 通道，按 RGB8 编码
+            // pixels*4 已通过分配校验（≤ usize::MAX），故 pixels*3 必 < usize::MAX；
+            // 这里再夹一层以防 future 改动，32 位下也安全
+            let mut rgb: Vec<u8> = Vec::with_capacity((pixels * 3).min(usize::MAX as u64) as usize);
+            for px in buf.chunks_exact(4) {
+                rgb.push(px[0]);
+                rgb.push(px[1]);
+                rgb.push(px[2]);
+            }
+            encoder.write_image(&rgb, width, height, ExtendedColorType::Rgb8)
+        }
+        .map_err(|e| format!("PNG 编码失败: {e}"))?;
     }
     Ok(out)
 }
@@ -869,14 +910,10 @@ fn decode_img(data: &[u8]) -> Result<image::DynamicImage, String> {
     image::load_from_memory(data).map_err(|e| format!("图片解码失败: {e}"))
 }
 
+/// 图像编码：统一走智能编码器，复用「alpha 自动收窄 + 压缩级别自动选」的优化。
 fn encode_png_img(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
-    let mut out: Vec<u8> = Vec::new();
-    {
-        let mut cursor = std::io::Cursor::new(&mut out);
-        img.write_to(&mut cursor, image::ImageFormat::Png)
-            .map_err(|e| format!("PNG 编码失败: {e}"))?;
-    }
-    Ok(out)
+    let rgba = img.to_rgba8();
+    encode_png(rgba.width(), rgba.height(), rgba.as_raw())
 }
 
 /// 等比缩放图片（默认保持比例，LANCZOS），返回 PNG bytes
@@ -941,9 +978,10 @@ fn image_circle_crop(img_bytes: &[u8], size: u32) -> PyResult<Vec<u8>> {
     let cy = r;
     for y in 0..size {
         for x in 0..size {
-            let dx = x as i32 - cx;
-            let dy = y as i32 - cy;
-            if dx * dx + dy * dy <= r * r {
+            // 平方距离改用 i64，避免大半径在 32 位下 i32 回绕
+            let dx = (x as i64) - (cx as i64);
+            let dy = (y as i64) - (cy as i64);
+            if dx * dx + dy * dy <= (r as i64) * (r as i64) {
                 out.put_pixel(x, y, *square.get_pixel(x, y));
             }
         }

@@ -770,6 +770,10 @@ class _CanvasPIL:
         return (self._width, self._height)
 
     def rect(self, x0, y0, x1, y1, radius=0, fill=None, outline=None, width=1):
+        # 归一化坐标：允许 x1<x0 / y1<y0（倒置坐标）当作同一矩形，与原生渲染行为一致
+        # （rect(300,200,0,0) == rect(0,0,300,200)）；避免 Pillow 对倒置坐标抛 ValueError。
+        x0, x1 = min(x0, x1), max(x0, x1)
+        y0, y1 = min(y0, y1), max(y0, y1)
         box = [x0, y0, x1, y1]
         fill_c = _parse_color(fill)
         outline_c = _parse_color(outline)
