@@ -15,6 +15,7 @@
 - db.py       连接管理（Database）+ 查询/执行/事务 + 全局单例
 """
 import logging
+import os
 import time
 from contextlib import contextmanager
 from threading import local
@@ -39,6 +40,19 @@ from framework.database.db_conn import (  # noqa: F401
 
 from .db_conn import DatabaseConnMixin
 from .storage import create_storage  # noqa: F401  存储抽象层工厂（debug/sqlite/mysql）
+
+def _is_readonly_error(err) -> bool:
+    """判定是否为 SQLITE_READONLY 类错误（只读挂载 / 文件只读属性 / 写入被拒）。
+
+    SQLite 与 MySQL 的措辞不同，统一按关键字判定：
+      - SQLite: "attempt to write a readonly database"
+      - MySQL : "The MySQL server is running with the --read-only option"
+    这类错误与"SQL 写错、唯一约束冲突"有本质区别——它意味着**本次运行的写入
+    不会落盘**，必须让运维看见，而不是让它混在普通异常里。
+    """
+    s = str(err).lower()
+    return 'readonly' in s or 'read-only' in s
+
 
 class Database(DatabaseConnMixin):
     """
@@ -65,6 +79,8 @@ class Database(DatabaseConnMixin):
             # 未配置时默认与最大连接数一致（避免默认 0 导致空闲连接被全部回收、频繁新建）
             self._pool_max_cached = self._pool_max
         self._pool = None
+        # 持久化降级标记：卷变只读时置位，恢复可写后清除（详见 persist_degraded）
+        self._persist_degraded = False
 
         if self.db_type == 'mysql':
             self._init_mysql()
@@ -186,7 +202,43 @@ class Database(DatabaseConnMixin):
                 if self.db_type == 'mysql' and not getattr(self._local, 'in_txn', False):
                     # 归还连接池（而非真关闭）；事务内连接被 pin，归还要等 transaction() 统一做
                     conn.close()
-        return self._run_with_reconnect(_do, sql, params)
+
+        try:
+            result = self._run_with_reconnect(_do, sql, params)
+        except Exception as e:
+            self._note_write_failure(e)
+            raise
+        self._note_write_ok()
+        return result
+
+    @property
+    def persist_degraded(self) -> bool:
+        """持久化是否处于降级状态（典型：运行中卷变只读）。
+
+        为 True 时写入不会落盘、读仍可用。健康检查/管理接口应据此告警，
+        而不是等插件逐个写失败才发现。
+        """
+        return self._persist_degraded
+
+    def _note_write_failure(self, err):
+        """写失败时判定是否进入只读降级，并只在**首次**打一条醒目 error。
+
+        只告警一次的原因：只读期间所有写入都会失败，逐条打会淹没日志。
+        状态本身通过 persist_degraded 暴露，不依赖日志条数。
+        """
+        if not _is_readonly_error(err) or self._persist_degraded:
+            return
+        self._persist_degraded = True
+        logger.error(
+            f"数据库进入只读状态（{err}）：本次运行的所有写入都不会落盘，读操作仍可用。"
+            f"请检查磁盘是否只读挂载、文件权限或剩余空间；恢复可写后会自动继续写入。"
+        )
+
+    def _note_write_ok(self):
+        """写成功后确认可写；若此前降级，说明卷已恢复。"""
+        if self._persist_degraded:
+            self._persist_degraded = False
+            logger.info("数据库已恢复可写，写操作恢复正常")
 
     def execute(self, sql: str, params: tuple = None) -> int:
         """执行插入/更新/删除，返回受影响行数"""
@@ -389,10 +441,25 @@ def init_db(config: dict):
         # 创建框架扩展表 + 迁移（兼容旧版升级）
         _auto_create_tables(db)
     except Exception as e:
+        # 兜底降级仍保留（不让框架完全起不来），但必须把"数据写到哪、会不会丢"
+        # 讲清楚：SqlSimEngine 落盘到 <db 目录>/db/sql/*.json，数据与真实库分叉，
+        # 切回真实库时不会自动迁移。历史上这条只写"降级为本地 SQL 模拟引擎"，
+        # 运维很容易把它当成普通告警忽略，直到发现数据对不上。
+        fallback_dir = db_config.get('fallback_dir') or os.path.join(
+            os.path.dirname(db_config.get('path', 'data/zcbot.db')) or '.', 'db')
+        if db_config.get('fallback_to_sim', True) is False:
+            logger.error(
+                f"数据库不可用（{type(e).__name__}: {e}），且已配置 "
+                f"database.fallback_to_sim=false，按生产要求终止启动。"
+                f"请修复数据库后重启。"
+            )
+            raise
         logger.error(
-            f"数据库初始化失败（{type(e).__name__}: {e}），"
-            f"降级为本地 SQL 模拟引擎（SqlSimEngine / debug 模式实现），"
-            f"框架以最低限度功能继续启动"
+            f"数据库不可用（{type(e).__name__}: {e}）。【持久化已失效】已降级为本地 SQL "
+            f"模拟引擎：本次运行的数据写入 {os.path.join(fallback_dir, 'sql')}"
+            f" 下的 JSON 行集，**不会进入原数据库**，切回真实数据库后也不会自动迁移。"
+            f"修复方式：排除数据库故障（损坏文件请配合备份恢复）后重启；"
+            f"如需强制生产环境不降级，配置 database.fallback_to_sim: false。"
         )
         from .sql_sim import SqlSimEngine
         db = SqlSimEngine(db_config)

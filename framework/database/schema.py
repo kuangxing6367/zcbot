@@ -216,6 +216,20 @@ def _auto_create_tables(database):
     # 迁移：权限系统表补索引 + 播种默认组（表本体已在上方 tables 字典建好）
     _migrate_perm_tables(database)
 
+    # 收尾自检：扩展表同样是"缺了要能重建"，但建表失败不能只留一行 debug。
+    # init.sql 范围之外的表（如 group_plugin_settings）只在这里建，故必须复验。
+    try:
+        from framework.database.init_db import missing_required_tables
+        missing = missing_required_tables(database, include_extension=True)
+    except Exception as e:
+        logger.warning(f"扩展表结构自检失败（不影响启动）: {e}")
+    else:
+        if missing:
+            logger.error(
+                "扩展表结构不完整：仍缺失 %d 张表 %s。相关功能写库会失败，"
+                "请检查数据库建表权限与 DDL 方言兼容性。",
+                len(missing), ", ".join(missing))
+
 
 def _migrate_commands_table(database):
     """迁移 commands 表添加 require_level 列"""
@@ -295,9 +309,14 @@ def _rebuild_sqlite_text_column(database, table, column):
     for m in _re.finditer(r'\b(UNIQUE\s*\([^)]*\)|CHECK\s*\([^)]*\)|PRIMARY\s+KEY\s*\([^)]*\))',
                           src_sql, _re.IGNORECASE):
         lines.append(f"    {m.group(0)}")
-    new_ddl = f"CREATE TABLE {new} (\n" + ",\n".join(lines) + "\n)"
+    # IF NOT EXISTS：重建流程失败重入时（上一次异常后 __idtype_new 可能残留），
+    # 无 IF NOT EXISTS 会直接报 "table already exists" 掩盖真实原因。
+    new_ddl = f"CREATE TABLE IF NOT EXISTS {new} (\n" + ",\n".join(lines) + "\n)"
 
     try:
+        # 先清理上一次重建失败可能残留的 __idtype_new：不清就直接 CREATE 会因
+        # 表已存在而失败；若残留表结构恰好兼容，还会把上一次的脏行留在新表里。
+        database.execute(f"DROP TABLE IF EXISTS {new}")
         database.execute(new_ddl)
         cols = ", ".join(r['name'] for r in col_defs)
         database.execute(f"INSERT INTO {new} ({cols}) SELECT {cols} FROM {old}")

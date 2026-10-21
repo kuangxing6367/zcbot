@@ -232,23 +232,75 @@ var coreSchemaIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_gps_group ON group_plugin_settings(group_id)`,
 }
 
+// coreSchemaTableNames 与 coreSchemaDDL 一一对应（同序），用于建表后的存在性复验。
+var coreSchemaTableNames = []string{
+	"users", "groups_info", "group_members", "plugins", "commands",
+	"dynamic_commands", "tasks", "admin_users", "audit_logs",
+	"plugin_configs", "system_config", "ip_blacklist", "perm_groups",
+	"perm_group_nodes", "perm_user_nodes", "perm_tracks", "perm_audit",
+	"api_tokens", "group_plugin_settings",
+}
+
+// missingSchemaTables 复验核心表是否真实存在。
+// 只读卷 / 权限不足 / 磁盘满时 Exec 会报错，但上层很容易只记一条 warn 继续跑；
+// 用 sqlite_master 实查一遍才能把"表真的没建出来"暴露成 error。
+func missingSchemaTables(store Store) []string {
+	var missing []string
+	for _, t := range coreSchemaTableNames {
+		rows, err := store.Query(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name = ?", t)
+		if err != nil || len(rows) == 0 {
+			missing = append(missing, t)
+		}
+	}
+	return missing
+}
+
 // EnsureSchema 建齐核心表（幂等）。失败仅告警不致命：插件可自行建自己的表。
 func EnsureSchema(store Store) {
+	var ddlFailed, idxFailed int
+	firstErr := ""
 	for _, ddl := range coreSchemaDDL {
 		if _, err := store.Exec(ddl); err != nil {
-			logWarn("db", "建表失败: %v", err)
+			ddlFailed++
+			if firstErr == "" {
+				firstErr = err.Error()
+			}
 		}
 	}
 	for _, idx := range coreSchemaIndexes {
 		if _, err := store.Exec(idx); err != nil {
-			logWarn("db", "建索引失败: %v", err)
+			idxFailed++
+			if firstErr == "" {
+				firstErr = err.Error()
+			}
 		}
 	}
 	// 播种默认权限组（对齐框架 _seed_default_group：is_default=1 全员自动拥有）
+	seedFailed := 0
 	if _, err := store.Exec(
 		"INSERT OR IGNORE INTO perm_groups(name, display_name, weight, prefix, suffix, is_default, created_at) " +
 			"VALUES('default','默认组',0,NULL,NULL,1,strftime('%s','now'))"); err != nil {
-		logWarn("db", "播种默认权限组失败: %v", err)
+		seedFailed++
+		if firstErr == "" {
+			firstErr = err.Error()
+		}
+	}
+
+	// 复验：建表语句"执行过"不等于"建成了"。历史实现逐条 logWarn 后仍无条件打
+	// "核心表结构就绪"，只读卷/权限不足时等于对外宣称成功——必须查实际存在性。
+	missing := missingSchemaTables(store)
+	if len(missing) > 0 {
+		logError("db", "核心表结构不完整：仍缺失 %d 张表 %v（建表失败 %d 条 / 索引失败 %d 条 / 默认组播种失败 %d，首条错误：%s）。"+
+			"相关功能写库会失败，请检查磁盘是否只读、建表权限与剩余空间。",
+			len(missing), missing, ddlFailed, idxFailed, seedFailed, firstErr)
+		return
+	}
+	if ddlFailed > 0 || idxFailed > 0 || seedFailed > 0 {
+		// 表齐全但索引/播种失败：功能可用，但索引缺失会拖慢查询，仍需可见
+		logWarn("db", "核心表均已存在，但初始化中有 %d 条建表 / %d 条索引 / %d 条播种失败（首条错误：%s）",
+			ddlFailed, idxFailed, seedFailed, firstErr)
+		return
 	}
 	logInfo("db", "核心表结构就绪（%d 表 / %d 索引）", len(coreSchemaDDL), len(coreSchemaIndexes))
 }

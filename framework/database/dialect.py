@@ -303,6 +303,9 @@ def _translate_mysql_funcs(sql: str) -> str:
     将 MySQL 专有函数转换为 SQLite 兼容语法：
     - IF(cond, a, b) → CASE WHEN cond THEN a ELSE b END
     - IFNULL(a, b)   → COALESCE(a, b)
+    - UNIX_TIMESTAMP() → strftime('%s','now')（SQLite 无此函数，不翻译会直接报
+      "no such function: UNIX_TIMESTAMP"，而这类种子/时间戳语句一旦失败就会被
+      上层 try/except 吞掉，表现为"初始化成功但没有默认权限组"）
     - NOW()          → 由 execute/insert 的 _replace_now 处理
     """
     # IFNULL 参数简单，用正则即可
@@ -311,6 +314,13 @@ def _translate_mysql_funcs(sql: str) -> str:
         r'COALESCE(\1, \2)',
         sql, flags=re.IGNORECASE
     )
+    # UNIX_TIMESTAMP() / UNIX_TIMESTAMP(NOW()) → 整数秒
+    sql = re.sub(
+        r'\bUNIX_TIMESTAMP\s*\(\s*\)',
+        "strftime('%s','now')", sql, flags=re.IGNORECASE)
+    sql = re.sub(
+        r'\bUNIX_TIMESTAMP\s*\(\s*NOW\s*\(\s*\)\s*\)',
+        "strftime('%s','now')", sql, flags=re.IGNORECASE)
     return _if_to_case(sql)
 
 
