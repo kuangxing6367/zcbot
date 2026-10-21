@@ -57,6 +57,19 @@
 - **IIPC 加固遗留**：`isolateCorruptDB` 在 Windows 上因 SQLite 仍持有句柄导致 `os.Rename` 失败并残留坏文件；已改为 Ping 失败时 `db.Close()` 释放句柄，且复制分支结束后删除源文件。
 - **pytest 配置缺失**：仓库此前无任何 pytest 配置，异步用例被 strict 模式静默判失败；已加 `asyncio_mode = "auto"`（不加 `testpaths`，避免脚本式测试文件导致收集 INTERNALERROR）。
 - **原生渲染器 32 位架构整数溢出加固**：`image_renderer` 的 Rust 原生后端（`canvas.rs`/`lib.rs`）此前在 i386 / i686 / armv7 等 32 位平台存在隐患——像素缓冲按 `u32` 乘法分配、`r*r` 等平方距离按 `i32` 计算，画布尺寸或半径较大时会在 4 字节整数上回绕，导致分配出尺寸错误的缓冲或圆角判定错乱。已统一为「`u64` 计算缓冲总字节数并校验地址空间 + `usize` 线性索引 + 平方距离改 `i64`」，32/64 位行为一致；原生二进制已重建覆盖全部 7 个目标（含 `win32` / `linux-i686` / `linux-armv7`）。
+- **数据库初始化"假成功"与部分表丢失不自愈**（告警可观测性 + 自愈双缺陷）：
+  - `_REQUIRED_TABLES` 定义了却从未被使用，初始化探针只看 `admin_users` + `plugins` 两张表。运行中一旦丢失其它表（手工 DROP / 迁移中断 / 磁盘回滚），探针仍判"已初始化"，缺失的表**永不重建**，直到相关功能写库报错才暴露。现改为按 `_REQUIRED_TABLES` 全量检测缺失、缺哪张补哪张，建完**再复验一遍**，仍缺则 `error` 并列出清单。
+  - 逐表 `try/except` 把建表失败压成 `debug`，随后无条件打「数据库自动初始化完成」——建 0 张表也报成功，首次部署的权限/方言/磁盘问题完全不可观测。现按成功/跳过/失败分类统计，失败带首条错误摘要，0 成功不再声称完成。
+  - `_REQUIRED_TABLES` 边界与 `sql/init.sql` 对齐（`group_plugin_settings` 由 `schema.py` 建，不属 init 阶段），避免"永远缺一张表"的假告警。
+  - 种子数据改为**仅随本次新建的表插入**，避免全量重跑时重复插 `admin_users` / `system_config`。
+  - `sql/init.sql` 的 `UNIX_TIMESTAMP()` 在 SQLite 下不存在（`no such function`），导致**默认权限组种子一直插入失败**且被静默吞掉——全新 SQLite 部署根本没有 `default` 组。已在方言层补 `UNIX_TIMESTAMP()` → `strftime('%s','now')` 翻译。
+- **数据库只读 / 损坏缺少进程级兜底**：
+  - 运行中卷变只读（`SQLITE_READONLY`）时，此前只有各插件各自收到异常，框架自身不吭声。现 `Database` 首次遇到只读错误即打一条醒目 `error`（后续抑制，避免刷屏），并通过 `persist_degraded` 暴露降级状态；写成功且此前降级时打「已恢复可写」。
+  - 数据库无法使用时降级到 `SqlSimEngine` 的告警，从含糊的「降级为本地 SQL 模拟引擎」改为明确说明【持久化已失效】、数据实际写入 `data/db/sql/*.json`、切回真实库不会自动迁移、以及如何恢复；新增 `database.fallback_to_sim: false` 供生产环境强制不降级。
+  - `malformed database schema` 等自检失败此前会继续往下跑，导致 18 条建表语句各失败一次、真正根因被埋在几十行 WARN 里。现直接中止初始化并降级（实测告警从 18 条收敛为 1 条讲清根因的 error）。
+  - `_rebuild_sqlite_text_column` 重建表前先 `DROP TABLE IF EXISTS` 清理上一次失败残留，避免残留表被 `IF NOT EXISTS` 静默复用、脏行混入新表。
+- **IIPC Go 内核同源缺陷**：`EnsureSchema` 逐条建表失败只 `logWarn`，末尾仍打「核心表结构就绪」。现汇总失败数与首条错误、用 `sqlite_master` **复验实际存在性**，缺表即 `error`；`sqliteStore` 增加只读状态识别（首次进入只读打 `error`、恢复可写打 `info`、`ReadOnly()` 供健康检查）——与 Python 侧行为对齐。
+- 新增回归测试 `tests/test_db_resilience.py`（9 项：部分表丢失自愈、种子不重复播种、只读写失败/读可用/可恢复、只读 + 缺表必须报"未完成"、真实只读文件启动）与 `framework/iipc/go_kernel/schema_resilience_test.go`（3 项）。
 - **矩形倒置坐标归一化**：`_CanvasPIL.rect` 与 Rust 原生 `rect` 此前对 `x1<x0` / `y1<y0` 行为不一致（PIL 抛 `ValueError`、原生静默 no-op）。已统一为「倒置坐标视为同一矩形」（`rect(300,200,0,0)` == `rect(0,0,300,200)`），并新增回归测试 `tests/test_image_rect_normalization.py`（原生 / PIL 双路，4 项全过）。
 
 ### 变更

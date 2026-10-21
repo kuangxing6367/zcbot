@@ -5,12 +5,64 @@ package main
 
 import (
 	"database/sql"
+	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
 
 type sqliteStore struct {
 	db *sql.DB
+
+	mu       sync.Mutex
+	readOnly bool
+}
+
+// isReadOnlyErr 判定是否属于 SQLITE_READONLY 类错误。
+// 只读挂载、文件只读属性、写入被拒绝最终都表现为
+// "attempt to write a readonly database" / "readonly database"。
+func isReadOnlyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "readonly") || strings.Contains(s, "read-only")
+}
+
+// noteWriteErr 包装写错误：首次进入只读状态时在内核日志里打一条醒目 error。
+// 卷变只读是"静默丢数据"的典型场景——没有这条日志，运维只能从各插件零散报错里猜，
+// 且容易误判为插件 bug。读操作不受影响，所以这里只标记状态、不阻断服务。
+func (s *sqliteStore) noteWriteErr(err error) error {
+	if err == nil || !isReadOnlyErr(err) {
+		return err
+	}
+	s.mu.Lock()
+	first := !s.readOnly
+	s.readOnly = true
+	s.mu.Unlock()
+	if first {
+		logError("db", "数据库进入只读状态（%v）：后续写操作都会失败，本次运行的写入不会落盘。"+
+			"请检查磁盘是否只读挂载 / 文件权限 / 剩余空间。读操作仍可用。", err)
+	}
+	return err
+}
+
+// noteWriteOK 写成功后确认可写；若此前处于只读状态说明卷已恢复。
+func (s *sqliteStore) noteWriteOK() {
+	s.mu.Lock()
+	was := s.readOnly
+	s.readOnly = false
+	s.mu.Unlock()
+	if was {
+		logInfo("db", "数据库已恢复可写，写操作恢复正常")
+	}
+}
+
+// ReadOnly 报告当前是否处于只读降级状态（供健康检查/状态接口使用）。
+func (s *sqliteStore) ReadOnly() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readOnly
 }
 
 func NewSqliteStore(path string) (*sqliteStore, error) {
@@ -54,14 +106,19 @@ func (s *sqliteStore) SetConfig(key, value string) error {
 		"INSERT INTO config(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
 		key, value,
 	)
-	return err
+	if err != nil {
+		return s.noteWriteErr(err)
+	}
+	s.noteWriteOK()
+	return nil
 }
 
 func (s *sqliteStore) Exec(sqlStr string, args ...interface{}) (int64, error) {
 	res, err := s.db.Exec(sqlStr, args...)
 	if err != nil {
-		return 0, err
+		return 0, s.noteWriteErr(err)
 	}
+	s.noteWriteOK()
 	if n, err := res.RowsAffected(); err == nil && n > 0 {
 		return n, nil
 	}
@@ -76,8 +133,9 @@ func (s *sqliteStore) Exec(sqlStr string, args ...interface{}) (int64, error) {
 func (s *sqliteStore) Insert(sqlStr string, args ...interface{}) (int64, error) {
 	res, err := s.db.Exec(sqlStr, args...)
 	if err != nil {
-		return 0, err
+		return 0, s.noteWriteErr(err)
 	}
+	s.noteWriteOK()
 	id, err := res.LastInsertId()
 	if err != nil {
 		return 0, err
