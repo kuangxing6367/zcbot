@@ -167,7 +167,7 @@ class PluginEventsMixin:
 
     # ---- 扩展点（内核契约：把行为挂到内核的任意运行环节）----
 
-    def hook(self, point: str, handler: Callable, priority: int = 50):
+    def hook(self, point: str, handler: Callable, priority: int = 50, serial: bool = True):
         """
         在内核的**扩展点**注册一个处理器——这是"往框架里插入自己的逻辑"的统一入口，
         可在几乎任意运行环节挂接行为：
@@ -185,12 +185,14 @@ class PluginEventsMixin:
         :param point: 扩展点名称（建议使用上面的标准常量）
         :param handler: 处理函数；签名随扩展点而异，详见文档「扩展点」一节
         :param priority: 优先级，越小越先执行（默认 50）
+        :param serial: 是否要求串行执行（默认 True）。False 表示与本扩展点其他
+            非串行 handler 并发执行（适合通知型点位提升吞吐）；需要短路语义请保持 True。
         :return: True 表示已注册
         """
         if not callable(handler):
             raise TypeError(f"hook 的 handler 必须可调用: {getattr(handler, '__name__', handler)}")
         name = f"{self._plugin_name}:{point}"
-        self._framework.hooks.register(point, name, handler, priority)
+        self._framework.hooks.register(point, name, handler, priority, serial)
         return True
 
     def unhook(self, point: str):

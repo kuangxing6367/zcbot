@@ -16,11 +16,18 @@
   router.before_route / router.after_route      消息路由前后（before 返回 False 跳过路由；after 通知型）
   router.message_unmatched                      消息未命中任何命令/关键词时兜底（返回 True 视为接管）
 
-插件侧用 `ctx.hook(point, handler, priority=50)` 注册；同名（插件内）重复注册自动去重。
+插件侧用 `ctx.hook(point, handler, priority=50, serial=True)` 注册；同名（插件内）重复注册自动去重。
 handler 既可以是普通函数，也可以是 `async def`：
 - 事件循环内（内核管线）用 `trigger_async`，可安全 `await`；
 - Web / 线程上下文（Flask 请求）用 `trigger_sync`，async handler 会经内核事件循环
   fire-and-forget 执行，绝不阻塞请求线程。
+
+**串行 / 并行声明**：`register(..., serial=...)` 控制同一扩展点内 handler 的执行模型：
+- `serial=True`（默认）：按优先级顺序逐个 `await`，前一个完成再执行下一个；
+  短路扩展点（如 `event.before_dispatch` 返回 False）依赖此语义——首个 False 即终止后续。
+- `serial=False`：与本扩展点其他非串行 handler 一起经 `asyncio.gather` 并发执行，
+  不再保证先后；适合通知型扩展点（如 `*_after_*` / `action.*`）以提升吞吐。
+  ⚠️ 并行 handler 不参与"串行短路"（竞态下无意义），需要短路语义请显式声明 `serial=True`。
 """
 import asyncio
 import logging
@@ -47,6 +54,7 @@ class HookPoints:
     ROUTER_BEFORE_ROUTE = 'router.before_route'
     ROUTER_AFTER_ROUTE = 'router.after_route'
     ROUTER_MESSAGE_UNMATCHED = 'router.message_unmatched'
+    MESSAGE_CLASSIFIED = 'message.classified'   # 消息事件完成四类分类后（携带 ev.category / ev.categories）
 
 
 # 各扩展点约定返回 False 时是否触发"短路"语义
@@ -96,18 +104,25 @@ class HookRegistry:
             self._snapshots[point] = snap
             return snap
 
-    def register(self, point: str, name: str, handler: Callable, priority: int = 50):
-        """注册一个扩展点处理器。同名（同一 name）重复注册自动覆盖（去重）。"""
+    def register(self, point: str, name: str, handler: Callable, priority: int = 50,
+                 serial: bool = True):
+        """注册一个扩展点处理器。同名（同一 name）重复注册自动覆盖（去重）。
+
+        :param serial: 是否要求串行执行（默认 True）。
+            - True：按顺序等待前一个 handler 完成再执行下一个（短路扩展点依赖此语义）。
+            - False：与本扩展点其他非串行 handler 并发执行（asyncio.gather），不再保证先后，
+              适合通知型扩展点（如 *_after_*）以提升吞吐；不参与串行短路。
+        """
         if not callable(handler):
             raise TypeError(f"扩展点 [{point}] 的 handler 必须可调用: {name}")
         with self._lock:
             entries = self._hooks.setdefault(point, [])
             for entry in entries:
                 if entry[1] == name:
-                    entry[0], entry[2] = priority, handler
+                    entry[0], entry[2], entry[3] = priority, handler, serial
                     break
             else:
-                entries.append([priority, name, handler])
+                entries.append([priority, name, handler, serial])
             entries.sort(key=lambda e: e[0])
         self._invalidate(point)
 
@@ -147,8 +162,12 @@ class HookRegistry:
         """
         在事件循环内触发（可安全 await async handler）。
         返回各 handler 的结果列表；调用方可用 `False in results` 判断是否短路。
-        短路扩展点（见 _SHORT_CIRCUIT）遇到首个 False 结果即提前终止，不再触发后续 handler
-        （结果列表语义不变，仍包含该 False）。
+
+        执行模型（见 register 的 serial 参数）：
+        - 串行组（serial=True，按优先级顺序）：逐个 await，保持短路语义——
+          短路扩展点遇到首个 False 即终止后续（含并行组不再触发）。
+        - 并行组（serial=False）：与本组其他 handler 经 asyncio.gather 并发执行，
+          收集全部结果；不参与"串行短路"（竞态下无意义）。
         """
         short_circuit = point in _SHORT_CIRCUIT
         results = []
@@ -157,16 +176,35 @@ class HookRegistry:
             # 无订阅者的扩展点是热路径最常见形态（每事件 5 次 trigger，
             # 多数点位无人注册），直接返回空结果，省去循环与短路判断
             return results
-        for _, name, handler in snap:
+
+        # 按声明拆分为串行组（按优先级顺序）与并行组
+        serial_entries = [(p, n, h) for (p, n, h, s) in snap if s]
+        parallel_entries = [(p, n, h) for (p, n, h, s) in snap if not s]
+
+        # 1) 串行组：顺序 await，保持短路语义（首个 False 即终止，并行组也不再触发）
+        for _, name, handler in serial_entries:
             try:
                 if asyncio.iscoroutinefunction(handler):
                     results.append(await handler(*args, **kwargs))
                 else:
                     results.append(handler(*args, **kwargs))
                 if short_circuit and results[-1] is False:
-                    break
+                    return results
             except Exception as e:
                 logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}", exc_info=True)
+
+        # 2) 并行组：与本组其他 handler 并发执行（asyncio.gather），收集全部结果
+        if parallel_entries:
+            async def _run(name, handler):
+                try:
+                    if asyncio.iscoroutinefunction(handler):
+                        return await handler(*args, **kwargs)
+                    return handler(*args, **kwargs)
+                except Exception as e:
+                    logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}", exc_info=True)
+                    return None
+            para_results = await asyncio.gather(*(_run(n, h) for _, n, h in parallel_entries))
+            results.extend(para_results)
         return results
 
     def trigger_sync(self, point: str, *args, **kwargs):
@@ -177,7 +215,7 @@ class HookRegistry:
           若该扩展点不允许跳过且无可用 loop，则记告警并跳过。
         """
         loop = getattr(self._framework, 'loop', None) if self._framework else None
-        for _, name, handler in self._snapshot(point):
+        for _, name, handler, _serial in self._snapshot(point):
             try:
                 if asyncio.iscoroutinefunction(handler):
                     if loop is not None and loop.is_running():
