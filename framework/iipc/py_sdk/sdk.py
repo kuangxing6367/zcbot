@@ -79,6 +79,60 @@ _current_ctx = None
 _registry_lock = threading.Lock()
 
 
+# ─────────────────────────── 静默丢弃守卫 ───────────────────────────
+
+def _stderr_warn(msg):
+    """告警直写 stderr。
+
+    这些通道本身就是"日志发不出去 / 消息发不出去"的场景，绝不能再依赖日志
+    通道自报——否则故障永远不可见。stderr 由 pluginhost 捕获并入内核日志。
+    """
+    print(msg, file=sys.stderr, flush=True)
+
+
+class _SilentDropGuard:
+    """让「吞掉」不再无声。
+
+    高频路径（出站消息 flush、日志批次发送、权限查询）失败时逐条打日志会
+    刷屏，但完全不打会让故障彻底不可见——这正是历史缺陷的根源。策略：
+      - 首次失败立即告警（保证可见）
+      - 之后按最小间隔汇总（防刷屏）
+      - 始终累计计数（供状态查询 / 健康判定）
+    """
+
+    def __init__(self, name, min_interval=30.0):
+        self.name = name
+        self.min_interval = min_interval
+        self.count = 0
+        self.last_err = None
+        self._last_report = 0.0
+        self._lock = threading.Lock()
+
+    def dropped(self, err=None, n=1, action=""):
+        """记录一次丢弃/降级；返回 True 表示本次实际输出了告警。"""
+        with self._lock:
+            self.count += n
+            if err is not None:
+                self.last_err = str(err)[:200]
+            now = time.time()
+            if now - self._last_report < self.min_interval:
+                return False
+            self._last_report = now
+            count, last = self.count, self.last_err
+        tail = "（%s）" % action if action else ""
+        _stderr_warn("[sdk] %s%s：累计 %d 次，最近错误: %s"
+                     % (self.name, tail, count, last))
+        return True
+
+
+# 出站消息发送失败（会尝试回队列重试，多次失败后才算丢弃）
+_MSG_DROP = _SilentDropGuard("出站消息发送失败")
+# 插件日志批次发送失败（连接断开时日志无声消失）
+_LOG_DROP = _SilentDropGuard("插件日志批次发送失败")
+# 权限/身份查询失败并降级为默认值（管理员会被静默降权，属安全语义变更）
+_PERM_DROP = _SilentDropGuard("权限查询失败并降级为默认角色")
+
+
 # ─────────────────────────── 日志 ───────────────────────────
 
 class IIPCLogger:
@@ -120,8 +174,11 @@ class IIPCLogger:
         try:
             # fire（req 帧、不等响应）：日志是高频小消息，不占同步往返
             self._client.fire("log.batch", {"items": batch})
-        except Exception:
-            pass  # 连接未就绪/断开时静默丢弃，不影响插件运行
+        except Exception as e:
+            # 连接未就绪/断开时不阻断插件运行，但**必须可见**：此前这里直接
+            # pass（注释还写着"静默丢弃"），内核断连期间插件日志全数消失，
+            # 插件崩溃也查不到任何线索。改为计数 + 抑制式告警。
+            _LOG_DROP.dropped(e, n=len(batch))
 
     def _flush_loop(self):
         while not self._stop.wait(self.FLUSH_INTERVAL):
@@ -433,6 +490,7 @@ class PluginContext:
         self.logger = IIPCLogger(client, plugin_id)
         self._queue = []
         self._qlock = threading.Lock()
+        self._retry_after = 0.0       # 发送失败退避截止时间戳（见 _flush）
         self._config_cache = {}
         self._config_cache_ttl = 30
         self._data_dir = None
@@ -682,7 +740,15 @@ class PluginContext:
         with self._qlock:
             self._queue.append({"message": message, "group_id": group_id})
 
+    # 发送失败后的退避：避免断连期间每 5ms 空转重试拖慢插件
+    RETRY_BACKOFF = 0.5
+    # 队列上限：连续发送失败时防止消息无限堆积把插件内存撑爆
+    MAX_QUEUE = 10000
+
     def _flush(self):
+        # 退避期内保留队列、不尝试发送（否则 5ms 一次空转会拖垮插件）
+        if self._retry_after and time.time() < self._retry_after:
+            return
         with self._qlock:
             if not self._queue:
                 return
@@ -704,8 +770,24 @@ class PluginContext:
                 self._client.call("msg.send", batch[0])
             else:
                 self._client.call("msg.send_batch", {"items": batch})
+            self._retry_after = 0.0
         except Exception as e:
-            print("[sdk] flush 失败: %s" % e)
+            # 关键：批次已从队列取出，失败即丢弃 = 消息永久消失。
+            # 历史实现正是如此（只 print 一句到 stdout，基本不进日志系统），
+            # 这是真正的"吞消息"。现改为放回队首等待重试，并按上限有界裁剪。
+            self._retry_after = time.time() + self.RETRY_BACKOFF
+            self._requeue(batch)
+            _MSG_DROP.dropped(e, n=len(batch), action="已回队列待重试")
+
+    def _requeue(self, batch):
+        """把发送失败的批次放回队首（保持顺序），超出上限丢弃最旧的。"""
+        with self._qlock:
+            self._queue[:0] = batch
+            overflow = len(self._queue) - self.MAX_QUEUE
+            if overflow > 0:
+                del self._queue[:overflow]
+                _MSG_DROP.dropped(None, n=overflow,
+                                  action="队列超限，丢弃最旧 %d 条" % overflow)
 
     def _start_flush_loop(self):
         def loop():
@@ -769,7 +851,11 @@ class PluginContext:
                 if grow and grow.get('role') in ('owner', 'admin'):
                     return {"role": grow['role']}
             return {"role": "member"}
-        except Exception:
+        except Exception as e:
+            # 降级方向是安全的（不提权），但此前完全无声：IPC 断连/DB 出错时
+            # 管理员会被静默降权为 member，超管命令莫名失效且无任何线索。
+            # 保留降级返回值以兼容插件，但必须留下可见痕迹。
+            _PERM_DROP.dropped(e, action="get_member_info 降级为 member")
             return {"role": "member"}
 
     def is_group_admin(self, group_id, user_id):
@@ -778,7 +864,8 @@ class PluginContext:
                 "SELECT role FROM group_members WHERE group_id=%s AND user_id=%s",
                 (group_id, user_id))
             return bool(row and row['role'] in ('owner', 'admin'))
-        except Exception:
+        except Exception as e:
+            _PERM_DROP.dropped(e, action="is_group_admin 降级为 False")
             return False
 
     def is_group_owner(self, group_id, user_id):
@@ -787,7 +874,8 @@ class PluginContext:
                 "SELECT role FROM group_members WHERE group_id=%s AND user_id=%s",
                 (group_id, user_id))
             return bool(row and row['role'] == 'owner')
-        except Exception:
+        except Exception as e:
+            _PERM_DROP.dropped(e, action="is_group_owner 降级为 False")
             return False
 
     def is_superuser(self, user_id):
@@ -795,7 +883,8 @@ class PluginContext:
             row = self.db_query_one(
                 "SELECT role FROM users WHERE user_id=%s", (user_id,))
             return bool(row and row.get('role') == 'super')
-        except Exception:
+        except Exception as e:
+            _PERM_DROP.dropped(e, action="is_superuser 降级为 False")
             return False
 
     def is_blacklisted(self, user_id):
@@ -803,7 +892,8 @@ class PluginContext:
             row = self.db_query_one(
                 "SELECT is_blacklist FROM users WHERE user_id=%s", (user_id,))
             return bool(row and int(row.get('is_blacklist') or 0) == 1)
-        except Exception:
+        except Exception as e:
+            _PERM_DROP.dropped(e, action="is_blacklisted 降级为 False")
             return False
 
     def get_user_role(self, group_id, user_id):
@@ -1464,8 +1554,11 @@ def _invoke(fn, *args):
     """
     try:
         args = _bind_args(fn, args, _current_ctx)
-    except Exception:
-        pass  # 装配失败绝不阻碍调用，退回原始实参
+    except Exception as e:
+        # 装配失败绝不阻碍调用（退回原始实参），但必须可见：此前 `pass` 让
+        # 依赖注入失败的 handler 以另一种诡异签名错误崩，根因被掩盖。
+        print("[sdk] handler %s 依赖装配失败，退回原始实参: %s"
+              % (getattr(fn, '__name__', '?'), e))
     if inspect.iscoroutinefunction(fn):
         ctx = _current_ctx
         loop = ctx._loop if ctx else None

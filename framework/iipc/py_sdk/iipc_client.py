@@ -8,7 +8,9 @@
 import json
 import queue
 import socket
+import sys
 import threading
+import traceback
 
 
 class _Pending:
@@ -106,8 +108,12 @@ class IIPCClient:
     def _read_loop(self):
         try:
             self._read_loop_inner()
-        except Exception:
-            pass
+        except Exception as e:
+            # 连接断开/解析崩溃：仅置位 _lost 不够，必须让运维看到「为什么断」。
+            # 此前这里 `except: pass` 把根因（RST/EOF/解码错误）吞掉，断连成谜。
+            print("[iipc] 读循环异常退出（连接已断开）: %s"
+                  % (e if isinstance(e, OSError) else traceback.format_exc()),
+                  file=sys.stderr, flush=True)
         finally:
             self._lost.set()
 
@@ -117,7 +123,11 @@ class IIPCClient:
                 break
             try:
                 msg = json.loads(line)
-            except Exception:
+            except Exception as e:
+                # 单行损坏（截断/非法 JSON）不可静默跳过：它意味着内核推送的某条
+                # 事件或响应已丢失。累计告警，至少留痕。
+                print("[iipc] 跳过损坏行（JSON 解析失败，可能丢失一条消息）: %s"
+                      % e, file=sys.stderr, flush=True)
                 continue
             t = msg.get("t")
             if t == "req":
@@ -140,14 +150,23 @@ class IIPCClient:
                 # call()，读线程被占住、响应永远读不到 → 死锁（这是 /ping 卡死的根因）。
                 self._event_q.put((msg.get("channel"), msg.get("payload")))
 
+    def _dispatch_one(self, channel, payload):
+        """分发单条事件到所有订阅 handler（异常可见，不静默吞）。"""
+        for h in self._events.get(channel, []):
+            try:
+                h(payload)
+            except Exception as e:
+                # 订阅 handler 抛异常绝不能 `pass`：此前正是如此，事件分发入口
+                # _on_event 一旦在中间件/事件构造阶段炸掉，整条事件无声消失，
+                # 插件「收不到消息」却查不到任何线索。改为 stderr 留痕。
+                print("[iipc] 事件处理器异常（channel=%s）: %s\n%s"
+                      % (channel, e, traceback.format_exc()),
+                      file=sys.stderr, flush=True)
+
     def _dispatch_loop(self):
         while True:
             item = self._event_q.get()
             if item is None:
                 break
             channel, payload = item
-            for h in self._events.get(channel, []):
-                try:
-                    h(payload)
-                except Exception:
-                    pass
+            self._dispatch_one(channel, payload)
