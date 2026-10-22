@@ -174,6 +174,9 @@ func (c *Conn) readLoop() {
 	for c.reader.Scan() {
 		var f Frame
 		if err := json.Unmarshal(c.reader.Bytes(), &f); err != nil {
+			// 单行损坏（截断/非法 JSON）：意味着对端推送的某条帧已丢失，绝不可静默
+			// 跳过——此前正是如此，连接上"偶发丢事件"成谜。改为告警留痕。
+			logWarn("ipc", "连接 %d 收到损坏帧（JSON 解析失败，可能丢失一条消息）: %v", c.id, err)
 			continue
 		}
 		switch f.T {
