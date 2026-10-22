@@ -54,7 +54,7 @@ class FrameworkDispatchMixin:
         try:
             if False in (await self.hooks.trigger_async(
                     HookPoints.MESSAGE_BEFORE_SEND, payload)):
-                logger.debug("消息发送被扩展点 message.before_send 取消")
+                logger.warning("消息发送被扩展点 message.before_send 取消（来源=%s）" % source)
                 return None
         except Exception as e:
             logger.error(f"message.before_send 扩展点异常: {e}")
@@ -124,7 +124,11 @@ class FrameworkDispatchMixin:
         try:
             if False in (await self.hooks.trigger_async(
                     HookPoints.EVENT_BEFORE_DISPATCH, event, bot_name)):
-                logger.debug("事件被扩展点 event.before_dispatch 拦截丢弃")
+                # 运维可见：该扩展点会真正丢弃事件，生产默认 INFO/WARNING 下必须能看到，
+                # 否则会出现"消息凭空消失却查不到任何线索"的隐性吞（与 IIPC 侧同源问题）。
+                logger.warning(
+                    "事件被扩展点 event.before_dispatch 拦截并丢弃（bot=%s）："
+                    "若怀疑消息消失，请排查该扩展点的注册方" % bot_name)
                 return
         except Exception as e:
             logger.error(f"event.before_dispatch 扩展点异常: {e}")
@@ -269,6 +273,18 @@ class FrameworkDispatchMixin:
 
                 self.stats_writer.register_user(user_id, sender, message_type, group_id)
                 await self.router.route(event, bot_name)
+
+                # ── 四类事件分类完成扩展点（架构 C 项）──
+                # 此时 ev.category 已最终确定（命中命令=general/regex，否则 all；raw 横切恒真）。
+                # 无订阅者时 aemit 直接短路返回，热路径零开销；有订阅者时四类事件均
+                # 可被 Hook 包装，对齐架构设计的「串行/并行/Hook 包装」要求。
+                try:
+                    await self.event_bus.aemit(
+                        HookPoints.MESSAGE_CLASSIFIED,
+                        {'event': ev, 'category': ev.category,
+                         'categories': ev.categories, 'bot_name': bot_name})
+                except Exception as e:
+                    logger.error(f"message.classified 扩展点异常: {e}")
 
             elif event_type == 'notice':
                 await self._handle_notice(event, bot_name)

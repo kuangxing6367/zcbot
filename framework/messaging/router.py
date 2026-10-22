@@ -268,6 +268,11 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         try:
             if False in (await self.framework.hooks.trigger_async(
                     HookPoints.ROUTER_BEFORE_ROUTE, {'event': event, 'bot_name': bot_name})):
+                # 原实现此处无日志：扩展点否决路由后消息既不处理也不报错，
+                # 运维侧完全无痕迹（隐性吞）。升级为可见告警。
+                logger.warning(
+                    f"消息被扩展点 router.before_route 跳过路由（bot={bot_name}）："
+                    f"若怀疑消息未进入命令匹配，请排查该扩展点")
                 return
         except Exception as e:
             logger.error(f"router.before_route 扩展点异常: {e}")

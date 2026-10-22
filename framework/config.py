@@ -125,6 +125,15 @@ plugin:
   auto_install_deps_on_startup: true  # 启动时自动安装缺失依赖到全局环境（移机自愈，版本冲突自动跳过）
   max_memory_mb: 64          # 单插件内存上限（MB），超限自动卸载
 
+# ── 依赖自检（启动自愈）──────────────────────────────────
+# 启动自检读取 requirements.txt，自动安装缺失的核心依赖（移机自愈）。
+# allow_missing：列出"允许缺失、无需安装也不报错"的包名（小写，连字符/下划线等价）。
+#   这些包即便缺失，也只记一条 WARNING，不强制安装、不打断启动、不退出。
+#   适用：确定不用的可选依赖（如纯 Web 部署不装 Pillow / 不用 IIPC 不装 go 工具链对应包）。
+#   注意：被注释在 requirements.txt 中的可选依赖本就不会被自检强制，无需在此重复列出。
+dependencies:
+  allow_missing: []
+
 # ── 日志配置 ────────────────────────────────────────────────
 log:
   level: INFO                # DEBUG / INFO / WARNING / ERROR

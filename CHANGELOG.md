@@ -70,6 +70,20 @@
   - `_rebuild_sqlite_text_column` 重建表前先 `DROP TABLE IF EXISTS` 清理上一次失败残留，避免残留表被 `IF NOT EXISTS` 静默复用、脏行混入新表。
 - **IIPC Go 内核同源缺陷**：`EnsureSchema` 逐条建表失败只 `logWarn`，末尾仍打「核心表结构就绪」。现汇总失败数与首条错误、用 `sqlite_master` **复验实际存在性**，缺表即 `error`；`sqliteStore` 增加只读状态识别（首次进入只读打 `error`、恢复可写打 `info`、`ReadOnly()` 供健康检查）——与 Python 侧行为对齐。
 - 新增回归测试 `tests/test_db_resilience.py`（9 项：部分表丢失自愈、种子不重复播种、只读写失败/读可用/可恢复、只读 + 缺表必须报"未完成"、真实只读文件启动）与 `framework/iipc/go_kernel/schema_resilience_test.go`（3 项）。
+- **IIPC 消息链路"静默吞"缺陷排查与修复**（延续"数据库假成功"暴露的系统性兜底缺失）：继续沿事件流水线排查，定位并修复多处"吞消息/吞异常"点：
+  - `iipc_client.py` 事件分发 `_dispatch_loop` 用 `except Exception: pass` 把**事件处理器异常（含整个事件分发入口 `_on_event` 在中间件/事件构造阶段炸掉）无声吞掉**，插件"收不到消息"却无线索；改为抽到 `_dispatch_one` 并向 stderr 打印异常堆栈。
+  - 读循环 `_read_loop` 此前 `except: pass` 把连接断开根因（RST/EOF/解码错误）吞掉、`_read_loop_inner` 对损坏 JSON 行 `continue` 静默跳过（可能丢失一条消息）；均改为 stderr 告警留痕。
+  - `sdk.py` `_invoke` 的依赖装配（`_bind_args`）失败以 `except: pass` 退回原始实参、根因被掩盖；改为打印装配失败信息。
+  - Go 内核 `ipc_server.go` 读循环对损坏帧 `continue` 静默跳过（与 Python 侧同源）——补 `logWarn`。Go 侧 `sendRaw`（出站队列满丢帧）、`publishFromConn`（非适配器/载荷解析失败/缺 type）原本已打 `logWarn`，确认非静默。
+  - `event_buffer.py` / `event_bus.py` 经核查已是健壮实现：`EventBuffer` 全满丢弃有 `_dropped` 计数与告警、`stats()` 可观测、L2→L3 兜底与 sqlite→file 降级；`EventBus._invoke_one` 异常 `logger.error`——均非静默，未改动。
+  - 新增回归测试 `tests/test_iipc_silent_drop.py`（9 项：出站消息 flush 失败回队列重试/恢复重发/有界裁剪/顺序保持、日志批次失败计数、权限查询失败降级可见、正常不计数）与 `tests/test_iipc_client_dispatch.py`（4 项：`_dispatch_one` 异常可见、正常无噪声、无订阅者安全、损坏帧告警）。
+- **主干事件分发「Hook 一票否决」可观测性修复**（对照"事件分发系统架构设计"理想图，系统盘查内核主干流水线）：此前三处扩展点会**真正丢弃/跳过消息但运维不可见**——`event.before_dispatch` 返回 False 丢弃事件仅 `logger.debug`、`router.before_route` 返回 False 跳过路由**无任何日志**、`message.before_send` 返回 False 取消发送仅 `logger.debug`。三者均已升级为 `logger.warning` 并给出明确的"消息被拦截/跳过/取消"措辞，使生产 INFO/WARNING 下"消息凭空消失"可溯源。
+  - 内核主干其余环节经核查已健壮，非静默：`_process_event` 各分支、`MessageRouter._match_plugin_commands` 命令 handler 异常打 `logger.error` + 调 `on_error` 钩子、`EventBus._invoke_one` 异常打 `logger.error`、`RawMessageHandler` 超时/异常打 `logger.error`。
+  - 对照理想架构确认的三类偏差：**A. Hook 无 `serial/parallel` 声明能力**；**B. 三类 before_* 拦截不可见（已修）**；**C. 四类事件（一般/正则/全量/原始）无统一分类契约层**（当前由命令引擎 + 事件总线 + raw handlers 三套并存覆盖，功能等价但结构不符图）。
+  - **A 已落地**：`HookRegistry.register(..., serial=True)` 新增 `serial` 形参（默认 `True`，对现存全部插件零行为变化）；`trigger_async` 改为「串行组按优先级顺序逐个 await（保留短路语义）+ 并行组经 `asyncio.gather` 并发执行」，实现架构图要求的"声明串行→顺序执行 / 未要求串行→并行执行"；`ctx.hook(point, handler, priority, serial)` 同步打通插件入口。`trigger_sync`、`unregister`、`clear_plugin` 随 4 元组存储同步修正。`EventBus.aemit` 的 `parallel` 形参非本次范围（路由层按需调用即可）。
+  - 新增回归测试 `tests/test_dispatch_drop_visibility.py`（3 项：三处 before_* 拦截均打 WARNING 且事件/路由确实被丢弃/跳过）与 `tests/test_hook_serial_parallel.py`（5 项：默认串行保序、并行 handler 真并发≈0.1s、串行仍顺序≈0.2s、串行短路阻止并行组、非短路两组结果都收集；真跑 5/5 全过）。
+  - **C 已落地（四类事件统一分类契约层）**：新增 `framework/messaging/event_classify.py`（`EventCategory` 枚举 `general/regex/all/raw/none` + `initial_classification`）；`Event` 新增 `_category_command` 槽与 `category` / `categories` 属性（单一真相源）；`router_match._match_plugin_commands` 在命令**实际执行**时回填 general（静态/前缀命中）/ regex（正则命中）；`dispatch._process_event` 路由完成后发射 `HookPoints.MESSAGE_CLASSIFIED`（`message.classified`，无订阅者时 `aemit` 短路、热路径零开销）。四类事件自此可被 Hook 统一包装，对齐架构图。新增回归测试 `tests/test_event_classify.py`（8 项：枚举 / 初始分类 / 未命中归 all / 命中回填 general·regex / Hook 常量，含轻量 harness 真跑路由回填；真跑 8/8 全过）。
+  - **启动自检依赖改为可配置**（`main.py`）：`_check_and_install_deps` 读取 `config.yaml` 的 `dependencies.allow_missing`（新增配置段），被豁免的缺失包只记 WARNING、不安装、不打断启动、不退出；仅把"必需子集"写临时 requirements 安装（不再把豁免包塞进整文件安装）。抽出纯函数 `_resolve_self_check_missing` / `_read_self_check_allow_missing` 便于测试。新增回归测试 `tests/test_main_selfcheck_config.py`（5 项：过滤豁免 / 无豁免 / 驼峰-小写归一 / 读配置 / 缺段返回空集；真跑 5/5 全过）。
 - **矩形倒置坐标归一化**：`_CanvasPIL.rect` 与 Rust 原生 `rect` 此前对 `x1<x0` / `y1<y0` 行为不一致（PIL 抛 `ValueError`、原生静默 no-op）。已统一为「倒置坐标视为同一矩形」（`rect(300,200,0,0)` == `rect(0,0,300,200)`），并新增回归测试 `tests/test_image_rect_normalization.py`（原生 / PIL 双路，4 项全过）。
 
 ### 变更
