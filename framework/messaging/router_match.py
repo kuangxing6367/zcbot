@@ -310,6 +310,13 @@ class RouterMatchMixin:
 
                 handler = getattr(module, cmd.handler_name, None)
                 if handler and callable(handler):
+                    # ── 四类事件分类回填（架构 C 项）──
+                    # 命令真正执行前锁定其类别：正则 pattern 命中 → regex，否则 general。
+                    # 仅在实际执行时回填（被 command.before 跳过 / 黑名单拦截 / 处理函数缺失
+                    # 的情况不视为"命中命令"，保持 category 为 all）。
+                    ev._category_command = ('regex'
+                                            if cmd.rx is not None
+                                            else 'general')
                     # 注入当前事件的 bot 到上下文变量（contextvars），确保回复走正确的
                     # OneBot 实例。协程创建与 asyncio.to_thread 均携带上下文快照，
                     # 并发消息互不干扰（原 module.ctx 插件级共享变量多 bot 时会交错错发）

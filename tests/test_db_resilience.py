@@ -162,6 +162,8 @@ def test_readonly_with_missing_table_reports_failure(tmp_path, caplog):
     db.execute("PRAGMA query_only = ON")
 
     caplog.set_level(logging.DEBUG, logger="zcbot")
+    caplog.clear()                      # 只关注"只读+缺表"这次初始化，
+                                         # 隔离 boot 阶段那句正常的"初始化完成"日志
     auto_init_database(db)
 
     # 复验：表仍然缺失（只读下建不出来）

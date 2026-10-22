@@ -163,6 +163,12 @@ class Event:
         self._stopped = False  # 是否停止传播
         self._continue_route = False  # 是否允许系统关键词回复继续尝试
 
+        # ----- 四类事件统一分类（架构设计「最终版」C 项） -----
+        # 单一真相源：消息事件进入管线时即具备 raw/all 维度，路由命中命令后回填
+        # general/regex（见 framework.messaging.router_match）。插件用 ev.category
+        # / ev.categories 读取，无需关心命令引擎/总线/raw 三套并存的内部差异。
+        self._category_command = None  # 路由命中后回填 'general' / 'regex'
+
     # ===== 权限属性 =====
 
     @property
@@ -545,6 +551,37 @@ class Event:
     @property
     def is_private(self) -> bool:
         return self.message_type == 'private'
+
+    # ===== 四类事件统一分类（架构设计「最终版」C 项） =====
+    @property
+    def category(self) -> str:
+        """本事件的最终分类（四类 + 非消息），单一取值。
+
+        - 非消息事件（meta/notice/request）→ 'none'
+        - 命中命令后 → 'general' / 'regex'
+        - 否则（过 raw + message 总线兜底）→ 'all'
+        - raw 是横切维度，始终可用（见 categories['is_raw']）
+        """
+        if self.post_type != 'message':
+            return 'none'
+        if self._category_command is not None:
+            return self._category_command
+        # 命令未命中：仍过 raw + message 总线兜底监听，归为全量
+        return 'all'
+
+    @property
+    def categories(self) -> dict:
+        """本事件的完整分类契约（四类标记，单一真相源）。
+
+        返回 {is_message, is_raw, is_all, command}；command 为 None/'general'/'regex'。
+        插件可在 message 类 handler 中据此判断消息属于哪一类。
+        """
+        return {
+            'is_message': self.post_type == 'message',
+            'is_raw': self.post_type == 'message',
+            'is_all': self.post_type == 'message',
+            'command': self._category_command,
+        }
 
     @property
     def sender_nickname(self) -> str:
