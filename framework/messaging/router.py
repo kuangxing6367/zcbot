@@ -360,6 +360,18 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             if logger.isEnabledFor(logging.DEBUG):
                 log_broker.log_system('DEBUG', f'消息未匹配任何命令: "{message[:80]}"')
         finally:
+            # ── 四类事件分类完成扩展点（架构 C 项）──
+            # 必须发在这里：ev 由本函数构造，且 try 内所有提前 return 都会汇流到
+            # finally，保证「命中命令 / 未命中 / 被终止传播」各路径分类都能送达。
+            # 分类此时已最终确定（命中命令=general/regex，否则 all；raw 横切恒真）。
+            # 无订阅者时 trigger_async 直接短路返回，热路径零开销。
+            try:
+                await self.framework.hooks.trigger_async(
+                    HookPoints.MESSAGE_CLASSIFIED,
+                    {'event': ev, 'category': ev.category,
+                     'categories': ev.categories, 'bot_name': bot_name})
+            except Exception as e:
+                logger.error(f"message.classified 扩展点异常: {e}")
             # 路由完成通知扩展点（无论命中与否、是否提前返回）
             try:
                 await self.framework.hooks.trigger_async(
