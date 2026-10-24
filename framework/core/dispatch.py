@@ -272,19 +272,10 @@ class FrameworkDispatchMixin:
                                     'user_id': user_id, 'group_id': group_id})
 
                 self.stats_writer.register_user(user_id, sender, message_type, group_id)
+                # 注：message.classified 扩展点由 router.route() 内部发出——
+                # Event 对象在路由内构造、分类也只在那里回填，本层拿不到 ev
+                # （此处 event 仍是原始 dict，直接读 .category 会 AttributeError）。
                 await self.router.route(event, bot_name)
-
-                # ── 四类事件分类完成扩展点（架构 C 项）──
-                # 此时 ev.category 已最终确定（命中命令=general/regex，否则 all；raw 横切恒真）。
-                # 无订阅者时 aemit 直接短路返回，热路径零开销；有订阅者时四类事件均
-                # 可被 Hook 包装，对齐架构设计的「串行/并行/Hook 包装」要求。
-                try:
-                    await self.event_bus.aemit(
-                        HookPoints.MESSAGE_CLASSIFIED,
-                        {'event': ev, 'category': ev.category,
-                         'categories': ev.categories, 'bot_name': bot_name})
-                except Exception as e:
-                    logger.error(f"message.classified 扩展点异常: {e}")
 
             elif event_type == 'notice':
                 await self._handle_notice(event, bot_name)
