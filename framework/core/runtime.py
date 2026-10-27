@@ -102,14 +102,45 @@ class FrameworkRuntimeMixin:
                         logger.warning(f"官方插件 [{name}] 装饰器 flush 失败: {e}")
                     logger.info(f"官方插件 [{name}] 已加载")
 
+                    # 同步命令 / 定时任务 / 原始消息处理器到路由与调度。
+                    # 关键修复：此前核心插件只 import + register，却漏了这步，
+                    # 导致核心插件命令不进 commands 表、不进入路由排序——形如虚设
+                    #（/render_card、/llmload、/echo 等命令永远路由不到）。
+                    # 此处对齐用户插件的 register_commands 行为，使核心插件命令可路由。
+                    meta = getattr(module, '__plugin_meta__', {})
+                    _prio = meta.get('priority', 50)
+                    _cmds = ctx._get_commands()
+                    _tasks = ctx._get_tasks()
+                    _raw = ctx._get_raw_message_handlers()
+                    if _cmds:
+                        for _c in _cmds:
+                            _c['plugin_name'] = name  # 与 _loaded_plugins 键一致，路由才能匹配
+                        try:
+                            self.plugin_loader._sync_commands(name, _cmds)
+                        except Exception as e:
+                            logger.warning(f"官方插件 [{name}] 命令同步失败: {e}")
+                    if _tasks:
+                        for _t in _tasks:
+                            _t['plugin_name'] = name
+                        try:
+                            self.plugin_loader._sync_tasks(name, _tasks)
+                        except Exception as e:
+                            logger.warning(f"官方插件 [{name}] 定时任务同步失败: {e}")
+                    if _raw:
+                        for _h in _raw:
+                            try:
+                                self.register_raw_message_handler(name, _h, _prio)
+                            except Exception as e:
+                                logger.warning(
+                                    f"官方插件 [{name}] 原始消息处理器注册失败: {e}")
+
                     # 存入 plugin_loader，使调度器能通过 get_plugin_module 获取模块
                     with self.plugin_loader._lock:
-                        meta = getattr(module, '__plugin_meta__', {})
                         self.plugin_loader._loaded_plugins[name] = {
                             'module': module,
                             'path': plugin_dir,
                             'meta': meta,
-                            'priority': meta.get('priority', 50),
+                            'priority': _prio,
                             'yaml': {},
                         }
                 else:

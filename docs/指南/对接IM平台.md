@@ -117,6 +117,11 @@ Lagrange、go-cqhttp 等同理：填同一个 `ws://地址` 和令牌即可。
 
 回 `你好` 就通了。`/help` 看全部命令。
 
+> 这条 `/echo` 由内置的 **echo 自检插件**（`core_plugins/echo`，默认开启）提供，
+> 覆盖**所有**接入端（OneBot / QQ 官方 / Telegram / Discord / WS / HTTP 注入），
+> 发什么回什么——专门用来验证「消息进得来、命令路由得通、回复发得出」整条链路。
+> 若你手动关掉了 `echo` 插件，需重新启用才会响应。
+
 ---
 
 ## 其它平台（简要）
@@ -125,9 +130,9 @@ Lagrange、go-cqhttp 等同理：填同一个 `ws://地址` 和令牌即可。
 
 1. `core_plugins.yaml` 里 `telegram.enabled: true`，填 `token`
 2. 重启，日志确认接入端就绪
-3. 给机器人发 `/echo 你好`
+3. 给机器人发 `/echo 你好`（内置 echo 自检插件响应）
 
-Discord、QQ 官方同理：**开插件 → 填 token/app 凭证 → 重启 → 发消息自测**。
+Discord、QQ 官方同理：**开插件 → 填 token/app 凭证 → 重启 → 发 `/echo 你好` 自测**。
 详细字段说明见 [配置系统 · 各接入端](./配置系统.md)。
 
 ---

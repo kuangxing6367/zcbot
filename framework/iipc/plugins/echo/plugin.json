@@ -7,6 +7,7 @@
   "deps": [],
   "event_types": ["message"],
   "commands": [
+    { "name": "/echo", "perm": "", "desc": "链路自测：/echo 内容 原样回显（对齐教程）" },
     { "name": "/ping", "perm": "", "desc": "回显 pong 并写 SQLite" },
     { "name": "/info", "perm": "", "desc": "调用 get_login_info API" },
     { "name": "/cfg", "perm": "", "desc": "测试配置持久化 set/get" },
