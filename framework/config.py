@@ -249,6 +249,31 @@ terminal:
   panel_autostart: false     # 启动后自动进入运维面板（退出后回到普通终端）
   panel_refresh: 1.0         # 面板刷新间隔（秒，最小 0.2）
   panel_default_view: monitor # 面板默认页：monitor / overview / plugins / messages / system
+
+# ── 多平台接入 ────────────────────────────────────────────────
+# 框架原生只认「单一平台视图」：所有适配器（OneBot / QQ官方 / Telegram / Discord …）
+# 共享同一套 user/group 身份，且所有插件处理全部适配器的消息。
+# 多平台接入让框架区分不同适配器，并提供三类能力（详见 docs/进阶/多平台接入.md）：
+#   1. drive 注册表：每个适配器首次加载自动登记一个稳定 uuid（重启不变）；
+#   2. 身份命名空间（下方 namespace 开关）：打开后 user/group 身份按
+#      `<适配器uuid>@<id>` 隔离，不同适配器下同一 QQ 号视为不同用户/群；
+#   3. 插件↔适配器双向绑定：配置适配器段的 plugins 白名单，或在插件
+#      __plugin_meta__ 写 adapters 列表，让「指定插件只处理指定适配器」而非全收。
+multi_platform:
+  # 身份命名空间开关（默认 false）：
+  #   false = user/group 用裸号，跨适配器共享同一身份（旧行为，零风险）
+  #   true  = 身份键 = <适配器uuid>@<id>，不同适配器下同一 QQ 号成为不同行，
+  #           各适配器的用户统计/黑名单/身份彼此隔离（适合多群多平台分别运营）
+  namespace: false
+  # 适配器白名单示例（按需手写到对应适配器配置段，如 core_plugins.yaml 的
+  # qq_official / onebot 块，或主 config 的 qq_official / onebot 段）：
+  #   qq_official:
+  #     plugins:                 # 该适配器只允许下列插件处理消息；留空/不写=全部插件
+  #       - hello
+  #       - group_guardian
+  # 反向（插件侧声明自己只服务哪些适配器）写在插件 main.py：
+  #   __plugin_meta__ = {..., 'adapters': ['qq_official', 'onebot']}
+  # 两者「且」关系：适配器白名单放行 且 插件 adapters 含当前适配器，才允许处理。
 """
 
 

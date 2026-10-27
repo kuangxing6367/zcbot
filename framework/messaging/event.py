@@ -10,6 +10,7 @@ from framework.messaging.segments import (
     data_list, first as first_seg, is_media_only, media_ref, media_segments,
     normalize_message, pick, segments_to_text,
 )
+from framework.messaging.adapter_registry import namespace_identity
 
 # 权限查询 TTL 缓存（热路径性能：避免每个事件反复查库）
 # 用户：user_id -> (role, is_blacklist, ts) ；群成员：(`group_id`,`user_id`) -> (role, ts)
@@ -26,21 +27,37 @@ _role_cache_checks = 0
 
 
 def invalidate_user_role_cache(user_id: int = None):
-    """清除用户权限缓存（Web 端修改权限后调用，None=全部）"""
+    """清除用户权限缓存（Web 端修改权限后调用，None=全部）
+
+    多平台接入命名空间开启时，缓存键为 `<适配器uuid>@<id>` 字符串；
+    此处额外按 `@<id>` 后缀扫描清除，保证手动失效尽力覆盖。
+    """
     if user_id is None:
         _user_role_cache.clear()
     else:
         _user_role_cache.pop(user_id, None)
+        suf = '@' + str(user_id)
+        for k in [k for k in _user_role_cache
+                  if isinstance(k, str) and k.endswith(suf)]:
+            _user_role_cache.pop(k, None)
 
 
 def invalidate_group_role_cache(group_id: int = None, user_id: int = None):
-    """清除群成员权限缓存"""
+    """清除群成员权限缓存（多平台命名空间开启时键含适配器 uuid，尽力覆盖）"""
     if group_id is None:
         _group_role_cache.clear()
     else:
-        for k in [k for k in _group_role_cache if
-                  k[0] == group_id and (user_id is None or k[1] == user_id)]:
-            _group_role_cache.pop(k, None)
+        g_suf = '@' + str(group_id)
+        u_suf = '@' + str(user_id) if user_id is not None else None
+        for k in list(_group_role_cache.keys()):
+            if not (isinstance(k, tuple) and len(k) == 2):
+                continue
+            gid_key, uid_key = k
+            if gid_key == group_id or (isinstance(gid_key, str) and gid_key.endswith(g_suf)):
+                if user_id is None or uid_key == user_id or (
+                        isinstance(uid_key, str) and u_suf is not None
+                        and uid_key.endswith(u_suf)):
+                    _group_role_cache.pop(k, None)
 
 
 def _extract_text(message):
@@ -193,6 +210,13 @@ class Event:
             now = time.time()
             uid = self.user_id
 
+            # 多平台接入：身份按适配器命名空间隔离（关闭时 ns_uid==uid，完全等价于旧行为）
+            fw = self._framework
+            _ns_enabled = bool(fw and getattr(fw, 'multi_platform_namespace', lambda: False)())
+            _reg = getattr(fw, 'adapter_registry', None) if fw else None
+            ns_uid = namespace_identity(_reg, self.adapter, _ns_enabled, uid)
+            ns_gid = namespace_identity(_reg, self.adapter, _ns_enabled, self.group_id)
+
             # 惰性上限清理：每 256 次查询检查一次缓存规模，超限从 LRU 尾部（最久未用）淘汰。
             # 只声明 _role_cache_checks 为 global：本函数不再重新绑定缓存字典本身，
             # 仅调用其方法（popitem / move_to_end），故无需 global 缓存名。
@@ -206,10 +230,10 @@ class Event:
                     _group_role_cache.popitem(last=False)
 
             # 用户级（super / blacklist）查询（60s TTL 内存缓存）
-            u_entry = _user_role_cache.get(uid)
+            u_entry = _user_role_cache.get(ns_uid)
             if u_entry is None or now - u_entry[2] > _ROLE_CACHE_TTL:
                 row = db.query_one(
-                    "SELECT role, is_blacklist FROM users WHERE user_id=%s", (uid,))
+                    "SELECT role, is_blacklist FROM users WHERE user_id=%s", (ns_uid,))
                 if row:
                     u_entry = (
                         row.get('role') or '',
@@ -218,11 +242,11 @@ class Event:
                     )
                 else:
                     u_entry = ('', 0, now)
-                _user_role_cache[uid] = u_entry
-                _user_role_cache.move_to_end(uid)
+                _user_role_cache[ns_uid] = u_entry
+                _user_role_cache.move_to_end(ns_uid)
             else:
                 # 命中：移到 LRU 尾部，避免活跃用户被误淘汰（O(1)）
-                _user_role_cache.move_to_end(uid)
+                _user_role_cache.move_to_end(ns_uid)
             role, is_blacklist, _ = u_entry
 
             if role == 'super':
@@ -234,12 +258,12 @@ class Event:
 
             # 群内角色（TTL 缓存）
             if self.is_group and self.group_id:
-                gkey = (self.group_id, uid)
+                gkey = (ns_gid, ns_uid)
                 grp_cached = _group_role_cache.get(gkey)
                 if grp_cached is None or now - grp_cached[1] > _ROLE_CACHE_TTL:
                     grp = db.query_one(
                         "SELECT role FROM group_members WHERE group_id=%s AND user_id=%s",
-                        (self.group_id, uid)
+                        (ns_gid, ns_uid)
                     )
                     grole = (grp.get('role') or 'member') if grp else 'member'
                     _group_role_cache[gkey] = (grole, now)
