@@ -198,6 +198,8 @@ framework/iipc/go_kernel/*.exe
 framework/iipc/rust_adapter/target/
 framework/iipc/**/plugins_dat/
 framework/iipc/data/
+framework/iipc/_pipeline_plugins/
+framework/iipc/_extcheck_plugins/
 
 # ============================================================
 # 原生渲染二进制（zcbot_render.*）：已用 UPX -9 压缩存盘、

@@ -1,0 +1,15 @@
+{
+  "id": "group_admin",
+  "name": "群管小工具示例插件",
+  "author": "zcbot_go",
+  "version": "0.1.0",
+  "description": "IIPC 命令+API 通道示例：/who /members /ban /kick",
+  "deps": [],
+  "event_types": ["message"],
+  "commands": [
+    { "name": "/who", "perm": "", "desc": "查询机器人登录信息" },
+    { "name": "/members", "perm": "", "desc": "列出当前群成员数" },
+    { "name": "/ban", "perm": "admin", "desc": "禁言某人 600s（需群里）" },
+    { "name": "/kick", "perm": "admin", "desc": "踢出某人（需群里）" }
+  ]
+}
