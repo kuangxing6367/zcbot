@@ -224,7 +224,7 @@ fn main() {
                         Arc::clone(&pending), Arc::clone(&kwriter), cfg.self_id.clone());
     }
     if let Some(listen) = cfg.onebot_listen.clone() {
-        run_server_mode(listen, Arc::clone(&shared), Arc::clone(&pending),
+        run_server_mode(listen, cfg.token.clone(), Arc::clone(&shared), Arc::clone(&pending),
                         Arc::clone(&kwriter), cfg.self_id.clone());
     }
 
@@ -264,7 +264,8 @@ fn run_client_mode(url: String, token: Option<String>, shared: SharedConn,
 }
 
 /// 服务端模式：监听反向 WS 连接（OneBot 实现连入）。
-fn run_server_mode(listen: String, shared: SharedConn, pending: PendingMap,
+/// `token` 透传至 `ws_accept` 做 OneBot 11 access_token 鉴权（空=关闭）。
+fn run_server_mode(listen: String, token: Option<String>, shared: SharedConn, pending: PendingMap,
                    kw: Arc<Mutex<TcpStream>>, self_id: String) {
     thread::spawn(move || {
         let listener = match TcpListener::bind(&listen) {
@@ -282,7 +283,8 @@ fn run_server_mode(listen: String, shared: SharedConn, pending: PendingMap,
                     let pending = Arc::clone(&pending);
                     let kw = Arc::clone(&kw);
                     let self_id = self_id.clone();
-                    thread::spawn(move || match ws::ws_accept(s) {
+                    let token = token.clone();
+                    thread::spawn(move || match ws::ws_accept(s, token.as_deref()) {
                         Ok(conn) => {
                             eprintln!("[rust-adapter] OneBot 反向连接已建立");
                             let conn = Arc::new(Mutex::new(conn));

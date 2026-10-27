@@ -332,7 +332,13 @@ pub fn ws_connect(url: &str, token: Option<&str>) -> Result<WsConn, String> {
 }
 
 /// 服务端握手：accept 到的连接先按 HTTP 升级请求处理，返回 101。
-pub fn ws_accept(mut stream: TcpStream) -> Result<WsConn, String> {
+///
+/// `token` 为 `Some` 且非空时，按 OneBot 11「鉴权」标准校验 access_token：
+/// 反向 WS 客户端（OneBot 实现对端）须在握手请求头携带 `Authorization: Bearer <token>`
+/// 或在 URL 查询参数携带 `access_token=<token>`；校验不通过返回 401 并断连。
+/// `token` 为 `None`/空视为关闭鉴权（本地部署兼容），与 OneBot 11 `auth.access_token`
+/// 默认空一致。
+pub fn ws_accept(mut stream: TcpStream, token: Option<&str>) -> Result<WsConn, String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(300)))
         .map_err(|e| format!("设置读超时失败: {}", e))?;
@@ -356,6 +362,19 @@ pub fn ws_accept(mut stream: TcpStream) -> Result<WsConn, String> {
     let req = String::from_utf8_lossy(&buf).to_lowercase();
     if !req.contains("upgrade: websocket") {
         return Err("不是 WebSocket 升级请求".to_string());
+    }
+    // ── OneBot 11 反向 WS 鉴权（access_token） ──
+    // 标准（OneBot 11「鉴权」章节）：配置了 access_token 时，反向 WS 客户端
+    // （OneBot 实现对端）建立连接须在握手请求头携带 `Authorization: Bearer <token>`
+    // 或 URL 查询参数 `access_token=<token>`；服务端须在校验失败时拒绝握手（返 401）。
+    if let Some(expected) = token {
+        if !expected.is_empty() && !check_access_token(&String::from_utf8_lossy(&buf), expected) {
+            let _ = stream.write_all(
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.flush();
+            return Err("access_token 校验失败：拒绝握手（OneBot 11 鉴权）".to_string());
+        }
     }
     // 服务端 accept = base64(sha1(client_key + RFC 固定 magic))（RFC 6455 §1.3）
     let accept_key = {
@@ -390,6 +409,47 @@ pub fn ws_accept(mut stream: TcpStream) -> Result<WsConn, String> {
         .flush()
         .map_err(|e| format!("握手 flush 失败: {}", e))?;
     WsConn::new(stream, false).map_err(|e| format!("克隆写句柄失败: {}", e))
+}
+
+/// OneBot 11 access_token 校验（反向 WS 服务端侧）。
+///
+/// 两种携带方式任一匹配即通过（与 OneBot 11 标准一致）：
+///   1) 请求头 `Authorization: Bearer <token>`（标准推荐，scheme 大小写不敏感）
+///   2) URL 查询参数 `?access_token=<token>`（兼容无法改请求头的场景）
+///
+/// 注：OneBot 12 规定优先 Header，但 V11 文档未强制优先级，故二者任一即可。
+/// `token` 本身大小写敏感（仅 Bearer scheme 大小写不敏感，符合 RFC 7235）。
+fn check_access_token(raw_request: &str, expected: &str) -> bool {
+    // 1) 请求行取 path+query：GET /path?access_token=x HTTP/1.1
+    if let Some(first_line) = raw_request.lines().next() {
+        if let Some(rest) = first_line.split_once(' ').map(|(_, r)| r) {
+            if let Some(path) = rest.split_once(' ').map(|(p, _)| p) {
+                if let Some(q) = path.split_once('?').map(|(_, q)| q) {
+                    for pair in q.split('&') {
+                        if let Some((k, v)) = pair.split_once('=') {
+                            if k == "access_token" && v.trim() == expected {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 2) 请求头 Authorization（scheme 大小写不敏感，token 本身大小写敏感）
+    for line in raw_request.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("authorization") {
+                let v = v.trim();
+                let lowered = v.to_ascii_lowercase();
+                // "Bearer " 全为 ASCII，按字节切片取 token 安全
+                if lowered.starts_with("bearer ") && v.len() >= 7 && v[7..].trim() == expected {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// 客户端 Sec-WebSocket-Key：16 随机字节 base64。
@@ -475,4 +535,51 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
         out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_access_token;
+
+    #[test]
+    fn header_bearer_match() {
+        let req = "GET /ws HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret\r\n\r\n";
+        assert!(check_access_token(req, "secret"));
+    }
+
+    #[test]
+    fn header_bearer_case_insensitive_scheme() {
+        let req = "GET /ws HTTP/1.1\r\nAuthorization: bearer SECRET\r\n\r\n";
+        assert!(check_access_token(req, "SECRET"));
+    }
+
+    #[test]
+    fn header_bearer_wrong_token() {
+        let req = "GET /ws HTTP/1.1\r\nAuthorization: Bearer nope\r\n\r\n";
+        assert!(!check_access_token(req, "secret"));
+    }
+
+    #[test]
+    fn query_param_match() {
+        let req = "GET /ws?access_token=secret HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert!(check_access_token(req, "secret"));
+    }
+
+    #[test]
+    fn query_param_wrong() {
+        let req = "GET /ws?access_token=nope HTTP/1.1\r\n\r\n";
+        assert!(!check_access_token(req, "secret"));
+    }
+
+    #[test]
+    fn no_token_rejected() {
+        let req = "GET /ws HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert!(!check_access_token(req, "secret"));
+    }
+
+    #[test]
+    fn token_case_sensitive() {
+        let req = "GET /ws HTTP/1.1\r\nAuthorization: Bearer Secret\r\n\r\n";
+        assert!(!check_access_token(req, "secret"));
+    }
 }

@@ -72,9 +72,33 @@ framework/iipc/
 ├─ go_kernel/         Go 内核源码（事件总线 / SQLite / 插件编排 / 调度 / 权限）
 ├─ rust_adapter/      Rust 协议端源码（OneBot 11，正向+反向双模式 WS）
 ├─ py_sdk/            Python SDK：sdk.py / event.py / framework.plugin 兼容层
-├─ plugins/           示例插件（echo、api_parity）
+├─ plugins/           示例插件（echo / repeat / group_admin / clock / api_parity / api_surface / official_signin / official_blacklist / _template）
 └─ tools/             联调与基准脚本
 ```
+
+## OneBot 11 协议标准与鉴权
+
+Rust 协议端严格执行 **OneBot 11** 标准（onebot.dev；历史兼容 go-cqhttp / NapCat / Lagrange）。
+接入形态两种，且均按标准实现 `access_token` 鉴权：
+
+| 形态 | 谁连谁 | 配置 | 鉴权角色 |
+|---|---|---|---|
+| 正向 WS（客户端模式） | 适配器主动连 OneBot 实现 | `--onebot-url` / `onebot_url` | 适配器**发送** `Authorization: Bearer <token>`（标准 §鉴权） |
+| 反向 WS（服务端模式，默认） | OneBot 实现连入适配器 | `--onebot-listen` / `onebot_listen`（默认 `127.0.0.1:6701`） | 适配器**校验** 对端 `Authorization: Bearer <token>` 或 `?access_token=` |
+
+**鉴权规则（与 OneBot 11「鉴权」章节一致）：**
+- `onebot_token`（CLI `--onebot-token` / env `ZCBOT_ONEBOT_TOKEN`）**为空 = 关闭鉴权**
+  （本地部署兼容，对齐 OneBot 11 `auth.access_token` 默认空）。
+- 一旦配置非空，反向 WS 服务端**强制校验**：对端握手请求须携带
+  `Authorization: Bearer <token>`（推荐）或 URL 查询参数 `?access_token=<token>`；
+  二者任一匹配即通过，否则返回 **`401 Unauthorized` 并拒绝握手**（不升级、不留连接残骸）。
+  这是公网部署的安全必需项——此前反向 WS 服务端不校验 token，任何能连到端口的客户端都能注入事件。
+- Bearer scheme 大小写不敏感（RFC 7235）；token 本身大小写敏感。
+- `wss://` 仍明确报错（Rust 侧 std 无 TLS，需前置反代终止 TLS），绝不静默失败。
+
+> 选型说明：未升 OneBot 12。V12 去掉了 QQ 耦合、引入 `X-*` 标识头与 `id`/`platform`
+> 概念，但生态覆盖面（go-cqhttp / NapCat / Lagrange 等仍主推 V11）远不及 V11，盲目升级会
+> 破坏现有 OneBot 实现对端的即插即用。当前以 V11 为生产基线，鉴权缺口已在 V11 框架内补齐。
 
 ## 1:1 目标与现状
 
@@ -232,11 +256,26 @@ Rust 协议端并发模型（**关键教训，实测**）：WS 连接读句柄�
 
 ## 示例插件
 
-- `plugins/echo/`：1:1 写法演示（`ctx.command/on/task` 实例形态、`%s` 占位、
-  模块级 `on_error`、require_admin、DB 往返、通用 API 通道、配置持久化）。
+入门演示（建议照抄起步）：
+- `plugins/echo/`：1:1 写法演示 + **跨适配器自检插件**（`/echo` 回显、`/ping`）。
+  已内置为官方自检入口：教程让你配好协议后发 `/echo 你好`，正是它回"你好"，覆盖
+  所有接入端（OneBot / QQ 官方 / Telegram / Discord / WS / HTTP 注入）。
+- `plugins/repeat/`：`on("message")` 事件订阅示例——复读非 `/` 开头的消息。
+- `plugins/group_admin/`：命令 + 通用 API 通道示例——`/who`(get_login_info)、
+  `/members`(get_member_list)、`/ban`(ctx.ban)、`/kick`(ctx.kick)。
+- `plugins/clock/`：`@task("* * * * *")` 定时任务 + 配置持久化示例——
+  `/clock_set group:群号|user:QQ号`、`/clock_stop`，每分钟播报时间。
+
+验收与模板：
 - `plugins/api_parity/`：验收插件（模块装饰器半边 + register(ctx) 半边 +
   `Event.ctx_send`），覆盖正则命令/别名/会话/群开关/actions 代理/dict 访问/
   task 零参执行/command.before 返回 False 跳过命令。
+- `plugins/api_surface/`：把 SDK 全部公开 API 真实调用一遍（见上「全 API 面实测」），
+  只报真实返回值，判定权在 `tools/api_surface_check.py`。
+- `plugins/official_signin/` / `plugins/official_blacklist/`：从 **真 zcbot 官方插件**
+  逐字拖入（签到=`docs/指南/编写插件.md` 完整示例；黑名单=真仓库插件），用于
+  `tools/official_plugin_check.py` 的 1:1 对齐验收。
+- `plugins/_template/`：新插件脚手架（`main.py` + `plugin.json` 模板）。
 
 拖真 zcbot 插件进来：放 `plugins/<id>/`（含 `plugin.json`），内核自动拉起；
 模块级装饰器写法由 `py_sdk/framework/plugin.py` 兼容层承接。

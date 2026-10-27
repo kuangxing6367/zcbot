@@ -1,0 +1,13 @@
+{
+  "id": "clock",
+  "name": "定时播报示例插件",
+  "author": "zcbot_go",
+  "version": "0.1.0",
+  "description": "IIPC 定时任务示例：@task 每分钟向目标播报时间",
+  "deps": [],
+  "event_types": ["message", "task.tick"],
+  "commands": [
+    { "name": "/clock_set", "perm": "", "desc": "设置播报目标 group:群号 / user:QQ号" },
+    { "name": "/clock_stop", "perm": "", "desc": "停止定时播报" }
+  ]
+}

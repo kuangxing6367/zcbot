@@ -1,0 +1,10 @@
+{
+  "id": "repeat",
+  "name": "复读姬示例插件",
+  "author": "zcbot_go",
+  "version": "0.1.0",
+  "description": "IIPC 事件订阅示例：on(message) 收到消息原样复读",
+  "deps": [],
+  "event_types": ["message"],
+  "commands": []
+}
