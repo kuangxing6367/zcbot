@@ -44,6 +44,13 @@ def register(ctx: PluginContext):
             group_id=event.group_id,
         )
 
+    @ctx.command("/echo")
+    def echo_cmd(event, match):
+        # 链路自测：/echo 你好 -> 回 "你好"（对齐 docs 教程 /echo 你好 验证步骤）。
+        # 命令命中后 SDK 直接 return，不再走下方 on("message") 回显，互不干扰。
+        arg = (match.group(1) or "").strip()
+        ctx.send_msg(message=arg, user_id=event.user_id, group_id=event.group_id)
+
     @ctx.command("/ping")
     def ping(event, match):
         ctx.send_msg(message="pong", user_id=event.user_id, group_id=event.group_id)

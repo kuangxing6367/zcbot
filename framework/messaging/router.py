@@ -150,10 +150,24 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             logger.error(f"构建路由表失败（插件排序）: {e}")
             return
 
+        # 合并排序来源：
+        #  - 用户插件：plugins 表（含 is_active/has_register/status 过滤），带真实 priority/created_at
+        #  - 核心插件：已加载但未入 plugins 表（core_plugins/），用其 meta priority
+        #    此前核心插件命令漏同步、也不进路由排序，需纳入使其命令可路由。
+        plugin_order_meta = {}
+        for r in rows:
+            # created_at 在库里是字符串时间戳，统一转 str 以保证跨来源可比较排序
+            plugin_order_meta[r['plugin_name']] = (
+                r.get('priority') or 50, str(r.get('created_at') or 0))
+        for _n in loaded:
+            if _n not in plugin_order_meta:
+                plugin_order_meta[_n] = ((loaded[_n].get('priority') or 50), "0")
+
         table = {}
         order = []
-        for r in rows:
-            name = r['plugin_name']
+        for name in sorted(plugin_order_meta,
+                           key=lambda n: (plugin_order_meta[n][0],
+                                          plugin_order_meta[n][1])):
             # 过滤掉内存中未加载的插件（防止 DB 残留导致路由到已卸载/加载失败的插件）
             if name not in loaded:
                 continue
