@@ -7,6 +7,8 @@
 import asyncio
 import logging
 
+from framework.messaging.adapter_registry import namespace_identity
+
 logger = logging.getLogger('zcbot')
 
 
@@ -42,10 +44,15 @@ class AsyncStatsWriter:
         self._kw_hits[kw_id] = self._kw_hits.get(kw_id, 0) + 1
 
     def register_user(self, user_id: int, sender: dict, message_type: str,
-                      group_id: int | None = None):
-        """排队用户/群自动注册（非阻塞，队列满时丢弃并计数）"""
+                      group_id: int | None = None, adapter_key: str = None):
+        """排队用户/群自动注册（非阻塞，队列满时丢弃并计数）
+
+        :param adapter_key: 事件来源适配器连接标识（onebot/qq_official/…），
+            用于多平台接入身份命名空间（multi_platform.namespace 开启时生效）
+        """
         try:
-            self._reg_queue.put_nowait((user_id, dict(sender), message_type, group_id))
+            self._reg_queue.put_nowait(
+                (user_id, dict(sender), message_type, group_id, adapter_key))
         except asyncio.QueueFull:
             self._dropped += 1
             if self._dropped % 1000 == 1:
@@ -108,6 +115,18 @@ class AsyncStatsWriter:
                 fns.append(lambda m=members: self._write_members(m))
         return fns
 
+    def _namespace_id(self, raw_id, adapter_key):
+        """按 multi_platform.namespace 开关把裸身份改写成命名空间键（关闭时原样返回）。"""
+        fw = self.framework
+        try:
+            enabled = fw.multi_platform_namespace()
+        except Exception:
+            enabled = False
+        if not enabled:
+            return raw_id
+        reg = getattr(fw, 'adapter_registry', None)
+        return namespace_identity(reg, adapter_key, True, raw_id)
+
     def _flush(self):
         """同步排空（DB 线程中执行，停机收尾 / 兜底用）"""
         for fn in self._drain_to_fns():
@@ -135,20 +154,25 @@ class AsyncStatsWriter:
             except Exception as e:
                 logger.error(f"关键词命中计数写库失败: {e}")
 
-    @staticmethod
-    def _aggregate_registrations(items):
-        """把注册请求按 (user / group / member) 聚合（同键合并，消息数累加）"""
-        users = {}                          # user_id -> nickname（最后状态）
-        groups = {}                         # group_id -> group_name（最后状态）
-        members = {}                        # (group_id, user_id) -> [card, role, title, count]
-        for user_id, sender, message_type, group_id in items:
+    def _aggregate_registrations(self, items):
+        """把注册请求按 (user / group / member) 聚合（同键合并，消息数累加）
+
+        多平台接入：namespace 开启时，user/group 身份键改写为 `<适配器uuid>@<id>`
+        （由 adapter_key 关联 drive 表的稳定 uuid），不同适配器下同一 QQ 号成为不同行。
+        """
+        users = {}                          # namespace_user_id -> nickname（最后状态）
+        groups = {}                         # namespace_group_id -> group_name（最后状态）
+        members = {}                        # (namespace_group_id, namespace_user_id) -> [...]
+        for user_id, sender, message_type, group_id, adapter_key in items:
             if not user_id:
                 continue
+            nuid = self._namespace_id(user_id, adapter_key)
             nickname = sender.get('nickname', '') or sender.get('card', '') or str(user_id)
-            users[user_id] = nickname
+            users[nuid] = nickname
             if group_id and message_type == 'group':
-                groups[group_id] = sender.get('group_name', '')
-                key = (group_id, user_id)
+                ngid = self._namespace_id(group_id, adapter_key)
+                groups[ngid] = sender.get('group_name', '')
+                key = (ngid, nuid)
                 m = members.get(key)
                 if m is None:
                     members[key] = [sender.get('card', ''),

@@ -304,6 +304,11 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                 entry = routes.get(plugin_name)
                 if entry is None:
                     continue
+                # 多平台接入：适配器↔插件双向绑定白名单（不受当前适配器允许的插件直接跳过）
+                # 用 getattr 取：老版本/测试桩 framework 没有该方法时不得阻断路由
+                _allowed = getattr(self.framework, 'adapter_plugin_allowed', None)
+                if _allowed is not None and not _allowed(plugin_name, ev.adapter or bot_name):
+                    continue
                 # 群级插件开关检查（私聊不限制，纯内存缓存）
                 if ev.is_group:
                     if not self.framework.plugin_loader.is_plugin_enabled_for_group_cached(
@@ -386,13 +391,34 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         广播 message 事件（文本消息统一监听通道）
         内容监听型插件（关键词回复/违禁词/自动应答等）通过 ctx.on('message', handler) 订阅，
         handler 返回 True 视为已处理（路由终止）
+
+        多平台接入：同样按「适配器↔插件绑定」过滤订阅者——插件声明只服务某些
+        适配器（或适配器配了 plugins 白名单）时，不该收到其它适配器的消息广播。
         """
         try:
-            result = await self.framework.event_bus.aemit('message', ev)
+            result = await self.framework.event_bus.aemit(
+                'message', ev, allow=self._plugin_allowed_fn(ev))
             return result is True
         except Exception as e:
             logger.error(f"message 事件广播异常: {e}")
             return False
+
+    def _plugin_allowed_fn(self, ev):
+        """构造本事件来源下的插件允许判定函数（供事件广播过滤订阅者）。
+
+        framework 未提供 adapter_plugin_allowed（老版本/测试桩）时返回 None=不过滤。
+        """
+        allowed = getattr(self.framework, 'adapter_plugin_allowed', None)
+        if allowed is None:
+            return None
+        adapter_key = getattr(ev, 'adapter', '') or getattr(ev, 'bot_name', '') or ''
+
+        def _fn(plugin_name):
+            try:
+                return bool(allowed(plugin_name, adapter_key))
+            except Exception:
+                return True   # 判定异常不阻断广播
+        return _fn
     async def _broadcast_non_text(self, event: dict, bot_name: str = 'default'):
         """
         广播无文本消息到事件总线（供插件订阅，绕开命令匹配）
@@ -409,6 +435,7 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         }
         if not types:
             return
+        allow = self._plugin_allowed_fn(ev)
         for t in types:
-            await self.framework.event_bus.aemit(f'message.{t}', ev)
-        await self.framework.event_bus.aemit('message.media', ev)
+            await self.framework.event_bus.aemit(f'message.{t}', ev, allow=allow)
+        await self.framework.event_bus.aemit('message.media', ev, allow=allow)

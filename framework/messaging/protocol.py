@@ -276,6 +276,10 @@ class ServiceRegistry:
         # handle 为不透明 dict：{'name', 'callback', 'state'}
         self._ready_callbacks: Dict[str, list] = {}
         self._ready_lock = threading.Lock()
+        # 适配器注册回调（多平台接入）：每注册一个协议适配器即触发一次，
+        # 由 Framework 注入，负责把适配器登记进 drive 表并绑定稳定 uuid。
+        # 异常不向外抛，避免阻断适配器注册流程。
+        self.on_adapter_registered = None  # Optional[Callable[[ProtocolAdapter], None]]
 
     def register(self, name: str, service: Any):
         """注册服务（官方插件调用）；同名服务的就绪回调在此同步触发"""
@@ -287,6 +291,13 @@ class ServiceRegistry:
             aid = service._connection_id()
             self._adapters[aid] = service
             self._check_contract(service, aid)
+            # 多平台接入：通知 Framework 把该适配器登记进 drive 表（自动分配稳定 uuid）
+            cb = self.on_adapter_registered
+            if callable(cb):
+                try:
+                    cb(service)
+                except Exception as e:
+                    logger.warning(f"适配器注册回调异常 [{aid}]: {e}")
         logger.debug(f"服务已注册: [{name}]")
         # 触发等待该服务就绪的一次性回调（如 session 等调度器服务）。
         # service 为 None 也触发——显式 register(None) 表示「插件已处理但被禁用」，

@@ -5,6 +5,7 @@ import logging
 
 from framework.hooks import HookPoints
 from framework.log_broker import log_broker
+from framework.messaging.adapter_registry import namespace_identity
 from framework.messaging.protocol import ProtocolAdapter
 
 logger = logging.getLogger('zcbot')
@@ -271,7 +272,9 @@ class FrameworkDispatchMixin:
                                    {'bot': bot_name, 'message_type': message_type,
                                     'user_id': user_id, 'group_id': group_id})
 
-                self.stats_writer.register_user(user_id, sender, message_type, group_id)
+                adapter_key = event.get('adapter') or bot_name
+                self.stats_writer.register_user(
+                    user_id, sender, message_type, group_id, adapter_key=adapter_key)
                 # 注：message.classified 扩展点由 router.route() 内部发出——
                 # Event 对象在路由内构造、分类也只在那里回填，本层拿不到 ev
                 # （此处 event 仍是原始 dict，直接读 .category 会 AttributeError）。
@@ -333,6 +336,13 @@ class FrameworkDispatchMixin:
             return False
         timeout = self._raw_handler_timeout()
         for item in list(self._raw_message_handlers):
+            # 多平台接入：适配器↔插件双向绑定白名单（不受当前适配器允许的插件直接跳过）
+            # 注：本 mixin 的 self 即 Framework 本体（同 self.hooks / self.router 的用法），
+            #     不是 self.framework；用 getattr 取以兼容没有该方法的桩/老实例。
+            _allowed = getattr(self, 'adapter_plugin_allowed', None)
+            if _allowed is not None and not _allowed(
+                    item['plugin_name'], data.get('adapter') or bot_name):
+                continue
             handler = item['handler']
             try:
                 if asyncio.iscoroutinefunction(handler):
@@ -382,10 +392,15 @@ class FrameworkDispatchMixin:
             self._enqueue_member_sync('leave', data)
 
     def _enqueue_member_sync(self, kind: str, data: dict):
-        """群成员同步入队（非阻塞，队列满时丢弃并计数）"""
+        """群成员同步入队（非阻塞，队列满时丢弃并计数）
+
+        额外携带 adapter_key（事件来源连接标识），供落库时按多平台接入命名空间改写
+        group/user 身份键，与 stats_writer 自动注册、Event.role 查询保持一致。
+        """
         try:
             self._member_sync_queue.put_nowait(
-                (kind, data.get('group_id'), data.get('user_id')))
+                (kind, data.get('group_id'), data.get('user_id'),
+                 data.get('adapter') or ''))
         except asyncio.QueueFull:
             self._member_sync_dropped += 1
             if self._member_sync_dropped % 1000 == 1:
@@ -405,16 +420,26 @@ class FrameworkDispatchMixin:
                 await asyncio.sleep(1)
 
     def _flush_member_sync(self):
-        """合并队列中的群成员同步请求并批量落库（在线程中执行，语义同原来单条 SQL）"""
+        """合并队列中的群成员同步请求并批量落库（在线程中执行，语义同原来单条 SQL）
+
+        多平台接入命名空间开启时，group_id/user_id 按 ``<uuid>@<id>`` 改写，
+        与 stats_writer 自动注册、Event.role 查询完全对齐（关闭时键不变，旧行为等价）。
+        """
         joins = {}   # (group_id, user_id) -> True（INSERT IGNORE 幂等）
         leaves = set()
+        ns_enabled = self.multi_platform_namespace()
+        reg = getattr(self, 'adapter_registry', None) if ns_enabled else None
         while True:
             try:
-                kind, group_id, user_id = self._member_sync_queue.get_nowait()
+                kind, group_id, user_id, adapter_key = self._member_sync_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
             if not user_id:
                 continue
+            if ns_enabled:
+                # namespace 开启：身份键改写为 <适配器uuid>@<id>
+                group_id = namespace_identity(reg, adapter_key, True, group_id)
+                user_id = namespace_identity(reg, adapter_key, True, user_id)
             key = (group_id, user_id)
             if kind == 'join':
                 joins[key] = True

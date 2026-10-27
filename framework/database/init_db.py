@@ -35,7 +35,7 @@ _REQUIRED_TABLES = [
 
 # 由 schema.py（_auto_create_tables）负责建的扩展表：不在 init.sql 内，
 # 因此不参与 init 阶段的缺失检测，但启动后整体自检要一并核对。
-_EXTENSION_TABLES = ['group_plugin_settings']
+_EXTENSION_TABLES = ['group_plugin_settings', 'drive']
 
 
 def missing_required_tables(database, include_extension: bool = False) -> list:

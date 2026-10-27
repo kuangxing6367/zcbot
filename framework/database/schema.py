@@ -173,6 +173,25 @@ def _auto_create_tables(database):
                 UNIQUE(token)
             )
         """,
+
+        # ── 多平台接入：适配器注册表（drive）─────────────────────
+        # 每个适配器（按连接标识 adapter_key，如 onebot / qq_official / telegram）
+        # 首次加载时自动登记一个稳定 uuid；重启复用，不漂移。
+        # user/group 命名空间隔离（multi_platform.namespace）即基于此 uuid 把身份键改写为
+        # `<uuid>@<id>`（用户概念中的 user-<uuid> / group-<uuid>）。
+        'drive': """
+            CREATE TABLE IF NOT EXISTS drive (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                adapter_key VARCHAR(64)  NOT NULL,
+                uuid        VARCHAR(64)  NOT NULL,
+                kind        VARCHAR(64)  DEFAULT '',
+                self_id     VARCHAR(64)  DEFAULT '',
+                created_at  VARCHAR(32)  DEFAULT NULL,
+                last_seen   VARCHAR(32)  DEFAULT NULL,
+                enabled     INTEGER      DEFAULT 1,
+                UNIQUE(adapter_key)
+            )
+        """,
     }
 
     # MySQL 模式下替换 AUTOINCREMENT → AUTO_INCREMENT

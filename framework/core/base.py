@@ -66,6 +66,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 服务注册表（官方插件注册自身为核心能力）
         self.services = ServiceRegistry()
+        # 多平台接入：每注册一个协议适配器即登记进 drive 表（自动分配稳定 uuid）
+        self.services.on_adapter_registered = self._on_adapter_registered
 
         # 扩展点注册表（内核契约：插件可挂载到几乎每个运行环节）
         self.hooks = HookRegistry(self)
@@ -95,6 +97,11 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 "框架处于调试模式（低性能本地 SQL 模拟，database.type=debug）："
                 "SQL 语义可用但性能低、无真实事务，仅限开发调试，生产请用 sqlite/mysql"
             )
+
+        # 多平台接入：适配器注册表（drive 表 ↔ 稳定 uuid 映射）。
+        # 必须在 services.on_adapter_registered 回调设置前建立，回调触发时会用到。
+        from framework.messaging.adapter_registry import AdapterRegistry
+        self.adapter_registry = AdapterRegistry(self.db, self)
 
         # 数据库专用线程池
         self._db_executor = ThreadPoolExecutor(
@@ -177,6 +184,64 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self._startup_load_task = None
 
         logger.info(i18n.t('framework.init_done'))
+
+    # ── 多平台接入：适配器自动登记 + 插件↔适配器绑定 ──
+
+    def _on_adapter_registered(self, adapter):
+        """ServiceRegistry 回调：把刚注册的协议适配器登记进 drive 表。"""
+        try:
+            key = adapter._connection_id()
+            kind = type(adapter).__name__
+            self_id = getattr(adapter, '_self_id', None) or getattr(adapter, 'app_id', None)
+            uuid_val = self.adapter_registry.ensure(key, kind=kind, self_id=self_id)
+            if uuid_val:
+                # 把 uuid 挂到适配器实例上，供调试/路由快速取用
+                try:
+                    adapter._drive_uuid = uuid_val
+                except Exception:
+                    pass
+                logger.info(
+                    f"多平台接入：适配器 [{key}] 已登记（uuid={uuid_val[:8]}…）")
+        except Exception as e:
+            logger.warning(f"多平台接入：适配器登记失败: {e}")
+
+    def multi_platform_namespace(self) -> bool:
+        """multi_platform.namespace 是否开启（默认 False=裸号，旧行为）。"""
+        try:
+            return bool((self.config.get('multi_platform') or {}).get('namespace', False))
+        except Exception:
+            return False
+
+    def adapter_plugin_allowed(self, plugin_name: str, adapter_key: str) -> bool:
+        """双向绑定判定：该适配器下的事件是否允许交给 plugin_name 处理。
+
+        判定（任一不满足即拒绝）：
+          - 适配器白名单（配置）：config[adapter_key].plugins 非空且 plugin_name 不在其中 → 拒绝；
+          - 插件声明适配的适配器：__plugin_meta__['adapters'] 非空且 adapter_key 不在其中 → 拒绝。
+        两者都为空（未配置）时视为「全部允许」。
+        """
+        # 1) 适配器白名单（config[adapter_key].plugins）
+        try:
+            whitelist = (self.config.get(adapter_key) or {}).get('plugins') or []
+        except Exception:
+            whitelist = []
+        if whitelist and plugin_name not in whitelist:
+            return False
+        # 2) 插件声明适配的适配器（插件 __plugin_meta__['adapters']）
+        #    必须走单插件 O(1) 查询：本方法在路由热路径上按「每消息 × 每插件」
+        #    调用，get_loaded_plugins() 会重建全量插件字典（O(插件数)），
+        #    叠加路由循环会退化成 O(插件数²)/消息。
+        #    另外 loader 的 meta 是白名单归一化结果（只留 name/version/…），
+        #    并不保留 adapters 这类自定义键，故直接读插件模块自身的声明。
+        try:
+            module = self.plugin_loader.get_plugin_module(plugin_name)
+            meta = getattr(module, '__plugin_meta__', None) or {}
+            padapters = meta.get('adapters') or []
+        except Exception:
+            padapters = []
+        if padapters and adapter_key not in padapters:
+            return False
+        return True
 
     def _format_uptime(self):
         """格式化运行时间"""

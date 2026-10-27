@@ -119,7 +119,8 @@ class EventBus:
             logger.error(f"事件处理异常: [{plugin_name}] {event_name} - {e}")
             return None
 
-    async def aemit(self, event_name: str, payload: dict = None, parallel: bool = False) -> bool:
+    async def aemit(self, event_name: str, payload: dict = None, parallel: bool = False,
+                    allow: Callable = None) -> bool:
         """
         异步发布事件，通知所有订阅者
         返回 bool：任一订阅 handler 返回 True 视为"已处理"（调用方可用于路由终止判断）
@@ -127,8 +128,13 @@ class EventBus:
 
         :param parallel: True 时并发执行各订阅者（asyncio.gather），
             互不依赖的监听型事件可显著降低总耗时；默认 False 保持串行保序语义。
+        :param allow: 可选订阅者过滤器 ``plugin_name -> bool``；返回 False 的
+            订阅者本次不执行。用于多平台接入的「适配器↔插件绑定」——插件声明
+            只服务某些适配器时，不应收到其它适配器广播的消息。不传=全量（原行为）。
         """
         subscribers = self._snapshot(event_name)
+        if allow is not None:
+            subscribers = tuple(s for s in subscribers if allow(s[0]))
         if not subscribers:
             return False
 
