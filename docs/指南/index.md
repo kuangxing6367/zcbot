@@ -2,7 +2,7 @@
 
 **从零把 ZCBOT 跑起来，到写出第一个插件。**按顺序读即可——前四篇是"跑起来"，后五篇是"写业务"。
 
-> 官方扩展默认全部关闭。要哪种能力就启用哪个扩展（`core_plugins.yaml` 里改 `enabled: true`，
+> 官方扩展大部分默认关闭（例外：`echo` / `help` / `scheduler` / `webui` 默认开启）。要哪种能力就启用哪个扩展（`core_plugins.yaml` 里改 `enabled: true`，
 > 或 `python tools/scan_core_plugins.py --enable <名>`），重启生效。
 > 进 Web 后台需启用 `webui`，收发聊天消息需启用某个接入端。
 

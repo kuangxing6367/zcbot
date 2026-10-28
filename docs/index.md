@@ -21,7 +21,7 @@ features:
     details: 接入端彼此并列——OneBot 11（QQ）、QQ 官方、Telegram、Discord、HTTP 注入、出站 WS；换接入端走统一事件与插件接口。
     link: /指南/对接IM平台
   - title: 需要哪种能力就开哪个
-    details: 官方扩展（接入端 / Web 后台 / 会话 / 定时 / 图片渲染…）默认全部关闭，在 core_plugins.yaml 里按需启用。
+    details: 官方扩展大部分默认关闭，但 echo（连通性自检）/ help（帮助菜单）/ scheduler（定时任务）/ webui（Web 后台）默认开启；其余接入端与功能插件在 core_plugins.yaml 里按需启用。
     link: /指南/配置系统
   - title: 改了就能重载
     details: 功能都在 plugins/ 里，一个文件夹一个插件；后台点「重载」立即生效，不影响在线。
@@ -65,7 +65,7 @@ python main.py
 
 看到 `框架启动完成，等待消息...` 即启动成功。没装依赖也能跑：启动时会自动检测并补装缺失包。
 
-> **官方扩展默认全部关闭**。要哪种能力就启用哪个扩展（`core_plugins.yaml` 改 `enabled: true`，
+> **官方扩展大部分默认关闭**（例外：`echo` / `help` / `scheduler` / `webui` 默认开启）。要哪种能力就启用哪个扩展（`core_plugins.yaml` 改 `enabled: true`，
 > 或 `python tools/scan_core_plugins.py --enable <名>`），重启生效。
 > 进 Web 后台需启用 `webui`，收发聊天消息需启用某个接入端。
 
