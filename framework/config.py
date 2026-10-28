@@ -405,18 +405,22 @@ _CORE_PLUGIN_SECTION = {'onebot_adapter': 'onebot', 'webui': 'web'}
 
 
 # 官方插件默认配置（含主要配置项），自动写入 core_plugins.yaml。
-# 新发现（yaml 缺失）的插件补块时 enabled 一律强制 False，绝不自动启用。
 # 启停与配置的唯一权威是 core_plugins.yaml（tools/scan_core_plugins.py 维护）。
+#
+# 注意：各插件块里的 enabled 仅供参考/示例——「自动补块」时的真实默认开关由
+# DEFAULT_ENABLED_CORE_PLUGINS 决定（见下方），避免代码权威与文档口径不一致。
 _CORE_PLUGIN_SCHEMA = {
-    'onebot_adapter': {'enabled': True, 'listen_host': '0.0.0.0',
+    'echo': {'enabled': True},
+    'help': {'enabled': True},
+    'onebot_adapter': {'enabled': False, 'listen_host': '0.0.0.0',
                        'listen_port': 6830, 'access_token': '',
                        'max_pending_events': 4096,
                        'max_pending_bytes': 67108864,
                        'max_frame_size': 16777216},
     'webui': {'enabled': True, 'host': '127.0.0.1', 'port': 8080},
-    'session': {'enabled': True},
+    'session': {'enabled': False},
     'scheduler': {'enabled': True},
-    'html_assembler': {'enabled': True, 'max_template_bytes': 4194304,
+    'html_assembler': {'enabled': False, 'max_template_bytes': 4194304,
                        'max_image_bytes': 4194304, 'max_output_bytes': 16777216,
                        'max_images': 64, 'escape_html': True,
                        'on_missing': 'keep'},
@@ -458,7 +462,13 @@ _CORE_PLUGIN_SCHEMA = {
                    'stats_interval_secs': 5, 'ipc_strip_raw': False,
                    'inherit_onebot': False, 'binary_path': '',
                    'auto_build': False},
+    'image_renderer': {'enabled': False},
 }
+
+# 官方插件的「默认开启」名单：新克隆 / 首次启动生成 core_plugins.yaml 时，
+# 这些插件自动 enabled=True；其余一律默认关闭（发现即禁用）。
+# 与文档《扩展清单》保持一致：echo / help / scheduler / webui 默认开启，接入端等默认关闭。
+DEFAULT_ENABLED_CORE_PLUGINS = {'echo', 'help', 'scheduler', 'webui'}
 
 
 def _scan_core_plugins() -> list:
@@ -544,13 +554,14 @@ def _autoload_core_plugins(config: dict) -> dict:
         blk = cps.get(name)
         if not isinstance(blk, dict):
             blk = dict(_CORE_PLUGIN_SCHEMA.get(name, {}))
-            blk['enabled'] = False   # 新发现插件一律禁用，绝不静默启用
+            # 仅「默认开启名单」内的插件自动启用；其余发现即禁用，绝不静默启用
+            blk['enabled'] = name in DEFAULT_ENABLED_CORE_PLUGINS
             cps[name] = blk
             changed = True
-        # config.yaml 段已不再管理启停；缺失 enabled 一律按禁用处理，
+        # config.yaml 段已不再管理启停；缺失 enabled 时按默认开启名单处理，
         # 避免"未列出自动启用"（历史 bug：缺省 True 曾致误加载）。
         if 'enabled' not in blk:
-            blk['enabled'] = False
+            blk['enabled'] = name in DEFAULT_ENABLED_CORE_PLUGINS
             changed = True
         # 补默认配置键（不覆盖 yaml 已设的值；优先迁移主 config 对应段的值）
         for k, v in _CORE_PLUGIN_SCHEMA.get(name, {}).items():
