@@ -211,6 +211,32 @@ security:
   #   evasion_detect: true     # 检测路径变形绕过（%2e 编码 / 重复斜杠 / 穿越），加重处置
   #   fake_404: true           # 未知页面返回伪装 nginx 的假 404（false=普通 JSON 404）
 
+# ── 框架基础约定与限制（framework 段） ────────────────────────
+# 集中管理此前散落或写死的基础约定，统一在此可调；WebUI 也通过本段编辑。
+framework:
+  # ── 内存黑匣子（调试排障）──
+  # 纯内存环形缓冲、无磁盘落库，追踪事件流转/路由命中/插件加载生命周期。
+  # 极低开销，默认开启，随时待命；发生诡异 Bug/死锁时可经 WebUI/API 导出最近现场。
+  blackbox:
+    enabled: true               # 是否开启（默认开，开销极小）
+    max_bytes: 102400           # 内存上限（字节，默认 100KB），满后自动丢弃最旧帧
+
+  # ── 崩溃重启守卫（Crash-loop Guard）──
+  # 解决“DB 损坏/启动致命异常 → systemd/pm2 无限重启 → 永远起不来”的死循环：
+  # 崩溃时写 error.log（自动轮转 .1..N）；累计 ≥ max_restarts 次直接拒绝启动并给出处置指引。
+  # 启动成功后自动清零计数（健康运行不误杀）。
+  crash:
+    enabled: true               # 是否启用守卫
+    max_restarts: 5             # 累计崩溃多少次后拒绝启动（打破无限重启）
+    path: error.log             # 崩溃日志路径（相对项目根目录，或绝对路径）
+    # alert_command: ""         # 崩溃时执行的本地命令（如调用邮件脚本）；留空不触发
+    # alert_webhook: ""         # 崩溃时 POST 文本到该 URL（如企业微信/钉钉机器人）；留空不触发
+
+  # ── 基础约定（conventions）──
+  conventions:
+    command_prefix: "/"         # 命令前缀约定（命令匹配以该字符开头，如 /echo）
+    event_workers: 0            # 事件并行 worker 数（0=自动=CPU×2；>0 显式指定；覆盖 event_queue.workers）
+
 # ── 双进程架构（可选） ────────────────────────────────────────
 # 一次启动拆成两个进程，用标准库 IPC 通信（零第三方依赖）：
 #   进程1（核心）：Web/WebUI、协议接入（onebot_adapter/http_inject）、真实数据库、IPC 服务端
@@ -600,6 +626,105 @@ def _autoload_core_plugins(config: dict) -> dict:
         core_cfg[name] = _as_bool(blk.get('enabled', False))
     config['core_plugins'] = core_cfg
     return cps
+
+
+def list_core_plugins_state():
+    """返回全部已安装官方插件的开关状态（供 WebUI 可视化开关用）。
+
+    返回 list[{name, enabled, section, desc}]。enabled 以 core_plugins.yaml
+    （不存在则用默认开启名单）为准；desc 取 _CORE_PLUGIN_SCHEMA 注释。
+    """
+    installed = _scan_core_plugins()
+    yaml_path = CORE_PLUGINS_YAML
+    cps = {}
+    if os.path.isfile(yaml_path):
+        try:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+            cps = data.get('core_plugins') if isinstance(data, dict) else {}
+        except Exception:
+            cps = {}
+    out = []
+    for name in sorted(installed):
+        blk = cps.get(name) if isinstance(cps, dict) else None
+        if isinstance(blk, dict):
+            enabled = _as_bool(blk.get('enabled', name in DEFAULT_ENABLED_CORE_PLUGINS))
+        else:
+            enabled = name in DEFAULT_ENABLED_CORE_PLUGINS
+        section = _CORE_PLUGIN_SECTION.get(name, name)
+        out.append({
+            'name': name,
+            'enabled': enabled,
+            'section': section,
+            'desc': _core_plugin_desc(name),
+        })
+    return out
+
+
+def set_core_plugin_enabled(name: str, enabled: bool):
+    """切换官方插件开关并回写 core_plugins.yaml（需重启框架生效）。
+
+    返回 (ok, needs_restart)。plugin 不存在返回 (False, False)。
+    """
+    installed = _scan_core_plugins()
+    if name not in installed:
+        return False, False
+    yaml_path = CORE_PLUGINS_YAML
+    data = {}
+    if os.path.isfile(yaml_path):
+        try:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+        except Exception:
+            data = {}
+    cps = data.get('core_plugins') if isinstance(data, dict) else {}
+    if not isinstance(cps, dict):
+        cps = {}
+    blk = cps.get(name)
+    if not isinstance(blk, dict):
+        blk = dict(_CORE_PLUGIN_SCHEMA.get(name, {}))
+        blk['enabled'] = bool(enabled)
+        cps[name] = blk
+    else:
+        blk['enabled'] = bool(enabled)
+    data['core_plugins'] = cps
+    try:
+        with open(yaml_path, 'w', encoding='utf-8') as f:
+            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+        return True, True
+    except Exception as e:
+        _get_logger().warning(f"写回 core_plugins.yaml 失败: {e}")
+        return False, False
+
+
+def _core_plugin_desc(name: str):
+    """从 core_plugins/<name>/main.py 的 __plugin_meta__ 读取 desc（AST 静态解析，不执行代码）。"""
+    import ast as _ast
+    path = os.path.join(get_home(), 'core_plugins', name, 'main.py')
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            txt = f.read()
+        i = txt.find('__plugin_meta__')
+        if i < 0:
+            return ''
+        j = txt.find('{', i)
+        depth, end = 0, -1
+        for k in range(j, len(txt)):
+            if txt[k] == '{':
+                depth += 1
+            elif txt[k] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = k + 1
+                    break
+        if end < 0:
+            return ''
+        d = _ast.literal_eval(txt[j:end])
+        if isinstance(d, dict):
+            return (d.get('desc') or d.get('description') or '')
+    except Exception:
+        return ''
+    return ''
 
 
 _config = None

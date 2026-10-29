@@ -234,7 +234,8 @@ def register(ctx):
 
     # ---- 系统配置（config.yaml 分组读写）----
 
-    _YAML_SECTIONS = ('database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system', 'security')
+    _YAML_SECTIONS = ('database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system',
+                      'security', 'framework')
 
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth
@@ -272,3 +273,63 @@ def register(ctx):
         framework.config.setdefault(section, {}).update(values)
         audit_log(admin['id'], admin['username'], 'update_yaml_config', 'config', section, values)
         return jsonify({'code': 0, 'msg': f'配置段 [{section}] 已保存，部分字段需重启生效'})
+
+    # ---- 内存黑匣子调试接口 ----
+    from framework.blackbox import get_frames, stats as bb_stats, clear as bb_clear
+
+    @app.route('/api/debug/blackbox', methods=['GET'])
+    @require_auth
+    def debug_blackbox():
+        """导出内存黑匣子最近现场（事件流转/路由命中/插件加载）"""
+        try:
+            limit = request.args.get('limit', type=int) or 200
+            frames = get_frames(limit=limit)
+            # 时间转可读字符串，便于前端展示
+            for f in frames:
+                f['ts'] = time.strftime('%H:%M:%S', time.localtime(f.get('t', 0)))
+            return jsonify({'code': 0, 'data': {'stats': bb_stats(), 'frames': frames}})
+        except Exception as e:
+            logger.error(f"debug_blackbox 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+    @app.route('/api/debug/blackbox/clear', methods=['POST'])
+    @require_super
+    def debug_blackbox_clear():
+        """清空内存黑匣子（仅超级管理员）"""
+        try:
+            bb_clear()
+            return jsonify({'code': 0, 'msg': '内存黑匣子已清空'})
+        except Exception as e:
+            logger.error(f"debug_blackbox_clear 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+    # ---- 核心插件开关（core_plugins.yaml 可视化开关）----
+    from framework.config import list_core_plugins_state, set_core_plugin_enabled
+
+    @app.route('/api/config/core-plugins', methods=['GET'])
+    @require_auth
+    def list_core_plugins():
+        """列出全部官方插件及其开关状态"""
+        try:
+            return jsonify({'code': 0, 'data': list_core_plugins_state()})
+        except Exception as e:
+            logger.error(f"list_core_plugins 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+    @app.route('/api/config/core-plugins', methods=['PUT'])
+    @require_super
+    def toggle_core_plugin():
+        """切换官方插件开关（写回 core_plugins.yaml，需重启生效）"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        name = data.get('name')
+        enabled = data.get('enabled')
+        if not name or enabled is None:
+            return jsonify({'code': 400, 'msg': '缺少 name 或 enabled'}), 400
+        ok, needs_restart = set_core_plugin_enabled(name, bool(enabled))
+        if not ok:
+            return jsonify({'code': 404, 'msg': f'未知官方插件: {name}'}), 404
+        audit_log(admin['id'], admin['username'], 'toggle_core_plugin', 'core_plugin',
+                  name, {'enabled': enabled})
+        return jsonify({'code': 0, 'msg': f'[{name}] 已{"启用" if enabled else "禁用"}'
+                                      f'，{"重启框架后生效" if needs_restart else ""}'})
