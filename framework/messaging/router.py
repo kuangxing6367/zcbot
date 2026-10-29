@@ -307,9 +307,15 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         if not message:
             return  # 防御：存在文本段时提取结果必非空
 
-        # 黑匣子：记录事件进入路由（纯内存，默认开；关闭时 record 直接 return）
-        _bb_record('recv', plugin='router', fn='route',
-                   event_id=str(id(event)), msg=message[:80])
+        # 黑匣子：路由开始（route_start）—— 事件流第 6 步，列出本次命令路由的候选插件队列
+        _cand = getattr(self, '_plugin_order', []) or []
+        _bb_record('route_start', plugin='router', fn='route',
+                   event_id=event.get('_bb_eid'),
+                   subscribers=','.join(_cand),
+                   msg=f"候选插件 {len(_cand)} 个: {','.join(_cand)}")
+        # 注入事件标识到 contextvars，使后续 handler 内的 ctx.send_msg 能关联到本事件
+        from framework.runtime import current_event_id_var as _eid_var
+        _eid_token = _eid_var.set(event.get('_bb_eid'))
 
         routes = self._routes
         plugin_order = self._plugin_order
@@ -339,9 +345,9 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                     continue
                 matched_any = True
                 handled_plugin = plugin_name
-                # 黑匣子：记录命令命中（含处理插件名）
+                # 黑匣子：记录命令命中（含处理插件名）—— 事件流第 8 步
                 _bb_record('plugin_hit', plugin=plugin_name, fn='command',
-                           event_id=str(id(event)), msg=message[:60])
+                           event_id=event.get('_bb_eid'), step=8, msg=message[:60])
                 # 插件处理了消息，记录 info 日志
                 log_broker.log_plugin(plugin_name, '处理消息', {
                     'user_id': ev.user_id,
@@ -358,9 +364,9 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
 
             # ── 插件命令未命中 → 广播 message 事件（文本消息统一监听通道）──
             if not matched_any:
-                # 黑匣子：记录命令未命中（文本监听通道 / 关键词回复可能仍接管）
+                # 黑匣子：记录命令未命中（文本监听通道 / 关键词回复可能仍接管）—— 第 14 步
                 _bb_record('unmatched', plugin='router', fn='route',
-                           event_id=str(id(event)), msg=message[:60])
+                           event_id=event.get('_bb_eid'), step=14, msg=message[:60])
                 if await self._broadcast_message_event(ev, message):
                     handled_plugin = 'message'
                     return
@@ -410,6 +416,15 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                      'matched': matched_any, 'handler': handled_plugin})
             except Exception as e:
                 logger.error(f"router.after_route 扩展点异常: {e}")
+            # 黑匣子：路由解析完成（done）—— 事件流第 16 步（命中/未命中/被接管均已落幕）
+            _bb_record('done', plugin='router', fn='route',
+                       event_id=event.get('_bb_eid'), step=16,
+                       msg=f"路由结束 matched={matched_any} handler={handled_plugin}")
+            # 路由结束：复位事件标识（handler 内的 ctx.send_msg 不再误关联）
+            try:
+                _eid_var.reset(_eid_token)
+            except Exception:
+                pass
 
     async def _broadcast_message_event(self, ev, message: str) -> bool:
         """
@@ -420,6 +435,20 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         多平台接入：同样按「适配器↔插件绑定」过滤订阅者——插件声明只服务某些
         适配器（或适配器配了 plugins 白名单）时，不该收到其它适配器的消息广播。
         """
+        # 黑匣子：未命中 → 广播 message 事件（broadcast）—— 列出订阅了 message 事件的插件
+        try:
+            subs = self.framework.event_bus.subscriber_names('message')
+        except Exception:
+            subs = []
+        try:
+            from framework.runtime import current_event_id_var as _eid_var
+            _eid = _eid_var.get()
+        except Exception:
+            _eid = None
+        _bb_record('broadcast', plugin='router', fn='_broadcast_message_event',
+                   event_id=_eid,
+                   subscribers=','.join(subs),
+                   msg=f"广播 message 事件，{len(subs)} 个订阅者")
         try:
             result = await self.framework.event_bus.aemit(
                 'message', ev, allow=self._plugin_allowed_fn(ev))

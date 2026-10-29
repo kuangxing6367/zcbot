@@ -91,6 +91,7 @@ class FrameworkRuntimeMixin:
                 from framework.ctx import PluginContext
                 ctx = PluginContext(f"core:{name}", self)
                 module.ctx = ctx
+                meta = getattr(module, '__plugin_meta__', {})
 
                 if hasattr(module, 'register'):
                     module.register(ctx)
@@ -100,6 +101,28 @@ class FrameworkRuntimeMixin:
                         _flush_plugin(module.__name__, ctx)
                     except Exception as e:
                         logger.warning(f"官方插件 [{name}] 装饰器 flush 失败: {e}")
+
+                    # 黑匣子：记录官方插件加载期调用的 ctx 函数（与用户插件 register_commands
+                    # 行为对齐——回答"加载时调了哪些 ctx 函数 / 订阅了哪些事件 / 注册了哪些命令任务"）。
+                    # module.register(ctx) 与 flush 已完成，此刻 ctx._register_journal 仅含加载期调用；
+                    # 读完即清空，避免运行时调用混入。
+                    try:
+                        from framework.blackbox import record as _bb_record
+                        _journal = list(getattr(ctx, '_register_journal', []) or [])
+                        if _journal:
+                            _counts = {}
+                            for _e in _journal:
+                                _counts[_e['kind']] = _counts.get(_e['kind'], 0) + 1
+                            _summary = ' '.join(f"{k}×{v}" for k, v in _counts.items())
+                            _bb_record('plugin_loaded', plugin=name, fn='register',
+                                       msg=f"v{meta.get('version', '?')} 加载成功；注册: {_summary}")
+                            for _e in _journal:
+                                _bb_record('load_ctx', plugin=name, fn=_e['kind'],
+                                           msg=_e['detail'][:120])
+                            ctx._register_journal = []
+                    except Exception:
+                        pass
+
                     logger.info(f"官方插件 [{name}] 已加载")
 
                     # 同步命令 / 定时任务 / 原始消息处理器到路由与调度。
@@ -107,7 +130,6 @@ class FrameworkRuntimeMixin:
                     # 导致核心插件命令不进 commands 表、不进入路由排序——形如虚设
                     #（/render_card、/llmload、/echo 等命令永远路由不到）。
                     # 此处对齐用户插件的 register_commands 行为，使核心插件命令可路由。
-                    meta = getattr(module, '__plugin_meta__', {})
                     _prio = meta.get('priority', 50)
                     _cmds = ctx._get_commands()
                     _tasks = ctx._get_tasks()

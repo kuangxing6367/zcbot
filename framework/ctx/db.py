@@ -8,6 +8,13 @@ logger = logging.getLogger('zcbot')
 class PluginDatabaseMixin:
     """同步/异步数据库操作与连接池"""
 
+    def _journal(self, kind: str, detail: str):
+        """记录一次 ctx 注册动作（加载期流水，供黑匣子 plugin_loaded 摘要）。"""
+        try:
+            self._register_journal.append({'kind': kind, 'detail': detail})
+        except Exception:
+            pass
+
     # 以下方法依赖 PluginContext.__init__ 建立的实例字段
 
     # ---- 数据库操作（连接池） ----
@@ -22,14 +29,17 @@ class PluginDatabaseMixin:
 
     def db_execute(self, sql: str, params: tuple = None) -> int:
         """执行插入/更新/删除，返回受影响行数"""
+        self._journal('db_execute', (sql or '')[:60])
         return self._db.execute(sql, params)
 
     def db_execute_many(self, sql: str, params_list: list) -> int:
         """批量执行，返回受影响行数"""
+        self._journal('db_execute_many', (sql or '')[:60])
         return self._db.execute_many(sql, params_list)
 
     def db_insert(self, sql: str, params: tuple = None) -> int:
         """插入并返回自增 ID"""
+        self._journal('db_insert', (sql or '')[:60])
         return self._db.insert(sql, params)
 
     def create_table(self, ddl: str):
@@ -38,6 +48,7 @@ class PluginDatabaseMixin:
         - SQLite：自动翻译 MySQL 方言 DDL（ENUM→TEXT、AUTO_INCREMENT→AUTOINCREMENT、INDEX 移除等）
         - MySQL：自动将长列（TEXT / VARCHAR>191）索引改写为前缀索引 `col`(191)，避免错误 1170/1064
         """
+        self._journal('create_table', (ddl or '')[:60])
         try:
             self._db.execute(ddl)
         except Exception as e:

@@ -230,8 +230,18 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         module = info['module']
         module.ctx = ctx
 
+        # register_func 可能缺失（核心插件经 _load_core_plugins 入库时未存该函数引用、
+        # 或心跳/重载重建 info 时丢键）。缺失时回退到模块上的 register 属性，避免
+        # KeyError 让重载直接失败；都没有则视为无 register，安全跳过。
+        register_func = info.get('register_func')
+        if register_func is None and module is not None:
+            register_func = getattr(module, 'register', None)
+        if not callable(register_func):
+            logger.error(f"[{plugin_name}] 无可用 register 函数，跳过注册")
+            return False
+
         try:
-            info['register_func'](ctx)
+            register_func(ctx)
         except Exception as e:
             logger.error(f"[{plugin_name}] register(ctx) 执行异常: {e}", exc_info=True)
             # 自修复：记录失败时刻的文件快照，供心跳检测到文件修复后自动重试
@@ -246,6 +256,27 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
             _flush_plugin(module.__name__, ctx)
         except Exception as e:
             logger.warning(f"[{plugin_name}] 插件装饰器 flush 失败: {e}")
+
+        # 黑匣子：记录插件加载期调用的 ctx 函数（回答"加载时调了哪些 ctx 函数 /
+        # 订阅了哪些事件 / 注册了哪些命令任务"）。register 与 flush 已完成，此刻
+        # _register_journal 仅含加载期调用；读完即清空，避免运行时调用混入。
+        try:
+            from framework.blackbox import record as _bb_record
+            _journal = list(getattr(ctx, '_register_journal', []) or [])
+            if _journal:
+                _counts = {}
+                for _e in _journal:
+                    _counts[_e['kind']] = _counts.get(_e['kind'], 0) + 1
+                _summary = ' '.join(f"{k}×{v}" for k, v in _counts.items())
+                _bb_record('plugin_loaded', plugin=plugin_name, fn='register',
+                           msg=f"v{info.get('meta', {}).get('version', '?')} 加载成功；"
+                               f"注册: {_summary}")
+                for _e in _journal:
+                    _bb_record('load_ctx', plugin=plugin_name, fn=_e['kind'],
+                               msg=_e['detail'][:120])
+                ctx._register_journal = []
+        except Exception:
+            pass
 
         # 获取注册的命令和任务
         commands = ctx._get_commands()

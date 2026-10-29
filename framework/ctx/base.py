@@ -71,6 +71,7 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
         self._logger = self._PluginLogger(plugin_name)
         self._config_cache = {}      # key -> (value, timestamp) 插件配置 TTL 缓存
         self._config_cache_ttl = 30  # 缓存有效期（秒），避免 async handler 同步查库阻塞事件循环
+        self._register_journal = []  # 加载期注册动作流水（黑匣子 plugin_loaded 摘要用）
     @property
     def actions(self):
         """

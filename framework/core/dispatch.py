@@ -7,6 +7,7 @@ from framework.hooks import HookPoints
 from framework.log_broker import log_broker
 from framework.messaging.adapter_registry import namespace_identity
 from framework.messaging.protocol import ProtocolAdapter
+from framework.blackbox import record as _bb_record, new_event_id
 
 logger = logging.getLogger('zcbot')
 
@@ -48,6 +49,17 @@ class FrameworkDispatchMixin:
         if is_group is None:
             is_group = bool(group_id)
         source = _g('bot_name')
+
+        # 黑匣子：准备发送（send）—— 记录发给谁（group/user/私聊），事件流第 15 步
+        try:
+            from framework.runtime import current_event_id_var
+            _eid = current_event_id_var.get()
+        except Exception:
+            _eid = None
+        _to = (f"群{group_id}" if group_id else f"私聊{user_id}")
+        _bb_record('send', plugin='dispatch', fn='reply_text',
+                   event_id=_eid, to=_to, adapter=source,
+                   msg=f"准备发送文本({len(text)}字)")
 
         payload = {'text': text, 'group_id': group_id,
                    'user_id': user_id, 'source': source}
@@ -110,6 +122,12 @@ class FrameworkDispatchMixin:
         """
         bot_name = event.get('bot_name', 'default')
 
+        # 黑匣子：在契约补齐（归一化会浅拷贝成新对象）之前，先在原始事件上嵌入稳定
+        # 事件代号。normalize_event 的 out = dict(raw) 浅拷贝会把该键带过去，于是
+        # 归一化前后的对象共用同一 event_id，整条事件流链路恒不断链。
+        if '_bb_eid' not in event:
+            event['_bb_eid'] = new_event_id()
+
         # 接入端契约补齐：接入端只交出有把握的字段，这里补成标准形状
         # （消息段规范归一、sender 补全、notice_type 别名归位…）。
         # 幂等：已合规的事件二次归一化不改变内容。
@@ -139,6 +157,33 @@ class FrameworkDispatchMixin:
             await self._process_event(event)
             return
 
+        # 黑匣子：事件进入内核（ingest）—— 记录类型与来源，作为事件流第 1 步
+        _bb_record('ingest', plugin='dispatch', fn='dispatch_event',
+                   event_id=event.get('_bb_eid'),
+                   adapter=bot_name,
+                   src=f"群{event.get('group_id')}" if event.get('group_id')
+                       else f"私聊{event.get('user_id')}",
+                   msg=f"type={event.get('type') or event.get('post_type')} seq={event.get('_seq')}")
+
+        # 黑匣子：入队前记录缓冲水位（是否在等待 / 溢出）—— 事件流第 2 步，wait 与否都记录。
+        # 必须在 put 之前写入：wait=True 时 put 后的 await done 会一直阻塞到 worker 处理完、
+        # 其 dequeue/done 等帧都已落盘，若 enqueue 写在 await 之后会被排到 dequeue 之后，
+        # 既破坏 ingest→enqueue→dequeue 的链路顺序，也会让 stuck_at 误判"卡在入队"。
+        try:
+            bs = self._event_buffer.stats()
+            l1_full = bs.get('l1_bytes', 0) >= bs.get('l1_max_bytes', 1)
+            waiting = l1_full or bs.get('l1_items', 0) >= (self._event_buffer.l1_max_items or 1)
+            queue_summary = (f"L1={bs.get('l1_items')}/{self._event_buffer.l1_max_items}"
+                             f" L3={bs.get('l3_items')} L2={bs.get('l2_pending')}"
+                             f" drop={bs.get('dropped')}")
+        except Exception:
+            waiting = False
+            queue_summary = ''
+        _bb_record('enqueue', plugin='dispatch', fn='dispatch_event',
+                   event_id=event.get('_bb_eid'),
+                   waiting=waiting, queue=queue_summary,
+                   msg=f"已入队{'（缓冲满，溢出/等待）' if waiting else ''}")
+
         if wait:
             done = asyncio.get_running_loop().create_future()
             await self._event_buffer.put(event, done)
@@ -166,6 +211,14 @@ class FrameworkDispatchMixin:
             except asyncio.CancelledError:
                 raise
             try:
+                # 黑匣子：worker 取出事件（dequeue）—— 记录取自哪一层与队列剩余
+                try:
+                    bs = self._event_buffer.stats()
+                    remain = bs.get('l1_items', 0) + bs.get('l3_items', 0) + bs.get('l2_pending', 0)
+                except Exception:
+                    remain = None
+                _bb_record('dequeue', plugin='dispatch', fn='worker',
+                           event_id=event.get('_bb_eid'), msg=f"worker={worker_id} 层={source} 在途≈{remain}")
                 await self._process_event(event)
             except asyncio.CancelledError:
                 raise
@@ -237,6 +290,10 @@ class FrameworkDispatchMixin:
         bot_name = event.get('bot_name', 'default')
 
         try:
+            # 黑匣子：事件分类（classify）—— 事件流第 4 步，记录类型与文本预览
+            _bb_record('classify', plugin='dispatch', fn='_process_event',
+                       event_id=event.get('_bb_eid'),
+                       msg=f"type={event_type} msg_type={event.get('message_type','')}")
             logger.debug("dispatch_event: type=%s bot=%s msg_type=%s",
                          event_type, bot_name, event.get('message_type', ''))
 
@@ -334,6 +391,11 @@ class FrameworkDispatchMixin:
         """
         if not self._raw_message_handlers:
             return False
+        # 黑匣子：原始消息处理器评估（raw_handlers）—— 列出订阅了原始消息的插件
+        _bb_record('raw_handlers', plugin='dispatch', fn='_dispatch_raw_message_handlers',
+                   event_id=data.get('_bb_eid'),
+                   subscribers=','.join(it['plugin_name'] for it in self._raw_message_handlers),
+                   msg=f"{len(self._raw_message_handlers)} 个原始消息处理器候选")
         timeout = self._raw_handler_timeout()
         for item in list(self._raw_message_handlers):
             # 多平台接入：适配器↔插件双向绑定白名单（不受当前适配器允许的插件直接跳过）
@@ -354,6 +416,9 @@ class FrameworkDispatchMixin:
                     result = await asyncio.wait_for(
                         asyncio.to_thread(handler, data, bot_name), timeout=timeout)
                 if result is True:
+                    _bb_record('handler_exit', plugin=item['plugin_name'],
+                               fn='raw_message', event_id=data.get('_bb_eid'),
+                               msg='原始消息接管，后续流程跳过')
                     log_broker.log_plugin(item['plugin_name'], '原始消息接管', {
                         'bot': bot_name,
                         'message_type': data.get('message_type', ''),

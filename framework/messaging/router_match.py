@@ -10,6 +10,7 @@ from typing import Optional
 
 from framework.hooks import HookPoints
 from framework.log_broker import log_broker
+from framework.blackbox import record as _bb_record
 
 logger = logging.getLogger('zcbot')
 
@@ -310,6 +311,15 @@ class RouterMatchMixin:
 
                 handler = getattr(module, cmd.handler_name, None)
                 if handler and callable(handler):
+                    # 黑匣子：进入插件 handler（handler_enter）—— 事件流第 9 步
+                    try:
+                        from framework.runtime import current_event_id_var as _eid_var
+                        _eid = _eid_var.get()
+                    except Exception:
+                        _eid = None
+                    _bb_record('handler_enter', plugin=plugin_name,
+                               fn=cmd.handler_name, event_id=_eid, step=9,
+                               detail=cmd.pattern[:60])
                     # ── 四类事件分类回填（架构 C 项）──
                     # 命令真正执行前锁定其类别：正则 pattern 命中 → regex，否则 general。
                     # 仅在实际执行时回填（被 command.before 跳过 / 黑名单拦截 / 处理函数缺失
@@ -322,6 +332,7 @@ class RouterMatchMixin:
                     # 并发消息互不干扰（原 module.ctx 插件级共享变量多 bot 时会交错错发）
                     from framework.runtime import current_source_var as current_bot_var
                     _bot_token = current_bot_var.set(ev.bot_name)
+                    _handler_failed = False
                     try:
                         if asyncio.iscoroutinefunction(handler):
                             result = await handler(ev, match)
@@ -341,9 +352,15 @@ class RouterMatchMixin:
                                 on_error(ev, e)
                         except Exception as he:
                             logger.error(f"[{plugin_name}] on_error 钩子异常: {he}")
+                        _handler_failed = True
                         return True  # 视为已处理，避免半处理消息继续传播
                     finally:
                         current_bot_var.reset(_bot_token)
+                        # 黑匣子：handler 执行完毕（handler_exit）—— 事件流第 11 步
+                        _bb_record('handler_exit', plugin=plugin_name,
+                                   fn=cmd.handler_name, event_id=_eid, step=11,
+                                   msg=("handler 异常，已交 on_error 处理"
+                                        if _handler_failed else "handler 执行完毕"))
                     # 命令执行后扩展点（通知，不短路）
                     try:
                         await self.framework.hooks.trigger_async(

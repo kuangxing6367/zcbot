@@ -6,6 +6,13 @@ from typing import Callable
 class PluginEventsMixin:
     """命令 / 定时任务 / 事件订阅 / 扩展点 / 协议 API"""
 
+    def _journal(self, kind: str, detail: str):
+        """记录一次 ctx 注册动作（加载期流水，供黑匣子 plugin_loaded 摘要）。"""
+        try:
+            self._register_journal.append({'kind': kind, 'detail': detail})
+        except Exception:
+            pass
+
     # 以下方法依赖 PluginContext.__init__ 建立的实例字段
 
     # ---- 命令注册 ----
@@ -58,6 +65,7 @@ class PluginEventsMixin:
             'require_level': 'super' if require_superuser else ('admin' if require_admin else ''),
             'require_perm': (require_perm or '').strip().lower(),
         })
+        self._journal('command', f"{pattern} -> {handler.__name__}")
 
     # ---- 插件自定义 API 路由（Web 后台 / REST，复用框架鉴权）----
 
@@ -80,6 +88,7 @@ class PluginEventsMixin:
         if methods is None:
             methods = ['GET']
         methods = [m.upper() for m in methods]
+        self._journal('api', f"{','.join(methods)} {path}")
 
         # 双进程宿主模式：Web 在核心进程，走远程路由（handler 契约 fn(params)->dict/(status,dict)）
         rr = getattr(self._framework, '_remote_routes', None)
@@ -134,12 +143,14 @@ class PluginEventsMixin:
             'handler_name': executor.__name__,
             'description': description or f"{self._plugin_name} 定时任务",
         })
+        self._journal('task', f"{cron_expr} -> {executor.__name__}")
 
     # ---- 事件订阅/发布 ----
 
     def on(self, event_name: str, handler: Callable):
         """订阅系统事件（handler 支持 async def 和普通 def）"""
         self._framework.event_bus.subscribe(event_name, self._plugin_name, handler)
+        self._journal('on', event_name)
 
     def on_raw_message(self, handler: Callable):
         """
@@ -160,6 +171,7 @@ class PluginEventsMixin:
         if not callable(handler):
             raise TypeError(f"handler '{getattr(handler, '__name__', handler)}' 不可调用")
         self._raw_message_handlers.append(handler)
+        self._journal('on_raw_message', handler.__name__)
 
     def emit(self, event_name: str, payload: dict = None):
         """发布事件（同步桥接，供旧插件使用）"""
@@ -193,6 +205,7 @@ class PluginEventsMixin:
             raise TypeError(f"hook 的 handler 必须可调用: {getattr(handler, '__name__', handler)}")
         name = f"{self._plugin_name}:{point}"
         self._framework.hooks.register(point, name, handler, priority, serial)
+        self._journal('hook', f"{point} -> {handler.__name__}")
         return True
 
     def unhook(self, point: str):
