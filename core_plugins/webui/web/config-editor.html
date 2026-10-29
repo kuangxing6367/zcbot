@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ZCBOT · 配置编辑器</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: rgba(22,27,34,0.72); --border: rgba(255,255,255,0.08);
+    --txt: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --ok: #3fb950; --warn: #d29922;
+    --danger: #f85149; --glass: rgba(255,255,255,0.04);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px; background: radial-gradient(1200px 600px at 70% -10%, #16202e 0%, var(--bg) 60%);
+    color: var(--txt); font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: .5px; }
+  .sub { color: var(--muted); margin-bottom: 22px; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px 20px; backdrop-filter: blur(12px); box-shadow: 0 8px 30px rgba(0,0,0,.35);
+  }
+  .card h2 { font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  .card h2 .tag { font-size: 11px; color: var(--muted); font-weight: 400; margin-left: auto; }
+  .row { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+  .row label { flex: 0 0 170px; color: var(--muted); font-size: 13px; }
+  .row input[type=text], .row input[type=number] {
+    flex: 1; background: var(--glass); border: 1px solid var(--border); color: var(--txt);
+    border-radius: 8px; padding: 7px 10px; font-size: 13px; outline: none;
+  }
+  .row input:focus { border-color: var(--accent); }
+  .switch { position: relative; width: 42px; height: 22px; flex: 0 0 42px; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; inset: 0; background: #30363d; border-radius: 22px; transition: .2s; cursor: pointer; }
+  .slider:before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #c9d1d9; border-radius: 50%; transition: .2s; }
+  .switch input:checked + .slider { background: var(--ok); }
+  .switch input:checked + .slider:before { transform: translateX(20px); background: #fff; }
+  .btn {
+    background: linear-gradient(180deg, #2a6fdb, #1f5fc0); color: #fff; border: none; cursor: pointer;
+    padding: 9px 16px; border-radius: 9px; font-size: 13px; letter-spacing: .3px;
+  }
+  .btn:hover { filter: brightness(1.1); }
+  .btn.ghost { background: var(--glass); border: 1px solid var(--border); color: var(--txt); }
+  .btn.danger { background: linear-gradient(180deg, #d2453f, #b8332e); }
+  .actions { margin-top: 16px; display: flex; gap: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 20px; }
+  .pill.on { background: rgba(63,185,80,.15); color: var(--ok); }
+  .pill.off { background: rgba(248,81,73,.15); color: var(--danger); }
+  .bb-table { max-height: 320px; overflow: auto; }
+  .msg { margin-top: 12px; font-size: 12.5px; min-height: 18px; }
+  .msg.ok { color: var(--ok); } .msg.err { color: var(--danger); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  code { background: var(--glass); padding: 1px 5px; border-radius: 4px; color: var(--accent); }
+</style>
+</head>
+<body>
+  <h1>ZCBOT · 配置编辑器</h1>
+  <div class="sub">在 WebUI 内直接调整框架基础约定与限制、可视化开关官方插件、查看内存黑匣子现场。
+    改动配置段后部分字段需重启生效；官方插件开关一定需重启。</div>
+
+  <div class="grid">
+    <!-- 框架约定与限制 -->
+    <div class="card">
+      <h2>框架约定与限制 <span class="tag">framework 段</span></h2>
+      <div class="row"><label>黑匣子 启用</label>
+        <label class="switch"><input type="checkbox" id="bb_enabled"><span class="slider"></span></label></div>
+      <div class="row"><label>黑匣子 内存上限(B)</label>
+        <input type="number" id="bb_max_bytes" min="4096" step="1024"></div>
+      <div class="row"><label>崩溃守卫 启用</label>
+        <label class="switch"><input type="checkbox" id="cr_enabled"><span class="slider"></span></label></div>
+      <div class="row"><label>崩溃上限(次)</label>
+        <input type="number" id="cr_max_restarts" min="1" step="1"></div>
+      <div class="row"><label>崩溃日志路径</label>
+        <input type="text" id="cr_path" placeholder="error.log"></div>
+      <div class="row"><label>告警命令</label>
+        <input type="text" id="cr_alert_command" placeholder="可选，如 /mail/main.py"></div>
+      <div class="row"><label>告警 Webhook</label>
+        <input type="text" id="cr_alert_webhook" placeholder="可选，POST 文本到该 URL"></div>
+      <div class="row"><label>命令前缀</label>
+        <input type="text" id="cv_command_prefix"></div>
+      <div class="row"><label>事件 worker(0=自动)</label>
+        <input type="number" id="cv_event_workers" min="0" step="1"></div>
+      <div class="actions">
+        <button class="btn" id="saveFramework">保存 framework 段</button>
+        <span class="hint">写入 <code>config.yaml</code> 的 framework 段</span>
+      </div>
+      <div class="msg" id="fwMsg"></div>
+    </div>
+
+    <!-- 官方插件开关 -->
+    <div class="card">
+      <h2>官方插件开关 <span class="tag">core_plugins.yaml</span></h2>
+      <div class="hint" style="margin-bottom:10px">开关改动需重启框架生效。</div>
+      <table id="pluginTable"><thead><tr><th>插件</th><th>说明</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody></tbody></table>
+      <div class="actions"><button class="btn ghost" id="reloadPlugins">刷新</button></div>
+      <div class="msg" id="plMsg"></div>
+    </div>
+
+    <!-- 内存黑匣子 -->
+    <div class="card" style="grid-column: 1 / -1;">
+      <h2>内存黑匣子现场 <span class="tag">最近事件/路由/插件加载</span></h2>
+      <div class="actions" style="margin-top:0">
+        <button class="btn ghost" id="loadBB">导出最近现场</button>
+        <button class="btn danger" id="clearBB">清空</button>
+        <span class="hint" id="bbStat"></span>
+      </div>
+      <div class="bb-table"><table id="bbTable">
+        <thead><tr><th>时间</th><th>阶段</th><th>插件</th><th>函数</th><th>内容</th></tr></thead>
+        <tbody></tbody></table></div>
+      <div class="msg" id="bbMsg"></div>
+    </div>
+  </div>
+
+  <script src="/js/config-editor.js"></script>
+</body>
+</html>

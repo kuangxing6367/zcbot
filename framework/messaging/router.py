@@ -48,6 +48,7 @@ class _RouteCommand:
 from framework.messaging.router_match import (  # noqa: E402
     RouterMatchMixin, SimpleMatch, _PluginRoute, build_command_index,
 )
+from framework.blackbox import record as _bb_record  # noqa: E402
 
 
 class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
@@ -306,6 +307,10 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         if not message:
             return  # 防御：存在文本段时提取结果必非空
 
+        # 黑匣子：记录事件进入路由（纯内存，默认开；关闭时 record 直接 return）
+        _bb_record('recv', plugin='router', fn='route',
+                   event_id=str(id(event)), msg=message[:80])
+
         routes = self._routes
         plugin_order = self._plugin_order
 
@@ -334,6 +339,9 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                     continue
                 matched_any = True
                 handled_plugin = plugin_name
+                # 黑匣子：记录命令命中（含处理插件名）
+                _bb_record('plugin_hit', plugin=plugin_name, fn='command',
+                           event_id=str(id(event)), msg=message[:60])
                 # 插件处理了消息，记录 info 日志
                 log_broker.log_plugin(plugin_name, '处理消息', {
                     'user_id': ev.user_id,
@@ -350,6 +358,9 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
 
             # ── 插件命令未命中 → 广播 message 事件（文本消息统一监听通道）──
             if not matched_any:
+                # 黑匣子：记录命令未命中（文本监听通道 / 关键词回复可能仍接管）
+                _bb_record('unmatched', plugin='router', fn='route',
+                           event_id=str(id(event)), msg=message[:60])
                 if await self._broadcast_message_event(ev, message):
                     handled_plugin = 'message'
                     return

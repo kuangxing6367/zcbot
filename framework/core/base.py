@@ -25,6 +25,7 @@ from framework.messaging.protocol import ServiceRegistry
 from framework.terminal import TerminalInput, terminal_commands, register_builtins
 from framework.hooks import HookRegistry, HookPoints
 from framework import i18n
+from framework.blackbox import blackbox as _global_blackbox
 
 logger = logging.getLogger('zcbot')
 
@@ -55,6 +56,13 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         i18n.set_language(os.environ.get('ZCBOT_LANG')
                           or self.config.get('language')
                           or i18n.DEFAULT_LANG)
+        # 内存黑匣子：按 framework.blackbox 配置初始化（默认开，100KB 上限）
+        _fw_cfg = self.config.get('framework', {}) or {}
+        _bb_cfg = _fw_cfg.get('blackbox', {}) or {}
+        _global_blackbox.configure(
+            enabled=_bb_cfg.get('enabled', True),
+            max_bytes=_bb_cfg.get('max_bytes', 102400),
+        )
         # 数据目录统一迁移（logs / plugins_dat → data/ 下），必须在日志与插件加载前执行
         self._migrate_legacy_data_dirs()
         # 日志合并器实例集（stop() 时统一停掉后台 flush 线程）
@@ -141,7 +149,14 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         #  buffer: L1 512KB 内存主缓冲 → sqlite 持久化溢出 → L3 4MB 内存兜底 → 全满告警丢弃
         eq_cfg = self.config.get('event_queue', {}) or {}
         self._event_queue_maxsize = int(eq_cfg.get('maxsize', 2000))
-        self._event_workers_count = max(1, int(eq_cfg.get('workers', 1)))
+        # 事件并行 worker 数：framework.conventions.event_workers 优先（0=自动=CPU×2），
+        # 否则沿用 event_queue.workers（默认 1）。
+        _conv = (self.config.get('framework', {}) or {}).get('conventions', {}) or {}
+        _fw_workers = int(_conv.get('event_workers', 0) or 0)
+        if _fw_workers > 0:
+            self._event_workers_count = max(1, _fw_workers)
+        else:
+            self._event_workers_count = max(1, int(eq_cfg.get('workers', 1)))
         self._event_drain_timeout = float(eq_cfg.get('drain_timeout', 5))
         from framework.config import get_home
         self._event_buffer = EventBuffer(eq_cfg, os.path.join(get_home(), 'data'))

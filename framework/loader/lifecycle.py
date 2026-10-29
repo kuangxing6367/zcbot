@@ -15,6 +15,7 @@ import sys
 import types
 
 from framework.deps import pip_install_all
+from framework.blackbox import record as _bb_record
 
 logger = logging.getLogger('zcbot')
 
@@ -363,6 +364,9 @@ class PluginLifecycleMixin:
 
                 logger.info(i18n.t('plugin.loaded', name=plugin_name,
                                    version=plugin_meta['version']))
+                # 黑匣子：记录插件加载生命周期（纯内存，默认开）
+                _bb_record('plugin_loaded', plugin=plugin_name, fn='load_plugin',
+                           msg=f"v{plugin_meta['version']} 加载成功")
                 return True
 
             except ImportError as e:
