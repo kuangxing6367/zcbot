@@ -104,6 +104,17 @@ class EventBus:
         """查询某事件的当前订阅者数量（调试/监控用）。"""
         return len(self._snapshot(event_name))
 
+    def subscriber_names(self, event_name: str) -> list:
+        """返回某事件当前的订阅插件名列表（黑匣子 broadcast 阶段用，去重保序）。"""
+        out = []
+        seen = set()
+        for s in self._snapshot(event_name):
+            name = s.get('plugin_name')
+            if name and name not in seen:
+                seen.add(name)
+                out.append(name)
+        return out
+
     def stats(self) -> dict:
         """返回事件总线订阅统计：{event_name: 订阅数}（调试/监控用）。"""
         with self._lock:

@@ -13,3 +13,11 @@ current_source_var: contextvars.ContextVar = contextvars.ContextVar(
 
 # 向后兼容别名（旧名，语义等价）
 current_bot_var = current_source_var
+
+# 当前正在处理的事件标识（由 router 在 handler 执行期间注入，取事件 dict 上的稳定
+# 字段 event['_bb_eid']，而非 str(id(event))——后者会因 normalize_event 浅拷贝替换
+# 对象而漂移、断链）。插件 handler 内调用 ctx.send_msg 时据此把「发送动作」关联到
+# 具体事件，使黑匣子能回答「这条消息准备发给谁、卡在第几步」。
+# 使用 contextvars：多消息并发互不干扰，协程与 to_thread 均携带上下文快照。
+current_event_id_var: contextvars.ContextVar = contextvars.ContextVar(
+    'zcbot_current_event_id', default=None)

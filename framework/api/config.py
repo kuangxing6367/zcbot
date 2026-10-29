@@ -280,11 +280,39 @@ def register(ctx):
     @app.route('/api/debug/blackbox', methods=['GET'])
     @require_auth
     def debug_blackbox():
-        """导出内存黑匣子最近现场（事件流转/路由命中/插件加载）"""
+        """导出内存黑匣子现场。
+
+        - 不带参数：返回最近 N 帧（事件流转/路由命中/插件加载）。
+        - ?event_id=<id>：返回该事件的完整事件流链路（按时间排序，含每步 step 编号）。
+        - ?recent=1：返回最近出现过的事件 id 列表，及其「卡在第几步」摘要（stuck_at），
+          便于一眼看出哪些事件未正常走完（停在某个阶段）。
+        """
         try:
+            from framework.blackbox import (get_event_trace, stuck_at,
+                                            recent_event_ids as bb_recent)
+            event_id = request.args.get('event_id')
+            if event_id:
+                trace = get_event_trace(event_id)
+                for f in trace:
+                    f['ts'] = time.strftime('%H:%M:%S', time.localtime(f.get('t', 0)))
+                return jsonify({'code': 0, 'data': {
+                    'event_id': event_id,
+                    'trace': trace,
+                    'stuck_at': stuck_at(event_id),
+                }})
+            if request.args.get('recent', type=int):
+                recents = []
+                for eid in bb_recent(limit=30):
+                    s = stuck_at(eid)
+                    recents.append({
+                        'event_id': eid,
+                        'stuck_at': s,                 # None=已走完；否则卡在该步
+                        'steps': len(get_event_trace(eid)),
+                    })
+                return jsonify({'code': 0, 'data': {
+                    'stats': bb_stats(), 'recent_events': recents}})
             limit = request.args.get('limit', type=int) or 200
             frames = get_frames(limit=limit)
-            # 时间转可读字符串，便于前端展示
             for f in frames:
                 f['ts'] = time.strftime('%H:%M:%S', time.localtime(f.get('t', 0)))
             return jsonify({'code': 0, 'data': {'stats': bb_stats(), 'frames': frames}})

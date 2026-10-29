@@ -7,6 +7,19 @@ class PluginMessagingMixin:
     # 以下方法依赖 PluginContext.__init__ 建立的实例字段
     # 动作经 self.actions（ctx.actions）转发到当前接入端，不绑定具体协议
 
+    def _bb_send(self, user_id, group_id, message, bot):
+        """黑匣子：记录发送动作（send）—— 事件流第 15 步，记录准备发给谁。"""
+        try:
+            from framework.runtime import current_event_id_var as _eid_var
+            _eid = _eid_var.get()
+        except Exception:
+            _eid = None
+        _to = (f"群{group_id}" if group_id else f"私聊{user_id}")
+        from framework.blackbox import record as _bb_record
+        _bb_record('send', plugin=self._plugin_name, fn='send_msg',
+                   event_id=_eid, step=15, to=_to, adapter=bot or '',
+                   msg=f"发送({len(message) if message else 0}字)")
+
     # ---- 最常用 API 快捷方法（省得每次都拼 params）----
 
     def send_msg(self, user_id: int = None, group_id: int = None,
@@ -15,6 +28,7 @@ class PluginMessagingMixin:
         # 未指定 bot 时，自动使用当前消息来源的 bot（由 router 注入 _current_bot）
         if bot is None:
             bot = getattr(self, '_current_bot', None)
+        self._bb_send(user_id, group_id, message, bot)
         return self.actions.send_msg(
             user_id=user_id, group_id=group_id,
             message=message, auto_escape=auto_escape, bot=bot
@@ -25,6 +39,7 @@ class PluginMessagingMixin:
         """异步快捷发送消息（推荐 async handler 使用，不阻塞事件循环）"""
         if bot is None:
             bot = getattr(self, '_current_bot', None)
+        self._bb_send(user_id, group_id, message, bot)
         return await self.actions.acall(
             'send_msg', user_id=user_id, group_id=group_id,
             message=message, auto_escape=auto_escape, bot=bot
