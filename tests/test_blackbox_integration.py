@@ -72,7 +72,7 @@ async def main():
     trace = get_event_trace(eid)
     print(f"  [INFO] /echo 你好 链路 {len(trace)} 帧:")
     for f in trace:
-        print(f"    [{f['step']:>2}] {f['stage']:<14} "
+        print(f"    [{f['step'] if f['step'] is not None else '?':>2}] {f['stage']:<14} "
               f"{f['plugin'] or '-':<10} {f['msg']} "
               f"(to={f['to'] or '-'} subs={f['subs'] or '-'})")
     stages = [f['stage'] for f in trace]
@@ -105,7 +105,7 @@ async def main():
     trace2 = get_event_trace(eid2)
     print(f"  [INFO] 未命中命令 链路 {len(trace2)} 帧:")
     for f in trace2:
-        print(f"    [{f['step']:>2}] {f['stage']:<14} "
+        print(f"    [{f['step'] if f['step'] is not None else '?':>2}] {f['stage']:<14} "
               f"{f['plugin'] or '-':<10} {f['msg']} "
               f"(subs={f['subs'] or '-'})")
     stages2 = [f['stage'] for f in trace2]

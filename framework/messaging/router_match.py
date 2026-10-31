@@ -147,6 +147,21 @@ class RouterMatchMixin:
 
     _REGEX_CHARS = set('^$.*+?()[]{}|\\')
 
+    def _command_handler_timeout(self):
+        """命令 handler 执行超时（秒，None=不限制）
+
+        配置：framework.command_handler_timeout，默认 30.0，<=0 表示不限制。
+        原始消息处理器已有独立超时（framework.raw_handler_timeout），此处补齐命令
+        handler 的超时：恶意/有 bug 的插件写个 await 死循环或长时间阻塞会冻结整条
+        事件管线（单事件循环 + 单 worker），故统一熔断，避免单点拖垮全部消息。
+        """
+        try:
+            cfg = (self.framework.config or {}).get('framework', {})
+            timeout = float(cfg.get('command_handler_timeout', 30.0))
+        except (TypeError, ValueError, AttributeError):
+            return 30.0
+        return timeout if timeout > 0 else None
+
     def _is_regex(self, pattern: str) -> bool:
         """判断 pattern 是否包含正则特殊字符"""
         return any(c in self._REGEX_CHARS for c in pattern)
@@ -333,14 +348,31 @@ class RouterMatchMixin:
                     from framework.runtime import current_source_var as current_bot_var
                     _bot_token = current_bot_var.set(ev.bot_name)
                     _handler_failed = False
+                    _handler_timed_out = False
+                    _hto = self._command_handler_timeout()
                     try:
                         if asyncio.iscoroutinefunction(handler):
-                            result = await handler(ev, match)
+                            _coro = handler(ev, match)
+                            result = await asyncio.wait_for(_coro, timeout=_hto) if _hto else await _coro
                         else:
                             # 同步 handler 转线程执行，不阻塞事件循环
-                            result = await asyncio.to_thread(handler, ev, match)
+                            _thr = asyncio.to_thread(handler, ev, match)
+                            result = await asyncio.wait_for(_thr, timeout=_hto) if _hto else await _thr
                     except asyncio.CancelledError:
                         raise
+                    except (asyncio.TimeoutError, TimeoutError) as te:
+                        # 命令 handler 执行超时：熔断，避免单点冻结整条事件管线；
+                        # 视为已处理（不继续传播、不重试），并交给插件 on_error 处理。
+                        logger.error(
+                            f"[{plugin_name}] handler 执行超时（>{_hto}s）已熔断: {cmd.handler_name}")
+                        try:
+                            on_error = getattr(module, 'on_error', None)
+                            if callable(on_error):
+                                on_error(ev, te)
+                        except Exception as he:
+                            logger.error(f"[{plugin_name}] on_error 钩子异常: {he}")
+                        _handler_failed = True
+                        _handler_timed_out = True
                     except Exception as e:
                         logger.error(
                             f"[{plugin_name}] handler 异常: {cmd.handler_name} - {e}",
@@ -359,8 +391,13 @@ class RouterMatchMixin:
                         # 黑匣子：handler 执行完毕（handler_exit）—— 事件流第 11 步
                         _bb_record('handler_exit', plugin=plugin_name,
                                    fn=cmd.handler_name, event_id=_eid, step=11,
-                                   msg=("handler 异常，已交 on_error 处理"
-                                        if _handler_failed else "handler 执行完毕"))
+                                   msg=("handler 执行超时已熔断"
+                                        if _handler_timed_out else
+                                        ("handler 异常，已交 on_error 处理"
+                                         if _handler_failed else "handler 执行完毕")))
+                    if _handler_timed_out:
+                        # 超时熔断：视为已处理（不继续传播、不重试），直接结束本插件匹配
+                        return True
                     # 命令执行后扩展点（通知，不短路）
                     try:
                         await self.framework.hooks.trigger_async(

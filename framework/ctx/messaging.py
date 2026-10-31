@@ -20,6 +20,19 @@ class PluginMessagingMixin:
                    event_id=_eid, step=15, to=_to, adapter=bot or '',
                    msg=f"发送({len(message) if message else 0}字)")
 
+    def _bb_send_fail(self, user_id, group_id, bot, err):
+        """黑匣子：发送动作实际失败（send_fail）—— 记录发给谁但失败，便于排障。"""
+        try:
+            from framework.runtime import current_event_id_var as _eid_var
+            _eid = _eid_var.get()
+        except Exception:
+            _eid = None
+        _to = (f"群{group_id}" if group_id else f"私聊{user_id}")
+        from framework.blackbox import record as _bb_record
+        _bb_record('send_fail', plugin=self._plugin_name, fn='send_msg',
+                   event_id=_eid, to=_to, adapter=bot or '', level='warn',
+                   msg=f"发送失败({type(err).__name__})")
+
     # ---- 最常用 API 快捷方法（省得每次都拼 params）----
 
     def send_msg(self, user_id: int = None, group_id: int = None,
@@ -29,10 +42,15 @@ class PluginMessagingMixin:
         if bot is None:
             bot = getattr(self, '_current_bot', None)
         self._bb_send(user_id, group_id, message, bot)
-        return self.actions.send_msg(
-            user_id=user_id, group_id=group_id,
-            message=message, auto_escape=auto_escape, bot=bot
-        )
+        try:
+            return self.actions.send_msg(
+                user_id=user_id, group_id=group_id,
+                message=message, auto_escape=auto_escape, bot=bot
+            )
+        except Exception as e:
+            # 黑匣子：发送实际失败（适配器宕机 / 无可用接入端 / API 异常）
+            self._bb_send_fail(user_id, group_id, bot, e)
+            raise
 
     async def asend_msg(self, user_id: int = None, group_id: int = None,
                         message=None, auto_escape: bool = False, bot: str = None):
@@ -40,10 +58,15 @@ class PluginMessagingMixin:
         if bot is None:
             bot = getattr(self, '_current_bot', None)
         self._bb_send(user_id, group_id, message, bot)
-        return await self.actions.acall(
-            'send_msg', user_id=user_id, group_id=group_id,
-            message=message, auto_escape=auto_escape, bot=bot
-        )
+        try:
+            return await self.actions.acall(
+                'send_msg', user_id=user_id, group_id=group_id,
+                message=message, auto_escape=auto_escape, bot=bot
+            )
+        except Exception as e:
+            # 黑匣子：发送实际失败（适配器宕机 / 无可用接入端 / API 异常）
+            self._bb_send_fail(user_id, group_id, bot, e)
+            raise
 
     def ban(self, group_id: int, user_id: int, duration: int = 600, bot: str = None):
         """快捷禁言群成员（duration=0 解禁）（同步桥接）"""

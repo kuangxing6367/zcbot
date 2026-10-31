@@ -68,6 +68,7 @@ STAGE_STEP = {
     'keyword': 13,
     'unmatched': 14,
     'send': 15,
+    'send_fail': 15,   # 发送动作的失败变体（同属第 15 步：准备发 → 发给谁但失败）
     'done': 16,
 }
 
