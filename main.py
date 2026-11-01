@@ -179,6 +179,76 @@ def _check_and_install_deps():
         sys.exit(1)
 
 
+def _acquire_instance_lock(root):
+    """单实例文件锁：防止守护进程无脑拉起导致多实例（抢端口 / 抢 DB / 双写）。
+
+    跨平台：Linux 用 fcntl.flock（内核级 advisory lock，进程退出自动释放，
+    即使锁文件残留也能重新获取，无需手动清理 stale）；Windows 用 msvcrt.locking。
+    拿到锁则持有 fd 直到进程退出（fd 关闭即释放），返回 fd；拿不到返回 None。
+    """
+    lock_dir = os.path.join(root, 'data')
+    try:
+        os.makedirs(lock_dir, exist_ok=True)
+    except Exception:
+        pass
+    lock_path = os.path.join(lock_dir, 'zcbot.lock')
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    except Exception as e:
+        logger.warning(f"实例锁文件创建失败，跳过单实例保护: {e}")
+        return None
+    if sys.platform == 'win32':
+        import msvcrt
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            return None
+    else:
+        import fcntl
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            return None
+    # 写入当前 PID 供运维诊断（锁本身不依赖此内容，进程退出即释放）
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode('utf-8'))
+    except Exception:
+        pass
+    return fd
+
+
+async def _enter_safe_mode(stop_event, crash_cfg, root):
+    """安全模式（假启动）：启动崩溃达上限且守护进程持续重启时，不退出进程、不做事，
+    仅挂起，让 systemd/pm2（Type=simple 只看进程存在）误以为已启动、停止反复拉起，
+    从而消除无限冷启动性能消耗。运维修复根因后 kill 本进程并重启即可。
+    """
+    crash = (crash_cfg.get('framework', {}) or {}).get('crash', {}) or {}
+    path = crash.get('path') or os.path.join(root, 'error.log')
+    print("\n" + "=" * 60)
+    print("[安全模式] 启动崩溃次数已达上限，且检测到守护进程持续重启策略。")
+    print("          为避免无限冷启动消耗性能，框架进入安全模式（假启动）：")
+    print("          进程保持运行但不执行任何工作，使守护进程误以为已启动、停止拉起。")
+    print(f"          请排查崩溃日志（{path} 及其 .N 轮转副本）修复根因后，")
+    print("          手动 kill 本进程并重启。")
+    print("=" * 60)
+    try:
+        from framework.crash_guard import fire_alert
+        fire_alert(crash_cfg)
+    except Exception:
+        pass
+    # 持有实例锁挂起，直到收到 SIGTERM/SIGINT 优雅退出
+    await stop_event.wait()
+
+
 async def amain():
     """异步主流程"""
     from framework.core import Framework
@@ -188,6 +258,21 @@ async def amain():
     # 支持命令行参数指定配置文件路径
     config_path = sys.argv[1] if len(sys.argv) > 1 else None
     root = os.path.dirname(os.path.abspath(__file__))
+
+    # 单实例文件锁：防止守护进程无脑拉起导致多实例（抢端口 / 抢 DB / 双写）。
+    # 拿不到锁说明已有实例（含安全模式假启动进程）在跑，本进程立即退出、不做任何重活。
+    lock_fd = _acquire_instance_lock(root)
+    if lock_fd is None:
+        sys.exit(1)
+
+    # 注册停止信号（提前到崩溃守卫之前，使安全模式也能优雅响应 SIGTERM/SIGINT）
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, RuntimeError):
+            pass
 
     # 读取崩溃配置（仅用标准库 yaml，避免提前 import 重型依赖）
     crash_cfg = {}
@@ -199,11 +284,23 @@ async def amain():
     except Exception:
         crash_cfg = {}
 
-    # 崩溃守卫：已达重启上限则直接拒绝启动，打破 systemd/pm2 无限重启死循环
+    # 崩溃守卫：达重启上限则进入安全模式（假启动）或明确拒绝，打破守护进程无限拉起。
+    # safe_mode（默认开）：不退出进程、仅挂起，让 systemd/pm2（Type=simple 只看进程
+    # 存在）误以为已启动而停止反复拉起，消除无限冷启动性能消耗；运维修复后 kill 重启。
     if should_abort_boot(crash_cfg, root):
-        n = 0
-        path = (crash_cfg.get('framework', {}).get('crash', {}) or {}).get('path') \
-            or os.path.join(root, 'error.log')
+        safe_mode = (crash_cfg.get('framework', {}).get('crash', {}) or {}).get('safe_mode', True)
+        if safe_mode:
+            try:
+                await _enter_safe_mode(stop_event, crash_cfg, root)
+            finally:
+                if lock_fd is not None:
+                    try:
+                        os.close(lock_fd)
+                    except Exception:
+                        pass
+            return
+        crash = (crash_cfg.get('framework', {}) or {}).get('crash', {}) or {}
+        path = crash.get('path') or os.path.join(root, 'error.log')
         print("\n" + "=" * 60)
         print(f"[崩溃守卫] 检测到已累计多次启动崩溃（≥ 上限），拒绝继续启动，")
         print(f"          以避免与守护进程(systemd/pm2)形成无限重启死循环。")
@@ -211,15 +308,6 @@ async def amain():
         print(f"          确认无误后删除这些 error.log* 文件再启动。")
         print("=" * 60)
         sys.exit(1)
-
-    # 注册停止信号（Windows 上 add_signal_handler 可能不支持，忽略即可）
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, stop_event.set)
-        except (NotImplementedError, RuntimeError):
-            pass
 
     framework = None
     try:
@@ -242,6 +330,11 @@ async def amain():
         if framework is not None:
             try:
                 await framework.stop()
+            except Exception:
+                pass
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
             except Exception:
                 pass
 

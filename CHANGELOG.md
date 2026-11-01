@@ -26,6 +26,37 @@
 
 ---
 
+## [1.10.0] - 2026-11-02
+
+> 主题：**生产化成熟度跃迁**——可观测性（内存黑匣子）、韧性（崩溃守卫 + db 自愈）、多协议接入（适配器注册表 + 命名空间隔离）、启动自愈（单实例锁 + 安全模式假启动）。以下均为已落地并实测通过的变化。
+
+### 新增
+
+- **内存黑匣子（blackbox）**：纯内存 `deque` 环形缓冲（256KB 硬上限，满丢最旧），16 阶段事件流追踪（ingest→done），覆盖 ingest/route/match/handler/send 全链路埋点；稳定代号 `_bb_eid` 解决 `normalize_event` 浅拷贝导致的链路 id 断链；`stuck_at` 用"是否存在 done 帧"判定卡步，兼容乱序。
+- **命令 handler 超时熔断 + send_msg 失败诊断**：handler 超时不再冻结整条管线，超时走熔断分支；出站在站 `send_fail` 帧记录失败原因，黑匣子可回溯"消息出去没/为何失败"。
+- **崩溃重启守卫（crash_guard）**：无限重启死循环 → 一次性明确失败；`error.log.1..N` 轮转保留 9 份；启动成功 `clear_crash_markers` 复位，避免误杀正常重启；支持 `alert_webhook` 外部告警。
+- **核心插件命令路由修复 + echo / help 自检插件**：修复核心插件命令不被路由的历史缺陷；新增 `echo`（回声）、`help`（内置帮助）自检插件，**默认开启并对接入端生效**，让"发 /echo 你好 收到 你好"成为可验证的接入标准。
+- **多平台接入（适配器注册表 + 命名空间隔离）**：`adapter_key ↔ uuid` 落 `drive` 表 + 内存缓存（热路径零 DB）；`namespace_identity` 改写为 `<uuid>@<id>`（开关关闭退化裸号，向后兼容），`raw_id` 为 0/空直接返回避免 `<uuid>@0` 无意义键；支持双向绑定。
+- **扩展点串行 / 并行执行**：串行组按优先级 `await` + 短路（首个 `False` 即终止并行组）；并行组 `asyncio.gather` 收集全部结果；并行不参与短路，需短路必须 `serial=True`。
+- **事件分发拦截点告警 + 四类事件统一分类层**：事件分发拦截点由静默改为可观测告警；消息 / 通知 / 请求 / 元事件四类统一分类。
+- **IIPC 加固**：示例插件 + 反向 WS `access_token` 鉴权；中间件管线；消息链路吞异常修复（极端环境下静默丢消息）。
+- **db 初始化自愈**：`admin_users + plugins` 两张表探针 → 全量 `_REQUIRED_TABLES` 检测；`_apply_init_sql` 只补缺失表（幂等）；建完复验仍有缺失即报 error 列清单，不再无脑"完成"；自检本身失败（连接/权限）向上抛，避免几十行 WARN 埋根因。
+- **单实例文件锁（main.py）**：跨平台 advisory lock（Linux `flock` / Windows `msvcrt.locking`），锁文件 `data/zcbot.lock` 写 PID；进程退出内核自动释放，拿不到锁的第二个实例立即 `sys.exit(1)` 且不做任何重活。
+- **安全模式假启动（main.py）**：崩溃达上限且 `framework.crash.safe_mode`（默认 `true`）开启时，不退出进程、打印明确 banner 后挂起（`await stop_event.wait()`），让 `Type=simple` 守护进程误以为启动成功、停止反复拉起，把"持久错误无限冷启动"的性能税降到≈0；SIGTERM/SIGINT 优雅退出。适合 db 配置错等"永远启不动"的场景。
+
+### 修复
+
+- **router `message.classified` 扩展点 ev 未定义异常**：分类扩展点调用时 `ev` 作用域错误导致 `NameError`，已在调用前正确绑定。
+- **文档默认开关矛盾**：`core_plugins.yaml` 默认开启清单（原 `DEFAULT_ENABLED_CORE_PLUGINS` 与文档描述不一致）已对齐为 `{echo, help, scheduler, webui}` 默认开启；`LLM.md` / `README` 同步修正（含版本号漂移）。
+- **render 原生二进制重建**：覆盖全部 7 个目标平台（含 32 位 win32 / linux-i686 / linux-armv7），UPX -9 压缩；32 位架构整数溢出加固。
+
+### 变更
+
+- **默认核心插件清单**：由"发现即禁用"改为 `{echo, help, scheduler, webui}` 默认开启（其余显式启用），降低新部署的"启了但啥也不干"困惑。
+- **CLI 脚手架 + i18n**：新增 ZCBOT CLI（`zcbot` 入口）+ 多语言 `zh` / `ciallo` / `en`（历史 1.8.9 已引入，本版随发布线收敛版本号）。
+
+---
+
 ## [1.8.9] - 2026-10-20
 
 > 主题：**扩展面自由度补齐（中间件管线 / 全局变换节点）+ 开发体验（多语言、IDE 补全）+ 文档与构建规范化**。
