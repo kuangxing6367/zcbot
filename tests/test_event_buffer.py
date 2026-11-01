@@ -2,6 +2,7 @@
 """EventBuffer 三层缓冲单元测试（v1.7.1 热路径修复防回归：
 记账单次化 / sqlite 空转轮询消除 / 重启遗留承接 / 全满丢弃）"""
 import asyncio
+import time
 
 import pytest
 
@@ -63,7 +64,11 @@ def test_overflow_to_sqlite_and_drain(tmp_path):
         assert st0['l4_items'] > 0 or st0['sqlite_pending'] > 0
         # 启动 L4 flush → 批量落 L2，验证持久化路径仍可达、计数一致
         buf.start_l4()
-        await asyncio.sleep(0.2)
+        # 轮询等 L4 后台 flush 落 L2：取代固定 sleep(0.2)，避免慢机器上
+        # 后台 flush 尚未完成即断言导致的偶发失败（CI 3.12 单元曾因此红）
+        _deadline = time.monotonic() + 3.0
+        while buf.stats()['sqlite_pending'] == 0 and time.monotonic() < _deadline:
+            await asyncio.sleep(0.02)
         await buf.stop_l4()
         st = buf.stats()
         assert st['overflow_to_sqlite'] > 0
@@ -88,7 +93,11 @@ def test_restart_inherits_persisted_rows(tmp_path):
         for i in range(5):
             await b1.put(_ev(i, 'y' * 300), None)
         b1.start_l4()
-        await asyncio.sleep(0.2)               # 等 L4 flush 落 L2，才能被重启承接
+        # 轮询等 L4 后台 flush 落 L2：取代固定 sleep(0.2)，避免慢机器上后台 flush
+        # 尚未完成即断言导致的偶发失败（CI 3.12 单元曾因此红）
+        _deadline = time.monotonic() + 3.0
+        while b1.stats()['sqlite_pending'] == 0 and time.monotonic() < _deadline:
+            await asyncio.sleep(0.02)
         n_left = b1.stats()['sqlite_pending']
         assert n_left > 0
         await b1.stop_l4()
