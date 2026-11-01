@@ -8,6 +8,20 @@
 
 ---
 
+## 开发中（Unreleased / 在研）
+
+> 跟随 v1.10.0 的修复与补强，尚未纳入正式版本号。
+
+### 新增
+
+- **终端黑匣子查看器（TTY `debug` 命令）**：终端输入线程键入 `debug` 进入交互式内存黑匣子查看器，支持 `stats` / `recent [n]` / `stuck [n]` / `last [n]` / `trace <event_id>` / `clear` / `exit` 子命令，可在运行时 TTY 直接排查"事件卡在第几步"。非 TTY / 终端未启用时无从进入，黑匣子仍由 WebUI 调试接口兜底。
+
+### 修复
+
+- **CI `test_core_plugin_switch` 与默认开启名单脱节**：原用例假设所有缺失插件默认禁用，但 v1.10.0 起 `DEFAULT_ENABLED_CORE_PLUGINS = {echo, help, scheduler, webui}` 名单内插件自动启用，导致 CI 在 4 个 Python 版本矩阵上整片失败（exit 1）。用例已改为按名单拆分断言（名单内期望 `True`、其余期望 `False`），本地复现 CI 全量 pytest（371 项全过）验证修复。
+
+---
+
 ## 代际主线（一句话看懂 ZCBOT 的演进）
 
 | 代际 | 版本区间 | 时间 | 这一代在解决什么 |

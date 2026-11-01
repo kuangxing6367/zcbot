@@ -82,20 +82,28 @@ def test_config_false_does_not_disable_yaml_true():
 
 
 def test_new_plugin_default_disabled():
-    """已安装但 yaml 缺失的插件 → 补块且 enabled 强制 False（发现即禁用）"""
+    """已安装但 yaml 缺失的插件 → 补块；默认开启名单内插件自动启用，
+    其余一律 disabled（发现即禁用，绝不静默启用）。"""
     installed, yaml_path = _fresh_yaml(True, only=['html_assembler'])
     missing = [n for n in installed if n != 'html_assembler']
     assert missing, "前置条件失败：仓库至少应有两个官方插件"
     flags = _load_flags({})
     # 已列出插件按 yaml true 加载
     assert flags.get('html_assembler') is True
-    # 缺失插件一律禁用（不静默启用）
-    assert all(flags.get(n) is False for n in missing), \
-        f"缺失插件被静默启用: {[n for n in missing if flags.get(n)]}"
+    # 默认开启名单（DEFAULT_ENABLED_CORE_PLUGINS）内的缺失插件：自动启用
+    default_on = [n for n in missing if n in fc.DEFAULT_ENABLED_CORE_PLUGINS]
+    for n in default_on:
+        assert flags.get(n) is True, f"默认开启插件被错误禁用: {n}"
+    # 其余缺失插件一律禁用（不静默启用）
+    others = [n for n in missing if n not in fc.DEFAULT_ENABLED_CORE_PLUGINS]
+    assert all(flags.get(n) is False for n in others), \
+        f"缺失插件被静默启用: {[n for n in others if flags.get(n)]}"
     # 且已回写 yaml（磁盘状态与生效状态一致）
     with open(yaml_path, 'r', encoding='utf-8') as f:
         disk = yaml.safe_load(f).get('core_plugins', {})
-    assert all(fc._as_bool(disk[n]['enabled']) is False for n in missing), \
+    for n in default_on:
+        assert fc._as_bool(disk[n]['enabled']) is True, f"默认开启插件未回写为启用: {n}"
+    assert all(fc._as_bool(disk[n]['enabled']) is False for n in others), \
         f"新插件未回写为禁用: {disk}"
 
 

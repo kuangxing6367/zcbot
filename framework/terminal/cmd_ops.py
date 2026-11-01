@@ -118,3 +118,14 @@ def register(fw):
     terminal_commands.register("shell", cmd_shell, "执行 shell 命令: shell <命令>",
                                aliases=["sh"])
     terminal_commands.register("dbdump", cmd_dbdump, "导出数据库快照: dbdump [--dir 目录]")
+
+    # ── 内存黑匣子 TTY 查看器：输入 debug 进入事件流 / 卡步诊断 ──
+    from .blackbox_viewer import run_blackbox_viewer
+
+    def cmd_debug(args):
+        """进入内存黑匣子查看器: debug（事件流转 / 卡步诊断）"""
+        run_blackbox_viewer(fw)
+
+    terminal_commands.register(
+        "debug", cmd_debug,
+        "进入内存黑匣子查看器: debug（事件流转 / 卡步诊断），exit 退出")
