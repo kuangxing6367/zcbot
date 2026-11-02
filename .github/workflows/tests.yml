@@ -51,22 +51,21 @@ jobs:
       - name: Workspace guard (pollution + test residue)
         run: bash .github/scripts/guard_workspace.sh
 
-  # ── WebUI：npm ci + 生产构建检查 ──────────────────────────
-  # 产物落点 core_plugins/webui/web 为有意跟踪的发布资产：只验证「锁文件
-  # 驱动下可安装、可生产构建」，不跑污染守卫（避免内容哈希漂移误报）。
+  # ── WebUI：构建产物存在性检查 ──────────────────────────
+  # 前端源码为闭源资产（不进仓库），仅发布 core_plugins/webui/web 构建产物。
+  # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布
+  # 产物存在且非空（index.html + js/ 含文件），作为前端资产发布门禁。
   webui-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: webui/package-lock.json
-      - name: WebUI install (npm ci)
-        working-directory: webui
-        run: npm ci
-      - name: WebUI production build (vite build)
-        working-directory: webui
-        run: npm run build
+      - name: Verify WebUI artifact present
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="core_plugins/webui/web"
+          test -f "$ROOT/index.html" || { echo "::error::缺少 $ROOT/index.html"; exit 1; }
+          test -d "$ROOT/js" || { echo "::error::缺少 $ROOT/js"; exit 1; }
+          count=$(find "$ROOT/js" -maxdepth 1 -name '*.js' | wc -l)
+          test "$count" -gt 0 || { echo "::error::$ROOT/js 下无 JS 产物"; exit 1; }
+          echo "WebUI 发布产物校验通过：index.html + $count 个 JS"

@@ -11,17 +11,10 @@ Web 管理后台插件（官方插件）。提供 Web 管理面板和 REST API�
 
 ## 前端构建产物位置
 
-前端源码位于 `webui/`（Vue 3 + Vite + Element Plus），构建产物输出到
+前端源码为闭源资产，不进本仓库；构建产物输出到
 `core_plugins/webui/web/`，由框架静态路由 `framework/api/static_routes.py` 直接托管。
-即前端与插件自包含在一起，不再散落在项目根目录的 `web/`。
-
-构建：
-
-```bash
-cd webui
-npm install
-npm run build   # 产物输出到 ../core_plugins/webui/web/
-```
+即前端与插件自包含在一起，不再散落在项目根目录的 `web/`。前端源码在独立的私有前端工程中维护，
+改动后由维护方重新构建并发布本目录下的 `web/` 产物。
 
 ## 接入方式
 
@@ -42,10 +35,9 @@ npm run build   # 产物输出到 ../core_plugins/webui/web/
 
 ## 相关文件
 
-- `webui/src` 前端源码
-- `webui/vite.config.js` 构建配置（`outDir: '../core_plugins/webui/web'`）
-- `webui/requirements.txt` 后端依赖（flask / flask-cors / waitress）
-- `core_plugins/webui/web/` 构建产物（随插件自包含）
+- 前端源码：闭源资产，在独立私有前端工程中维护，不进本仓库
+- `core_plugins/webui/web/` 构建产物（随插件自包含，即线上托管的前端）
+- 后端依赖见本插件 `requirements.txt`（flask / flask-cors / waitress）
 
 ## 说明
 

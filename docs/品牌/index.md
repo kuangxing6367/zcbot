@@ -167,6 +167,8 @@ img/zcbot-icon-mini-dark.svg    # 折叠态 · 暗
 
 ## 项目落地点
 
+> 前端源码为闭源资产，不进本仓库；下表为前端实际包含的视觉资源清单（位于私有前端工程中）。
+
 | 位置 | 内容 |
 | ---- | ---- |
 | `webui/public/img/logo.png` | 512×512 方形图标（`#6366F1`），侧边栏与登录页的通用兜底 |
@@ -182,9 +184,10 @@ img/zcbot-icon-mini-dark.svg    # 折叠态 · 暗
 
 ### 改前端后的构建同步
 
-`webui/src/` 下的改动需要重新构建才会进入产物目录：
+前端源码为闭源资产（不进本仓库），在私有前端工程中维护。`webui/src/` 与 `webui/public/` 的改动需在该工程中重新构建，产物发布至本仓库的 `core_plugins/webui/web/`：
 
 ```bash
+# 在私有前端工程中
 cd webui
 npm run build      # 产物输出到 ../core_plugins/webui/web/
 ```
