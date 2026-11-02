@@ -2,8 +2,8 @@
 # ZCBOT · pyproject.toml（PEP 621 项目元数据 + 工具配置）
 #
 # 说明：
-# - 本仓库以「源码方式」运行（python main.py），不作为 wheel 分发，
-#   故不声明 [build-system]。
+# - 本仓库以「源码方式」运行（python main.py）为主，同时支持打包为 wheel
+#   分发（下方 [build-system] + [tool.setuptools] 已声明，可 pip install . 或构建上传 PyPI）。
 # - 依赖有两个入口，内容必须保持同步：
 #     1) requirements.txt —— 传统入口，main.py 启动自检读取的就是它（兼容保留）
 #     2) 本文件 [project.dependencies] / [project.optional-dependencies]
@@ -15,13 +15,13 @@
 
 [project]
 name = "zcbot"
-version = "1.8.9b1"
-description = "ZCBOT 事件驱动 IM 平台：内核 + 扩展点契约 + 协议无关接入端（内置 OneBot 11 / QQ 官方 / Telegram / Discord）"
+version = "1.10.0"
+description = "ZCBOT 事件驱动 IM 平台：内核 + 扩展点契约 + 协议无关的接入端（以插件形式提供多平台接入）"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT OR Apache-2.0"
 authors = [{ name = "kuangxing6367" }]
-keywords = ["onebot", "telegram", "discord", "qq", "bot", "plugin", "event-driven", "framework"]
+keywords = ["telegram", "discord", "bot", "plugin", "event-driven", "framework", "im", "chatbot"]
 
 # 核心依赖（SQLite 模式必须）—— 与 requirements.txt 上半段保持一致
 dependencies = [
