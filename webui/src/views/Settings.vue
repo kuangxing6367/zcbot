@@ -232,7 +232,14 @@ async function saveSection() {
 async function changePassword() {
   if (!pwd.value.old || !pwd.value.new) { ElMessage.warning('请填写完整'); return }
   const r = await apiCall('/api/change_password', { method: 'POST', body: { old_password: pwd.value.old, new_password: pwd.value.new } })
-  if (r) { ElMessage.success(r.msg); pwd.value.old = ''; pwd.value.new = '' }
+  if (r) {
+    ElMessage.success(r.msg)
+    pwd.value.old = ''
+    pwd.value.new = ''
+    // 刷新当前管理员信息：默认密码标记会随之失效，顶栏修改建议自动收起
+    const me = await api('/api/me').catch(() => null)
+    if (me && me.code === 0) session.admin = me.data
+  }
 }
 
 async function addAdmin() {

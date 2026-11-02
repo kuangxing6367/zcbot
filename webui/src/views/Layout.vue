@@ -72,13 +72,26 @@
           </el-dropdown>
         </div>
       </el-header>
+      <el-alert
+        v-if="needChangePwd && !dismissPwdTip"
+        class="pwd-tip"
+        type="warning"
+        :closable="true"
+        show-icon
+        @close="dismissPwdTip = true"
+      >
+        <template #title>
+          <span>您当前使用的仍是系统默认密码（admin123），存在安全风险，建议尽快修改。</span>
+          <el-button size="small" type="warning" plain class="pwd-tip-btn" @click="goChangePwd">前往修改</el-button>
+        </template>
+      </el-alert>
       <el-main class="main"><router-view /></el-main>
     </el-container>
   </el-container>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { session, api, clearToken, secureHeaders } from '../api'
 import { API_BASE } from '../config'
@@ -88,6 +101,9 @@ import { OFFICIAL_SIDEBAR_ITEMS } from '../sidebar'
 const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
+// 仍使用默认密码（admin123）时的非强制修改建议：可关闭，不阻断任何操作
+const needChangePwd = ref(false)
+const dismissPwdTip = ref(false)
 // 标志按主题切换明暗两版：亮底用 #5D87FF，暗底提亮
 const logoUrl = computed(() => import.meta.env.BASE_URL + (theme.value === 'dark' ? 'img/zcbot-icon-dark.svg' : 'img/zcbot-icon-light.svg'))
 // 折叠态 24px 用简化版：标准版断口在 24px 下只有 2px，会糊
@@ -136,8 +152,21 @@ let statusTimer = null
 async function loadMe() {
   try {
     const me = await api('/api/me')
-    if (me && me.code === 0) session.admin = me.data
+    if (me && me.code === 0) {
+      session.admin = me.data
+      needChangePwd.value = !!session.admin?.default_password
+    }
   } catch (e) { /* 401 已处理 */ }
+}
+
+// 在「设置-修改密码」成功后，session.admin 会被刷新；若已不再使用默认密码则自动收起提示
+watch(() => session.admin?.default_password, (v) => {
+  needChangePwd.value = !!v
+  if (!v) dismissPwdTip.value = false
+})
+
+function goChangePwd() {
+  router.push('/settings')
 }
 
 async function loadWebUIs() {
@@ -252,6 +281,18 @@ onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer) })
 }
 .topbar-right { display: flex; align-items: center; gap: 8px; }
 .topbar-right .icon-btn:hover { transform: rotate(18deg); }
+
+.pwd-tip {
+  margin: 12px 16px 0;
+  border-radius: calc(var(--custom-radius) / 2);
+}
+.pwd-tip :deep(.el-alert__title) {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.pwd-tip-btn { margin-left: 4px; }
 
 .user-chip {
   display: inline-flex;

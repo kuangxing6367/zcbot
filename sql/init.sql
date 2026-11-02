@@ -401,8 +401,8 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 INSERT IGNORE INTO perm_groups (name, display_name, weight, is_default, created_at)
     VALUES ('default', '默认组', 0, 1, UNIX_TIMESTAMP());
 
--- 默认管理员账号（密码需要在首次启动时强制修改）
--- 默认密码: admin123 （生产环境务必修改）
+-- 默认管理员账号（默认密码 admin123；WebUI 登录后会建议（非强制）用户修改，
+-- 后端通过比对下方哈希识别「仍使用默认密码」的账号，前端给出修改引导）
 INSERT INTO admin_users (username, password_hash, role) VALUES
     ('admin', '$2b$12$YsniVDvsFqQU0ENEUQNVhuVqpbr/e03SBWLSEcaUFkmeQzOaMujpq', 'super');
 

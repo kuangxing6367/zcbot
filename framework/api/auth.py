@@ -10,6 +10,24 @@ from flask import jsonify, request
 
 logger = logging.getLogger('zcbot')
 
+# 初始化种子默认管理员（admin / admin123）的 bcrypt 哈希。
+# 用于识别「仍在使用默认密码」的账号，WebUI 据此给出修改建议（建议，不强制）。
+# 注意：若 sql/init.sql 的默认管理员种子哈希变更，此处必须同步更新，否则识别失效。
+DEFAULT_ADMIN_PASSWORD_HASH = b'$2b$12$YsniVDvsFqQU0ENEUQNVhuVqpbr/e03SBWLSEcaUFkmeQzOaMujpq'
+
+
+def _is_default_password(stored_hash):
+    """当前账号密码是否仍为初始化默认密码（admin123）。
+
+    比对的是哈希而非明文，避免任何明文落库/落日志；不依赖新增表字段，
+    新老部署（只要还在用 admin123）都能识别。
+    """
+    if not stored_hash:
+        return False
+    if isinstance(stored_hash, str):
+        stored_hash = stored_hash.encode('utf-8')
+    return stored_hash == DEFAULT_ADMIN_PASSWORD_HASH
+
 
 def register(ctx):
     app = ctx.app
@@ -92,7 +110,12 @@ def register(ctx):
         resp = jsonify({
             'code': 0,
             'msg': '登录成功',
-            'data': {'token': token, 'username': username, 'role': row['role']}
+            'data': {
+                'token': token,
+                'username': username,
+                'role': row['role'],
+                'default_password': _is_default_password(row['password_hash']),
+            }
         })
         _sync_token_cookie(resp, token)
         return resp
@@ -117,8 +140,14 @@ def register(ctx):
     @app.route('/api/me', methods=['GET'])
     @require_auth
     def me():
-        """获取当前登录信息"""
-        return jsonify({'code': 0, 'data': request.admin})
+        """获取当前登录信息（含是否仍使用默认密码的提示标记）"""
+        row = db.query_one(
+            "SELECT password_hash FROM admin_users WHERE id = %s",
+            (request.admin['id'],)
+        )
+        data = dict(request.admin)
+        data['default_password'] = _is_default_password(row['password_hash']) if row else False
+        return jsonify({'code': 0, 'data': data})
 
     @app.route('/api/change_password', methods=['POST'])
     @require_auth
