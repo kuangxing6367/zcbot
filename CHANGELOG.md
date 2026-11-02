@@ -8,20 +8,6 @@
 
 ---
 
-## 开发中（Unreleased / 在研）
-
-> 跟随 v1.10.0 的修复与补强，尚未纳入正式版本号。
-
-### 新增
-
-- **终端黑匣子查看器（TTY `debug` 命令）**：终端输入线程键入 `debug` 进入交互式内存黑匣子查看器，支持 `stats` / `recent [n]` / `stuck [n]` / `last [n]` / `trace <event_id>` / `clear` / `exit` 子命令，可在运行时 TTY 直接排查"事件卡在第几步"。非 TTY / 终端未启用时无从进入，黑匣子仍由 WebUI 调试接口兜底。
-
-### 修复
-
-- **CI `test_core_plugin_switch` 与默认开启名单脱节**：原用例假设所有缺失插件默认禁用，但 v1.10.0 起 `DEFAULT_ENABLED_CORE_PLUGINS = {echo, help, scheduler, webui}` 名单内插件自动启用，导致 CI 在 4 个 Python 版本矩阵上整片失败（exit 1）。用例已改为按名单拆分断言（名单内期望 `True`、其余期望 `False`），本地复现 CI 全量 pytest（371 项全过）验证修复。
-
----
-
 ## 代际主线（一句话看懂 ZCBOT 的演进）
 
 | 代际 | 版本区间 | 时间 | 这一代在解决什么 |
@@ -57,12 +43,15 @@
 - **db 初始化自愈**：`admin_users + plugins` 两张表探针 → 全量 `_REQUIRED_TABLES` 检测；`_apply_init_sql` 只补缺失表（幂等）；建完复验仍有缺失即报 error 列清单，不再无脑"完成"；自检本身失败（连接/权限）向上抛，避免几十行 WARN 埋根因。
 - **单实例文件锁（main.py）**：跨平台 advisory lock（Linux `flock` / Windows `msvcrt.locking`），锁文件 `data/zcbot.lock` 写 PID；进程退出内核自动释放，拿不到锁的第二个实例立即 `sys.exit(1)` 且不做任何重活。
 - **安全模式假启动（main.py）**：崩溃达上限且 `framework.crash.safe_mode`（默认 `true`）开启时，不退出进程、打印明确 banner 后挂起（`await stop_event.wait()`），让 `Type=simple` 守护进程误以为启动成功、停止反复拉起，把"持久错误无限冷启动"的性能税降到≈0；SIGTERM/SIGINT 优雅退出。适合 db 配置错等"永远启不动"的场景。
+- **终端黑匣子查看器（TTY `debug` 命令）**：终端输入线程键入 `debug` 进入交互式内存黑匣子查看器（`framework/terminal/blackbox_viewer.py`），支持 `stats` / `recent [n]` / `stuck [n]` / `last [n]` / `trace <event_id>` / `clear` / `exit` 子命令，可在运行时 TTY 直接排查"事件卡在第几步"；由 `input.py` 阻塞占用 stdin 避免与主循环抢终端；非 TTY / 终端未启用时无从进入，黑匣子仍由 WebUI 调试接口兜底。
 
 ### 修复
 
 - **router `message.classified` 扩展点 ev 未定义异常**：分类扩展点调用时 `ev` 作用域错误导致 `NameError`，已在调用前正确绑定。
 - **文档默认开关矛盾**：`core_plugins.yaml` 默认开启清单（原 `DEFAULT_ENABLED_CORE_PLUGINS` 与文档描述不一致）已对齐为 `{echo, help, scheduler, webui}` 默认开启；`LLM.md` / `README` 同步修正（含版本号漂移）。
 - **render 原生二进制重建**：覆盖全部 7 个目标平台（含 32 位 win32 / linux-i686 / linux-armv7），UPX -9 压缩；32 位架构整数溢出加固。
+- **CI `test_core_plugin_switch` 与默认开启名单脱节**：原用例假设所有缺失插件默认禁用，但 v1.10.0 起 `DEFAULT_ENABLED_CORE_PLUGINS = {echo, help, scheduler, webui}` 名单内插件自动启用，导致 CI 在 4 个 Python 版本矩阵上整片失败（exit 1）。用例改为按名单拆分断言（名单内期望 `True`、其余期望 `False`），本地复现 CI 全量 pytest（371 项全过）验证修复。
+- **CI `test_event_buffer` 偶发红（tests.yml python-tests(3.12)）**：`test_restart_inherits_persisted_rows` / `test_overflow_to_sqlite_and_drain` 用固定 `sleep(0.2)` 竞态 L4 后台 flush，慢机器上 flush 未完成即断言 `sqlite_pending > 0` 为 0。加固为轮询等待（超时 3s），不涉及 `framework/core/event_buffer.py` 逻辑改动；本地复跑 13 项全过、两用例各 x3 稳定通过。
 
 ### 变更
 
