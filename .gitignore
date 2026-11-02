@@ -211,4 +211,4 @@ framework/iipc/_extcheck_plugins/
 
 # 孤儿测试夹具：全仓无代码/CI 引用，不进源码包；
 # 如本地需要可保留文件，仅不再纳入版本控制与发布包。
-test/iipc_linux_amd64.zip
+tests/iipc_linux_amd64.zip

@@ -246,7 +246,7 @@
   1. **单端口合并**（不配 `api_port`）：WebUI + 真实 API + 诱饵同端口（文档仍标注真实接口，不伪装）；
   2. **双端口隔离**（`api_port` 与 `web.port` 不同）：WebUI 端口无真实 API、API 端口专属真实接口；
   3. **纯 API**（`ui_enabled=false`）：仅 API 端口，无 WebUI。
-- **黑盒测试启动器 `test/webui_blackbox_launcher.py`**：给安全审计 / AI 黑盒测试用的「从零开始、凭据随机、环境隔离」启动器。随机生成管理密码与端口（均可参数覆盖），写入隔离的临时 `config.yaml` + 临时 SQLite 库（**绝不碰真实 `data/zcbot.db`**），拉起框架待端口就绪后把随机密码以 bcrypt 注入 `admin_users`，打印访问地址与账号密码并尝试打开浏览器；Ctrl-C 自动清理临时文件。支持 `--host/--port/--api-port/--security/--username/--password/--api-only/--no-open/--keep/--timeout/--print-only/--root`，跨平台（Windows / Linux / macOS）。
+- **黑盒测试启动器 `tests/webui_blackbox_launcher.py`**：给安全审计 / AI 黑盒测试用的「从零开始、凭据随机、环境隔离」启动器。随机生成管理密码与端口（均可参数覆盖），写入隔离的临时 `config.yaml` + 临时 SQLite 库（**绝不碰真实 `data/zcbot.db`**），拉起框架待端口就绪后把随机密码以 bcrypt 注入 `admin_users`，打印访问地址与账号密码并尝试打开浏览器；Ctrl-C 自动清理临时文件。支持 `--host/--port/--api-port/--security/--username/--password/--api-only/--no-open/--keep/--timeout/--print-only/--root`，跨平台（Windows / Linux / macOS）。
   - 修复框架强依赖仓库 `core_plugins.yaml` 的 `webui.port`、会覆盖 `config.yaml` 的 `web.port` 导致端口随机失效的问题：新增环境变量 **`ZCBOT_CORE_PLUGINS_YAML`** 覆盖插件配置路径，启动器借此把插件配置指向隔离副本（仅覆盖 `webui` 端口/host），**真实仓库零改动**。
 - **安全等级体系（`security.level`）**：`off / low / medium / high / paranoid` 五档统管蜜罐诱饵集、tarpit 延迟、自动拉黑、安全响应头、Server 指纹隐藏、JS 人机验证、认证静默丢弃；单项（honeypot / headers / human_check）仍可显式覆盖，显式值优先。
 

@@ -225,7 +225,7 @@ def main():
     # 生成隔离配置
     cfg = build_config(root, args, port, api_port, db_path)
     cfg_path.write_text(
-        "# 由 test/webui_blackbox_launcher.py 生成的隔离配置（用于黑盒测试）\n"
+        "# 由 tests/webui_blackbox_launcher.py 生成的隔离配置（用于黑盒测试）\n"
         + yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
         encoding='utf-8',
     )
@@ -253,7 +253,7 @@ def main():
     cp_data = build_core_plugins(root, args, port, args.host)
     cp_path = run_dir / 'core_plugins.yaml'
     cp_path.write_text(
-        "# 由 test/webui_blackbox_launcher.py 生成的隔离插件配置（用于黑盒测试）\n"
+        "# 由 tests/webui_blackbox_launcher.py 生成的隔离插件配置（用于黑盒测试）\n"
         + yaml.safe_dump(cp_data, allow_unicode=True, sort_keys=False),
         encoding='utf-8',
     )

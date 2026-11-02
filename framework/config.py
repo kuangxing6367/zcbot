@@ -423,7 +423,7 @@ def get_config() -> dict:
 
 # 官方插件配置中心：独立 yaml，由启动时自动扫描 core_plugins/ 目录同步
 # 注：支持环境变量 ZCBOT_CORE_PLUGINS_YAML 覆盖路径（黑盒测试启动器
-# test/webui_blackbox_launcher.py 借此把插件配置指向一份隔离副本，
+# tests/webui_blackbox_launcher.py 借此把插件配置指向一份隔离副本，
 # 从而在不改动真实仓库的前提下自定义 webui 监听端口等）。
 CORE_PLUGINS_YAML = os.environ.get('ZCBOT_CORE_PLUGINS_YAML') or os.path.join(
     get_home(), 'core_plugins.yaml')
