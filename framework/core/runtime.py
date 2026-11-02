@@ -11,6 +11,7 @@ import sys
 import time
 
 from framework.memory import trim_memory, log_malloc_hint
+from framework.deps import classify_load_error
 
 logger = logging.getLogger('zcbot')
 
@@ -168,6 +169,12 @@ class FrameworkRuntimeMixin:
                 else:
                     logger.warning(f"官方插件 [{name}] 无 register 函数")
             except Exception as e:
+                info = classify_load_error(e)
+                if info['kind']:
+                    logger.error(
+                        f"官方插件 [{name}] 加载失败：{info['hint']}\n"
+                        f"  原始错误：{str(e)}"
+                    )
                 logger.error(f"官方插件 [{name}] 加载失败: {e}", exc_info=True)
     @staticmethod
     def _read_plugin_process_tag(main_file: str):

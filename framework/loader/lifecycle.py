@@ -14,7 +14,7 @@ import shutil
 import sys
 import types
 
-from framework.deps import pip_install_all
+from framework.deps import pip_install_all, classify_load_error
 from framework.blackbox import record as _bb_record
 
 logger = logging.getLogger('zcbot')
@@ -370,7 +370,14 @@ class PluginLifecycleMixin:
                 return True
 
             except ImportError as e:
-                logger.warning(f"[{plugin_name}] 导入失败（第{attempt + 1}次）: {e}")
+                info = classify_load_error(e)
+                if info['kind']:
+                    logger.warning(
+                        f"[{plugin_name}] 导入失败（第{attempt + 1}次）：{info['hint']}\n"
+                        f"  原始错误：{str(e)}"
+                    )
+                else:
+                    logger.warning(f"[{plugin_name}] 导入失败（第{attempt + 1}次）: {e}")
                 if attempt == 0:
                     # 第一次失败：尝试重新安装缺失依赖（全局环境）再试一次
                     logger.info(f"[{plugin_name}] 尝试重新安装缺失依赖...")
@@ -379,11 +386,23 @@ class PluginLifecycleMixin:
                         pip_install_all(plugin_name, dep_result2['missing'])
                     continue
                 else:
-                    logger.error(
-                        f"[{plugin_name}] 加载失败，依赖可能未正确安装\n"
-                        f"  请检查: pip install {' '.join(dep_result.get('missing', []))}\n"
-                        f"  或在 Web UI 插件管理页查看详情"
-                    )
+                    # 终态失败：优先给出平台化诊断（缺失模块 / 版本不兼容 / 原生扩展等）
+                    if info['kind']:
+                        logger.error(
+                            f"[{plugin_name}] 加载失败：{info['hint']}\n"
+                            f"  原始错误：{str(e)}"
+                        )
+                    else:
+                        logger.error(
+                            f"[{plugin_name}] 加载失败，依赖可能未正确安装\n"
+                            f"  请检查: {sys.executable} -m pip install "
+                            f"{' '.join(dep_result.get('missing', []))}\n"
+                            f"  或在 Web UI 插件管理页查看详情"
+                        )
+                    if dep_result.get('missing'):
+                        logger.error(
+                            f"[{plugin_name}] 依赖清单里缺失：{', '.join(dep_result['missing'])}"
+                        )
                     # 回滚 sys.modules 中残留的合成包与子模块
                     self._purge_plugin_modules(plugin_name, plugin_path)
                     # 更新 DB 状态为 error
@@ -399,6 +418,12 @@ class PluginLifecycleMixin:
                     return False
 
             except Exception as e:
+                info = classify_load_error(e)
+                if info['kind']:
+                    logger.error(
+                        f"[{plugin_name}] 加载失败：{info['hint']}\n"
+                        f"  原始错误：{str(e)}"
+                    )
                 logger.error(f"[{plugin_name}] 加载失败: {e}", exc_info=True)
                 # 回滚 sys.modules 中残留的合成包与子模块
                 self._purge_plugin_modules(plugin_name, plugin_path)

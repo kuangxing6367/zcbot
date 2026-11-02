@@ -30,6 +30,9 @@ from framework.deps.pip import (  # noqa: F401  向后兼容 re-export
     _parse_ver, _parse_version_spec, pip_install_all,
     pip_install_requirements, pip_install_with_mirror,
 )
+from framework.deps.diagnose import (  # noqa: F401  平台化加载错误诊断
+    classify_load_error, diagnose_plugin_load_error,
+)
 
 
 class PluginDepsMixin:
