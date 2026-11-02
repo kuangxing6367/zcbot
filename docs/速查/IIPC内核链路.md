@@ -99,7 +99,7 @@ python framework/iipc/tools/run_all_bench.py --only e2e,stress
 3. **可靠性** = 丢失率 + 是否存在 15s 级卡顿（`api.call` 响应丢失会让内核干等
    `defaultCallTimeout=15s`）。
 
-**端口全部动态分配**（`tools/portutil.py`，bind :0 向 OS 要空闲端口）——开发机上跑着
+**端口全部动态分配**（`framework/iipc/tools/portutil.py`，bind :0 向 OS 要空闲端口）——开发机上跑着
 别的服务时不会抢端口。需要固定可设 `ZCBOT_E2E_ADDR` / `ZCBOT_OFFICIAL_ADDR` / `ZCBOT_SURFACE_ADDR`。
 
 ## 排查

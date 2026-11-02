@@ -41,9 +41,14 @@
 - **事件分发拦截点告警 + 四类事件统一分类层**：事件分发拦截点由静默改为可观测告警；消息 / 通知 / 请求 / 元事件四类统一分类。
 - **IIPC 加固**：示例插件 + 反向 WS `access_token` 鉴权；中间件管线；消息链路吞异常修复（极端环境下静默丢消息）。
 - **db 初始化自愈**：`admin_users + plugins` 两张表探针 → 全量 `_REQUIRED_TABLES` 检测；`_apply_init_sql` 只补缺失表（幂等）；建完复验仍有缺失即报 error 列清单，不再无脑"完成"；自检本身失败（连接/权限）向上抛，避免几十行 WARN 埋根因。
-- **单实例文件锁（main.py）**：跨平台 advisory lock（Linux `flock` / Windows `msvcrt.locking`），锁文件 `data/zcbot.lock` 写 PID；进程退出内核自动释放，拿不到锁的第二个实例立即 `sys.exit(1)` 且不做任何重活。
-- **安全模式假启动（main.py）**：崩溃达上限且 `framework.crash.safe_mode`（默认 `true`）开启时，不退出进程、打印明确 banner 后挂起（`await stop_event.wait()`），让 `Type=simple` 守护进程误以为启动成功、停止反复拉起，把"持久错误无限冷启动"的性能税降到≈0；SIGTERM/SIGINT 优雅退出。适合 db 配置错等"永远启不动"的场景。
+- **单实例文件锁（main.py）**：跨平台 advisory lock（Linux `flock` / Windows `msvcrt.locking`），锁文件 `data/zcbot.lock` 写 PID；进程退出内核自动释放，拿不到锁的第二个实例立即 `sys.exit(1)` 且不做任何重活；Windows 端经 `CreateFileW` 双保险、冲突时明确打印「检测到另一个 ZCBOT 实例（PID X）」、atexit 兜底清理锁文件，避免退出残留误杀后续实例。
+- **安全模式假启动（main.py）**：崩溃达上限且 `framework.crash.safe_mode`（默认 `true`）开启时，不退出进程、打印明确 banner 后挂起（`await stop_event.wait()`），让 `Type=simple` 守护进程误以为启动成功、停止反复拉起，把"持久错误无限冷启动"的性能税降到≈0；SIGTERM/SIGINT 优雅退出。适合 db 配置错等"永远启不动"的场景；banner 明确提示「先删除 `error.log*` 崩溃计数文件，再手动 kill 本进程（由守护进程拉起干净实例；新实例正常启动会自行清零）」，与 `safe_mode=false` 分支一致，避免不删文件导致重启仍触发守卫死循环。
 - **终端黑匣子查看器（TTY `debug` 命令）**：终端输入线程键入 `debug` 进入交互式内存黑匣子查看器（`framework/terminal/blackbox_viewer.py`），支持 `stats` / `recent [n]` / `stuck [n]` / `last [n]` / `trace <event_id>` / `clear` / `exit` 子命令，可在运行时 TTY 直接排查"事件卡在第几步"；由 `input.py` 阻塞占用 stdin 避免与主循环抢终端；非 TTY / 终端未启用时无从进入，黑匣子仍由 WebUI 调试接口兜底。
+
+### 加固（hotfix，已并入 v1.10.0 主线）
+
+- **WebUI 登录后建议修改默认密码（`framework/api/auth.py` + `webui/src/views/Layout.vue`）**：`/login` 与 `/api/me` 返回 `default_password` 标志（比对当前哈希与 `sql/init.sql` 种子哈希常量，零数据库迁移、老部署可用）；前端挂载检测后在顶部显示可关闭提示条并带「前往修改」一键跳转 `/settings`，**仅建议、不强制**（默认账号 `admin` / `admin123`）。
+- **插件加载失败「平台化」诊断（`framework/deps/diagnose.py`）**：`classify_load_error(exc)` 把 `No module named X` 归类「缺失依赖」（取顶层包名，如 `aiohttp.client`→`aiohttp`）、`cannot import name Y from X` 归类「版本不兼容」、`DLL/.so 加载失败` 归类「系统运行库缺失」，未匹配则保留原始消息；接入 `framework/loader/lifecycle.py`（用户插件）与 `framework/core/runtime.py`（官方插件）的加载异常分支，日志同时输出中文诊断 + 安装命令（`<当前解释器> -m pip install <模块>`，与框架自身包管理器一致）+ 原始错误，让缺依赖的报错不再是一串英文堆栈。包管理器经源码核实为 **pip（经框架运行解释器 `sys.executable -m pip`）**，非 uv / pipx。
 
 ### 修复
 
