@@ -18,6 +18,7 @@ Agent 循环（tool loop）
   而不是终止整个会话。
 """
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -41,6 +42,7 @@ class AgentResult:
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     usage: Dict[str, Any] = field(default_factory=dict)
     model: str = ''
+    trace: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -129,6 +131,12 @@ class ToolLoopAgent:
             self._debug(f"提供商 [{provider.label}] 不支持函数调用，本轮不携带工具声明")
 
         result = AgentResult(model=getattr(provider, 'model', ''))
+        result.trace = {
+            'model': getattr(provider, 'model', ''),
+            'provider': getattr(provider, 'label', '') or getattr(provider, 'id', ''),
+            'turns': 0, 'total_ms': 0.0, 'spans': [], 'finished_at': 0.0,
+        }
+        _t0 = time.perf_counter()
 
         try:
             for turn in range(1, self.max_turns + 1):
@@ -137,8 +145,25 @@ class ToolLoopAgent:
                 messages = conversation.as_request()
                 decls = self._tool_decls(last_round, allow_tools)
 
-                reply = await self._call_provider(
-                    provider, messages, decls, temperature, max_tokens)
+                _m_t0 = time.perf_counter()
+                try:
+                    reply = await self._call_provider(
+                        provider, messages, decls, temperature, max_tokens)
+                except Exception as e:  # noqa: BLE001
+                    result.trace['spans'].append({
+                        'type': 'model', 'turn': turn,
+                        'duration_ms': round((time.perf_counter() - _m_t0) * 1000, 2),
+                        'error': str(e)[:200],
+                    })
+                    raise
+                result.trace['spans'].append({
+                    'type': 'model', 'turn': turn,
+                    'duration_ms': round((time.perf_counter() - _m_t0) * 1000, 2),
+                    'has_tool_calls': reply.has_tool_calls,
+                    'usage': reply.usage or {},
+                    'model': getattr(provider, 'model', ''),
+                    'error': None,
+                })
 
                 if not reply.has_tool_calls:
                     result.text = reply.content or ''
@@ -164,10 +189,19 @@ class ToolLoopAgent:
                     tool = self.registry.get(call.name)
                     if tool is None or not tool.enabled:
                         outcome = f"[工具 {call.name}] 不存在或已被停用"
+                        _t_ms = 0.0
                     else:
+                        _t_t0 = time.perf_counter()
                         outcome = await self.registry.aexecute(
                             tool, call.arguments, event=event,
                             perm_check=self.perm_check)
+                        _t_ms = (time.perf_counter() - _t_t0) * 1000
+                    result.trace['spans'].append({
+                        'type': 'tool', 'turn': turn, 'name': call.name,
+                        'duration_ms': round(_t_ms, 2),
+                        'error': ('fail' if isinstance(outcome, str)
+                                  and outcome.startswith(f'[工具 {call.name}]') else None),
+                    })
                     result.tool_calls.append({
                         'name': call.name,
                         'arguments': call.arguments,
@@ -185,20 +219,24 @@ class ToolLoopAgent:
             result.error = str(e)
         except Exception as e:  # noqa: BLE001 - 任何异常都不该炸掉会话
             result.error = f"对话异常：{e}"
-
-        # 到这里说明始终收敛不了：去掉工具 + 显式收口提示再问一次，让它给结论
-        if not result.text and not result.error:
-            try:
-                messages = conversation.as_request() + [{'role': 'user', 'content': _NUDGE}]
-                reply = await self._call_provider(
-                    provider, messages, None, temperature, max_tokens)
-                text = reply.content
-                if reply.has_tool_calls or not text:
-                    text = _summarize_tool_outputs(result.tool_calls)
-                result.text = text
-                conversation.append({'role': 'assistant', 'content': text})
-            except Exception as e:  # noqa: BLE001
-                result.error = f"收口请求失败：{e}"
+        else:
+            # 到这里说明始终收敛不了：去掉工具 + 显式收口提示再问一次，让它给结论
+            if not result.text and not result.error:
+                try:
+                    messages = conversation.as_request() + [{'role': 'user', 'content': _NUDGE}]
+                    reply = await self._call_provider(
+                        provider, messages, None, temperature, max_tokens)
+                    text = reply.content
+                    if reply.has_tool_calls or not text:
+                        text = _summarize_tool_outputs(result.tool_calls)
+                    result.text = text
+                    conversation.append({'role': 'assistant', 'content': text})
+                except Exception as e:  # noqa: BLE001
+                    result.error = f"收口请求失败：{e}"
+        finally:
+            result.trace['total_ms'] = round((time.perf_counter() - _t0) * 1000, 2)
+            result.trace['turns'] = result.turns
+            result.trace['finished_at'] = time.time()
         return result
 
 

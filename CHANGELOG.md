@@ -39,6 +39,12 @@
 - 新增 `tests/test_i18n_lang.py` 覆盖三语言切换、占位符、缺失回退与嵌套展平。
 - 同步更新 `docs/指南/多语言.md`（新增词条位置 + 词条存储描述）。
 
+### LLM 调用链追踪（llm_core 插件）
+- `ToolLoopAgent.arun` 新增 `result.trace` 全链路埋点：`model` 跨度（每轮模型调用的耗时、是否带工具调用、token 用量、模型名、失败原因）+ `tool` 跨度（每个工具执行的耗时与失败标记），并在 `finally` 汇总 `total_ms` / `turns` / `finished_at`。
+- `main.py` 暴露 `GET /api/llm_core/trace` 返回最近一次对话的调用链（`_LAST_TRACE`），便于排障时直接看"哪一轮模型调用慢 / 哪个工具挂了"。
+- `llm_core.__version__` 由 `1.1.1` 提升至 `1.1.2`，已重打包 `llm_core.zip`（md5 变化会触发释放覆盖）。
+- 新增 `tests/test_llm_trace.py` 覆盖 turns / 双跨度 / 字段完整 / 失败工具标记，ALL PASS。
+
 ## [1.10.0] - 2026-11-02
 
 > 主题：**生产化成熟度跃迁**——可观测性（内存黑匣子）、韧性（崩溃守卫 + db 自愈）、多协议接入（适配器注册表 + 命名空间隔离）、启动自愈（单实例锁 + 安全模式假启动）。以下均为已落地并实测通过的变化。

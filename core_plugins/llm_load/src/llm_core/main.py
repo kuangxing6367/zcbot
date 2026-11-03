@@ -56,6 +56,9 @@ _Media: Optional[MediaCache] = None
 _Store: Optional[ConversationStore] = None
 _Service: Optional['LLMCoreService'] = None
 
+# 最近一次对话的调用链追踪（供 /api/llm_core/trace 暴露，全局保留最新一份）
+_LAST_TRACE: dict = {}
+
 # 对话闸门：外部插件（如黑名单管理）注册的准入检查。
 # gate(user_id) -> 拒绝时返回提示文本，放行返回 None。任一闸门拒绝即拒绝。
 _CHAT_GATES: List[Any] = []
@@ -71,7 +74,7 @@ __plugin_meta__ = {
 # 版本号仅用于 /llmstatus 展示与日志；llm_load 重新释放/重启是按 manifest 里
 # 每个文件的 md5 比对触发的（改了源码重新打包即可，见 tools/build_llm_payload.py），
 # 不依赖这个号是否递增。改动源码后照常 --write 重打包即可生效。
-__version__ = '1.1.1'
+__version__ = '1.1.2'
 
 _DEFAULT_SYSTEM_PROMPT = (
     "你是跑在聊天软件里的助手。回答要用口语，别写小作文，"
@@ -398,7 +401,10 @@ class LLMCoreService:
                      'content': build_user_content(
                          text, images or [],
                          bool(provider and provider.supports_vision))})
-        return await self._agent.arun(conv, provider=provider, event=event)
+        result = await self._agent.arun(conv, provider=provider, event=event)
+        global _LAST_TRACE
+        _LAST_TRACE = result.trace
+        return result
 
     async def areply(self, text: str, event=None) -> str:
         """最简形式：只要一句回答"""
@@ -477,6 +483,8 @@ async def handle_chat(event, match):
                                temperature=float(_cfg('temperature', 0.7)),
                                max_tokens=int(_cfg('max_tokens', 1024)))
     elapsed = time.time() - started
+    global _LAST_TRACE
+    _LAST_TRACE = result.trace
 
     # 助手的回复由 agent 循环内部写入会话，这里只负责发给用户
     body = result.text or result.error or "（模型没有给出任何内容）"
@@ -670,6 +678,14 @@ class _FakeEvent:
 
 
 # ── REST / 面板数据 ───────────────────────────────────────────
+
+def _view_trace():
+    """最近一次对话的调用链追踪：模型/工具耗时、轮数、token 用量与错误。"""
+    data = _LAST_TRACE or {}
+    if jsonify is None:
+        return data
+    return jsonify({'code': 0, 'data': data})
+
 
 def _view_overview():
     """面板总览：提供商 / 工具 / 会话（密钥一律打码）"""
@@ -998,6 +1014,8 @@ def register(plugin_ctx):
     if _HAS_FLASK:
         ctx.register_api('/api/llm_core/overview', _view_overview,
                          methods=['GET'], description="LLM 子系统总览")
+        ctx.register_api('/api/llm_core/trace', _view_trace,
+                         methods=['GET'], description="最近一次对话调用链追踪")
         ctx.register_api('/api/llm_core/tools/<name>', _view_toggle_tool,
                          methods=['POST', 'PUT'], description="开关工具")
         ctx.register_api('/api/llm_core/sessions', _view_sessions,
