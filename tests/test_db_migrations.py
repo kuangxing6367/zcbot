@@ -213,6 +213,164 @@ def test_framework_registry_shape():
           '框架注册表：版本号从 1 连续递增（历史版本不可重排）')
     check(all(m.name for m in MIGRATIONS), '框架注册表：每版都有名称')
     check(all(M.checksum_of(m) for m in MIGRATIONS), '框架注册表：每版都能算出校验和')
+    check(all(m.level in M.LEVELS for m in MIGRATIONS),
+          '框架注册表：每版都声明了合法级别')
+    check(any(m.level == M.LEVEL_DESTRUCTIVE for m in MIGRATIONS),
+          '框架注册表：至少有一版被标为 destructive（分级不是摆设）')
+
+
+# ── 变更管控：分级 / 授权 / 证据链 / 备份 ──────────────────────
+
+def _drop_probe(db):
+    _CALLS.append('drop')
+    db.execute("DROP TABLE IF EXISTS t_probe")
+
+
+def _registry_with_destructive():
+    return _registry() + [
+        M.Migration(4, 'probe.drop', _drop_probe, '删除探针表',
+                    level=M.LEVEL_DESTRUCTIVE)]
+
+
+def test_first_run_converges_history():
+    """首次接管（无账本）允许一次性收敛，含 destructive —— 否则安装卡在半途。"""
+    db = _new_db()
+    db.execute("CREATE TABLE IF NOT EXISTS t_probe (id INTEGER)")
+    _CALLS.clear()
+    report = M.run_pending(db, _registry_with_destructive())
+    check(report['first_run'] is True, '首次接管：报告标记 first_run')
+    check(report['ok'] is True and not report['blocked'], '首次接管：不被授权闸门拦下')
+    check('drop' in _CALLS, '首次接管：destructive 版也执行了')
+    check(not db.table_exists('t_probe'), '首次接管：destructive 生效')
+
+
+def test_destructive_blocked_after_ledger_exists():
+    """账本已存在后，新增的 destructive 必须人工授权。"""
+    db = _new_db()
+    M.run_pending(db, _registry())          # 先建立账本
+    db.execute("CREATE TABLE IF NOT EXISTS t_probe (id INTEGER)")
+    _CALLS.clear()
+    report = M.run_pending(db, _registry_with_destructive())
+    check(report['ok'] is False, '闸门：未授权时 ok=False')
+    check([b['version'] for b in report['blocked']] == [4], '闸门：拦下 v4')
+    check(report['blocked'][0]['level'] == M.LEVEL_DESTRUCTIVE, '闸门：标记级别')
+    check('drop' not in _CALLS, '闸门：迁移体没有被执行')
+    check(db.table_exists('t_probe'), '闸门：目标表仍在（没被删）')
+    st = M.status(db, _registry_with_destructive())
+    check(len(st['blocked']) == 1 and st['ok'] is False, 'status：暴露 blocked 且 ok=False')
+    check(M.verify(db, _registry_with_destructive())['ok'] is False,
+          'verify：存在未授权迁移即自检不通过')
+
+
+def test_ticket_required_even_when_allowed():
+    """只给 allow_destructive 不给变更单号 = 没有授权凭据，仍然拦。"""
+    db = _new_db()
+    M.run_pending(db, _registry())
+    db.execute("CREATE TABLE IF NOT EXISTS t_probe (id INTEGER)")
+    ctx = M.MigrationContext(source='cli', operator='ops',
+                             allow_destructive=True, ticket='')
+    report = M.run_pending(db, _registry_with_destructive(), ctx)
+    check(report['ok'] is False, '闸门：无变更单号仍被拦')
+    check('变更单号' in (report['blocked'][0]['reason'] if report['blocked'] else ''),
+          '闸门：原因指明缺变更单号')
+
+
+def test_approved_destructive_records_evidence():
+    """批准执行：账本记人/单/原因，流水留证，备份文件真实存在。"""
+    db = _new_db()
+    M.run_pending(db, _registry())
+    db.execute("CREATE TABLE IF NOT EXISTS t_probe (id INTEGER)")
+    ctx = M.MigrationContext(source='cli', operator='ops-a', ticket='CHG-2026-0117',
+                             reason='清理探针表', allow_destructive=True, backup=True)
+    report = M.run_pending(db, _registry_with_destructive(), ctx)
+    check(report['ok'] is True and [a['version'] for a in report['applied']] == [4],
+          '批准：v4 执行成功')
+    check(not db.table_exists('t_probe'), '批准：destructive 生效')
+    row = db.query_one("SELECT operator, ticket, reason, level FROM schema_migrations "
+                       "WHERE version = 4")
+    check(row['operator'] == 'ops-a' and row['ticket'] == 'CHG-2026-0117',
+          '账本：记录操作人与变更单号（职责可追溯）')
+    check(row['level'] == M.LEVEL_DESTRUCTIVE, '账本：记录变更级别')
+
+    evidence = [r for r in M.runs(db, 20) if r['version'] == 4]
+    check(len(evidence) == 1 and evidence[0]['success'], '流水：v4 一条成功记录')
+    check(evidence[0]['source'] == 'cli' and evidence[0]['operator'] == 'ops-a',
+          '流水：来源与操作人可查')
+    backup_path = evidence[0]['backup']
+    check(bool(backup_path) and os.path.exists(backup_path),
+          '流水：备份路径已记录且文件存在（可回退）')
+
+
+def test_runs_are_append_only():
+    """流水只增不改：失败与重试各留一条，账本只保留当前状态。"""
+    db = _new_db()
+    reg_bad = [M.Migration(1, 'demo.create', _m1),
+               M.Migration(2, 'demo.boom', _boom)]
+    M.run_pending(db, reg_bad)
+    reg_ok = [M.Migration(1, 'demo.create', _m1),
+              M.Migration(2, 'demo.add_b', _m2)]
+    M.run_pending(db, reg_ok)
+    rows = [r for r in M.runs(db, 50) if r['version'] == 2]
+    check(len(rows) == 2, '流水：同一版本失败+成功各留一条（不被覆盖）')
+    check(rows[0]['success'] is True and rows[1]['success'] is False,
+          '流水：按时间倒序，最新在前')
+    ledger = db.query("SELECT * FROM schema_migrations WHERE version = 2")
+    check(len(ledger) == 1, '账本：同版本只有一行（状态而非历史）')
+    check('模拟迁移失败' in (rows[1]['error'] or ''), '流水：失败记录带错误摘要')
+
+
+def test_backup_rotation():
+    """备份按 keep 轮转，避免把磁盘吃满。"""
+    db = _new_db()
+    M.run_pending(db, _registry())
+    db.execute("CREATE TABLE IF NOT EXISTS t_probe (id INTEGER)")
+    ctx = M.MigrationContext(source='cli', operator='ops', ticket='CHG-1',
+                             allow_destructive=True, backup=True, keep_backups=1)
+    for i in range(2):
+        reg = [M.Migration(4 + i, f'probe.drop{i}', _drop_probe,
+                           level=M.LEVEL_DESTRUCTIVE)]
+        M.run_pending(db, reg, ctx)
+    backup_dir = os.path.join(os.path.dirname(
+        os.path.abspath(db.config['path'])), 'backups')
+    files = [f for f in os.listdir(backup_dir) if f.startswith('zcbot-schema-')]
+    check(len(files) == 1, f'备份：keep=1 时仅保留 1 份（实际 {len(files)}）')
+
+
+def test_plan_does_not_execute():
+    db = _new_db()
+    _CALLS.clear()
+    p = M.plan(db, _registry_with_destructive())
+    check(_CALLS == [], 'plan：不执行任何迁移体')
+    check(p['pending_count'] == 4, 'plan：列出 4 步')
+    check([s['requires_approval'] for s in p['steps']] == [False, False, False, True],
+          'plan：只有 destructive 标为需授权')
+    check(p['steps'][-1]['will_backup'] is True, 'plan：destructive 标为先备份')
+
+
+def test_context_from_config():
+    ctx = M.MigrationContext.from_config('boot', {})
+    check(ctx.allow_destructive is False and ctx.backup is True,
+          '配置：缺省即安全（不自动执行 destructive、默认备份）')
+    ctx = M.MigrationContext.from_config(
+        'boot', {'migrations': {'auto_apply_destructive': True, 'keep_backups': 2}})
+    check(ctx.allow_destructive is True and ctx.keep_backups == 2,
+          '配置：显式开启 auto_apply_destructive 才生效')
+
+
+def test_ledger_columns_migrated():
+    """老账本表缺 level/operator 等新列时自动补列，不丢掉历史行。"""
+    db = _new_db()
+    db.execute("""CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY, name VARCHAR(128) NOT NULL,
+        checksum VARCHAR(64) DEFAULT '', applied_at VARCHAR(32) DEFAULT NULL,
+        duration_ms INTEGER DEFAULT 0, success INTEGER DEFAULT 1,
+        origin VARCHAR(16) DEFAULT 'run', note VARCHAR(255) DEFAULT '')""")
+    db.execute("INSERT INTO schema_migrations (version, name, success) "
+               "VALUES (1, 'legacy.row', 1)")
+    check(M.ensure_ledger(db) is True, '老账本：ensure_ledger 成功')
+    row = db.query_one("SELECT level, operator FROM schema_migrations WHERE version = 1")
+    check(row['level'] == M.LEVEL_ADDITIVE, '老账本：新列补齐且默认 additive')
+    check(len(M.runs(db, 5)) == 0, '老账本：流水表建立但无记录')
 
 
 def main():

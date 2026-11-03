@@ -47,6 +47,15 @@ startup:
 database:
   type: sqlite
   path: data/zcbot.db
+  # ── 结构变更管控（详见 docs/进阶/数据库迁移.md） ──
+  # 迁移按级别执行：additive（加表加列）开机自动跑；
+  # rewrite（重建表/改类型）自动跑但先备份；destructive（删表删列删数据）
+  # 必须人工执行 `python -m framework.database.migrate up --approve <变更单号>`。
+  migrations:
+    auto_apply_destructive: false   # 生产环境保持 false：开机流程不能兼任批准人
+    backup_before_rewrite: true     # rewrite/destructive 前自动备份（SQLite 在线快照）
+    keep_backups: 5                 # 备份保留份数，避免占满磁盘
+    # operator: ""                  # 记录到执行流水里的操作人；默认取系统登录名
   # ── MySQL 连接保活/自动重连（type: mysql 时生效） ──
   # 数据库断开（wait_timeout/服务重启/网络中断）后自动重连，不再卡死
   # ping_interval: 5        # 连接空闲超过该秒数后自动 ping 检测存活

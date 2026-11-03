@@ -140,11 +140,12 @@ def register(ctx):
     @app.route('/api/db/migrations', methods=['GET'])
     @require_auth
     def db_migrations():
-        """当前 schema 版本、待应用迁移、校验和漂移、应用历史"""
+        """当前 schema 版本、待应用迁移（含级别与授权要求）、漂移、历史、执行流水"""
         try:
             from framework.database import migrations as _mig
-            from framework.database.schema import MIGRATIONS
-            return jsonify({'code': 0, 'data': _mig.status(db, MIGRATIONS)})
+            from framework.database.schema import MIGRATIONS, migrations_context
+            ctx = migrations_context(db, source='api')
+            return jsonify({'code': 0, 'data': _mig.status(db, MIGRATIONS, ctx)})
         except Exception as e:
             logger.error(f"读取迁移状态失败: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
@@ -152,15 +153,29 @@ def register(ctx):
     @app.route('/api/db/migrations/up', methods=['POST'])
     @require_super
     def db_migrations_up():
-        """立即应用待执行的迁移（仅超级管理员；失败不回滚，返回逐条结果）"""
+        """应用待执行迁移（仅超管）
+
+        additive 直接执行；destructive 必须在 body 里给 ``ticket``（变更单号）
+        作为授权凭据 —— 接口不是后门，和 CLI 走同一道闸门。执行前对
+        rewrite/destructive 自动备份，执行人/单号/原因全部写入流水。
+        """
         try:
             from framework.database import migrations as _mig
-            from framework.database.schema import MIGRATIONS
-            report = _mig.run_pending(db, MIGRATIONS)
+            from framework.database.schema import MIGRATIONS, migrations_context
+            payload = request.get_json(silent=True) or {}
+            ticket = str(payload.get('ticket') or '').strip()
+            reason = str(payload.get('reason') or '').strip()
             admin = request.admin
+            ctx = migrations_context(
+                db, source='api', operator=admin['username'], ticket=ticket,
+                reason=reason, allow_destructive=bool(ticket))
+            report = _mig.run_pending(db, MIGRATIONS, ctx)
             audit_log(admin['id'], admin['username'], 'db_migrate', 'database', None,
                       {'applied': [a['version'] for a in report['applied']],
-                       'failed': [f['version'] for f in report['failed']]})
+                       'failed': [f['version'] for f in report['failed']],
+                       'blocked': [b['version'] for b in report.get('blocked') or []],
+                       'ticket': ticket, 'reason': reason,
+                       'backup': report.get('backup', '')})
             return jsonify({'code': 0 if report['ok'] else 500, 'data': report}), \
                 (200 if report['ok'] else 500)
         except Exception as e:

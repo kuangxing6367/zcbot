@@ -7,15 +7,40 @@
 新增字段的正确做法（三处同步，缺一不可）：
   1. 新装的库：改 sql/init.sql + sql/init_mysql55.sql 的建表语句；
   2. 已在跑的库：在下方 MIGRATIONS 末尾追加一版迁移（next_version()）；
-  3. 迁移必须幂等（先查列/索引是否存在再改），中断可重入。
+  3. 迁移必须幂等（先查列/索引是否存在再改），中断可重入；
+  4. 必须声明 level：additive（加表加列，可开机自跑）/ rewrite（重建表、
+     改类型，会锁表）/ destructive（删表删列删数据，必须人工授权后执行）。
   已发布的迁移一律不可改 —— 账本里有校验和，改动会在启动时报错。
 """
 import logging
 import time
 
-from framework.database.migrations import Migration, run_pending as run_migrations
+from framework.database.migrations import (
+    LEVEL_ADDITIVE, LEVEL_DESTRUCTIVE, LEVEL_REWRITE,
+    Migration, MigrationContext, run_pending as run_migrations)
 
 logger = logging.getLogger('zcbot')
+
+
+def migrations_context(database, source='boot', **overrides) -> MigrationContext:
+    """按 ``database.migrations`` 配置段构造执行上下文。
+
+    配置项（都可不写，默认即安全值）::
+
+        database:
+          migrations:
+            auto_apply_destructive: false   # destructive 是否允许开机自动执行
+            backup_before_rewrite: true     # rewrite/destructive 前自动备份
+            keep_backups: 5                 # SQLite 备份保留份数
+            operator: ""                    # 记录到流水的操作人
+
+    启动场景恒为 source='boot' 且默认不允许 destructive —— 开机流程不能
+    兼任「批准人」，这是职责分离的边界。
+    """
+    cfg = getattr(database, 'config', None)
+    if not isinstance(cfg, dict):
+        cfg = {}
+    return MigrationContext.from_config(source, cfg, **overrides)
 
 # 身份 ID 列白名单：这些列在多种平台（QQ 官方 openid 等）下是字符串，
 # 绝对不能建成 BIGINT/INTEGER。建表/迁移时统一约束为 VARCHAR(64)。
@@ -73,8 +98,12 @@ def _migrate_identity_id_columns(database):
                 raise
 
 
-def _auto_create_tables(database):
+def _auto_create_tables(database, context=None):
     """创建框架扩展表并应用版本化迁移。
+
+    ``context`` 为 None 时按 ``database.migrations`` 配置构造 boot 上下文
+    （开机流程，destructive 默认被拦）；CLI/接口显式传入自己的上下文，
+    以免「带变更单号执行」被开机策略覆盖。
 
     返回迁移执行报告（无待应用时也返回，供 CLI/测试读取）；引擎自身异常时
     返回 None —— 迁移失败不抛出，避免被 db.init_db 的兜底判成「数据库不可用」
@@ -226,13 +255,24 @@ def _auto_create_tables(database):
     # 版本化迁移：账本 schema_migrations 记录已应用版本，每版只执行一次。
     # 迁移失败不阻塞启动（可用性优先），但必须可见：error 日志 + 账本 success=0
     # + 下次启动自动重试。
+    #
+    # 启动不是「批准人」：destructive 迁移（删表/删列/删数据）默认被授权闸门
+    # 拦下，必须由人在命令行带变更单号执行。这是 SOX 职责分离的落地点 ——
+    # 自动化的启动流程不能同时充当授权者。
     report = None
     try:
-        report = run_migrations(database, MIGRATIONS)
+        ctx = context or migrations_context(database, source='boot')
+        report = run_migrations(database, MIGRATIONS, ctx)
     except Exception as e:  # noqa: BLE001  注册表非法等：引擎自身故障
         logger.error("数据库迁移引擎异常，已跳过迁移: %s", e)
     else:
-        if not report['ok']:
+        if report.get('blocked'):
+            b = report['blocked'][0]
+            logger.error(
+                "数据库迁移待授权：v%s %s（%s）未执行 —— %s。"
+                "结构落后于代码，授权后执行 CLI 或重启生效。",
+                b.get('version'), b.get('name'), b.get('level'), b.get('reason'))
+        elif not report['ok']:
             first = (report['failed'] or [{}])[0]
             logger.error(
                 "数据库迁移未全部完成：当前版本 v%s（最新 v%s），失败 %d 条"
@@ -608,21 +648,30 @@ def _migrate_dynamic_commands_handler(database):
 # 然后记账；此后不再重复执行。
 MIGRATIONS = (
     Migration(1, 'commands.require_level', _migrate_commands_table,
-              'commands 表增加 require_level（命令权限等级）'),
+              'commands 表增加 require_level（命令权限等级）',
+              level=LEVEL_ADDITIVE),
     Migration(2, 'commands.unique_index', _migrate_commands_unique_index,
-              'commands 表补唯一索引 uk_plugin_handler 并清洗历史重复行'),
+              'commands 表补唯一索引 uk_plugin_handler 并清洗历史重复行',
+              level=LEVEL_DESTRUCTIVE),  # 会 DELETE 重复行：不可逆，需人工授权
     Migration(3, 'identity.id_columns', _migrate_identity_id_columns,
-              '身份 ID 列统一为 VARCHAR(64)（开放平台 openid 为字符串）'),
+              '身份 ID 列统一为 VARCHAR(64)（开放平台 openid 为字符串）',
+              level=LEVEL_REWRITE),      # SQLite 走整表重建：锁表但保数据
     Migration(4, 'users.role', _migrate_users_table,
-              'users 表增加 role（超管标记）'),
+              'users 表增加 role（超管标记）',
+              level=LEVEL_ADDITIVE),
     Migration(5, 'commands.require_perm', _migrate_commands_require_perm,
-              'commands 表增加 require_perm（权限节点要求）'),
+              'commands 表增加 require_perm（权限节点要求）',
+              level=LEVEL_ADDITIVE),
     Migration(6, 'admin_users.token', _migrate_admin_users_table,
-              'admin_users 表增加 token / token_created_at'),
+              'admin_users 表增加 token / token_created_at',
+              level=LEVEL_ADDITIVE),
     Migration(7, 'dynamic_commands.match_type', _migrate_dynamic_commands_table,
-              "dynamic_commands.match_type ENUM 增加 contains"),
+              "dynamic_commands.match_type ENUM 增加 contains",
+              level=LEVEL_ADDITIVE),
     Migration(8, 'dynamic_commands.handler', _migrate_dynamic_commands_handler,
-              'dynamic_commands 表增加 handler（关键词回调）'),
+              'dynamic_commands 表增加 handler（关键词回调）',
+              level=LEVEL_ADDITIVE),
     Migration(9, 'perm.indexes_default_group', _migrate_perm_tables,
-              '权限表补索引并播种默认组 default'),
+              '权限表补索引并播种默认组 default',
+              level=LEVEL_ADDITIVE),
 )

@@ -26,6 +26,45 @@
 
 ---
 
+## [1.14.0] - 2026-11-04
+
+> 主题：**结构变更可管控**——1.13.0 解决了"知道自己是哪一版"，这一版解决"谁批的、谁执行的、凭什么批、出事怎么退"。
+
+### 迁移分级与授权闸门（对齐 SOC 2 CC8.1 / SOX ITGC / ITIL 4）
+
+- `Migration` 新增 `level`：`additive`（加表加列，开机自动执行）/ `rewrite`（重建表、改类型，自动执行但先备份）/ `destructive`（删表删列删行，**必须人工授权**）。判断标准只有一条：回滚这条语句要不要恢复数据。
+- 启动流程不再能批准 `destructive`：引擎按 `approval_gap()` 判定，未授权时拦下并停止后续迁移，error 日志直接给出可执行的 CLI 指令。这落实了 SOX 的职责分离——自动化重启不能替人做不可逆决定。
+- 批准须带变更单号：`migrate up --approve CHG-xxx --reason "..."`；只传 `allow_destructive` 无单号仍被拦（没有凭据的批准不算批准）。
+- **首次接管例外**（等价 Flyway `baselineOnMigrate`）：账本一条记录都没有时（新库/无账本老库升级），历史迁移一次性收敛含 destructive，避免安装卡在半途；此后的 destructive 一律需授权。流水 `reason` 记「首次接管，历史迁移一次性收敛」。
+- 历史 9 版补齐分级：v2 去重删行 → `destructive`；v3 重建表 → `rewrite`；其余 `additive`。
+
+### 执行证据链（append-only 流水表）
+
+- 新增 `schema_migration_runs`：每次尝试一行，字段 `version` / `name` / `level` / `started_at`（UTC ISO 8601）/ `duration_ms` / `success` / `source`(boot/cli/api) / `operator` / `ticket` / `reason` / `error` / `backup` / `db_type` / `app_version`，**只增不改**。
+- 账本 `schema_migrations` 补 `level` / `operator` / `ticket` / `reason` 四列（老库启动时自动补列，不重跑、不丢历史行）。两表分工：账本是"当前状态"（重试覆盖），流水是"执行证据"（审计取样查这张）。
+- 修掉一个真实缺陷：账本读取原先用显式列清单，老库缺新列会让整表读失败并被误判成「一版都没应用」（会触发重跑，destructive 甚至会被首次接管规则放行）。改为 `SELECT *` + 缺列取默认值。
+
+### 执行前备份（回退预案）
+
+- `rewrite` / `destructive` 执行前自动备份，同一轮只备一次：SQLite 用 `VACUUM INTO` 在线快照落 `backups/`（按 `keep_backups` 轮转，旧版 SQLite 退化为文件复制并告警 WAL 风险）；MySQL 记录 `SHOW MASTER STATUS` binlog 位点作为恢复点，拿不到位点直接报 error，不假装有备份。
+- 备份路径写进流水，审计可直接核对"这条不可逆变更当时有没有退路"。
+
+### 干跑与自检
+
+- 新增 `migrate plan`：列出将执行什么、是否需授权、会不会备份，**不执行任何迁移体**，输出可直接贴进变更单的影响评估栏。
+- 新增 `migrate verify`：账本版本 vs 代码版本、必需表是否齐全、是否还有未授权迁移，返回码可进 CI。
+- 新增 `migrate runs`：打印最近执行流水。
+
+### 配置与接口
+
+- 新增配置段 `database.migrations`：`auto_apply_destructive`（默认 false）/ `backup_before_rewrite`（默认 true）/ `keep_backups`（默认 5）/ `operator`。
+- `POST /api/db/migrations/up` 支持 body `{ticket, reason}`，与 CLI 共用同一道闸门；审计日志补记 `ticket` / `reason` / `backup`；`GET /api/db/migrations` 返回 `level` / `requires_approval` / `blocked_reason` 与最近流水。
+
+### 测试与文档
+
+- `tests/test_db_migrations.py` 由 10 组扩到 19 组：首次接管收敛 / 有账本后 destructive 被拦 / 无单号仍被拦 / 批准后记操作人与单号且备份文件真实存在 / 流水 append-only 与账本不覆盖 / 备份轮转 / plan 不执行 / 配置默认安全 / 老账本自动补列。全量 pytest 420 passed，15 个脚本式回归全过。
+- 文档 `docs/进阶/数据库迁移.md` 整篇重写：新增「企业标准到底要求什么」（SOC 2 CC8.1、SOX ITGC CM-01~06、ITIL 4 变更使能、零停机演进、回退预案逐条映射）、变更分级、职责分离、证据链分工、备份语义、expand-contract 附录。
+
 ## [1.13.0] - 2026-11-04
 
 > 主题：**结构演进可追溯**——此前「库是哪个版本」只能靠查列是否存来反推，迁移失败还会被 `except: pass` 吞掉。
