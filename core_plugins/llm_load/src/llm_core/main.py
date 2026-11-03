@@ -58,8 +58,17 @@ _Media: Optional[MediaCache] = None
 _Store: Optional[ConversationStore] = None
 _Service: Optional['LLMCoreService'] = None
 
-# 最近一次对话的调用链追踪（供 /api/llm_core/trace 暴露，全局保留最新一份）
-_LAST_TRACE: dict = {}
+# 调用链追踪历史（供 /api/llm_core/trace 暴露）。索引 0 为最新一次，最多保留 _TRACE_MAX 条
+_TRACE_MAX = 30
+_TRACE_HISTORY: List[dict] = []
+
+
+def _record_trace(trace: dict) -> None:
+    """记一条调用链。只留最近 _TRACE_MAX 条，旧的自动淘汰（进程内，不落盘）"""
+    if not trace:
+        return
+    _TRACE_HISTORY.insert(0, trace)
+    del _TRACE_HISTORY[_TRACE_MAX:]
 
 # 本地知识库（RAG）实例：register() 里按需初始化；未配置时保持 None
 _KB: Optional[KnowledgeBase] = None
@@ -70,7 +79,7 @@ _CHAT_GATES: List[Any] = []
 
 __plugin_meta__ = {
     "name": "LLM 对话核心",
-    "version": "1.1.3",
+    "version": "1.1.4",
     "author": "ZGRIC",
     "desc": "模型提供商总线 + 函数（工具）总线 + 工具调用闭环 + 会话窗口治理 + 本地知识库（RAG）",
     "priority": 100,
@@ -79,7 +88,7 @@ __plugin_meta__ = {
 # 版本号仅用于 /llmstatus 展示与日志；llm_load 重新释放/重启是按 manifest 里
 # 每个文件的 md5 比对触发的（改了源码重新打包即可，见 tools/build_llm_payload.py），
 # 不依赖这个号是否递增。改动源码后照常 --write 重打包即可生效。
-__version__ = '1.1.3'
+__version__ = '1.1.4'
 
 _DEFAULT_SYSTEM_PROMPT = (
     "你是跑在聊天软件里的助手。回答要用口语，别写小作文，"
@@ -487,8 +496,7 @@ class LLMCoreService:
                          text, images or [],
                          bool(provider and provider.supports_vision))})
         result = await self._agent.arun(conv, provider=provider, event=event)
-        global _LAST_TRACE
-        _LAST_TRACE = result.trace
+        _record_trace(result.trace)
         return result
 
     async def areply(self, text: str, event=None) -> str:
@@ -568,8 +576,7 @@ async def handle_chat(event, match):
                                temperature=float(_cfg('temperature', 0.7)),
                                max_tokens=int(_cfg('max_tokens', 1024)))
     elapsed = time.time() - started
-    global _LAST_TRACE
-    _LAST_TRACE = result.trace
+    _record_trace(result.trace)
 
     # 助手的回复由 agent 循环内部写入会话，这里只负责发给用户
     body = result.text or result.error or "（模型没有给出任何内容）"
@@ -765,11 +772,30 @@ class _FakeEvent:
 # ── REST / 面板数据 ───────────────────────────────────────────
 
 def _view_trace():
-    """最近一次对话的调用链追踪：模型/工具耗时、轮数、token 用量与错误。"""
-    data = _LAST_TRACE or {}
+    """对话调用链追踪：模型/工具耗时、轮数、token 用量与错误。
+
+    query: index 想看的批次，0 为最新（默认）。data 为该批次明细，
+    history 为最近若干批次的摘要（索引与 data 的 index 参数一致）。
+    """
+    try:
+        idx = int(str(_req_arg('index', 0) or 0))
+    except (TypeError, ValueError):
+        idx = 0
+    if idx < 0:
+        idx = 0
+    data = _TRACE_HISTORY[idx] if idx < len(_TRACE_HISTORY) else {}
+    history = [{
+        'index': i,
+        'model': t.get('model') or '',
+        'provider': t.get('provider') or '',
+        'turns': t.get('turns'),
+        'total_ms': t.get('total_ms'),
+        'spans': len(t.get('spans') or []),
+        'finished_at': t.get('finished_at'),
+    } for i, t in enumerate(_TRACE_HISTORY)]
     if jsonify is None:
-        return data
-    return jsonify({'code': 0, 'data': data})
+        return {'data': data, 'history': history}
+    return jsonify({'code': 0, 'data': data, 'history': history})
 
 
 def _view_overview():

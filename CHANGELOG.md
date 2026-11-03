@@ -41,9 +41,10 @@
 
 ### LLM 调用链追踪（llm_core 插件）
 - `ToolLoopAgent.arun` 新增 `result.trace` 全链路埋点：`model` 跨度（每轮模型调用的耗时、是否带工具调用、token 用量、模型名、失败原因）+ `tool` 跨度（每个工具执行的耗时与失败标记），并在 `finally` 汇总 `total_ms` / `turns` / `finished_at`。
-- `main.py` 暴露 `GET /api/llm_core/trace` 返回最近一次对话的调用链（`_LAST_TRACE`），便于排障时直接看"哪一轮模型调用慢 / 哪个工具挂了"。
-- `llm_core.__version__` 由 `1.1.1` 提升至 `1.1.2`，已重打包 `llm_core.zip`（md5 变化会触发释放覆盖）。
-- 新增 `tests/test_llm_trace.py` 覆盖 turns / 双跨度 / 字段完整 / 失败工具标记，ALL PASS。
+- `main.py` 暴露 `GET /api/llm_core/trace` 返回对话调用链，便于排障时直接看"哪一轮模型调用慢 / 哪个工具挂了"。追踪改为**进程内保留最近 30 条**（`_TRACE_HISTORY`，索引 0 为最新，超出上限自动淘汰旧记录），接口新增可选 `index` 参数查看历史批次，同时返回 `history` 摘要列表；不带参数时行为与原先一致（返回最新一次）。
+- 面板新增「调用链追踪」标签页（`web/trace.html`）：指标卡（总耗时 / 轮次 / 模型 / 提供商 / 调用次数）+ 按跨度累计排布的执行时间轴（模型与工具分色，失败标红）+ 跨度明细表（含 tokens 入/出与失败原因），并可从下拉框切换历史批次。
+- `llm_core.__version__` 提升至 `1.1.4`，已重打包 `llm_core.zip`（md5 变化会触发释放覆盖）。
+- 新增 `tests/test_llm_trace.py` 覆盖 turns / 双跨度 / 字段完整 / 失败工具标记，以及历史保留、`index` 语义、超限淘汰，ALL PASS。
 
 ### 本地知识库（RAG，llm_core 插件）
 - 新增 `embeddings.py`：可插拔 embedding 客户端，只认 OpenAI 兼容的 `POST /embeddings` 方言，换 `base_url` 即可（BGE-M3 / text-embedding-3-small 等同一套代码）；维度可配置，留 0 时按首次返回自动推断。

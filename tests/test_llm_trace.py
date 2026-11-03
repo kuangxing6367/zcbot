@@ -101,6 +101,67 @@ async def run():
 
 
 asyncio.run(run())
+
+
+# ── 追踪历史保留与 API 语义（main._record_trace / _view_trace）──
+import llm_core.main as main_mod  # noqa: E402
+
+
+class _FakeArgs:
+    def __init__(self, d):
+        self._d = d
+
+    def get(self, k):
+        return self._d.get(k)
+
+
+class _FakeReq:
+    def __init__(self, d):
+        self.args = _FakeArgs(d)
+        self.method = 'GET'
+
+
+def test_history():
+    real_jsonify = main_mod.jsonify
+    main_mod.jsonify = None  # 拿纯 dict，方便断言
+    try:
+        main_mod._TRACE_HISTORY.clear()
+        for i in range(3):
+            main_mod._record_trace({'model': f'm{i}', 'turns': i + 1,
+                                    'total_ms': i * 10, 'spans': []})
+        check(len(main_mod._TRACE_HISTORY) == 3, '记录 3 条历史')
+        check(main_mod._TRACE_HISTORY[0]['model'] == 'm2', '索引 0 是最新一条')
+
+        main_mod.flask_request = _FakeReq({'index': '2'})
+        out = main_mod._view_trace()
+        check(out['data']['model'] == 'm0', 'index=2 取到最早那条')
+        check(len(out['history']) == 3 and out['history'][0]['index'] == 0,
+              'history 摘要按最新在前')
+
+        main_mod.flask_request = _FakeReq({})
+        check(main_mod._view_trace()['data']['model'] == 'm2', '不带 index 默认最新')
+
+        main_mod.flask_request = _FakeReq({'index': '99'})
+        check(main_mod._view_trace()['data'] == {}, 'index 超界返回空')
+        main_mod.flask_request = _FakeReq({'index': 'abc'})
+        check(main_mod._view_trace()['data']['model'] == 'm2', '非法 index 回落最新')
+
+        main_mod._TRACE_HISTORY.clear()
+        for i in range(main_mod._TRACE_MAX + 5):
+            main_mod._record_trace({'model': f'x{i}'})
+        check(len(main_mod._TRACE_HISTORY) == main_mod._TRACE_MAX, '超过上限自动淘汰')
+        check(main_mod._TRACE_HISTORY[0]['model'] == f'x{main_mod._TRACE_MAX + 4}',
+              '淘汰旧的、保留最新的')
+        main_mod._record_trace({})
+        check(len(main_mod._TRACE_HISTORY) == main_mod._TRACE_MAX, '空 trace 不入库')
+    finally:
+        main_mod.jsonify = real_jsonify
+        main_mod.flask_request = None
+        main_mod._TRACE_HISTORY.clear()
+
+
+test_history()
+
 if _FAILED:
     print('RESULT: FAIL')
     sys.exit(1)

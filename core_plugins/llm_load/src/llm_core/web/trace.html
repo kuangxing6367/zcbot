@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>调用链追踪</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --panel: #1c1f26;
+    --panel-2: #22262f;
+    --line: #2e333d;
+    --text: #d8dce3;
+    --muted: #8b93a1;
+    --accent: #6ea8fe;
+    --ok: #5dcaa5;
+    --off: #e0855f;
+    --tool: #c9a7f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 15px; font-weight: 500; margin: 0; letter-spacing: .3px; }
+  h2 { font-size: 13px; font-weight: 500; margin: 22px 0 8px; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .card .num { font-size: 20px; font-weight: 500; letter-spacing: .5px; }
+  .card .cap { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-weight: 400; }
+  th { color: var(--muted); font-size: 12px; background: var(--panel-2); }
+  tr:last-child td { border-bottom: none; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  select {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12px; max-width: 340px;
+  }
+  .msg { padding: 10px 12px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+  .err { border-color: #5b2a2a; color: #e08a8a; }
+  .okcc { border-color: #2e4a3a; color: var(--ok); }
+  .muted { color: var(--muted); }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; border: 1px solid var(--line); }
+  .tag.model { color: var(--accent); border-color: #2b3f5e; }
+  .tag.tool { color: var(--tool); border-color: #43325e; }
+  .tag.bad { color: var(--off); border-color: #5b2a2a; }
+
+  /* 时间轴泳道 */
+  .lane { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px 8px; }
+  .tbody { position: relative; }
+  .tline { position: relative; height: 26px; margin-bottom: 6px; }
+  .tline .name {
+    position: absolute; left: 0; top: 0; width: 150px; height: 26px; line-height: 26px;
+    font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--muted); padding-right: 8px;
+  }
+  .tline .track { position: absolute; left: 156px; right: 56px; top: 0; height: 26px; }
+  .tline .grid { position: absolute; inset: 0; border-left: 1px solid var(--line); }
+  .seg {
+    position: absolute; top: 5px; height: 16px; border-radius: 3px;
+    background: var(--accent); opacity: .85; min-width: 2px;
+  }
+  .seg.tool { background: var(--tool); }
+  .seg.bad { background: var(--off); }
+  .tline .dur {
+    position: absolute; right: 0; top: 0; width: 52px; height: 26px; line-height: 26px;
+    text-align: right; font-size: 12px; color: var(--muted);
+  }
+  .axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 6px; padding-left: 156px; padding-right: 56px; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <h1 style="flex:1">调用链追踪</h1>
+    <select id="pick"></select>
+    <button id="refresh">刷新</button>
+  </div>
+  <div id="status" class="msg">加载中…</div>
+
+  <div class="cards" id="cards" style="margin-top:12px"></div>
+
+  <h2>执行时间轴</h2>
+  <div class="lane" id="lane"><div class="muted">暂无数据</div></div>
+
+  <h2>跨度明细</h2>
+  <div id="spans"><div class="muted">暂无数据</div></div>
+
+<script>
+const TOKEN_KEY = 'zcbot_token'
+
+async function call(url, options = {}) {
+  const headers = { ...(options.headers || {}) }
+  const token = localStorage.getItem(TOKEN_KEY) || ''
+  if (token) headers['Authorization'] = 'Bearer ' + token
+  if (options.body) headers['Content-Type'] = 'application/json'
+  const res = await fetch(url, {
+    ...options, headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
+  const data = await res.json().catch(() => null)
+  if (res.status === 401) throw new Error('未登录或登录已过期，请先登录管理面板')
+  if (!res.ok) throw new Error(`接口不可用（HTTP ${res.status}）：重启框架后重试`)
+  if (!data || data.code !== 0) throw new Error((data && data.msg) || `请求失败（HTTP ${res.status}）`)
+  return data
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+}
+
+function fmtTime(epoch) {
+  if (!epoch) return '-'
+  const d = new Date(epoch * 1000)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+function fmtMs(ms) {
+  if (ms == null) return '-'
+  const n = Number(ms)
+  if (!isFinite(n)) return '-'
+  return n >= 1000 ? (n / 1000).toFixed(2) + ' s' : n.toFixed(0) + ' ms'
+}
+
+function usageText(u) {
+  if (!u || typeof u !== 'object') return '-'
+  const p = u.prompt_tokens != null ? u.prompt_tokens : (u.input_tokens != null ? u.input_tokens : null)
+  const c = u.completion_tokens != null ? u.completion_tokens : (u.output_tokens != null ? u.output_tokens : null)
+  const t = u.total_tokens != null ? u.total_tokens : (p != null && c != null ? p + c : null)
+  if (p == null && c == null && t == null) return '-'
+  return `${p == null ? '?' : p} / ${c == null ? '?' : c}${t == null ? '' : '（共 ' + t + '）'}`
+}
+
+function spanLabel(s) {
+  if (s.type === 'model') return `模型调用 · 第 ${s.turn == null ? '?' : s.turn} 轮`
+  return `${s.name || '工具'} · 第 ${s.turn == null ? '?' : s.turn} 轮`
+}
+
+function isBad(s) {
+  return s.error != null && s.error !== '' && s.error !== false
+}
+
+function render(data) {
+  const status = document.getElementById('status')
+  const spans = Array.isArray(data.spans) ? data.spans : []
+  if (!data || data.model == null && spans.length === 0 && data.total_ms == null) {
+    status.className = 'msg'
+    status.textContent = '还没有对话记录。发起一次对话后回到这里刷新，即可看到这一轮的调用路径。'
+    document.getElementById('cards').innerHTML = ''
+    document.getElementById('lane').innerHTML = '<div class="muted">暂无数据</div>'
+    document.getElementById('spans').innerHTML = '<div class="muted">暂无数据</div>'
+    return
+  }
+  status.className = 'msg okcc'
+  status.textContent = `最近一次对话完成于 ${fmtTime(data.finished_at)}`
+
+  const modelSpans = spans.filter(s => s.type === 'model')
+  const toolSpans = spans.filter(s => s.type === 'tool')
+  const bad = spans.filter(isBad).length
+  document.getElementById('cards').innerHTML = [
+    ['总耗时', fmtMs(data.total_ms)],
+    ['轮次', data.turns == null ? spans.length : data.turns],
+    ['模型', data.model || '-'],
+    ['提供商', data.provider || '-'],
+    ['模型调用', modelSpans.length],
+    ['工具调用', toolSpans.length + (bad ? `（${bad} 失败）` : '')],
+  ].map(([cap, num]) => `<div class="card"><div class="num">${esc(num)}</div><div class="cap">${esc(cap)}</div></div>`).join('')
+
+  // 时间轴：span 只有 duration，按顺序累计排布
+  const total = spans.reduce((a, s) => a + (Number(s.duration_ms) || 0), 0) || 1
+  let acc = 0
+  const lines = spans.map((s, i) => {
+    const dur = Number(s.duration_ms) || 0
+    const left = (acc / total) * 100
+    const width = Math.max((dur / total) * 100, 0.4)
+    acc += dur
+    const cls = 'seg' + (s.type === 'tool' ? ' tool' : '') + (isBad(s) ? ' bad' : '')
+    return `<div class="tline">
+      <div class="name" title="${esc(spanLabel(s))}"><span class="tag ${esc(s.type)}">${esc(s.type === 'model' ? '模型' : '工具')}</span> ${esc(spanLabel(s))}</div>
+      <div class="track"><div class="grid"></div><div class="${cls}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"></div></div>
+      <div class="dur">${esc(fmtMs(dur))}</div>
+    </div>`
+  })
+  document.getElementById('lane').innerHTML = `
+    <div class="tbody">${lines.join('')}</div>
+    <div class="axis"><span>0</span><span>累计 ${esc(fmtMs(total))}</span></div>`
+  if (!spans.length) document.getElementById('lane').innerHTML = '<div class="muted">这一轮没有记录到跨度</div>'
+
+  const rows = spans.map((s, i) => `<tr>
+      <td class="muted">${i + 1}</td>
+      <td><span class="tag ${esc(s.type)}">${esc(s.type === 'model' ? '模型' : '工具')}</span></td>
+      <td>${esc(s.type === 'model' ? (s.model || data.model || '-') : (s.name || '-'))}</td>
+      <td class="muted">${s.turn == null ? '-' : esc(s.turn)}</td>
+      <td>${esc(fmtMs(s.duration_ms))}</td>
+      <td class="muted">${s.type === 'model' ? esc(usageText(s.usage)) : '-'}</td>
+      <td>${isBad(s) ? '<span class="tag bad">失败</span> ' + esc(String(s.error)) : '<span class="muted">正常</span>'}</td>
+    </tr>`).join('')
+  document.getElementById('spans').innerHTML = spans.length
+    ? `<table><thead><tr><th>#</th><th>类型</th><th>对象</th><th>轮次</th><th>耗时</th><th>tokens（入/出）</th><th>结果</th></tr></thead><tbody>${rows}</tbody></table>`
+    : '<div class="muted">这一轮没有记录到跨度</div>'
+}
+
+function fillHistory(history) {
+  const sel = document.getElementById('pick')
+  const prev = sel.value
+  sel.innerHTML = history.map(h => {
+    const label = `#${h.index + 1} ${fmtTime(h.finished_at)} · ${h.model || '-'} · ${h.turns == null ? '-' : h.turns} 轮 · ${fmtMs(h.total_ms)}`
+    return `<option value="${h.index}">${esc(label)}</option>`
+  }).join('')
+  if (prev !== '' && history.some(h => String(h.index) === prev)) sel.value = prev
+}
+
+async function load(index) {
+  const status = document.getElementById('status')
+  const sel = document.getElementById('pick')
+  const idx = index == null ? (sel.value === '' ? 0 : Number(sel.value)) : index
+  try {
+    const res = await call('/api/llm_core/trace?index=' + encodeURIComponent(idx))
+    render(res.data || {})
+    fillHistory(res.history || [])
+    sel.value = String(idx)
+  } catch (e) {
+    status.className = 'msg err'
+    status.textContent = e.message
+  }
+}
+
+document.getElementById('refresh').addEventListener('click', () => load())
+document.getElementById('pick').addEventListener('change', e => load(Number(e.target.value)))
+load(0)
+</script>
+</body>
+</html>
