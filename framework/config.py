@@ -114,6 +114,22 @@ observability:
   metrics: true                # /metrics（Prometheus 文本格式，仅在 API 端口暴露，避免公网 WebUI 端口泄露）
   metrics_token: ""            # 非空时 /metrics 需 Authorization: Bearer <token>（跨机抓取时设置）
 
+# ── 入站可靠性（去重 + 限流，核心基础设施，非运维项）──────────────
+# 生产环境机器人先挂的往往是「没限流」和「重连重放重复回复」，不是命令逻辑。
+# 详见 docs/进阶/可靠性与限流.md。
+reliability:
+  dedup_window: 300            # 入站消息去重窗口（秒）：断线重连 / 客户端重推的同一 message_id
+                              # 只处理首条，后续静默跳过；0=禁用。仅对 message 类事件生效，
+                              # notice/meta/request 本身幂等，不去重。
+  rate_limit:
+    enabled: false             # 默认关闭：阈值带业务属性（群规模/活跃度），由部署方按场景开启
+    window: 60                 # 滑动窗口（秒）
+    global_per_min: 0          # 全局每分钟上限，0=不限
+    group_per_min: 0           # 单群每分钟上限，0=不限
+    user_per_min: 0            # 单用户每分钟上限，0=不限
+    action: skip               # skip=静默丢弃；notify=每窗口至多回复一条限流提示
+    notify_text: "消息过于频繁，请稍后再试。"  # action=notify 时回复文案
+
 # ── SSL / TLS（HTTPS / WSS，可选）───────────────────────────
 # 启用后：Web 管理后台走 https、OneBot 反向 WS 走 wss（两者共用同一份证书）。
 # cert / key 支持绝对路径，或相对项目根目录的路径（如 certs/fullchain.pem）。
@@ -422,6 +438,33 @@ def _generate_default_config(config_path: str):
     _get_logger().info(f"已生成默认配置文件: {config_path}，请按需修改后重启")
 
 
+def fill_missing_sections(config: dict) -> list:
+    """把默认配置里缺失的顶层 section 补进内存配置，返回补了哪些段。
+
+    为什么需要：升级到新版本后，用户手里的 config.yaml 是旧的，新版本引入的
+    配置段（observability / reliability / database.migrations …）在里面根本不存在。
+    不补的话，新能力对存量部署等于不可见、不可调，只能靠翻文档猜。
+
+    两条红线：
+    - 只补**顶层 section**，已存在的段一律不碰（用户改过的值优先级最高）；
+    - **不改写用户文件**——YAML 注释会被 dump 掉，替用户重写配置文件不可接受。
+      想让改动落盘，由用户在面板/文件里自己补，日志会告知补了哪些段。
+    """
+    try:
+        defaults = yaml.safe_load(_DEFAULT_CONFIG) or {}
+    except Exception as e:  # noqa: BLE001 - 默认模板自身损坏不应阻断启动
+        _get_logger().warning(f"解析默认配置模板失败，跳过缺段补齐: {e}")
+        return []
+    if not isinstance(defaults, dict) or not isinstance(config, dict):
+        return []
+    added = []
+    for key, val in defaults.items():
+        if key not in config:
+            config[key] = val
+            added.append(key)
+    return added
+
+
 def load_config(config_path: str = None) -> dict:
     """
     加载 YAML 配置文件，支持环境变量替换
@@ -460,6 +503,18 @@ def load_config(config_path: str = None) -> dict:
 
     # 官方插件配置中心：自动扫描 core_plugins/ 同步 core_plugins.yaml，并合并进 config
     _autoload_core_plugins(config)
+
+    # 新版引入的配置段：旧 config.yaml 里没有 → 用默认值补进内存（不改用户文件）。
+    # 不补的话，新能力（去重/限流、可观测、迁移管控…）对存量部署不可见不可调。
+    try:
+        _added = fill_missing_sections(config)
+    except Exception as e:  # noqa: BLE001
+        _get_logger().warning(f"配置缺段补齐失败（按原配置继续）: {e}")
+    else:
+        if _added:
+            _get_logger().info(
+                "配置文件缺少新版本引入的配置段，已用默认值生效（未改写文件）：%s。"
+                "如需调整，请参考默认配置补写进 config.yaml。", ", ".join(_added))
 
     return config
 

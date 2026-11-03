@@ -139,6 +139,30 @@ class FrameworkDispatchMixin:
         except Exception as e:  # noqa: BLE001 - 补齐失败不应吃掉事件
             logger.debug(f"事件契约补齐失败，按原样分发: {e}")
 
+        # 入站可靠性守卫：断线重连重放去重 + 消息流限流（详见 docs/进阶/可靠性与限流.md）。
+        # 放在入队前——被拦掉的事件不占用分层缓冲槽；守卫自身异常必须放行，绝不吞事件。
+        try:
+            guard = getattr(self, '_inbound_guard', None)
+            if guard is None:
+                from framework.messaging.inbound_guard import InboundGuard
+                guard = InboundGuard(getattr(self, 'config', {}).get('reliability', {}) or {})
+                self._inbound_guard = guard
+            allowed, reason, notify = guard.check(event, bot_name)
+            if not allowed:
+                if reason == 'dedup':
+                    logger.debug("入站消息去重：跳过重放事件（bot=%s, message_id=%s）",
+                                 bot_name, event.get('message_id'))
+                else:
+                    logger.warning("入站消息限流：丢弃事件（bot=%s, %s）", bot_name, reason)
+                    if notify:
+                        try:
+                            await self.reply_text(event, guard.rl_notify)
+                        except Exception as e:
+                            logger.debug("限流提示回复失败（不影响限流判定）: %s", e)
+                return
+        except Exception as e:  # noqa: BLE001 - 守卫故障绝不让消息凭空消失
+            logger.error("入站可靠性守卫异常，已放行事件: %s", e)
+
         # 事件进入内核前的扩展点（任何 handler 返回 False 即丢弃该事件）
         try:
             if False in (await self.hooks.trigger_async(

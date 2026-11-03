@@ -56,6 +56,10 @@ jobs:
         run: python tests/test_json_logging.py
       - name: DB migration ledger regression
         run: python tests/test_db_migrations.py
+      - name: Inbound reliability (dedup + rate limit) regression
+        run: python tests/test_inbound_guard.py
+      - name: Config missing-section fill regression
+        run: python tests/test_config_defaults.py
       # pytest 用例与脚本式回归并存：显式列文件（其余 test_*.py 是模块级 sys.exit 的脚本，
       # 被 pytest 收集会 INTERNALERROR），test_smoke.py 本身两种方式兼容
       - name: Pytest suite (smoke + html_assembler + event_buffer + qq_official + scheduler + db_regression + loop_fix_regression + file_store_fallback + sql_sim_debug + terminal_panel + llm + arch_split)
