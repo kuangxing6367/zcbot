@@ -2,9 +2,12 @@
 """验证 LLM 调用链追踪：agent.arun 在模型调用与工具执行处埋点，产出 result.trace。"""
 import asyncio
 import logging
+import os
 import sys
 
-SRC = r'E:/工程/机器人/zgric_onebot11_35xLe/core_plugins/llm_load/src'
+# 从 __file__ 推导源码目录，别写死本机绝对路径（CI 是 Linux，硬编码必挂）
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(_ROOT, 'core_plugins', 'llm_load', 'src')
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 

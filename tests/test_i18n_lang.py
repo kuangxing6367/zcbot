@@ -3,7 +3,8 @@
 import os
 import sys
 
-ROOT = r'E:/工程/机器人/zgric_onebot11_35xLe'
+# 从 __file__ 推导仓库根，别写死本机绝对路径（CI 是 Linux，硬编码必挂）
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
