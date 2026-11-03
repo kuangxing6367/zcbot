@@ -132,6 +132,7 @@ plugin:
   heartbeat_interval: 60     # 插件注册心跳间隔（秒）
   auto_install_deps_on_startup: true  # 启动时自动安装缺失依赖到全局环境（移机自愈，版本冲突自动跳过）
   max_memory_mb: 64          # 单插件内存上限（MB），超限自动卸载
+  hot_reload: true           # 用户插件（plugins/）源码变更时自动全量热重载（unload+reload），改动的 handler 逻辑即时生效；false 则沿用旧行为（仅重新注册，不重跑模块代码）。仅作用于用户插件，核心插件不参与
 
 # ── 依赖自检（启动自愈）──────────────────────────────────
 # 启动自检读取 requirements.txt，自动安装缺失的核心依赖（移机自愈）。

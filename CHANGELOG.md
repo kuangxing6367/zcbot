@@ -26,6 +26,13 @@
 
 ---
 
+## 开发中（未发布）
+
+### 热重载增强：用户插件保存即生效
+- 新增 `plugin.hot_reload`（默认 `true`）：心跳检测到 `plugins/` 用户插件源码 mtime 变化后，由「仅重新注册」升级为「unload + reload 全量重载」，从源码重新编译，改动的 handler 逻辑真正即时生效；设为 `false` 则退回旧行为（仅 `register(ctx)`）。
+- 复用与 Web 面板「重载」、`retry_failed_plugins` 自愈完全相同的 machinery（`unload_plugin` + `load_plugin` + `register_commands`），核心插件（`core_plugins/`）仍不参与心跳自动重载。
+- 新增 `tests/test_hot_reload.py` 覆盖心跳分派逻辑（开启/关闭/无变更/加载失败四种场景）。
+
 ## [1.10.0] - 2026-11-02
 
 > 主题：**生产化成熟度跃迁**——可观测性（内存黑匣子）、韧性（崩溃守卫 + db 自愈）、多协议接入（适配器注册表 + 命名空间隔离）、启动自愈（单实例锁 + 安全模式假启动）。以下均为已落地并实测通过的变化。

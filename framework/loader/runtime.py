@@ -94,11 +94,57 @@ class PluginRuntimeMixin:
 
 
 
+    def _reload_plugin(self, plugin_name: str) -> bool:
+        """
+        对运行中的用户插件执行全量热重载：unload → load → register。
+
+        与 /api/plugins/<name>/reload 及失败自愈（retry_failed_plugins）使用完全相同的
+        machinery：unload_plugin 负责干净拆除（事件订阅/钩子/原始处理器/调度任务/路由缓存/
+        sys.modules/sys.path/gc），load_plugin 经 _PluginSourceLoader 从源码现场重编译
+        （不读 .pyc，且加载前清本插件 __pycache__），故磁盘上改动的 handler 逻辑真正生效。
+
+        仅由 heartbeat_register 在 hot_reload 启用时调用；核心插件不参与。
+        """
+        logger.info(f"[{plugin_name}] 检测到源码变更，执行热重载...")
+        try:
+            self.unload_plugin(plugin_name)
+        except Exception as e:
+            logger.warning(f"[{plugin_name}] 热重载卸载阶段异常（继续尝试重新加载）: {e}")
+
+        if self.load_plugin(plugin_name):
+            if self.register_commands(plugin_name):
+                # 重载完成后显式校正状态（与 retry_failed_plugins 自愈路径保持一致）
+                try:
+                    self.db.execute(
+                        "UPDATE plugins SET status='running', has_register=1 "
+                        "WHERE plugin_name=%s", (plugin_name,)
+                    )
+                except Exception:
+                    pass
+                try:
+                    self.framework.router._invalidate_cache()
+                except Exception:
+                    pass
+                logger.info(f"[{plugin_name}] 热重载完成（代码已更新）")
+                return True
+            else:
+                logger.error(f"[{plugin_name}] 热重载注册阶段失败，已登记自愈")
+                return False
+        else:
+            logger.error(f"[{plugin_name}] 热重载加载失败，已登记自愈")
+            return False
+
     def heartbeat_register(self):
         """
-        心跳检查：仅对用户插件（plugins/ 目录）中文件发生变化的插件重新 register(ctx)
-        核心插件（core_plugins/）已在启动时注册，不参与心跳
+        心跳检查：仅对用户插件（plugins/ 目录）中文件发生变化的插件应用变更。
+        核心插件（core_plugins/）已在启动时注册，不参与心跳。
+
+        变更应用方式由 plugin.hot_reload 决定：
+          - true（默认）：全量热重载 unload+reload，磁盘改动真正生效；
+          - false：沿用旧行为，仅重新 register(ctx)（模块代码不重跑，适合对重载副作用敏感的插件）。
         """
+        hot_reload = self.framework.config.get('plugin', {}).get('hot_reload', True)
+
         with self._lock:
             plugin_names = list(self._loaded_plugins.keys())
 
@@ -113,15 +159,21 @@ class PluginRuntimeMixin:
             if snap == self._plugin_mtimes.get(name):
                 continue
             try:
-                ok = self.register_commands(name)
+                if hot_reload:
+                    ok = self._reload_plugin(name)
+                else:
+                    ok = self.register_commands(name)
                 if ok:
                     self._plugin_mtimes[name] = snap
                     changed.append(name)
-                    logger.debug(f"[{name}] 心跳增量注册完成")
-                # register 失败时已写入 _failed_mtimes，交由 retry_failed_plugins 自愈，
+                    logger.debug(
+                        f"[{name}] 心跳已应用文件变更（"
+                        f"{'热重载' if hot_reload else '重新注册'}）"
+                    )
+                # 失败时已写入 _failed_mtimes，交由 retry_failed_plugins 自愈，
                 # 不更新 mtime 快照，避免同快照下反复重试同一损坏文件
             except Exception as e:
-                logger.error(f"[{name}] 心跳注册异常: {e}")
+                logger.error(f"[{name}] 心跳变更应用异常: {e}")
 
         # 失败插件自愈：曾加载/注册失败（含文件损坏、register 异常）的插件，
         # 若文件快照发生变化（用户已修复），自动重新加载并注册，无需重启框架
