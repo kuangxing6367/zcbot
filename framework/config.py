@@ -33,6 +33,12 @@ _DEFAULT_CONFIG = """\
 # 也可用启动参数 --language / -l 或环境变量 ZCBOT_LANG 覆盖（优先级更高）
 language: zh
 
+# ── 启动配置 ────────────────────────────────────────────────
+# wait_ready: true  → 等待核心/用户插件全部加载完成、路由表预热后才继续（默认）
+# wait_ready: false → 异步启动：框架基础服务先就绪立即返回，插件后台加载
+startup:
+  wait_ready: true
+
 # ── 数据库配置 ──────────────────────────────────────────────
 # SQLite 模式（默认，零配置开箱即用）
 #   ⚠️ 适用边界：仅适合小环境与开发环境（单写多读、单文件、无网络扩展）。
@@ -48,6 +54,22 @@ database:
   # read_timeout: 30        # 读超时（秒），避免断连后无限阻塞
   # write_timeout: 30       # 写超时（秒）
   # max_reconnect: 3        # 单次操作最大自动重连次数
+
+# ── 事件队列配置 ────────────────────────────────────────────
+# maxsize/workers/drain_timeout 见 framework/core/base.py；buffer 为消息流入分层缓冲
+event_queue:
+  maxsize: 2000
+  workers: 4
+  drain_timeout: 5
+  buffer:
+    l1_max_bytes: 524288
+    sqlite_enabled: false
+    l2_path: data/event_buffer.l2.log
+    sqlite_path: data/event_buffer.db
+    sqlite_write_timeout: 0.5
+    sqlite_batch: 64
+    l3_max_bytes: 4194304
+    full_action: warn_drop
 
 # ── OneBot WebSocket 服务端 ─────────────────────────────────
 # OneBot 客户端反向连接此端口（如 NapCat、Lagrange 等）
@@ -103,20 +125,6 @@ http_inject:
   path: /hook                # POST http://host:port/path
   token: ""                  # 可选；留空则不校验（建议仅内网使用）
 
-# ── 官方插件开关（core_plugins/） ─────────────────────────────
-# 【已弃用】config.yaml 不再管理官方插件启停——官方插件的启停与配置
-# 统一由 core_plugins.yaml 决定（该文件由独立扫描进程
-# tools/scan_core_plugins.py 生成/维护，本段内容不再生效）。
-# 用法：python tools/scan_core_plugins.py --enable <name>  即可启用某插件。
-# 下方段仅为历史兼容占位（值不再参与判定），可整体删除。
-core_plugins:
-  onebot_adapter: true       # OneBot 11 WebSocket 协议接入
-  webui: true                # Web 管理后台
-  session: true              # 会话管理器
-  scheduler: true            # 定时任务调度器
-  http_api: false            # HTTP REST API（给外部程序用）
-  http_inject: false         # HTTP 事件注入接入端
-
 # ── 插件配置 ────────────────────────────────────────────────
 plugin:
   dir: plugins               # 插件代码目录（.py 文件）
@@ -140,6 +148,9 @@ log:
   file: data/logs/zcbot.log  # 日志文件路径（统一存放于 data/logs/），留空则只输出控制台
   log_raw_message: true      # 是否记录收到的原始消息内容
   log_sent_message: true     # 是否记录发送到 OneBot11 的消息内容
+  coalesce: true              # 高并发下重复错误自动合并（防刷屏）
+  coalesce_window: 10         # 合并滑动窗口（秒），窗口内重复只记首条
+  coalesce_level: WARNING     # 参与合并的最低级别（INFO/DEBUG 不合并）
 
 # ── GitHub 加速 ─────────────────────────────────────────────
 # 插件市场 / 插件下载 / 框架更新的 GitHub 加速代理地址
@@ -151,6 +162,13 @@ system:
   show_cpu: true             # 仪表盘显示 CPU 使用率
   show_disk: true            # 仪表盘显示磁盘使用率
   status_interval: 30        # 系统状态刷新间隔（秒）
+
+# ── 内存策略 ────────────────────────────────────────────────
+# allocator: auto/malloc/pymalloc；limit_mb 超触发看门狗清理；check_interval 检查间隔
+memory:
+  allocator: auto
+  limit_mb: 120
+  check_interval: 30
 
 # ── 安全配置 ────────────────────────────────────────────────
 # 由「安全等级」一档统管：蜜罐诱饵、tarpit 延迟、自动拉黑、安全响应头、指纹隐藏、
@@ -257,6 +275,20 @@ dual_process:
   restart_interval: 30      # 限流窗口（秒）（默认 30）
   event_batch_max: 64       # 核心→宿主事件攒批条数上限（<=1 关闭批量，逐条发送）
   event_batch_delay_ms: 5   # 攒批时间窗口（毫秒）；满批或到窗口即发送
+
+# ── IIPC 内核链路（可选，--iipc 启动）────────────────────────
+# 与主框架并列的第二条启动路径；不带 --iipc 时本节不参与。
+# 优先级：命令行 > 本节 > 环境变量 > 内置默认。
+iipc:
+  ipc_addr: "127.0.0.1:18730"
+  db: ":memory:"
+  admin: ""
+  plugins_dir: ""
+  onebot_url: ""
+  onebot_listen: ""
+  onebot_token: ""
+  no_rust: false
+  max_rss_mb: 1024
 
 # ── 调试控制台（无 TTY 也能接进运行中的框架） ──────────────────
 # 启动时在 127.0.0.1 上监听一个本地端口，端口与超长随机 token 自动生成并
