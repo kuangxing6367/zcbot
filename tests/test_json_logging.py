@@ -19,6 +19,7 @@ import logging
 import os
 import sys
 import tempfile
+from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -78,8 +79,13 @@ def test_formatter_fields():
     check(obj['msg'] == '用户登录失败: 1001', f"参数已格式化（{obj['msg']}）")
     check(obj['logger'] == 'zcbot.jsonlog.t1', "logger 名正确")
     check(':' in str(obj['src']), f"src 带行号（{obj['src']}）")
-    check('+08:00' in obj['ts'] or 'Z' in obj['ts'] or '-' in obj['ts'][19:],
-          f"时间戳带时区（{obj['ts']}）")
+    # 时区断言必须与时区无关：CI 跑在 UTC，本机是 UTC+8，不能写死偏移量
+    try:
+        _dt = datetime.fromisoformat(obj['ts'])
+        tz_ok = _dt.tzinfo is not None
+    except ValueError:
+        tz_ok = False
+    check(tz_ok, f"时间戳可解析且带时区（{obj['ts']}）")
 
 
 def test_extra_fields():
