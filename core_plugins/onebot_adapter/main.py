@@ -309,13 +309,17 @@ class ApiCaller:
         conn = self.get_connection(bot)
         if conn is None:
             return {"status": "failed", "retcode": -1, "msg": "无可用 OneBot 连接"}
-        return await conn.acall(action, **params)
+        from framework.messaging.outbound_guard import gate as _out_gate
+        return await _out_gate.execute_async(
+            action, bot, params, lambda: conn.acall(action, **params))
 
     def call(self, action: str, bot: str = None, **params) -> dict:
         conn = self.get_connection(bot)
         if conn is None:
             return {"status": "failed", "retcode": -1, "msg": "无可用 OneBot 连接"}
-        return conn.call(action, **params)
+        from framework.messaging.outbound_guard import gate as _out_gate
+        return _out_gate.execute_sync(
+            action, bot, params, lambda: conn.call(action, **params))
 
     def broadcast(self, action: str, **params) -> dict:
         return {n: c.call(action, **params) for n, c in self._connections.items()}

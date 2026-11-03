@@ -171,6 +171,15 @@ def snapshot(framework, ctx=None) -> dict:
             'checks': checks}
 
 
+def outbound_stats() -> dict:
+    """出站闸门计数快照（发送/失败/限流/重试/累计等待），与 /metrics 同源"""
+    try:
+        from framework.messaging.outbound_guard import gate
+        return gate.stats()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def request_counts(limit: int = 12) -> list:
     """HTTP 请求计数快照（按次数倒序，仅取前 N 项供面板展示）"""
     with _REQ_LOCK:
@@ -346,6 +355,20 @@ def register(ctx):
 
             emit('zcbot_ws_connections', 'gauge', '已连接接入端数量',
                  [(None, _ws_connections())])
+
+            ob = outbound_stats()
+            if ob:
+                emit('zcbot_outbound_sent_total', 'counter', '出站发送成功累计数',
+                     [(None, ob.get('sent', 0))])
+                emit('zcbot_outbound_failed_total', 'counter', '出站发送失败累计数',
+                     [(None, ob.get('failed', 0))])
+                emit('zcbot_outbound_throttled_total', 'counter',
+                     '出站因限流被拒累计数', [(None, ob.get('throttled', 0))])
+                emit('zcbot_outbound_retried_total', 'counter', '出站重试累计次数',
+                     [(None, ob.get('retried', 0))])
+                emit('zcbot_outbound_waited_seconds_total', 'counter',
+                     '出站因限流累计等待秒数',
+                     [(None, (ob.get('waited_ms', 0) or 0) / 1000.0)])
 
             if 'rss' in proc:
                 emit('zcbot_process_resident_memory_bytes', 'gauge',

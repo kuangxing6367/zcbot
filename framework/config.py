@@ -130,6 +130,30 @@ reliability:
     action: skip               # skip=静默丢弃；notify=每窗口至多回复一条限流提示
     notify_text: "消息过于频繁，请稍后再试。"  # action=notify 时回复文案
 
+# ── 出站闸门（发送节流 + 失败重试）──────────────────────────
+# 入站守卫的对称面：管"发出去"这一侧。只作用于发送类动作（send_msg / send_group_msg /
+# send_private_msg / send_group_forward_msg / send_like / upload_group_file 等），
+# get_* 查询动作原样直通，不受节流也不重试。
+#
+# 节流是**等待**而非丢弃：发送是插件的明确意图，静默丢弃会让插件以为已发出。
+# 等待超过 max_wait 才返回失败结构（retcode=-4, throttled=true），失败可见但不无限拖住。
+#
+# 重试只覆盖"确定没发出去"的失败：retcode=-3（本地通道异常）。
+# -1 未连接不重试（等一会儿也不会自己好）；-2 超时**不重试**——超时不代表没送达，
+# 重试只会产生重复消息，而重复消息比发送失败更难排查。
+outbound:
+  rate_limit:
+    enabled: true              # 默认开启：阈值明显高于正常业务、低于平台惩罚线
+    window: 60                 # 滑动窗口（秒）
+    global_per_min: 180        # 全局每分钟上限（所有目标合计），0=不限
+    group_per_min: 30          # 单群每分钟上限，0=不限
+    user_per_min: 20           # 单用户私聊每分钟上限，0=不限
+    max_wait: 5.0              # 单次发送最多等多久（秒），超过即放弃并返回失败
+  retry:
+    enabled: true
+    attempts: 1                # 额外重试次数（0=不重试），之后按 backoff 翻倍退避
+    backoff: 0.4               # 首次重试前等待（秒）
+
 # ── SSL / TLS（HTTPS / WSS，可选）───────────────────────────
 # 启用后：Web 管理后台走 https、OneBot 反向 WS 走 wss（两者共用同一份证书）。
 # cert / key 支持绝对路径，或相对项目根目录的路径（如 certs/fullchain.pem）。

@@ -206,10 +206,12 @@ def register(ctx):
             health = {}
             buffer_stats = {}
             req_counts = []
+            outbound = {}
             try:
                 from framework.api import observability as _obs
                 health = _obs.snapshot(framework)
                 req_counts = _obs.request_counts(limit=10)
+                outbound = _obs.outbound_stats()
                 buf = getattr(framework, '_event_buffer', None)
                 if buf is not None and hasattr(buf, 'stats'):
                     buffer_stats = buf.stats() or {}
@@ -244,6 +246,7 @@ def register(ctx):
                 'health': health,
                 'event_buffer': buffer_stats,
                 'requests': req_counts,
+                'outbound': outbound,
                 'db_degraded': bool(getattr(framework, 'db_degraded', False)),
             }})
         except Exception as e:
@@ -253,7 +256,8 @@ def register(ctx):
     # ---- 系统配置（config.yaml 分组读写）----
 
     _YAML_SECTIONS = ('database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system',
-                      'security', 'framework', 'observability')
+                      'security', 'framework', 'observability',
+                      'reliability', 'outbound')
 
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth

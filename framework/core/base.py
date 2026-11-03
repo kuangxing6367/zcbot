@@ -63,6 +63,9 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             enabled=_bb_cfg.get('enabled', True),
             max_bytes=_bb_cfg.get('max_bytes', 102400),
         )
+        # 出站闸门（发送节流 + 失败重试）：配置在此生效，之后可用 PUT /api/config/yaml/outbound 热改
+        from framework.messaging.outbound_guard import gate as _out_gate
+        _out_gate.configure(self.config.get('outbound'))
         # 数据目录统一迁移（logs / plugins_dat → data/ 下），必须在日志与插件加载前执行
         self._migrate_legacy_data_dirs()
         # 日志合并器实例集（stop() 时统一停掉后台 flush 线程）

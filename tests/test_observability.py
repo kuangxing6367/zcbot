@@ -123,6 +123,9 @@ def test_metrics_content():
         check(name in text, f"包含指标 {name}")
     check('# TYPE zcbot_up gauge' in text, "带 Prometheus TYPE 声明")
     check('zcbot_plugins_failed' in text, "暴露插件失败数")
+    for name in ('zcbot_outbound_sent_total', 'zcbot_outbound_throttled_total',
+                 'zcbot_outbound_retried_total'):
+        check(name in text, f"暴露出站闸门指标 {name}")
     # 探针自身不计入请求数
     check('status="200"' not in text, "探针请求未被计入 zcbot_http_requests_total")
 

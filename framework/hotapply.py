@@ -109,7 +109,28 @@ def _apply_plugin(framework, cfg: dict) -> list:
     return notes
 
 
-_APPLIERS.update({'log': _apply_log, 'framework': _apply_framework, 'plugin': _apply_plugin})
+def _apply_outbound(framework, cfg: dict) -> list:
+    """出站闸门（发送节流 + 重试）：阈值是运行期读的，改完立即生效"""
+    try:
+        from framework.messaging.outbound_guard import gate
+        snap = gate.configure(cfg)
+        rl = snap['rate_limit']
+        rt = snap['retry']
+        state = '开启' if rl['enabled'] else '关闭'
+        return [
+            f"出站节流即时生效：{state}（全局 {rl['global_per_min']}/分，"
+            f"单群 {rl['group_per_min']}/分，单用户 {rl['user_per_min']}/分，"
+            f"最长等待 {rl['max_wait']}s）",
+            f"出站重试即时生效：{'开启' if rt['enabled'] else '关闭'}"
+            f"（额外 {rt['attempts']} 次，首次退避 {rt['backoff']}s）",
+        ]
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[热应用] 出站闸门配置应用失败: {e}")
+        return [f'出站闸门配置应用失败: {e}']
+
+
+_APPLIERS.update({'log': _apply_log, 'framework': _apply_framework,
+                  'plugin': _apply_plugin, 'outbound': _apply_outbound})
 
 
 # 部分生效的段：能热应用的只是其中一部分键，其余仍要重启

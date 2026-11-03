@@ -58,6 +58,8 @@ jobs:
         run: python tests/test_db_migrations.py
       - name: Inbound reliability (dedup + rate limit) regression
         run: python tests/test_inbound_guard.py
+      - name: Outbound gate (throttle + retry) regression
+        run: python tests/test_outbound_guard.py
       - name: Config missing-section fill regression
         run: python tests/test_config_defaults.py
       # pytest 用例与脚本式回归并存：显式列文件（其余 test_*.py 是模块级 sys.exit 的脚本，

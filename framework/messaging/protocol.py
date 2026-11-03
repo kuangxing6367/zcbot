@@ -167,7 +167,7 @@ class ProtocolAdapter(ABC):
     # ─────────────────────────────────────────────────────────────
 
     async def acall(self, action: str, bot: str = None, **params) -> dict:
-        """异步动作调用（默认转发到 call_api）"""
+        """异步动作调用（默认转发到 call_api，发送类动作经出站闸门）"""
         fw = getattr(self, 'framework', None)
         if fw is not None and getattr(fw, 'hooks', None) is not None:
             try:
@@ -175,7 +175,9 @@ class ProtocolAdapter(ABC):
                     HookPoints.ACTION_BEFORE, action, params, bot)
             except Exception as e:
                 logger.error(f"action.before 扩展点异常: {e}")
-        result = await self.call_api(action, bot, **params)
+        from framework.messaging.outbound_guard import gate as _out_gate
+        result = await _out_gate.execute_async(
+            action, bot, params, lambda: self.call_api(action, bot, **params))
         if fw is not None and getattr(fw, 'hooks', None) is not None:
             try:
                 await fw.hooks.trigger_async(
@@ -192,19 +194,23 @@ class ProtocolAdapter(ABC):
                 fw.hooks.trigger_sync(HookPoints.ACTION_BEFORE, action, params, bot)
             except Exception as e:
                 logger.error(f"action.before 扩展点异常: {e}")
-        coro = self.call_api(action, bot, **params)
-        loop = getattr(fw, 'loop', None) if fw else None
-        if loop is not None and loop.is_running():
+
+        def _invoke():
+            coro = self.call_api(action, bot, **params)
+            loop = getattr(fw, 'loop', None) if fw else None
+            if loop is not None and loop.is_running():
+                try:
+                    return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=15)
+                except Exception as e:
+                    return {"status": "failed", "retcode": -3, "msg": str(e)}
+            # 没有可复用的运行循环时，在本线程临时运行（极少路径）
             try:
-                result = asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=15)
+                return asyncio.run(coro)
             except Exception as e:
-                result = {"status": "failed", "retcode": -3, "msg": str(e)}
-        # 没有可复用的运行循环时，在本线程临时运行（极少路径）
-        else:
-            try:
-                result = asyncio.run(coro)
-            except Exception as e:
-                result = {"status": "failed", "retcode": -3, "msg": str(e)}
+                return {"status": "failed", "retcode": -3, "msg": str(e)}
+
+        from framework.messaging.outbound_guard import gate as _out_gate
+        result = _out_gate.execute_sync(action, bot, params, _invoke)
         if fw is not None and getattr(fw, 'hooks', None) is not None:
             try:
                 fw.hooks.trigger_sync(HookPoints.ACTION_AFTER, action, params, bot, result)
