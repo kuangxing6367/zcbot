@@ -1,0 +1,27 @@
+# 中文活泼版（Ciallo～(∠・ω< )⌒☆ 风格）
+# 基调：俏皮、带颜文字；只改语气、不改事实。
+# 嵌套结构，加载时自动展平为「模块.语义」点号 key。
+
+framework:
+  initializing: 'Ciallo～(∠・ω< )⌒☆ 正在给框架核心引擎热热身...'
+  init_done: 'Ciallo～(∠・ω< )⌒☆ 核心引擎准备好啦～'
+  starting: 'Ciallo～(∠・ω< )⌒☆ ZCBOT 框架启动中咯～ 稍等一小下，马上就好喵～'
+  started: 'Ciallo～(∠・ω< )⌒☆ 启动完成啦～ 正竖起耳朵等你的消息哦～（总共花了 {elapsed}s）'
+  stopping: 'Ciallo～(∠・ω< )⌒☆ 要收工啦～ 正在把框架停下来...'
+  stopped: 'Ciallo～(∠・ω< )⌒☆ 框架已经乖乖躺好咯～ 下次见！'
+
+app:
+  ctrl_c: 'Ciallo～(∠・ω< )⌒☆ 收到 Ctrl+C，先退下啦～'
+
+plugin:
+  loaded: 'Ciallo～(∠・ω< )⌒☆ [{name}] v{version} 装载完毕～'
+  disabled: 'Ciallo～(∠・ω< )⌒☆ [{name}] 在睡懒觉（core_plugins.{name}: {enabled}），先不叫它～'
+
+webui:
+  started: 'Ciallo～(∠・ω< )⌒☆ 管理后台开门啦～ {url}'
+
+console:
+  ready: 'Ciallo～(∠・ω< )⌒☆ 调试控制台就位～ {addr}（token {bits} 位，凭证在数据库 console_access；本地 `python main.py attach` 就能接入）'
+
+terminal:
+  skipped: 'Ciallo～(∠・ω< )⌒☆ 这里不是交互终端，陪聊先跳过啦～（命令还能走 API/IPC 哦）'

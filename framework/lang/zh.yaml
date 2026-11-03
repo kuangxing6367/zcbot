@@ -1,0 +1,28 @@
+# 简体中文（标准，默认）
+# 基调：正式、简洁
+# 嵌套结构，加载时自动展平为「模块.语义」点号 key，与 i18n.t() 调用一致。
+# 新增文案在此追加，不要写进 i18n.py 源码。
+
+framework:
+  initializing: '正在初始化框架核心引擎...'
+  init_done: '框架核心引擎初始化完成'
+  starting: 'ZCBOT 框架 启动中...'
+  started: '框架启动完成，等待消息...（总耗时 {elapsed}s）'
+  stopping: '正在停止框架...'
+  stopped: '框架已停止'
+
+app:
+  ctrl_c: '收到 Ctrl+C，已退出。'
+
+plugin:
+  loaded: '[{name}] 加载成功 v{version}'
+  disabled: '官方插件 [{name}] 已禁用 (core_plugins.{name}: {enabled})'
+
+webui:
+  started: 'Web UI 已启动: {url}'
+
+console:
+  ready: '调试控制台已就绪：{addr}（token {bits} 位，凭证存于数据库 console_access；本地执行 `python main.py attach` 接入）'
+
+terminal:
+  skipped: '终端交互已跳过：stdin 非交互终端（CI/守护进程/重定向环境），终端命令仍可通过 API/IPC 触发'

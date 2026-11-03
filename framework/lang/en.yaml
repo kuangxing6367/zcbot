@@ -1,0 +1,27 @@
+# English
+# Tone: formal, concise
+# Nested; flattened to dotted keys on load. New strings go here, not in i18n.py.
+
+framework:
+  initializing: 'Initializing framework core engine...'
+  init_done: 'Framework core engine initialized'
+  starting: 'ZCBOT framework starting...'
+  started: 'Framework started, waiting for messages... (took {elapsed}s)'
+  stopping: 'Stopping framework...'
+  stopped: 'Framework stopped'
+
+app:
+  ctrl_c: 'Received Ctrl+C, exiting.'
+
+plugin:
+  loaded: '[{name}] loaded v{version}'
+  disabled: 'Official plugin [{name}] disabled (core_plugins.{name}: {enabled})'
+
+webui:
+  started: 'Web UI started: {url}'
+
+console:
+  ready: 'Debug console ready: {addr} (token {bits} bits, credentials stored in DB console_access; run `python main.py attach` locally)'
+
+terminal:
+  skipped: 'Terminal interaction skipped: stdin is not an interactive terminal (CI/daemon/redirected); commands still available via API/IPC'

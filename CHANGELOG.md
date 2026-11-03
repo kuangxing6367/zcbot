@@ -33,6 +33,12 @@
 - 复用与 Web 面板「重载」、`retry_failed_plugins` 自愈完全相同的 machinery（`unload_plugin` + `load_plugin` + `register_commands`），核心插件（`core_plugins/`）仍不参与心跳自动重载。
 - 新增 `tests/test_hot_reload.py` 覆盖心跳分派逻辑（开启/关闭/无变更/加载失败四种场景）。
 
+### i18n 词条外置到 `framework/lang/`
+- 把 `framework/i18n.py` 内嵌的 `LANGS` 词条字典剥离到 `framework/lang/zh.yaml` / `en.yaml` / `ciallo.yaml` 三个数据文件，源码只保留加载逻辑与 `t()` / `set_language()` 等 API，对外契约不变。
+- 加载时自动将 YAML 嵌套结构展平为「模块.语义」点号 key，与既有 `i18n.t('framework.started', ...)` 调用完全兼容；新增语言只需在 `framework/lang/` 下加一个 `<code>.yaml`，无需改代码。
+- 新增 `tests/test_i18n_lang.py` 覆盖三语言切换、占位符、缺失回退与嵌套展平。
+- 同步更新 `docs/指南/多语言.md`（新增词条位置 + 词条存储描述）。
+
 ## [1.10.0] - 2026-11-02
 
 > 主题：**生产化成熟度跃迁**——可观测性（内存黑匣子）、韧性（崩溃守卫 + db 自愈）、多协议接入（适配器注册表 + 命名空间隔离）、启动自愈（单实例锁 + 安全模式假启动）。以下均为已落地并实测通过的变化。
