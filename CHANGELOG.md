@@ -26,7 +26,9 @@
 
 ---
 
-## 开发中（未发布）
+## [1.11.0] - 2026-11-03
+
+> 主题：**开发者体验与智能层补齐**——改插件保存即生效（HMR）、内核文案外置、LLM 调用链可见、Agent 具备本地知识库。以下均为已落地并实测通过的变化。
 
 ### 热重载增强：用户插件保存即生效
 - 新增 `plugin.hot_reload`（默认 `true`）：心跳检测到 `plugins/` 用户插件源码 mtime 变化后，由「仅重新注册」升级为「unload + reload 全量重载」，从源码重新编译，改动的 handler 逻辑真正即时生效；设为 `false` 则退回旧行为（仅 `register(ctx)`）。
@@ -53,6 +55,10 @@
 - 面板新增「知识库」标签页（`kb.html`）：粘贴文本入库、检索自测、文档列表与删除、一键清空。
 - `core_plugins/llm_load/requirements.txt`：声明 `sqlite-vec>=0.1.9`，随插件启用自动安装；装不上时自动退 memory 后端，功能不受影响。
 - `__version__` -> `1.1.3`；新增 `tests/test_llm_rag.py` 覆盖入库 / 向量召回 / 关键词召回 / 删除 / 工具函数，ALL PASS（memory 后端 + 确定性假 embedding，CI 可跑）。
+
+### 工程与测试
+- CI 测试矩阵补入本迭代新增的四个脚本式回归：`test_hot_reload.py`、`test_i18n_lang.py`、`test_llm_trace.py`、`test_llm_rag.py`（此前只在本地跑，未进 `tests.yml`）。
+- `tests/test_llm_load.py` 的现网一致性检查改为**提示语义**：本机重打包后未重启时 `plugins/llm_core` 必然落后，属正常状态，由装载器下次启动按 md5 覆盖；不再因此假红。
 
 ## [1.10.0] - 2026-11-02
 

@@ -159,13 +159,20 @@ def test_migratable_files_follow_framework():
 
 
 def test_live_target_synced():
-    """若本机已经释放过，检查它是否与当前载荷一致（提示作用，不算失败）"""
+    """若本机已经释放过，检查它是否与当前载荷一致（提示作用，不算失败）。
+
+    本机重打包后未重启时，plugins/llm_core 必然是旧版——这是正常状态：
+    装载器下次启动会按文件 md5 自动覆盖释放。真一致性由启动时校验保证，
+    这里只做提示，避免本地/CI 因「还没重启」出现假红。
+    """
     if not os.path.isdir(os.path.join(_REPO_ROOT, 'plugins', 'llm_core')):
         return "尚未释放到 plugins/，跳过"
     m = read_manifest(_ZIP)
     dat = os.path.join(_REPO_ROOT, 'data', 'plugins_dat', 'llm_core')
     report = verify(os.path.join(_REPO_ROOT, 'plugins', 'llm_core'), m, dat)
-    assert report['ok'], f"现网副本与载荷不一致：缺失{report['missing']} 不符{report['mismatch']}"
+    if not report['ok']:
+        return (f"提示：现网副本与载荷不一致（缺失{report['missing']} 不符{report['mismatch']}），"
+                f"重启框架后由装载器按 md5 覆盖释放")
     return f"本机 plugins/llm_core 与载荷一致（{report['total']} 个文件）"
 
 

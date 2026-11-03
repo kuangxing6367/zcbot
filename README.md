@@ -11,7 +11,7 @@
 [![PyPI](https://img.shields.io/badge/PyPI-zcbot-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/zcbot/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#开源协议)
-[![Release](https://img.shields.io/badge/release-v1.10.0-orange)](https://gitee.com/liquanfeng123/zcbot/releases)
+[![Release](https://img.shields.io/badge/release-v1.11.0-orange)](https://gitee.com/liquanfeng123/zcbot/releases)
 
 <br>
 
@@ -44,6 +44,7 @@ ZCBOT 是一个**不绑定任何聊天协议**的机器人框架。内核只负�
 11. 🔒 **单实例锁 + 安全模式** —— 防止重复运行；持久配置错误时挂起「假启动」，让 `Type=simple` 守护进程停止无脑拉起，不再空吃冷启动税（崩溃计数文件 `error.log*` 清零后自愈）。
 12. 🩺 **平台化依赖诊断** —— 插件加载失败自动归类（缺依赖 / 版本不兼容 / 系统运行库缺失），给出中文提示与 `pip install` 命令，并附原始报错，不再是一串英文堆栈。
 13. 🔑 **Web 后台安全提醒** —— 用默认密码（`admin` / `admin123`）登录后，后台顶部提示「建议修改密码」并可一键跳转（建议，非强制）。
+14. **LLM 子系统（可选插件）** —— 提供商与工具双总线、工具调用闭环、会话窗口、多模态与 MCP；内置本地知识库（混合检索 RAG，向量 + 全文，单 SQLite 文件）与调用链追踪面板。不启用时内核毫无感知。
 
 ## 快速上手
 
