@@ -45,6 +45,14 @@
 - `llm_core.__version__` 由 `1.1.1` 提升至 `1.1.2`，已重打包 `llm_core.zip`（md5 变化会触发释放覆盖）。
 - 新增 `tests/test_llm_trace.py` 覆盖 turns / 双跨度 / 字段完整 / 失败工具标记，ALL PASS。
 
+### 本地知识库（RAG，llm_core 插件）
+- 新增 `embeddings.py`：可插拔 embedding 客户端，只认 OpenAI 兼容的 `POST /embeddings` 方言，换 `base_url` 即可（BGE-M3 / text-embedding-3-small 等同一套代码）；维度可配置，留 0 时按首次返回自动推断。
+- 新增 `knowledge.py`：单个 SQLite 文件收纳「文档 / 切片 / 向量 / 全文索引」。向量后端双形态——`sqlite_vec`（vec0 虚拟表，向量内联进库）与 `memory`（numpy 暴力余弦），`sqlite_vec` 不可用时自动降级；检索为**混合检索**：向量语义召回 + FTS5 trigram 关键词召回（BM25），再用 RRF 倒数排名融合。
+- `main.py`：新增 `rag` 配置段与 `_init_kb()` 懒初始化；把 `knowledge_search` 注册进工具总线（Agent 可自主调用检索本地资料）；新增知识库管理接口（入库 / 列表 / 删除 / 检索 / 清空）。
+- 面板新增「知识库」标签页（`kb.html`）：粘贴文本入库、检索自测、文档列表与删除、一键清空。
+- `core_plugins/llm_load/requirements.txt`：声明 `sqlite-vec>=0.1.9`，随插件启用自动安装；装不上时自动退 memory 后端，功能不受影响。
+- `__version__` -> `1.1.3`；新增 `tests/test_llm_rag.py` 覆盖入库 / 向量召回 / 关键词召回 / 删除 / 工具函数，ALL PASS（memory 后端 + 确定性假 embedding，CI 可跑）。
+
 ## [1.10.0] - 2026-11-02
 
 > 主题：**生产化成熟度跃迁**——可观测性（内存黑匣子）、韧性（崩溃守卫 + db 自愈）、多协议接入（适配器注册表 + 命名空间隔离）、启动自愈（单实例锁 + 安全模式假启动）。以下均为已落地并实测通过的变化。

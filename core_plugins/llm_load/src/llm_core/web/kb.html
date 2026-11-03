@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --panel: #1c1f26;
+    --panel-2: #22262f;
+    --line: #2e333d;
+    --text: #d8dce3;
+    --muted: #8b93a1;
+    --accent: #6ea8fe;
+    --ok: #5dcaa5;
+    --off: #e0855f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 15px; font-weight: 500; margin: 0 0 14px; letter-spacing: .3px; }
+  h2 { font-size: 13px; font-weight: 500; margin: 20px 0 8px; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .card .num { font-size: 20px; font-weight: 500; letter-spacing: .5px; }
+  .card .cap { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-weight: 400; }
+  th { color: var(--muted); font-size: 12px; background: var(--panel-2); }
+  tr:last-child td { border-bottom: none; }
+  td.title { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.danger:hover { border-color: var(--off); color: var(--off); }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  input[type=text] {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px;
+  }
+  input.grow { flex: 1; min-width: 160px; }
+  textarea {
+    width: 100%; min-height: 110px; resize: vertical;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 13px;
+  }
+  .msg { padding: 10px 12px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+  .err { border-color: #5b2a2a; color: #e08a8a; }
+  .okcc { border-color: #2e4a3a; color: var(--ok); }
+  .hit { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .hit .src { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  .hit .score { color: var(--accent); font-size: 12px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <h1 style="flex:1;margin:0">知识库</h1>
+    <button id="refresh">刷新</button>
+    <button id="clear" class="danger">清空知识库</button>
+  </div>
+  <div id="status" class="msg">加载中…</div>
+
+  <div class="cards" id="cards" style="margin-top:12px"></div>
+
+  <h2>入库（粘贴文本）</h2>
+  <div class="row">
+    <input id="title" type="text" placeholder="标题（可留空，自动截取正文）" class="grow">
+    <input id="source" type="text" placeholder="来源标记（可选，如 manual / url）" class="grow">
+    <button id="ingest">入库</button>
+  </div>
+  <textarea id="text" placeholder="把要入库的文档 / 资料粘贴到这里。入库时会自动切块并向量化。"></textarea>
+
+  <h2>检索测试</h2>
+  <div class="row">
+    <input id="q" type="text" placeholder="输入检索词，验证召回效果" class="grow">
+    <input id="k" type="text" placeholder="返回条数" value="5" style="width:90px">
+    <button id="search">检索</button>
+  </div>
+  <div id="hits"></div>
+
+  <h2>已入库文档</h2>
+  <div id="docs"></div>
+
+<script>
+const TOKEN_KEY = 'zcbot_token'
+
+async function call(url, options = {}) {
+  const headers = { ...(options.headers || {}) }
+  const token = localStorage.getItem(TOKEN_KEY) || ''
+  if (token) headers['Authorization'] = 'Bearer ' + token
+  if (options.body) headers['Content-Type'] = 'application/json'
+  const res = await fetch(url, {
+    ...options, headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
+  const data = await res.json().catch(() => null)
+  if (res.status === 401) throw new Error('未登录或登录已过期，请先登录管理面板')
+  if (!res.ok) throw new Error(`接口不可用（HTTP ${res.status}）：重启框架后重试`)
+  if (!data || data.code !== 0) throw new Error((data && data.msg) || `请求失败（HTTP ${res.status}）`)
+  return data
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+}
+
+function fmtTime(epoch) {
+  if (!epoch) return '-'
+  const d = new Date(epoch * 1000)
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status')
+  el.className = 'msg' + (cls ? ' ' + cls : '')
+  el.textContent = msg
+}
+
+function renderDocs(docs, count) {
+  document.getElementById('cards').innerHTML =
+    `<div class="card"><div class="num">${esc(count.docs || 0)}</div><div class="cap">文档数</div></div>` +
+    `<div class="card"><div class="num">${esc(count.chunks || 0)}</div><div class="cap">切片数</div></div>`
+
+  if (!docs.length) {
+    document.getElementById('docs').innerHTML = '<div class="msg">知识库还是空的。上面粘贴文本入库后，Agent 就能通过 knowledge_search 检索到。</div>'
+    return
+  }
+  let html = '<table><thead><tr><th>ID</th><th>标题</th><th>来源</th><th>切片</th><th>入库时间</th><th></th></tr></thead><tbody>'
+  for (const d of docs) {
+    html += `<tr><td>${esc(d.id)}</td>`
+    html += `<td class="title" title="${esc(d.title)}">${esc(d.title)}</td>`
+    html += `<td class="muted">${esc(d.source || '-')}</td>`
+    html += `<td>${esc(d.chunks)}</td>`
+    html += `<td class="muted">${esc(fmtTime(d.created_at))}</td>`
+    html += `<td><button class="danger" data-del="${esc(d.id)}">删除</button></td></tr>`
+  }
+  html += '</tbody></table>'
+  document.getElementById('docs').innerHTML = html
+  document.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-del')
+      if (!confirm(`删除文档 #${id}？该操作不可撤销。`)) return
+      try {
+        await call('/api/llm_core/kb/docs/' + encodeURIComponent(id), { method: 'DELETE' })
+        setStatus(`已删除文档 #${id}`, 'okcc')
+        await load()
+      } catch (e) { setStatus(e.message, 'err') }
+    })
+  })
+}
+
+async function load() {
+  try {
+    const r = await call('/api/llm_core/kb/docs')
+    renderDocs(r.data.docs || [], r.data.count || {})
+    setStatus('知识库就绪')
+  } catch (e) {
+    setStatus(e.message, 'err')
+    document.getElementById('docs').innerHTML = ''
+    document.getElementById('cards').innerHTML = ''
+  }
+}
+
+document.getElementById('refresh').addEventListener('click', load)
+
+document.getElementById('ingest').addEventListener('click', async () => {
+  const title = document.getElementById('title').value.trim()
+  const text = document.getElementById('text').value.trim()
+  const source = document.getElementById('source').value.trim()
+  if (!text) { setStatus('正文不能为空', 'err'); return }
+  const btn = document.getElementById('ingest')
+  btn.disabled = true
+  setStatus('入库中（切块 + 向量化）…')
+  try {
+    const r = await call('/api/llm_core/kb/ingest', { method: 'POST', body: { title, text, source } })
+    setStatus(`入库成功，文档 #${r.data.doc_id}`, 'okcc')
+    document.getElementById('title').value = ''
+    document.getElementById('text').value = ''
+    document.getElementById('source').value = ''
+    await load()
+  } catch (e) {
+    setStatus(e.message, 'err')
+  } finally {
+    btn.disabled = false
+  }
+})
+
+document.getElementById('search').addEventListener('click', async () => {
+  const q = document.getElementById('q').value.trim()
+  const k = document.getElementById('k').value.trim() || '5'
+  if (!q) { setStatus('请输入检索词', 'err'); return }
+  setStatus('检索中…')
+  try {
+    const r = await call('/api/llm_core/kb/search?q=' + encodeURIComponent(q) + '&k=' + encodeURIComponent(k))
+    const hits = r.data.results || []
+    if (!hits.length) {
+      document.getElementById('hits').innerHTML = '<div class="msg">没有命中。</div>'
+    } else {
+      document.getElementById('hits').innerHTML = hits.map(h =>
+        `<div class="hit"><div class="src">${esc(h.title || '未命名')} · 片段#${esc(h.idx)} <span class="score">score ${esc(h.score)}</span></div>${esc(h.text)}</div>`
+      ).join('')
+    }
+    setStatus(`命中 ${hits.length} 条`, 'okcc')
+  } catch (e) {
+    setStatus(e.message, 'err')
+    document.getElementById('hits').innerHTML = ''
+  }
+})
+
+document.getElementById('clear').addEventListener('click', async () => {
+  if (!confirm('清空整个知识库？所有文档与向量都会被删除，不可撤销。')) return
+  try {
+    const r = await call('/api/llm_core/kb/clear', { method: 'POST' })
+    setStatus(`已清空：${r.data.docs} 篇文档 / ${r.data.chunks} 个切片`, 'okcc')
+    document.getElementById('hits').innerHTML = ''
+    await load()
+  } catch (e) { setStatus(e.message, 'err') }
+})
+
+load()
+</script>
+</body>
+</html>

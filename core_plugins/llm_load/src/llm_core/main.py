@@ -45,6 +45,8 @@ from .history import (ConversationStore, SessionPersist, estimate_tokens,
 from .media import MediaCache, build_user_content, extract_images
 from .mcp import bind_mcp_tools
 from .providers import OpenAICompatProvider, Provider, ProviderError, ProviderRegistry
+from .embeddings import EmbeddingClient, EmbeddingError
+from .knowledge import KnowledgeBase
 from .tools import FunctionTool, ToolRegistry, llm_function, schema_from_callable
 
 logger = logging.getLogger('zcbot.llm_core')
@@ -59,22 +61,25 @@ _Service: Optional['LLMCoreService'] = None
 # 最近一次对话的调用链追踪（供 /api/llm_core/trace 暴露，全局保留最新一份）
 _LAST_TRACE: dict = {}
 
+# 本地知识库（RAG）实例：register() 里按需初始化；未配置时保持 None
+_KB: Optional[KnowledgeBase] = None
+
 # 对话闸门：外部插件（如黑名单管理）注册的准入检查。
 # gate(user_id) -> 拒绝时返回提示文本，放行返回 None。任一闸门拒绝即拒绝。
 _CHAT_GATES: List[Any] = []
 
 __plugin_meta__ = {
     "name": "LLM 对话核心",
-    "version": "1.0.6",
+    "version": "1.1.3",
     "author": "ZGRIC",
-    "desc": "模型提供商总线 + 函数（工具）总线 + 工具调用闭环 + 会话窗口治理",
+    "desc": "模型提供商总线 + 函数（工具）总线 + 工具调用闭环 + 会话窗口治理 + 本地知识库（RAG）",
     "priority": 100,
 }
 
 # 版本号仅用于 /llmstatus 展示与日志；llm_load 重新释放/重启是按 manifest 里
 # 每个文件的 md5 比对触发的（改了源码重新打包即可，见 tools/build_llm_payload.py），
 # 不依赖这个号是否递增。改动源码后照常 --write 重打包即可生效。
-__version__ = '1.1.2'
+__version__ = '1.1.3'
 
 _DEFAULT_SYSTEM_PROMPT = (
     "你是跑在聊天软件里的助手。回答要用口语，别写小作文，"
@@ -146,10 +151,90 @@ def calculator(expression: str):
 _BUILTIN_TOOLS = [get_current_time, calculator]
 
 
+# ── 本地知识库（RAG）──────────────────────────────────────
+def _rag_config() -> dict:
+    """rag 配置段：JSON 对象（面板里写成 JSON 字符串）。返回解析后的 dict。"""
+    raw = _cfg('rag', '{}')
+    if isinstance(raw, str):
+        raw = (raw or '').strip() or '{}'
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("rag 配置不是合法 JSON，已忽略")
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
+def _init_kb():
+    """按 rag 配置懒初始化知识库；未启用或配置不全时保持 _KB=None。"""
+    global _KB
+    _KB = None
+    cfg = _rag_config()
+    if not cfg.get('enabled', False):
+        return
+    client = EmbeddingClient.from_config(cfg)
+    if client is None:
+        logger.warning("rag.enabled=true 但未配置 embedding 端点（base_url），知识库未启用")
+        return
+    try:
+        data_dir = ctx.get_data_dir() if ctx else '.'
+        os.makedirs(data_dir, exist_ok=True)
+        db_path = os.path.join(data_dir, 'llm_kb.db')
+        _KB = KnowledgeBase(
+            db_path=db_path,
+            embed=client.embed,
+            dims=int(cfg.get('dims') or 0),
+            chunk_size=int(cfg.get('chunk_size') or 400),
+            chunk_overlap=int(cfg.get('chunk_overlap') or 80),
+            backend=cfg.get('backend', 'auto'),
+        )
+        logger.info(f"知识库就绪：{_KB.backend} 后端，向量维度 {_KB.dims or '待首次入库推断'}")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"知识库初始化失败: {e}")
+        _KB = None
+
+
+@llm_function(
+    name='knowledge_search',
+    description='检索本地知识库。当用户问到「资料 / 文档 / 手册 / 我之前存过的内容 / 某个具体事实」时调用，'
+                '把命中的片段作为回答依据。入参 query 是检索词，尽量概括用户想查的内容。',
+    parameters={'type': 'object',
+                'properties': {'query': {'type': 'string',
+                                        'description': '检索词，概括用户想查的内容'}},
+                'required': ['query']},
+    timeout=25,
+)
+def knowledge_search(query: str) -> str:
+    """检索本地知识库，返回命中片段拼接文本。"""
+    if _KB is None:
+        return "知识库尚未启用：请在插件配置的 rag 段填写 embedding 端点并开启 enabled，再问我。"
+    try:
+        hits = _KB.search(query, top_k=int(_cfg('rag_top_k', 5)))
+    except EmbeddingError as e:
+        return f"知识库检索出错：{e}"
+    except Exception as e:  # noqa: BLE001
+        return f"知识库检索出错：{e}"
+    if not hits:
+        return "知识库里没有命中相关内容。"
+    lines = []
+    for i, h in enumerate(hits, 1):
+        title = h.get('title') or ''
+        src = f"（来源：{title}）" if title else ''
+        lines.append(f"【片段{i}】{src}\n{h['text']}")
+    return "\n\n".join(lines)
+
+
 # ── 配置读取 ──────────────────────────────────────────────────
 
 def _cfg(key: str, default=None):
-    """读插件配置。配置项会自动出现在 Web 面板（源码静态发现）。"""
+    """读插件配置。配置项会自动出现在 Web 面板（源码静态发现）。
+
+    ctx 只在 register() 里被赋值（模块顶层没有），用 globals().get 兜底，
+    未初始化时直接回落默认，避免 NameError。
+    """
+    ctx = globals().get('ctx')
     if ctx is None:
         return default
     try:
@@ -732,6 +817,68 @@ def _view_clear_sessions():
     return jsonify({'code': 0, 'data': {'cleared': n}})
 
 
+# ── 知识库（RAG）管理接口 ──────────────────────────────────
+def _view_kb_ingest():
+    if _KB is None:
+        return jsonify({'code': 1, 'msg': '知识库未启用（检查 rag 配置）'})
+    body = (flask_request.get_json(silent=True) or {}) if flask_request else {}
+    title = (body.get('title') or '').strip()
+    text = (body.get('text') or '').strip()
+    source = (body.get('source') or '').strip()
+    if not text:
+        return jsonify({'code': 1, 'msg': 'text 不能为空'})
+    if not title:
+        title = (text[:30] + '…') if len(text) > 30 else text
+    try:
+        doc_id = _KB.add_text(title, text, source=source)
+    except EmbeddingError as e:
+        return jsonify({'code': 1, 'msg': f'向量化失败：{e}'})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'code': 1, 'msg': f'入库失败：{e}'})
+    return jsonify({'code': 0, 'data': {'doc_id': doc_id}})
+
+
+def _view_kb_docs():
+    if _KB is None:
+        return jsonify({'code': 1, 'msg': '知识库未启用'})
+    return jsonify({'code': 0, 'data': {'docs': _KB.list_docs(), 'count': _KB.count()}})
+
+
+def _view_kb_delete(doc_id: str):
+    if _KB is None:
+        return jsonify({'code': 1, 'msg': '知识库未启用'})
+    try:
+        doc_id = int(doc_id)
+    except ValueError:
+        return jsonify({'code': 1, 'msg': 'doc_id 必须是整数'})
+    ok = _KB.delete_doc(doc_id)
+    return jsonify({'code': 0 if ok else 1, 'msg': 'ok' if ok else '文档不存在'})
+
+
+def _view_kb_search():
+    if _KB is None:
+        return jsonify({'code': 1, 'msg': '知识库未启用'})
+    q = _req_arg('q', '')
+    try:
+        k = int(_req_arg('k', 5) or 5)
+    except ValueError:
+        k = 5
+    try:
+        hits = _KB.search(q, top_k=k)
+    except EmbeddingError as e:
+        return jsonify({'code': 1, 'msg': f'检索失败：{e}'})
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'code': 1, 'msg': f'检索失败：{e}'})
+    return jsonify({'code': 0, 'data': {'results': hits}})
+
+
+def _view_kb_clear():
+    if _KB is None:
+        return jsonify({'code': 1, 'msg': '知识库未启用'})
+    before = _KB.clear()
+    return jsonify({'code': 0, 'data': before})
+
+
 # ── 会话管理接口 ──────────────────────────────────────────────
 
 def _req_arg(key: str, default=None):
@@ -925,6 +1072,11 @@ def register(plugin_ctx):
             if tool is not None:
                 registry.register(tool.clone(owner='llm_core', source='builtin'))
 
+    # 1.1 本地知识库（RAG）：配置开启时初始化，并把 knowledge_search 挂进工具总线
+    _init_kb()
+    if _KB is not None:
+        registry.register(knowledge_search.__llm_tool__.clone(owner='llm_core', source='builtin'))
+
     # 2. 提供商总线
     cfgs = _providers_config()
     if not cfgs:
@@ -1028,6 +1180,16 @@ def register(plugin_ctx):
                          methods=['POST'], description="导出会话为 JSONL")
         ctx.register_api('/api/llm_core/sessions/clear', _view_clear_sessions,
                          methods=['POST'], description="清空全部会话")
+        ctx.register_api('/api/llm_core/kb/ingest', _view_kb_ingest,
+                         methods=['POST'], description="知识库入库（文本）")
+        ctx.register_api('/api/llm_core/kb/docs', _view_kb_docs,
+                         methods=['GET'], description="知识库文档列表")
+        ctx.register_api('/api/llm_core/kb/docs/<doc_id>', _view_kb_delete,
+                         methods=['DELETE'], description="删除文档")
+        ctx.register_api('/api/llm_core/kb/search', _view_kb_search,
+                         methods=['GET'], description="知识库检索")
+        ctx.register_api('/api/llm_core/kb/clear', _view_kb_clear,
+                         methods=['POST'], description="清空知识库")
     else:
         logger.info("未检测到 Flask，LLM 面板接口暂不挂载（启用 webui 插件后重载即生效）")
 

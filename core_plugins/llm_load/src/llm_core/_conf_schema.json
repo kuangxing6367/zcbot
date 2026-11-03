@@ -108,5 +108,17 @@
     "type": "text",
     "default": "[]",
     "hint": "stdio 示例：{\"name\":\"fs\",\"transport\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\",\"/tmp\"]}；http 示例：{\"name\":\"remote\",\"transport\":\"http\",\"url\":\"https://x/mcp\"}"
+  },
+  "rag": {
+    "description": "本地知识库（RAG）配置（JSON 对象，留 {} 表示关闭）",
+    "type": "text",
+    "default": "{}",
+    "hint": "{\"enabled\":true,\"base_url\":\"https://api.openai.com/v1\",\"api_key\":\"sk-...\",\"model\":\"text-embedding-3-small\",\"dims\":1536}。base_url 是 OpenAI 兼容的 embeddings 端点（如 BGE-M3 自建服务填其 /v1 地址）；中文优先用 BGE-M3（dims=1024）。dims 留 0 会按首次入库自动推断；backend 可填 sqlite_vec / memory，默认 auto"
+  },
+  "rag_top_k": {
+    "description": "知识库检索返回片段数",
+    "type": "number",
+    "default": 5,
+    "hint": "每次 knowledge_search 返回的命中片段上限"
   }
 }
