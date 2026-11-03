@@ -57,6 +57,7 @@ export default defineConfig({
             { text: '编写插件', link: '/指南/编写插件' },
             { text: '多轮会话', link: '/指南/多轮会话' },
             { text: '接入大模型（LLM）', link: '/指南/接入大模型' },
+            { text: '本地知识库（RAG）', link: '/指南/本地知识库' },
             { text: '接入端契约与规范消息', link: '/指南/接入端契约' },
             { text: '最佳实践', link: '/指南/最佳实践' }
           ]
