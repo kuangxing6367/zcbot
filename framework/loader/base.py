@@ -16,6 +16,7 @@ from typing import Dict
 import yaml
 
 from framework.loader.config import PluginConfigMixin, _CONFIG_FILE_EXTS  # noqa: F401  _CONFIG_FILE_EXTS 定义在 config，此处 re-export
+from framework.loader.graph import PluginGraphMixin
 from framework.loader.lifecycle import PluginLifecycleMixin, _PluginSourceLoader  # noqa: F401
 from framework.loader.runtime import PluginRuntimeMixin
 from framework.loader.ui import (
@@ -55,7 +56,7 @@ _CODE_FILE_NAMES = {
     'pyproject.toml', 'setup.cfg', 'tox.ini',
 }
 
-class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, PluginGroupSettingsMixin, PluginConfigMixin, PluginRuntimeMixin, PluginLifecycleMixin):
+class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, PluginGroupSettingsMixin, PluginConfigMixin, PluginRuntimeMixin, PluginLifecycleMixin, PluginGraphMixin):
     """插件加载器，管理插件生命周期"""
 
     def __init__(self, plugins_dir: str, framework, plugins_dat_dir: str = None):
@@ -83,6 +84,12 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         self._plugin_mtimes: Dict[str, float] = {}
         # ── 加载失败插件自愈：失败插件名 → 失败时文件快照（mtime 变化后心跳自动重试加载）──
         self._failed_mtimes: Dict[str, float] = {}
+
+        # ── 声明式依赖（__plugin_meta__['requires']）──
+        # 静态 meta 缓存：plugin_name -> (mtime, meta)；依赖拦截原因：plugin_name -> reason
+        self._declared_meta_cache: Dict[str, tuple] = {}
+        self._dep_errors: Dict[str, str] = {}
+        self._graph_lock = threading.Lock()
 
     # ── 依赖检查 / 自动安装 / 隔离 venv ──────────────────────
     # 已剥离到 framework/deps/ 的 PluginDepsMixin（混入本类），
@@ -494,13 +501,26 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
 
         已在数据库中标记为禁用（is_active=0）的插件会被跳过，
         避免「框架重启后仍然加载已禁用插件」的问题。
+
+        加载顺序按 `__plugin_meta__['requires']` 做拓扑排序；依赖未满足的插件
+        直接拒绝加载并记录明确原因（不再「先加载再说、半个插件活着」）。
         """
         discovered = self.discover()
-        success = []
+        candidates = []
         for name in discovered:
             if not self.is_plugin_active_in_db(name):
                 logger.info(f"[{name}] 插件已被禁用（is_active=0），跳过加载")
                 continue
+            candidates.append(name)
+
+        ordered, problems = self.resolve_load_order(candidates)
+        for name, reason in problems.items():
+            logger.error(f"[{name}] 依赖未满足，拒绝加载：{reason}"
+                         f"（检查 __plugin_meta__['requires'] 或启用被依赖插件）")
+            self._record_dep_error(name, reason)
+
+        success = []
+        for name in ordered:
             if self.load_plugin(name):
                 success.append(name)
         # 启动内存监控

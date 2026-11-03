@@ -71,6 +71,10 @@ def register(ctx):
                     'dependencies': yaml_data.get('dependencies', {}),
                     'config_files': config_files,
                     'dep_status': framework.plugin_loader.get_missing_deps(plugin_name),
+                    # 声明式插件依赖（__plugin_meta__['requires']）：已声明 / 未满足 / 拦截原因
+                    'requires': framework.plugin_loader.declared_requires(plugin_name),
+                    'requires_unmet': framework.plugin_loader.check_requires(plugin_name),
+                    'dep_error': framework.plugin_loader.get_dep_error(plugin_name),
                 }
             })
         except Exception as e:

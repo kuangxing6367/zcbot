@@ -235,7 +235,7 @@ def register(ctx):
     # ---- 系统配置（config.yaml 分组读写）----
 
     _YAML_SECTIONS = ('database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system',
-                      'security', 'framework')
+                      'security', 'framework', 'observability')
 
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth
@@ -270,9 +270,18 @@ def register(ctx):
         if not _update_yaml_section(section, merged):
             return jsonify({'code': 500, 'msg': '写入 config.yaml 失败'}), 500
 
-        framework.config.setdefault(section, {}).update(values)
+        # 写盘成功后再应用到运行中的框架（内存配置 + 运行时副作用），并回报哪些字段即时生效
+        from framework import hotapply
+        applied = hotapply.apply_section(framework, section, values)
+
         audit_log(admin['id'], admin['username'], 'update_yaml_config', 'config', section, values)
-        return jsonify({'code': 0, 'msg': f'配置段 [{section}] 已保存，部分字段需重启生效'})
+        msg = f'配置段 [{section}] 已保存'
+        if applied.get('notes'):
+            msg += '，' + '；'.join(applied['notes'])
+        if applied.get('restart_required'):
+            reason = applied.get('restart_reason') or '重启后生效'
+            msg += f'；{reason}'
+        return jsonify({'code': 0, 'msg': msg, 'data': applied})
 
     # ---- 内存黑匣子调试接口 ----
     from framework.blackbox import get_frames, stats as bb_stats, clear as bb_clear

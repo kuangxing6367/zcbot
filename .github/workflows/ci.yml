@@ -50,6 +50,7 @@ jobs:
             tests/test_buffer_l2_file.py \
             tests/test_core_plugin_switch.py \
             tests/test_buffer_refill.py \
+            tests/test_config_hotapply.py \
             tests/test_console_server.py \
             tests/test_db_regression.py \
             tests/test_dual_core.py \
@@ -60,7 +61,9 @@ jobs:
             tests/test_llm_core.py \
             tests/test_llm_load.py \
             tests/test_loop_fix_regression.py \
+            tests/test_observability.py \
             tests/test_message_contract.py \
+            tests/test_plugin_requires.py \
             tests/test_plugin_decorators.py \
             tests/test_qq_official.py \
             tests/test_qq_official_extra.py \

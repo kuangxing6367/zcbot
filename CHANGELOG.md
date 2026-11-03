@@ -26,6 +26,35 @@
 
 ---
 
+## [1.12.0] - 2026-11-03
+
+> 主题：**让框架可运维、可演进**——此前缺的不是功能，而是「外部系统怎么判断它健康」「插件怎么表达先后顺序」「改配置要不要重启」「API 破坏性变更往哪落」。
+
+### 健康探针与指标端点（可观测性）
+- 新增 `framework/api/observability.py`：`GET /healthz`（存活，不查库）、`GET /readyz`（就绪，带逐项检查明细）、`GET /metrics`（Prometheus 文本格式，零第三方依赖）。
+- 此前 `/healthz`、`/readyz`、`/metrics` 只是蜜罐的诱饵（伪 nginx 404 / 假 actuator 内容），现在真实路由优先，蜜罐注册时自动跳过已占用路径；关闭开关后才回落到诱饵。
+- 探针免登录 / 免限速 / 免人机验证 / 不写审计；端口隔离与纯 API 模式下 `/healthz`、`/readyz` 在两个端口都可达，`/metrics` 只在 API 端口暴露，避免公网 WebUI 端口泄露运行数据。
+- `/metrics` 支持 `observability.metrics_token`（Bearer 或 `?token=`），指标覆盖构建信息、运行时长、就绪、插件加载/失败数、数据库可用性、事件缓冲四层条目与字节、丢弃计数、WS 连接数、进程 RSS/线程数、按 method+status 聚合的请求计数（不含探针自身）。
+- 新增 `observability` 配置段（`health` / `metrics` / `metrics_token`），并纳入 `/api/config/yaml/observability` 可编辑段。
+- 新增 `tests/test_observability.py`：覆盖免鉴权、未就绪 503、逐项检查、指标内容、探针不计入请求数、令牌鉴权、关闭开关、端口隔离 8 组场景。
+
+### 插件声明式依赖 `requires`
+- 新增 `framework/loader/graph.py`：`__plugin_meta__` 支持 `requires`（list / 逗号分隔字符串 / dict 键），用 AST 静态解析（不执行插件代码），按 mtime 缓存。
+- `load_all` 改为拓扑排序加载；依赖不存在、被禁用或加载失败的插件**直接拒绝加载**并给出明确原因，不再产生「加载成功但功能异常」的半个插件；循环依赖判定为异常且不死锁。
+- `load_plugin`（单插件加载 / 热重载路径）增加同样的前置校验；拦截原因可通过 `GET /api/plugins/<name>/config` 的 `dep_error` / `requires_unmet` 查询，已加载插件（含官方插件）视为满足。
+- 新增 `tests/test_plugin_requires.py`：解析 / 归一化 / 拓扑排序 / 缺失与循环拒绝 / 已加载满足 / 运行时拦截 / 真实 Framework 端到端。
+
+### 配置热应用
+- 新增 `framework/hotapply.py`：`PUT /api/config/yaml/<section>` 写盘后把新值应用到运行中框架，并在响应 `data` 里返回 `live` / `restart_required` / `restart_reason` / `notes`，前端消息直接说明哪些字段已生效、哪些要重启。
+- 即时生效：`log.level`（直接改 root logger）、`framework.blackbox`（开关与内存上限）、`security.rate_limit`（`RateLimitGuard.update_config` 重建限速器）、`plugin.hot_reload`。
+- 需重启：`database` / `web` / `onebot` / `ssl` / `event_queue` / `dual_process` / `iipc` / `console` / `observability`，以及未注册 applier 的未知段（保守判定，不假装生效）。
+- 支持第三方注册 applier：`hotapply.register(section, fn)`，`fn(framework, section_cfg) -> list[str]`。
+- 新增 `tests/test_config_hotapply.py`：日志级别真变、黑匣子上限（含 16KB 下限兜底）、分段判定、部分生效段、自定义 applier、`/api/v1` 别名。
+
+### API 版本前缀
+- 所有真实 `/api/*` 路由自动挂一份 `/api/v1/*` 别名（同一 `view_func`），旧路径保持不变；蜜罐兜底与静态文件不参与别名。
+- 为将来的破坏性变更预留落点：新语义走 `/api/v2/*`，`v1` 保持旧语义。
+
 ## [1.11.0] - 2026-11-03
 
 > 主题：**开发者体验与智能层补齐**——改插件保存即生效（HMR）、内核文案外置、LLM 调用链可见、Agent 具备本地知识库。以下均为已落地并实测通过的变化。

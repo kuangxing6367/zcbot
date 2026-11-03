@@ -246,6 +246,18 @@ class PluginLifecycleMixin:
         """
         plugin_path = plugin_path or os.path.join(self.plugins_dir, plugin_name)
 
+        # ====== 声明式依赖校验（__plugin_meta__['requires']）======
+        # 依赖未加载就不加载本插件：半个插件（register 跑完但拿不到依赖的服务）
+        # 比明确失败更难排查。load_all 已拓扑排序，这里是单插件加载/热重载的兜底。
+        unmet = self.check_requires(plugin_name, plugin_path)
+        if unmet:
+            reason = f"缺少依赖插件: {', '.join(unmet)}"
+            logger.error(f"[{plugin_name}] 依赖未满足，拒绝加载：{reason}"
+                         f"（__plugin_meta__['requires']）")
+            self._record_dep_error(plugin_name, reason)
+            return False
+        self.clear_dep_error(plugin_name)
+
         # 将插件目录加入 sys.path
         if plugin_path not in sys.path:
             sys.path.insert(0, plugin_path)
@@ -332,6 +344,10 @@ class PluginLifecycleMixin:
                     'desc': meta.get('desc', ''),
                     'priority': meta.get('priority', 50),
                 }
+                # 声明式依赖（可选）：透传给 WebUI / 依赖图，便于排障时看清加载先后
+                if meta.get('requires'):
+                    from framework.loader.graph import normalize_requires
+                    plugin_meta['requires'] = normalize_requires(meta.get('requires'))
 
                 # 读取 plugin.yaml 覆盖元数据
                 if yaml_data:

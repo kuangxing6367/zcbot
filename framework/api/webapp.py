@@ -117,28 +117,38 @@ def create_web_app(framework) -> Flask:
         resp.headers['Cache-Control'] = 'no-store'
         return resp
 
+    # 健康探针路径：编排系统不感知端口隔离/纯 API 模式，必须任何端口都可达。
+    # /metrics 视为与 /api/* 同侧（只在 API 端口暴露），避免公网 WebUI 端口泄露运行指标。
+    from framework.api.observability import PROBE_PATHS as _PROBE_PATHS
+    from framework.api.observability import METRICS_PATH as _METRICS_PATH
+
     @app.before_request
     def _port_split_guard():
         """按监听端口隔离职责：WebUI 端口无真实 API，API 端口无静态页面；
-        纯 API 模式下本进程只认 /api/*，其余一律 404（不提供前端、也不挂诱饵）。"""
+        纯 API 模式下本进程只认 /api/*，其余一律 404（不提供前端、也不挂诱饵）。
+        健康探针例外：任何端口/模式下都放行（否则容器探针永远失败）。"""
         path = request.path or ''
-        # 纯 API 模式：本进程只监听 API，非 /api/* 一律 404
+        # 存活/就绪探针：不区分端口，直接放行
+        if path in _PROBE_PATHS:
+            return None
+        _is_metrics = (path == _METRICS_PATH)
+        # 纯 API 模式：本进程只监听 API，非 /api/* 一律 404（指标端点同侧放行）
         if _API_ONLY:
-            if not path.startswith('/api/'):
+            if not path.startswith('/api/') and not _is_metrics:
                 return jsonify({'code': 404, 'msg': 'Not Found'}), 404
             return None
         if not SPLIT_PORTS:
             return None
         srv = str(request.environ.get('SERVER_PORT') or '')
 
-        # API 端口：只服务 /api/*
+        # API 端口：只服务 /api/*（含指标端点）
         if srv == _api_port:
-            if not path.startswith('/api/'):
+            if not path.startswith('/api/') and not _is_metrics:
                 return jsonify({'code': 404, 'msg': 'Not Found'}), 404
             return None
 
         # WebUI 端口：不暴露真实 API，一律交给诱饵
-        if srv == _web_port and path.startswith('/api/'):
+        if srv == _web_port and (path.startswith('/api/') or _is_metrics):
             endpoint = getattr(request.url_rule, 'endpoint', '') or ''
             if not endpoint.startswith('_honeypot'):
                 from framework.api import honeypot as _hpm
@@ -320,6 +330,22 @@ def create_web_app(framework) -> Flask:
         _RL_CFG,
         is_exempt=lambda ip: dual_auth.is_whitelisted(ip) or dual_auth.is_internal(ip),
     )
+
+    # 配置热应用：限速器在启动时由配置构建，改 config.yaml 不会自己变；
+    # 这里注册 applier，使「设置 → 安全/限速」保存后立即按新参数拦截。
+    from framework import hotapply as _hotapply
+
+    def _apply_security_hot(_fw, _cfg):
+        rl = (_cfg or {}).get('rate_limit')
+        if not isinstance(rl, dict) or not rl:
+            return []
+        changed = _rate_guard.update_config(rl)
+        if not changed:
+            return []
+        return [f'限速参数即时生效（{", ".join(changed)}）；'
+                f'蜜罐/人机验证参数重启后生效']
+
+    _hotapply.register('security', _apply_security_hot)
 
     @app.before_request
     def _global_rate_guard():
@@ -674,7 +700,7 @@ def create_web_app(framework) -> Flask:
     from framework.api import (
         auth, admins, apikeys, dashboard, plugins, commands, users_groups, tasks,
         logs, config, db_gateway, framework_ops, webui, files, stats, perm_api,
-        static_routes, session_tokens, honeypot,
+        static_routes, session_tokens, honeypot, observability,
     )
     auth.register(ctx)
     admins.register(ctx)
@@ -686,6 +712,9 @@ def create_web_app(framework) -> Flask:
     tasks.register(ctx)
     logs.register(ctx)
     config.register(ctx)
+    # 健康探针 / 指标：必须早于蜜罐注册 —— 蜜罐的 /healthz /readyz /metrics 诱饵
+    # 只在没有真实路由时才生效（其注册时自行跳过已被占用的路径）。
+    observability.register(ctx)
     db_gateway.register(ctx)
     framework_ops.register(ctx)
     webui.register(ctx)
@@ -704,7 +733,43 @@ def create_web_app(framework) -> Flask:
     _api_registry.set_web_context(app, require_auth)
     _api_registry.mount_all(app, require_auth)
 
+    # ---- /api/v1/* 别名（全部真实 API 都能带版本前缀访问，旧路径保持可用）----
+    _mount_api_v1_aliases(app)
+
     return app
+
+
+def _mount_api_v1_aliases(app):
+    """给所有真实的 /api/* 规则补一条 /api/v1/* 别名。
+
+    背景：插件与外部脚本已直接依赖 `/api/xxx`，未来做破坏性变更时没有落脚点。
+    现在提前把「版本前缀」这条通道铺好：`/api/v1/xxx` 与 `/api/xxx` 指向同一个
+    view_func，行为完全一致（不影响任何现有调用方）。
+
+    只别名真实路由：蜜罐兜底（`_honeypot*`）与静态文件不参与，避免把诱饵
+    也复制一份到 v1 下。
+    """
+    created = 0
+    for rule in list(app.url_map.iter_rules()):
+        path = rule.rule or ''
+        if not path.startswith('/api/') or path.startswith('/api/v1/'):
+            continue
+        endpoint = rule.endpoint or ''
+        if endpoint.startswith('_honeypot') or endpoint == 'static':
+            continue
+        view = app.view_functions.get(endpoint)
+        if view is None:
+            continue
+        alias = '/api/v1' + path[len('/api'):]
+        methods = set(rule.methods or ()) - {'HEAD', 'OPTIONS'}
+        try:
+            app.add_url_rule(alias, endpoint=endpoint, view_func=view,
+                             methods=sorted(methods) or None)
+            created += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[API 版本化] 别名注册失败 {alias}: {e}")
+    if created:
+        logger.info(f"[API 版本化] 已挂载 {created} 条 /api/v1/* 别名（旧路径保持不变）")
 
 
 # 向后兼容 re-export（WebServer 本体已拆至 webserver.py）

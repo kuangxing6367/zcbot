@@ -97,6 +97,14 @@ web:
     order: []
     hidden: []
 
+# ── 可观测性（健康探针 / 指标端点）────────────────────────────
+# 供 Docker healthcheck / Kubernetes probe / systemd / 负载均衡 / Prometheus 使用。
+# 三个端点只读、零新依赖；免登录、免限速、免人机验证（否则外部探针无法通过）。
+observability:
+  health: true                 # /healthz（存活，不查库）与 /readyz（就绪，含逐项检查明细）
+  metrics: true                # /metrics（Prometheus 文本格式，仅在 API 端口暴露，避免公网 WebUI 端口泄露）
+  metrics_token: ""            # 非空时 /metrics 需 Authorization: Bearer <token>（跨机抓取时设置）
+
 # ── SSL / TLS（HTTPS / WSS，可选）───────────────────────────
 # 启用后：Web 管理后台走 https、OneBot 反向 WS 走 wss（两者共用同一份证书）。
 # cert / key 支持绝对路径，或相对项目根目录的路径（如 certs/fullchain.pem）。

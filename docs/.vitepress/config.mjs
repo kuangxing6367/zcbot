@@ -94,6 +94,7 @@ export default defineConfig({
             { text: '数据库', link: '/进阶/数据库' },
             { text: '定时任务', link: '/进阶/定时任务' },
             { text: '权限系统', link: '/进阶/权限系统' },
+            { text: '可观测性与运维接口', link: '/进阶/可观测性与运维' },
             { text: '接口令牌（API Key）', link: '/进阶/接口令牌' },
             { text: '部署上线', link: '/进阶/部署上线' },
             { text: '双核心架构（实验）', link: '/进阶/双核心架构' },

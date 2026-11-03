@@ -181,3 +181,51 @@ class RateLimitGuard:
             return {'enabled': self.enabled, 'hits': self._hits, 'blocked': self._blocked,
                     'global_qps': self.global_qps, 'per_ip_max': self.per_ip_max,
                     'per_ip_window': self.per_ip_window, 'strict_max': self.strict_max}
+
+    def update_config(self, cfg: dict) -> dict:
+        """热更新限速参数（不重启即生效）。
+
+        只重建被改动的那几个限速器：改 per_ip_max 会清空该窗口的累计计数，
+        改 global_qps 会重置令牌桶；其余参数原样保留，累计命中/拦截计数不清零。
+        返回实际生效的字段名列表。
+        """
+        cfg = cfg or {}
+        applied = []
+        with self._lock:
+            if 'enabled' in cfg:
+                self.enabled = bool(cfg['enabled'])
+                applied.append('enabled')
+            if 'global_qps' in cfg:
+                self.global_qps = float(cfg['global_qps'])
+                self._qps = TokenBucket(self.global_qps, max(self.global_qps, 1.0) * 2)
+                applied.append('global_qps')
+            ip_changed = False
+            if 'per_ip_max' in cfg:
+                self.per_ip_max = int(cfg['per_ip_max'])
+                ip_changed = True
+                applied.append('per_ip_max')
+            if 'per_ip_window' in cfg:
+                self.per_ip_window = float(cfg['per_ip_window'])
+                ip_changed = True
+                applied.append('per_ip_window')
+            if ip_changed:
+                self._ip = SlidingWindow(self.per_ip_max, self.per_ip_window)
+            strict_changed = False
+            if 'strict_max' in cfg:
+                self.strict_max = int(cfg['strict_max'])
+                strict_changed = True
+                applied.append('strict_max')
+            if 'strict_window' in cfg:
+                self.strict_window = float(cfg['strict_window'])
+                strict_changed = True
+                applied.append('strict_window')
+            if strict_changed:
+                self._strict = SlidingWindow(self.strict_max, self.strict_window)
+            if 'strict_paths' in cfg:
+                paths = cfg['strict_paths'] or ()
+                self.strict_paths = tuple(paths)
+                applied.append('strict_paths')
+            if 'whitelist_bypass' in cfg:
+                self.whitelist_bypass = bool(cfg['whitelist_bypass'])
+                applied.append('whitelist_bypass')
+        return applied
