@@ -26,7 +26,23 @@
 
 ---
 
-## 开发中（未发布）
+## [1.13.0] - 2026-11-04
+
+> 主题：**结构演进可追溯**——此前「库是哪个版本」只能靠查列是否存来反推，迁移失败还会被 `except: pass` 吞掉。
+
+### 数据库迁移版本化（账本 + 校验和 + 失败重试）
+
+- 新增 `framework/database/migrations.py`：账本表 `schema_migrations`（`version` / `name` / `checksum` / `applied_at` / `duration_ms` / `success` / `origin` / `note`），版本单调递增、按序执行、每版只跑一次。
+- 历史 9 个 `_migrate_*` 收敛为注册表 `MIGRATIONS`（版本 1–9，顺序即原执行顺序，**已发布版本不可重排/不可改内容**）；整表由「每次启动无条件幂等执行」改为「账本驱动的增量执行」。
+- **校验和**取迁移体源码的 sha256：已应用的迁移被改动时报 error 并在状态里标 drift，但**不重跑**（不可变原则），正确做法是追加新版本。
+- **失败不记账**：迁移抛异常写 `success=0` + 错误摘要、停止后续迁移、下次启动自动重试；迁移体内的 `except Exception: pass` 全部改为「记录 + 抛出」，不再让失败与成功看起来一样。
+- 失败**不阻塞框架启动**（优先级：可用性 > 结构最新），但启动日志以 error 级别给出当前版本、最新版本与首个失败原因。
+- MySQL 多节点用命名锁 `zcbot_schema_migrations` 串行化（专用连接持有，`GET_LOCK` 是连接级锁，不能借池连接）；拿不到锁则跳过本次并告警。SQLite 走进程内锁。
+- 账本表建不出来（只读库/无 DDL 权限）时退化为「不记账、照旧幂等执行」，并在每次启动告警。
+- 新增运维命令 `python -m framework.database.migrate status|up|history|check|baseline`，`check` 有未应用或漂移返回 1，可直接进 CI；`baseline --version N` 用于接管无账本的老库（只记账不执行）。
+- 新增接口 `GET /api/db/migrations`（登录可见）与 `POST /api/db/migrations/up`（超管，写审计日志）。
+- 新增 `tests/test_db_migrations.py`（10 组：全新库/二次运行不重跑/失败停止并记账/修复后重试/漂移不重跑/基线只记账/注册表校验/账本表不属核心表清单）；`test_db_regression.py`、`test_db_resilience.py`、`test_perm.py` 原有断言不变。
+- 文档：新增 `docs/进阶/数据库迁移.md`（三处同步、不可变铁律、命令行、并发与失败语义），`docs/进阶/数据库.md` 补入口。
 
 ### 结构化日志（JSON Lines）
 

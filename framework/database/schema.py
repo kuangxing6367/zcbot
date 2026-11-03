@@ -1,11 +1,19 @@
 """
-框架 schema：自动建表 + 运行时迁移（SQLite / MySQL 双方言）
+框架 schema：自动建表 + 版本化迁移（SQLite / MySQL 双方言）
 
 只管「表结构」：框架扩展表的 CREATE TABLE 与历史版本的列/索引补丁。
-连接与执行在 db.Database；SQL 方言翻译在 dialect.py。
+迁移的账本与调度在 migrations.py；连接与执行在 db.Database；SQL 方言翻译在 dialect.py。
+
+新增字段的正确做法（三处同步，缺一不可）：
+  1. 新装的库：改 sql/init.sql + sql/init_mysql55.sql 的建表语句；
+  2. 已在跑的库：在下方 MIGRATIONS 末尾追加一版迁移（next_version()）；
+  3. 迁移必须幂等（先查列/索引是否存在再改），中断可重入。
+  已发布的迁移一律不可改 —— 账本里有校验和，改动会在启动时报错。
 """
 import logging
 import time
+
+from framework.database.migrations import Migration, run_pending as run_migrations
 
 logger = logging.getLogger('zcbot')
 
@@ -60,11 +68,18 @@ def _migrate_identity_id_columns(database):
                 else:
                     _rebuild_sqlite_text_column(database, table, col)
             except Exception as e:
+                # 不吞：账本要记 success=0，下次启动重试（幂等保证可重入）
                 logger.warning(f"数据库迁移 {table}.{col} 类型约束失败: {e}")
+                raise
 
 
 def _auto_create_tables(database):
-    """自动创建框架所需的扩展表"""
+    """创建框架扩展表并应用版本化迁移。
+
+    返回迁移执行报告（无待应用时也返回，供 CLI/测试读取）；引擎自身异常时
+    返回 None —— 迁移失败不抛出，避免被 db.init_db 的兜底判成「数据库不可用」
+    而降级到本地模拟引擎。
+    """
     # 列类型统一用 VARCHAR（SQLite 宽松类型同样兼容）：
     # - TEXT 列不能作为 MySQL 索引键（缺 key length）
     # - TEXT 列不能带 DEFAULT（MySQL 报错）
@@ -208,32 +223,28 @@ def _auto_create_tables(database):
         except Exception as e:
             logger.warning(f"自动建表失败 [{name}]: {e}")
 
-    # 迁移：给 commands 表追加 require_level 列
-    _migrate_commands_table(database)
-
-    # 迁移：commands 表补唯一索引（ON DUPLICATE KEY UPDATE 的去重依据）
-    _migrate_commands_unique_index(database)
-
-    # 迁移：身份 ID 列统一为 VARCHAR(64)（开放平台 openid 是字符串）
-    _migrate_identity_id_columns(database)
-
-    # 迁移：给 users 表追加 role 列
-    _migrate_users_table(database)
-
-    # 迁移：给 commands 表追加 require_perm 列（权限组节点要求）
-    _migrate_commands_require_perm(database)
-
-    # 迁移：给 admin_users 表追加 token 列（token 认证）
-    _migrate_admin_users_table(database)
-
-    # 迁移：dynamic_commands.match_type ENUM 增加 contains（更开放的匹配方式）
-    _migrate_dynamic_commands_table(database)
-
-    # 迁移：dynamic_commands 表增加 handler 列（关键词 handler 回调）
-    _migrate_dynamic_commands_handler(database)
-
-    # 迁移：权限系统表补索引 + 播种默认组（表本体已在上方 tables 字典建好）
-    _migrate_perm_tables(database)
+    # 版本化迁移：账本 schema_migrations 记录已应用版本，每版只执行一次。
+    # 迁移失败不阻塞启动（可用性优先），但必须可见：error 日志 + 账本 success=0
+    # + 下次启动自动重试。
+    report = None
+    try:
+        report = run_migrations(database, MIGRATIONS)
+    except Exception as e:  # noqa: BLE001  注册表非法等：引擎自身故障
+        logger.error("数据库迁移引擎异常，已跳过迁移: %s", e)
+    else:
+        if not report['ok']:
+            first = (report['failed'] or [{}])[0]
+            logger.error(
+                "数据库迁移未全部完成：当前版本 v%s（最新 v%s），失败 %d 条"
+                "（首个：v%s %s → %s）。结构可能落后于代码，请修复后重启。",
+                report['current'], report['latest'], len(report['failed']),
+                first.get('version'), first.get('name'), first.get('error'))
+        elif report['applied']:
+            logger.info(
+                "数据库迁移完成：应用 %d 版（v%s → v%s），耗时 %dms",
+                len(report['applied']),
+                report['applied'][0]['version'], report['current'],
+                report['elapsed_ms'])
 
     # 收尾自检：扩展表同样是"缺了要能重建"，但建表失败不能只留一行 debug。
     # init.sql 范围之外的表（如 group_plugin_settings）只在这里建，故必须复验。
@@ -248,6 +259,7 @@ def _auto_create_tables(database):
                 "扩展表结构不完整：仍缺失 %d 张表 %s。相关功能写库会失败，"
                 "请检查数据库建表权限与 DDL 方言兼容性。",
                 len(missing), ", ".join(missing))
+    return report
 
 
 def _migrate_commands_table(database):
@@ -265,8 +277,9 @@ def _migrate_commands_table(database):
                     "COMMENT '权限要求: admin=管理员/群主/超管, super=超管'"
                 )
             logger.info("数据库迁移: commands 表添加 require_level 列")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("数据库迁移 commands.require_level 失败: %s", e)
+        raise
 
 
 def _rebuild_sqlite_text_column(database, table, column):
@@ -409,6 +422,7 @@ def _migrate_commands_unique_index(database):
         logger.info("数据库迁移: commands 表补唯一索引 uk_plugin_handler")
     except Exception as e:
         logger.warning(f"数据库迁移 commands 唯一索引失败: {e}")
+        raise
 
 
 def _migrate_commands_require_perm(database):
@@ -426,8 +440,9 @@ def _migrate_commands_require_perm(database):
                     "COMMENT '权限节点要求(节点式), 空=不限制'"
                 )
             logger.info("数据库迁移: commands 表添加 require_perm 列")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("数据库迁移 commands.require_perm 失败: %s", e)
+        raise
 
 
 def _migrate_users_table(database):
@@ -445,8 +460,9 @@ def _migrate_users_table(database):
                     "COMMENT '权限角色: super=超级管理员, 空=普通用户'"
                 )
             logger.info("数据库迁移: users 表添加 role 列")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("数据库迁移 users.role 失败: %s", e)
+        raise
 
 
 def _migrate_admin_users_table(database):
@@ -478,8 +494,9 @@ def _migrate_admin_users_table(database):
                     "COMMENT '令牌签发时间'"
                 )
             logger.info("数据库迁移: admin_users 表添加 token_created_at 列")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("数据库迁移 admin_users.token 失败: %s", e)
+        raise
 
 
 def _migrate_dynamic_commands_table(database):
@@ -507,8 +524,9 @@ def _migrate_dynamic_commands_table(database):
             "COMMENT '匹配方式'"
         )
         logger.info("数据库迁移: dynamic_commands.match_type ENUM 增加 contains")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("数据库迁移 dynamic_commands.match_type 失败: %s", e)
+        raise
 
 
 def _migrate_perm_tables(database):
@@ -532,8 +550,10 @@ def _migrate_perm_tables(database):
     for ddl in index_ddls:
         try:
             database.execute(ddl)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            # MySQL 无 CREATE INDEX IF NOT EXISTS：重复建索引报 Duplicate key name，
+            # 属预期，不影响迁移结果（索引已存在）。
+            logger.debug("补索引跳过（可能已存在）: %s", e)
 
     try:
         if not database.table_exists('perm_groups'):
@@ -548,8 +568,9 @@ def _migrate_perm_tables(database):
                 ('default', '默认组', 0, None, None, 1, str(int(time.time())))
             )
             logger.info("数据库迁移: 播种默认权限组 default")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("数据库迁移 播种默认权限组失败（全员默认权限会缺失）: %s", e)
+        raise
 
 
 def _migrate_dynamic_commands_handler(database):
@@ -567,5 +588,41 @@ def _migrate_dynamic_commands_handler(database):
                 "ALTER TABLE dynamic_commands ADD COLUMN handler VARCHAR(100) DEFAULT '' "
                 "COMMENT '关键词handler回调 plugin:func'")
         logger.info("数据库迁移: dynamic_commands 表添加 handler 列")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("数据库迁移 dynamic_commands.handler 失败: %s", e)
+        raise
+
+
+# ── 迁移注册表 ────────────────────────────────────────────────
+#
+# 铁律：
+#   1. 版本号一经发布**永不重排、永不改内容**（账本按版本号 + 校验和记账，
+#      改动只会让启动时报 drift，老库也不会重跑）；
+#   2. 新迁移一律追加在末尾，版本号 = next_version(MIGRATIONS)；
+#   3. 迁移体必须幂等：先判断「要做的事是否已存在」再动手，
+#      因为 MySQL 的 DDL 不是事务性的，中断后只能靠重入收敛；
+#   4. 一次迁移只做一件事，便于失败后定位与重试。
+#
+# 历史 9 版由「每次启动无条件执行的幂等补丁」收敛而来：老库首次升级到
+# 带账本的版本时会把它们各跑一遍（都是幂等判断，效果相当于空转），
+# 然后记账；此后不再重复执行。
+MIGRATIONS = (
+    Migration(1, 'commands.require_level', _migrate_commands_table,
+              'commands 表增加 require_level（命令权限等级）'),
+    Migration(2, 'commands.unique_index', _migrate_commands_unique_index,
+              'commands 表补唯一索引 uk_plugin_handler 并清洗历史重复行'),
+    Migration(3, 'identity.id_columns', _migrate_identity_id_columns,
+              '身份 ID 列统一为 VARCHAR(64)（开放平台 openid 为字符串）'),
+    Migration(4, 'users.role', _migrate_users_table,
+              'users 表增加 role（超管标记）'),
+    Migration(5, 'commands.require_perm', _migrate_commands_require_perm,
+              'commands 表增加 require_perm（权限节点要求）'),
+    Migration(6, 'admin_users.token', _migrate_admin_users_table,
+              'admin_users 表增加 token / token_created_at'),
+    Migration(7, 'dynamic_commands.match_type', _migrate_dynamic_commands_table,
+              "dynamic_commands.match_type ENUM 增加 contains"),
+    Migration(8, 'dynamic_commands.handler', _migrate_dynamic_commands_handler,
+              'dynamic_commands 表增加 handler（关键词回调）'),
+    Migration(9, 'perm.indexes_default_group', _migrate_perm_tables,
+              '权限表补索引并播种默认组 default'),
+)

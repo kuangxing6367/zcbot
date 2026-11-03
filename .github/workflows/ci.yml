@@ -52,6 +52,7 @@ jobs:
             tests/test_buffer_refill.py \
             tests/test_config_hotapply.py \
             tests/test_console_server.py \
+            tests/test_db_migrations.py \
             tests/test_db_regression.py \
             tests/test_dual_core.py \
             tests/test_event_buffer.py \

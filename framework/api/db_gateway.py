@@ -134,3 +134,35 @@ def register(ctx):
         except Exception as e:
             logger.error(f"执行 SQL 失败: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+    # ── 结构版本（迁移账本）────────────────────────────────────
+
+    @app.route('/api/db/migrations', methods=['GET'])
+    @require_auth
+    def db_migrations():
+        """当前 schema 版本、待应用迁移、校验和漂移、应用历史"""
+        try:
+            from framework.database import migrations as _mig
+            from framework.database.schema import MIGRATIONS
+            return jsonify({'code': 0, 'data': _mig.status(db, MIGRATIONS)})
+        except Exception as e:
+            logger.error(f"读取迁移状态失败: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+    @app.route('/api/db/migrations/up', methods=['POST'])
+    @require_super
+    def db_migrations_up():
+        """立即应用待执行的迁移（仅超级管理员；失败不回滚，返回逐条结果）"""
+        try:
+            from framework.database import migrations as _mig
+            from framework.database.schema import MIGRATIONS
+            report = _mig.run_pending(db, MIGRATIONS)
+            admin = request.admin
+            audit_log(admin['id'], admin['username'], 'db_migrate', 'database', None,
+                      {'applied': [a['version'] for a in report['applied']],
+                       'failed': [f['version'] for f in report['failed']]})
+            return jsonify({'code': 0 if report['ok'] else 500, 'data': report}), \
+                (200 if report['ok'] else 500)
+        except Exception as e:
+            logger.error(f"执行迁移失败: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
