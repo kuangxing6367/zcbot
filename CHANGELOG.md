@@ -28,6 +28,14 @@
 
 ## 开发中（未发布）
 
+### 结构化日志（JSON Lines）
+
+- 新增 `framework/jsonlog.py`：`log.format: json` 时控制台与日志文件改为每行一个 JSON 对象，字段固定（`ts`/`level`/`logger`/`msg`/`pid`/`thread`/`src`/`service`，可选 `fields`/`exc`），采集端无需 multiline 配置。
+- 附附加字段写法 `extra=jsonlog.fields(k=v)`，进 `fields` 对象，不污染 `msg`。
+- **只换 formatter，不换 handler**：轮转、级别过滤、重复错误合并全部不变；桥接 WebUI 日志中心的 handler 不被替换（否则后台日志页会显示成 JSON 字符串）。
+- `log.format` 支持热应用（`framework/hotapply.py` 的 `log` applier），切回 text 时还原原 formatter 对象；非法值回落 text 并给出提示。
+- 新增 `tests/test_json_logging.py`（7 组，含真实 Framework 接线与落盘校验），`test_config_hotapply.py` 补格式切换断言；两个 workflow 均已纳入。
+
 ### 后台「运行状态」页接入健康与指标
 
 1.12.0 只把可观测性做成了端点，看数据要 curl。这一版把同一份口径搬进后台：

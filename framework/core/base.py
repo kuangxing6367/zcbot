@@ -359,6 +359,16 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 桥接框架日志到 LogBroker
         root.addHandler(FrameworkLogHandler(log_broker))
 
+        # 结构化日志：log.format=json 时控制台与文件改为 JSON Lines。
+        # 桥接 handler 自带格式化，不会被替换（否则后台日志页会显示成 JSON 字符串）。
+        try:
+            from framework import jsonlog
+            _fmt = jsonlog.apply_format(self.config.get('log', {}).get('format', 'text'))
+            if _fmt == jsonlog.FORMAT_JSON:
+                logger.info("日志输出格式: JSON Lines（log.format=json）")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"日志格式设置失败，保持文本格式: {e}")
+
         # 日志合并（自动止刷屏）：对归一化后相同的 WARNING+ 日志在滑动窗口内合并计数，
         # 只发首条、窗口到期再发一条「该错误重复 N 次」汇总；INFO/DEBUG 不参与合并。
         # 高并发下同一错误被每条消息/连接重复触发，不合并会直接刷爆日志文件与 WebUI。

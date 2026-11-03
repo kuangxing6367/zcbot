@@ -80,8 +80,21 @@ def test_log_level():
         check('未知日志级别' in ' '.join(
             hotapply.apply_section(fw, 'log', {'level': 'NOPE'})['notes']),
             "非法级别给出明确提示")
+
+        # 输出格式同样支持热切换（text <-> json）
+        from framework import jsonlog
+        res_fmt = hotapply.apply_section(fw, 'log', {'format': 'json'})
+        check(res_fmt['live'] is True, "格式切换标记为即时生效")
+        check(jsonlog.current_format() == 'json', "根 logger 已切到 JSON")
+        hotapply.apply_section(fw, 'log', {'format': 'text'})
+        check(jsonlog.current_format() == 'text', "切回 text")
+        check('未知日志格式' in ' '.join(
+            hotapply.apply_section(fw, 'log', {'format': 'yaml'})['notes']),
+            "非法格式给出明确提示")
     finally:
         root.setLevel(old)
+        from framework import jsonlog as _jl
+        _jl.apply_format('text')
 
 
 # ── 2. 黑匣子 ───────────────────────────────────────────────

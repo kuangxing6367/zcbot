@@ -63,6 +63,20 @@ def _apply_log(framework, cfg: dict) -> list:
         notes.append(f'日志级别即时生效: {level_name}')
     else:
         notes.append(f'未知日志级别 {level_name}，未应用')
+
+    # 输出格式（text / json）：换 formatter 即可，handler 与轮转不变
+    fmt_cfg = (cfg or {}).get('format')
+    if fmt_cfg is not None:
+        try:
+            from framework import jsonlog
+            raw = str(fmt_cfg).strip().lower()
+            applied = jsonlog.apply_format(raw)
+            if raw != applied:
+                notes.append(f'未知日志格式 {raw}，已回落到 {applied}')
+            else:
+                notes.append(f'日志格式即时生效: {applied}')
+        except Exception as e:  # noqa: BLE001
+            notes.append(f'日志格式应用失败: {e}')
     return notes
 
 

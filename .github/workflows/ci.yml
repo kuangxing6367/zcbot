@@ -58,6 +58,7 @@ jobs:
             tests/test_file_store_fallback.py \
             tests/test_html_assembler.py \
             tests/test_ipc_perf.py \
+            tests/test_json_logging.py \
             tests/test_llm_core.py \
             tests/test_llm_load.py \
             tests/test_loop_fix_regression.py \

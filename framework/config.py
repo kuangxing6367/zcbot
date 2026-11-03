@@ -154,6 +154,7 @@ dependencies:
 # ── 日志配置 ────────────────────────────────────────────────
 log:
   level: INFO                # DEBUG / INFO / WARNING / ERROR
+  format: text               # 输出格式：text（给人看）/ json（JSON Lines，便于 Loki、ELK 等采集）
   file: data/logs/zcbot.log  # 日志文件路径（统一存放于 data/logs/），留空则只输出控制台
   log_raw_message: true      # 是否记录收到的原始消息内容
   log_sent_message: true     # 是否记录发送到 OneBot11 的消息内容
