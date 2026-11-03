@@ -202,6 +202,20 @@ def register(ctx):
                 bots = []
             db_type = framework.config.get('database', {}).get('type', 'unknown')
 
+            # 健康快照 / 事件缓冲 / 请求计数：与 /readyz、/metrics 同源（observability 模块）
+            health = {}
+            buffer_stats = {}
+            req_counts = []
+            try:
+                from framework.api import observability as _obs
+                health = _obs.snapshot(framework)
+                req_counts = _obs.request_counts(limit=10)
+                buf = getattr(framework, '_event_buffer', None)
+                if buf is not None and hasattr(buf, 'stats'):
+                    buffer_stats = buf.stats() or {}
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"运行状态附加指标不可用: {e}")
+
             # 插件内存占用（已加载插件）
             plugin_mem = {}
             try:
@@ -227,6 +241,10 @@ def register(ctx):
                 'python_version': sys.version.split()[0],
                 'db_type': db_type,
                 'ws': {'connected': len(bots), 'bots': bots},
+                'health': health,
+                'event_buffer': buffer_stats,
+                'requests': req_counts,
+                'db_degraded': bool(getattr(framework, 'db_degraded', False)),
             }})
         except Exception as e:
             logger.error(f"获取运行状态失败: {e}")

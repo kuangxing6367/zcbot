@@ -78,6 +78,106 @@ def _fmt_num(value) -> str:
     return f'{f:.3f}'
 
 
+# ── 请求计数（模块级：探针与 WebUI 运行状态页共用同一份累计）──────
+_REQ_LOCK = threading.Lock()
+_REQ_COUNTS = Counter()   # (method, status) -> 累计次数
+
+
+def version_of(ctx=None) -> str:
+    """框架版本号（优先用 Web 上下文提供的 getter，其次读 VERSION 文件）"""
+    getter = getattr(ctx, '_get_framework_local_version', None) if ctx is not None else None
+    if callable(getter):
+        try:
+            return str(getter() or '')
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))), 'VERSION')
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except Exception:  # noqa: BLE001
+        return ''
+
+
+def uptime_of(framework) -> float:
+    start = getattr(framework, '_start_time', None)
+    try:
+        return max(0.0, time.time() - float(start)) if start else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def db_probe(framework):
+    """探针级数据库检查：一次 SELECT 1，返回 (ok, detail)"""
+    db = getattr(framework, 'db', None)
+    if db is None:
+        return False, '数据库实例不存在'
+    t0 = time.perf_counter()
+    try:
+        try:
+            db.scalar('SELECT 1')
+        except AttributeError:
+            db.query_one('SELECT 1')
+    except Exception as e:  # noqa: BLE001
+        return False, f'{type(e).__name__}: {e}'
+    ms = (time.perf_counter() - t0) * 1000
+    if getattr(framework, 'db_degraded', False):
+        return True, f'{ms:.1f}ms（降级写缓冲中）'
+    return True, f'{ms:.1f}ms'
+
+
+def plugin_counts(framework):
+    """(已加载数, 加载失败数)"""
+    loader = getattr(framework, 'plugin_loader', None)
+    loaded = failed = 0
+    if loader is not None:
+        try:
+            loaded = len(loader.get_loaded_plugins() or {})
+        except Exception:  # noqa: BLE001
+            loaded = 0
+        try:
+            failed = len(getattr(loader, '_failed_mtimes', {}) or {})
+        except Exception:  # noqa: BLE001
+            failed = 0
+    return loaded, failed
+
+
+def collect_checks(framework) -> dict:
+    """逐项健康检查（/readyz 与 WebUI 运行状态页共用）"""
+    checks = {}
+    running = bool(getattr(framework, '_running', False))
+    checks['process'] = {'ok': running, 'detail': '运行中' if running else '进程未运行'}
+    ready = bool(getattr(framework, '_ready', False))
+    checks['startup'] = {'ok': ready, 'detail': '插件加载完成' if ready else '插件加载中'}
+    db_ok, db_detail = db_probe(framework)
+    checks['database'] = {'ok': db_ok, 'detail': db_detail}
+    loaded, failed = plugin_counts(framework)
+    # 插件加载失败不阻止就绪（框架本身可用），但如实暴露，便于排障
+    checks['plugins'] = {'ok': True, 'required': False,
+                         'detail': f'已加载 {loaded}，失败 {failed}',
+                         'loaded': loaded, 'failed': failed}
+    return checks
+
+
+def snapshot(framework, ctx=None) -> dict:
+    """就绪快照（与 GET /readyz 响应体同构），供 WebUI 复用，避免重复实现"""
+    checks = collect_checks(framework)
+    ok = all(c.get('ok') for c in checks.values() if c.get('required', True))
+    return {'status': 'ready' if ok else 'not_ready',
+            'ready': ok,
+            'uptime_seconds': round(uptime_of(framework), 3),
+            'version': version_of(ctx),
+            'checks': checks}
+
+
+def request_counts(limit: int = 12) -> list:
+    """HTTP 请求计数快照（按次数倒序，仅取前 N 项供面板展示）"""
+    with _REQ_LOCK:
+        items = sorted(_REQ_COUNTS.items(), key=lambda kv: kv[1], reverse=True)
+    return [{'method': m, 'status': s, 'count': n} for (m, s), n in items[:limit]]
+
+
 def register(ctx):
     """注册健康探针与指标端点（由 create_web_app 调用）"""
     app = ctx.app
@@ -99,76 +199,21 @@ def register(ctx):
         logger.info("[可观测性] 已禁用（observability.health / metrics 均为 false）")
         return
 
+    # 薄包装：复用模块级实现，保证 /readyz 与 WebUI 运行状态页口径一致
     def _version() -> str:
-        getter = getattr(ctx, '_get_framework_local_version', None)
-        if callable(getter):
-            try:
-                return str(getter() or '')
-            except Exception:  # noqa: BLE001
-                pass
-        try:
-            path = os.path.join(os.path.dirname(os.path.dirname(
-                os.path.dirname(os.path.abspath(__file__)))), 'VERSION')
-            with open(path, 'r', encoding='utf-8') as f:
-                return f.read().strip()
-        except Exception:  # noqa: BLE001
-            return ''
+        return version_of(ctx)
 
     def _uptime() -> float:
-        start = getattr(framework, '_start_time', None)
-        try:
-            return max(0.0, time.time() - float(start)) if start else 0.0
-        except (TypeError, ValueError):
-            return 0.0
+        return uptime_of(framework)
 
     def _db_probe():
-        """探针级数据库检查：一次 SELECT 1，返回 (ok, detail)"""
-        db = getattr(framework, 'db', None)
-        if db is None:
-            return False, '数据库实例不存在'
-        t0 = time.perf_counter()
-        try:
-            try:
-                db.scalar('SELECT 1')
-            except AttributeError:
-                db.query_one('SELECT 1')
-        except Exception as e:  # noqa: BLE001
-            return False, f'{type(e).__name__}: {e}'
-        ms = (time.perf_counter() - t0) * 1000
-        if getattr(framework, 'db_degraded', False):
-            return True, f'{ms:.1f}ms（降级写缓冲中）'
-        return True, f'{ms:.1f}ms'
+        return db_probe(framework)
 
     def _plugin_counts():
-        loader = getattr(framework, 'plugin_loader', None)
-        loaded = failed = 0
-        if loader is not None:
-            try:
-                loaded = len(loader.get_loaded_plugins() or {})
-            except Exception:  # noqa: BLE001
-                loaded = 0
-            try:
-                failed = len(getattr(loader, '_failed_mtimes', {}) or {})
-            except Exception:  # noqa: BLE001
-                failed = 0
-        return loaded, failed
+        return plugin_counts(framework)
 
     def _collect_checks() -> dict:
-        checks = {}
-        running = bool(getattr(framework, '_running', False))
-        checks['process'] = {'ok': running,
-                             'detail': '运行中' if running else '进程未运行'}
-        ready = bool(getattr(framework, '_ready', False))
-        checks['startup'] = {'ok': ready,
-                             'detail': '插件加载完成' if ready else '插件加载中'}
-        db_ok, db_detail = _db_probe()
-        checks['database'] = {'ok': db_ok, 'detail': db_detail}
-        loaded, failed = _plugin_counts()
-        # 插件加载失败不阻止就绪（框架本身可用），但如实暴露，便于排障
-        checks['plugins'] = {'ok': True, 'required': False,
-                             'detail': f'已加载 {loaded}，失败 {failed}',
-                             'loaded': loaded, 'failed': failed}
-        return checks
+        return collect_checks(framework)
 
     # ── 存活探针 ─────────────────────────────────────────────
     if health_enabled:
@@ -194,8 +239,9 @@ def register(ctx):
 
     # ── 指标端点 ─────────────────────────────────────────────
     if metrics_enabled:
-        _req_lock = threading.Lock()
-        _req_counts = Counter()   # (method, status) -> 累计次数
+        # 指向模块级累计：/metrics 与 WebUI 运行状态页读同一份计数
+        _req_lock = _REQ_LOCK
+        _req_counts = _REQ_COUNTS
 
         @app.after_request
         def _zcbot_count_requests(resp):

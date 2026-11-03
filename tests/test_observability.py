@@ -181,10 +181,48 @@ def test_port_split():
           f"WebUI 端口不暴露真实指标（status={m_web.status_code}）")
 
 
+def test_runtime_stats_shares_health():
+    """WebUI 运行状态页与 /readyz 同源：/api/runtime/stats 必须带健康快照"""
+    fw, app = _build(started=True)
+    c = app.test_client()
+    # 该端点需要管理员登录（默认账号由框架初始化写入）
+    login = c.post('/api/login', json={'username': 'admin', 'password': 'admin123'})
+    token = ((login.get_json() or {}).get('data') or {}).get('token')
+    check(bool(token), f"管理员登录成功（{login.status_code}）")
+    hdr = {'Authorization': f'Bearer {token}'}
+
+    # 先产生一次业务请求，让请求计数非空
+    c.get('/healthz')
+    c.get('/api/runtime/stats', headers=hdr)
+    r = c.get('/api/runtime/stats', headers=hdr)
+    check(r.status_code == 200, f"/api/runtime/stats 可访问（{r.status_code}）")
+    data = (r.get_json() or {}).get('data') or {}
+
+    health = data.get('health') or {}
+    check(health.get('status') == 'ready', f"健康状态与 /readyz 一致（{health.get('status')}）")
+    check(health.get('ready') is True, "ready 标记为真")
+    checks = health.get('checks') or {}
+    check(set(checks) == {'process', 'startup', 'database', 'plugins'},
+          f"逐项检查齐全（{sorted(checks)}）")
+    check(all(c.get('ok') for c in checks.values() if c.get('required', True)),
+          "必需检查项均通过")
+
+    # 与 /readyz 返回完全同构，避免两处口径漂移
+    readyz = c.get('/readyz').get_json() or {}
+    check(readyz.get('checks') == checks, "与 /readyz 的 checks 完全一致")
+
+    check(isinstance(data.get('event_buffer'), dict), "带事件缓冲统计字段")
+    reqs = data.get('requests')
+    check(isinstance(reqs, list) and len(reqs) >= 1,
+          f"带 HTTP 请求分布（{len(reqs) if isinstance(reqs, list) else reqs} 项）")
+    check('db_degraded' in data, "带降级标记")
+
+
 def main():
     for fn in (test_healthz_open, test_readyz_not_started, test_readyz_ready,
                test_metrics_content, test_metrics_counts_api_requests,
-               test_metrics_token, test_disabled, test_port_split):
+               test_metrics_token, test_disabled, test_port_split,
+               test_runtime_stats_shares_health):
         fn()
     print()
     if _FAILED:

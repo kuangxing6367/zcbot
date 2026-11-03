@@ -26,6 +26,18 @@
 
 ---
 
+## 开发中（未发布）
+
+### 后台「运行状态」页接入健康与指标
+
+1.12.0 只把可观测性做成了端点，看数据要 curl。这一版把同一份口径搬进后台：
+
+- `observability.py` 的检查逻辑从 `register()` 闭包里提到模块级（`version_of` / `uptime_of` / `db_probe` / `plugin_counts` / `collect_checks` / `snapshot` / `request_counts`），`/readyz`、`/metrics` 与 WebUI 三处读同一份实现，避免口径漂移。
+- 请求计数改为模块级累计，`/metrics` 与面板共享同一份数据。
+- `GET /api/runtime/stats` 新增 `health`（与 `/readyz` 同构）、`event_buffer`、`requests`、`db_degraded` 四个字段；原有字段一个不动，纯新增。
+- 后台「运行状态」新增三个区块：健康检查（逐项状态与详情）、事件缓冲（L1/L2/L3/L4 条目与占用、累计丢弃）、HTTP 请求分布（Top 10）。
+- `tests/test_observability.py` 增加一项：断言 runtime/stats 的 `health.checks` 与 `/readyz` 完全一致，防止两处后续改漂。
+
 ## [1.12.0] - 2026-11-03
 
 > 主题：**让框架可运维、可演进**——此前缺的不是功能，而是「外部系统怎么判断它健康」「插件怎么表达先后顺序」「改配置要不要重启」「API 破坏性变更往哪落」。
