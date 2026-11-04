@@ -288,9 +288,36 @@ security:
   #   evasion_detect: true     # 检测路径变形绕过（%2e 编码 / 重复斜杠 / 穿越），加重处置
   #   fake_404: true           # 未知页面返回伪装 nginx 的假 404（false=普通 JSON 404）
 
+# ── 定时任务（scheduler 段）──────────────────────────────────
+# 影响 ctx.task 注册的 cron 任务、内置任务，以及插件定时逻辑的执行方式。
+scheduler:
+  # 时区：local（系统本地时区，默认）/ utc / IANA 名（Asia/Shanghai）
+  # 容器镜像的 TZ 通常是 UTC，写 `0 9 * * *` 的任务会在北京时间 17:00 才执行，
+  # 而日志里看不出来。部署在中国大陆建议显式写 Asia/Shanghai。
+  # 注意：Windows 上 ZoneInfo 需要 tzdata 包（pip install tzdata），缺失会自动退回 local。
+  timezone: local
+  # 单任务执行超时（秒），0 = 不限。
+  # 超时只是「不再等待」，Python 无法强杀线程：任务线程仍会在后台跑完。
+  # 要可中断必须写 async handler 并在内部支持取消。
+  task_timeout: 300
+  # 慢任务告警阈值（秒），0 = 不告警。执行耗时超阈值会打 warning 并记入任务记录。
+  slow_task_threshold: 10
+  # 同步 handler 专用线程池大小（与命令 handler 用的默认线程池隔离，互不挤占）
+  workers: 4
+
 # ── 框架基础约定与限制（framework 段） ────────────────────────
 # 集中管理此前散落或写死的基础约定，统一在此可调；WebUI 也通过本段编辑。
 framework:
+  # ── 事件循环卡顿看门狗（诊断）──
+  # 阻塞调用会让整个机器人停摆（所有插件 + 所有接入端 + 定时任务），且日志里
+  # 通常什么都没有。看门狗周期性测量循环延迟，卡顿超过 threshold 时打 warning
+  # 并抓取循环线程的栈顶帧，直接指出卡在哪一行。
+  loop_watchdog:
+    enabled: true               # 默认开；常驻一个守护线程，开销可忽略
+    interval: 0.25              # 采样间隔（秒）
+    threshold: 0.5              # 延迟超过该值（秒）判定为阻塞
+    stall_wait: 3               # 回调多久没执行判定为循环完全卡死（秒）
+
   # ── 内存黑匣子（调试排障）──
   # 纯内存环形缓冲、无磁盘落库，追踪事件流转/路由命中/插件加载生命周期。
   # 极低开销，默认开启，随时待命；发生诡异 Bug/死锁时可经 WebUI/API 导出最近现场。

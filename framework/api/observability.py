@@ -370,6 +370,29 @@ def register(ctx):
                      '出站因限流累计等待秒数',
                      [(None, (ob.get('waited_ms', 0) or 0) / 1000.0)])
 
+            # 事件循环卡顿：偶发一次性抖动和持续性阻塞的处置完全不同，
+            # 所以次数、累计时长、峰值三个维度都要有，不能只看一个 current 值。
+            try:
+                from framework.core.loop_watchdog import watchdog as _wd
+                ws = _wd.stats()
+            except Exception:
+                ws = None
+            if ws:
+                emit('zcbot_event_loop_lag_seconds', 'gauge',
+                     '最近一次采样的事件循环延迟（秒）',
+                     [(None, (ws.get('last_lag_ms', 0) or 0) / 1000.0)])
+                emit('zcbot_event_loop_lag_max_seconds', 'gauge',
+                     '启动以来最大事件循环延迟（秒）',
+                     [(None, (ws.get('max_lag_ms', 0) or 0) / 1000.0)])
+                emit('zcbot_event_loop_blocked', 'gauge',
+                     '事件循环当前是否处于阻塞（1=阻塞）',
+                     [(None, 1 if ws.get('blocked') else 0)])
+                emit('zcbot_event_loop_stalls_total', 'counter',
+                     '事件循环阻塞次数（超阈值）', [(None, ws.get('stalls', 0))])
+                emit('zcbot_event_loop_stall_seconds_total', 'counter',
+                     '事件循环阻塞累计时长（秒）',
+                     [(None, (ws.get('total_stall_ms', 0) or 0) / 1000.0)])
+
             if 'rss' in proc:
                 emit('zcbot_process_resident_memory_bytes', 'gauge',
                      '进程常驻内存（字节）', [(None, proc['rss'])])

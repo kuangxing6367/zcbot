@@ -217,9 +217,23 @@ class FrameworkRuntimeMixin:
             sched = getattr(self.scheduler, '_scheduler', None)
             if sched is None:
                 return
+
+            async def _cleanup_job():
+                # 内置任务同样不能占事件循环：清理会扫全表，库大时同步跑会把
+                # 整条事件管线冻住（与插件同步 handler 走同一套线程池）。
+                runner = getattr(self.scheduler, 'run_blocking', None)
+                if runner is None:
+                    _cleanup_expired_perms()
+                    return
+                try:
+                    await runner(_cleanup_expired_perms)
+                except Exception as e:
+                    logger.warning(f"权限过期清理任务异常: {e}")
+
             sched.add_job(
-                _cleanup_expired_perms,
+                _cleanup_job,
                 'cron', minute=17, id='builtin_perm_cleanup',
+                timezone=getattr(self.scheduler, 'timezone', None),
                 replace_existing=True, misfire_grace_time=600,
             )
             logger.debug("内置定时任务已注册: 权限过期清理（每小时第 17 分钟）")

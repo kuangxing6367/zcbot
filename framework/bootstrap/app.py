@@ -72,13 +72,45 @@ async def amain():
         print("=" * 60)
         sys.exit(1)
 
+    # 事件循环卡顿看门狗：尽早启动，覆盖启动期（插件 import、建表、大配置解析
+    # 同样会阻塞循环，而那正是「启动卡住但没日志」最难查的阶段）。
+    # 配置段：framework.loop_watchdog.{enabled,interval,threshold,stall_wait}
+    watchdog = None
+    try:
+        from framework.core import loop_watchdog as _loop_watchdog
+        _wd_cfg = ((crash_cfg.get('framework') or {}).get('loop_watchdog') or {})
+        if _wd_cfg.get('enabled', True):
+            watchdog = _loop_watchdog.configure(
+                interval=_wd_cfg.get('interval'),
+                threshold=_wd_cfg.get('threshold'),
+                stall_wait=_wd_cfg.get('stall_wait'),
+            ).start(loop=loop)
+    except Exception as e:  # noqa: BLE001 - 诊断设施失败不能挡住启动
+        logger.debug(f"事件循环看门狗启动失败: {e}")
+        watchdog = None
+
     framework = None
     try:
         framework = Framework(config_path)
         # 异步启动模式：config.yaml → startup.wait_ready: false 时不等待插件加载完成，
         # 核心/用户插件在后台异步加载，启动立即返回（可后续 await framework.wait_ready()）
         _startup_cfg = framework.config.get('startup', {}) or {}
-        await framework.start(wait_ready=_startup_cfg.get('wait_ready', True))
+        # 启动期暂停告警：装依赖 / 建表 / 同步加载全部插件必然阻塞循环，
+        # 这段时间报警等于每次启动刷几条 warning，噪音会让真卡顿被忽略。
+        # 启动期延迟仍会记录，resume() 返回峰值。
+        if watchdog is not None:
+            try:
+                watchdog.suspend()
+            except Exception:
+                pass
+        try:
+            await framework.start(wait_ready=_startup_cfg.get('wait_ready', True))
+        finally:
+            if watchdog is not None:
+                try:
+                    watchdog.resume()
+                except Exception:
+                    pass
         # 启动成功：复位崩溃计数（健康运行即清零，避免误杀正常重启）
         clear_crash_markers(crash_cfg, root)
         # 等待停止信号 / Ctrl+C
@@ -90,6 +122,11 @@ async def amain():
         logger.exception("启动期致命异常（已写入崩溃日志）")
         sys.exit(1)
     finally:
+        if watchdog is not None:
+            try:
+                watchdog.stop()
+            except Exception:
+                pass
         if framework is not None:
             try:
                 await framework.stop()

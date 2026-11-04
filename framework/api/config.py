@@ -219,6 +219,18 @@ def register(ctx):
                 logger.debug(f"运行状态附加指标不可用: {e}")
 
             # 插件内存占用（已加载插件）
+            # 定时任务与事件循环健康：两个最容易「静默故障」的面
+            scheduler_stats = {}
+            loop_health = {}
+            try:
+                sch = getattr(framework, 'scheduler', None)
+                if sch is not None and hasattr(sch, 'stats'):
+                    scheduler_stats = sch.stats() or {}
+                from framework.core.loop_watchdog import watchdog as _wd
+                loop_health = _wd.stats() or {}
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"调度/循环指标不可用: {e}")
+
             plugin_mem = {}
             try:
                 for pname, mod in framework.plugin_loader.get_loaded_plugins().items():
@@ -247,6 +259,8 @@ def register(ctx):
                 'event_buffer': buffer_stats,
                 'requests': req_counts,
                 'outbound': outbound,
+                'scheduler': scheduler_stats,
+                'event_loop': loop_health,
                 'db_degraded': bool(getattr(framework, 'db_degraded', False)),
             }})
         except Exception as e:
@@ -257,7 +271,7 @@ def register(ctx):
 
     _YAML_SECTIONS = ('database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system',
                       'security', 'framework', 'observability',
-                      'reliability', 'outbound')
+                      'reliability', 'outbound', 'scheduler')
 
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth
