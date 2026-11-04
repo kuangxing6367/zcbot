@@ -17,12 +17,14 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import threading
 from typing import List, Optional
 
 import requests
 import websockets
+from websockets.exceptions import ConnectionClosed
 
 from framework.messaging.protocol import ProtocolAdapter
 from framework.messaging.backoff import Backoff, now as _mono
@@ -53,6 +55,23 @@ _OP_RECONNECT = 7
 _OP_INVALID_SESSION = 9
 _OP_HELLO = 10
 _OP_HEARTBEAT_ACK = 11
+
+# 这些关闭码代表「配置/权限错了」，重连一万次也不会好，还会耗尽配额：
+# 官方限 1000 次 IDENTIFY / 24 小时（跨 shard 全局），超了直接重置 bot token。
+# 4014 尤其致命——MESSAGE_CONTENT 等特权 Intent 只在门户开了、代码里没请求（或反之）
+# 就是这个码，日志里只会看到反复断开。
+_FATAL_CLOSE_CODES = {
+    4004: 'token 无效，请重新复制 Bot Token',
+    4010: '分片参数非法',
+    4011: '需要分片（bot 已超过 2500 个服务器），本接入端不支持分片',
+    4012: 'Gateway 版本不受支持',
+    4013: 'intents 取值非法，请检查 discord.intents',
+    4014: 'intents 里有未获批准的特权 Intent（MESSAGE_CONTENT / GUILD_MEMBERS / '
+          'GUILD_PRESENCES），需在 Developer Portal 打开对应开关',
+}
+# 官方：收到 1000/1001 后 session 作废，必须重新 IDENTIFY，不能拿旧 session 去 RESUME
+_SESSION_RESET_CODES = {1000, 1001}
+_INTENT_MESSAGE_CONTENT = 1 << 15
 
 _B64_RE = re.compile(r'^base64://([A-Za-z0-9+/=\s]+)$', re.DOTALL)
 _CQ_IMAGE_RE = re.compile(
@@ -284,6 +303,8 @@ class DiscordAdapter(ProtocolAdapter):
         self._heartbeat_interval_ms = 41250
         self._heartbeat_acked = True
         self._self_id = ''
+        # 致命关闭码（4004/4013/4014…）后置为原因文本，supervisor 据此停止重连
+        self._fatal_reason = ''
         self._loop = None
         self._http = requests.Session()
         self._http.headers.update({
@@ -321,7 +342,28 @@ class DiscordAdapter(ProtocolAdapter):
 
     def start(self):
         self._closing = False
+        self._fatal_reason = ''
+        self._warn_missing_intents()
         self._schedule_connect()
+
+    def _warn_missing_intents(self):
+        """MESSAGE_CONTENT 缺失不会报错，只会让每条消息的 content 变成空串。
+
+        官方明确写过这一点：事件照常到达，被门控的字段为空。
+        现象是「机器人收到了消息但内容为空」，极易被当成解析 bug 排查半天，
+        所以在启动时直接说清楚，而不是等用户去猜。
+        """
+        try:
+            intents = int(getattr(self, 'intents', 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if intents & _INTENT_MESSAGE_CONTENT:
+            return
+        logger.warning(
+            'discord intents 未包含 MESSAGE_CONTENT(1<<15)，服务器内普通消息的 '
+            'content 会是空字符串（只有 @ 机器人 和私聊仍能拿到正文）。'
+            '需要完整消息内容请到 Developer Portal → Bot → '
+            'Privileged Gateway Intents 打开 MESSAGE_CONTENT，并保持 intents 含该位。')
 
     def _schedule_connect(self):
         loop = getattr(self.framework, 'loop', None)
@@ -352,6 +394,10 @@ class DiscordAdapter(ProtocolAdapter):
                 await self._cancel_heartbeat()
             if self._closing:
                 break
+            if self._fatal_reason:
+                # 配置/权限类错误：重连不会自愈，还会把 IDENTIFY 配额烧光
+                logger.error('discord 接入端已停止重连：%s', self._fatal_reason)
+                break
             await asyncio.sleep(self._backoff.next_delay(_mono() - started))
 
     async def _cancel_heartbeat(self):
@@ -377,50 +423,84 @@ class DiscordAdapter(ProtocolAdapter):
         if not self.token:
             raise RuntimeError('未配置 discord token')
         url = self._ws_url()
-        async with websockets.connect(
-            url, max_size=8 * 1024 * 1024, ping_interval=20, ping_timeout=20,
-        ) as ws:
-            self._ws = ws
-            raw = await asyncio.wait_for(ws.recv(), timeout=20)
-            hello = json.loads(raw)
-            interval = 41250
-            if isinstance(hello, dict) and hello.get('op') == _OP_HELLO:
-                interval = int((hello.get('d') or {}).get('heartbeat_interval')
-                               or interval)
-            self._heartbeat_interval_ms = max(1000, interval)
-            self._heartbeat_acked = True
+        try:
+            async with websockets.connect(
+                url, max_size=8 * 1024 * 1024, ping_interval=20, ping_timeout=20,
+            ) as ws:
+                self._ws = ws
+                raw = await asyncio.wait_for(ws.recv(), timeout=20)
+                hello = json.loads(raw)
+                interval = 41250
+                if isinstance(hello, dict) and hello.get('op') == _OP_HELLO:
+                    interval = int((hello.get('d') or {}).get('heartbeat_interval')
+                                   or interval)
+                self._heartbeat_interval_ms = max(1000, interval)
+                self._heartbeat_acked = True
 
-            if self._session_id and self._seq is not None and self.token:
-                identify = {
-                    'op': _OP_RESUME,
-                    'd': {
-                        'token': self.token,
-                        'session_id': self._session_id,
-                        'seq': self._seq,
-                    },
-                }
-            else:
-                identify = {
-                    'op': _OP_IDENTIFY,
-                    'd': {
-                        'token': self.token,
-                        'intents': self.intents,
-                        'properties': {
-                            'os': 'windows',
-                            'browser': 'zcbot',
-                            'device': 'zcbot',
+                if self._session_id and self._seq is not None and self.token:
+                    identify = {
+                        'op': _OP_RESUME,
+                        'd': {
+                            'token': self.token,
+                            'session_id': self._session_id,
+                            'seq': self._seq,
                         },
-                    },
-                }
-            await ws.send(json.dumps(identify))
+                    }
+                else:
+                    identify = {
+                        'op': _OP_IDENTIFY,
+                        'd': {
+                            'token': self.token,
+                            'intents': self.intents,
+                            'properties': {
+                                'os': 'windows',
+                                'browser': 'zcbot',
+                                'device': 'zcbot',
+                            },
+                        },
+                    }
+                await ws.send(json.dumps(identify))
 
-            self._connected = True
-            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))
-            logger.info('discord 已连接: %s (intents=%s)', url, self.intents)
-            await self._recv_loop(ws)
+                self._connected = True
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))
+                logger.info('discord 已连接: %s (intents=%s)', url, self.intents)
+                await self._recv_loop(ws)
+        except ConnectionClosed as e:
+            self._note_close_code(getattr(e, 'code', None))
+        except Exception as e:  # noqa: BLE001
+            # 握手阶段失败（HTTP 401/403 等）：token 错、bot 被禁用都属于这一类，
+            # 重连不会自愈，标成致命并停止重试。
+            status = getattr(e, 'status_code', None)
+            if status in (401, 403):
+                self._fatal_reason = f'HTTP {status}：token 无效或应用被禁用'
+                logger.error('discord 认证失败（HTTP %s），已停止重连', status)
+                return
+            raise
+
+    def _note_close_code(self, code):
+        """按官方关闭码语义决定「可恢复重连」还是「停止并说明原因」。"""
+        if code is None:
+            return
+        if code in _FATAL_CLOSE_CODES:
+            self._fatal_reason = f'{code}: {_FATAL_CLOSE_CODES[code]}'
+            logger.error('discord 网关关闭码 %s（%s），已停止重连。'
+                         '继续重试只会耗尽 IDENTIFY 配额。',
+                         code, _FATAL_CLOSE_CODES[code])
+            return
+        if code in _SESSION_RESET_CODES:
+            # 1000/1001 意味着 session 已作废，必须重新 IDENTIFY
+            self._session_id = ''
+            self._seq = None
+            self._resume_gateway = ''
+            logger.info('discord 连接正常关闭（%s），session 已作废，'
+                        '下次重新 IDENTIFY', code)
 
     async def _heartbeat_loop(self, ws):
-        await asyncio.sleep(self._heartbeat_interval_ms / 2000.0)
+        # 官方要求首次心跳延迟 = heartbeat_interval * random(0, 1)（jitter），
+        # 目的是让大量 bot 不在同一毫秒一起心跳/一起重连形成尖峰；
+        # 原来固定用一半间隔，正是「同一时刻集体重连」的成因。
+        await asyncio.sleep(
+            self._heartbeat_interval_ms / 1000.0 * random.random())
         while self._connected and not self._closing:
             if not self._heartbeat_acked:
                 logger.warning('discord 心跳未 ACK，断开重连')
@@ -537,7 +617,30 @@ class DiscordAdapter(ProtocolAdapter):
         except Exception:
             body = {'_status': resp.status_code, '_text': (resp.text or '')[:400]}
         if resp.status_code >= 400:
-            return {'status': 'failed', 'retcode': resp.status_code,
+            # retcode 必须用框架约定值，不能直接透 HTTP 状态码：
+            # 出站闸门/插件判断的是 -1(业务失败) / -4(限流)，看到 429 会当未知错误。
+            if resp.status_code == 429:
+                ra = None
+                if isinstance(body, dict):
+                    ra = body.get('retry_after')
+                if ra is None:
+                    ra = resp.headers.get('Retry-After')
+                try:
+                    ra = float(ra) if ra is not None else None
+                except (TypeError, ValueError):
+                    ra = None
+                return {'status': 'failed', 'retcode': -4, 'throttled': True,
+                        'retry_after': int(ra) if ra is not None else None,
+                        'msg': (f'discord 限流，官方要求等待 '
+                                f'{int(ra) if ra is not None else "?"}s')}
+            if resp.status_code in (401, 403):
+                return {'status': 'failed', 'retcode': -1,
+                        'http_status': resp.status_code,
+                        'msg': f'discord 拒绝访问（HTTP {resp.status_code}）：'
+                               f'token 无效或 bot 缺少该频道的权限'}
+            return {'status': 'failed', 'retcode': -1,
+                    'http_status': resp.status_code,
+                    'error_code': body.get('code') if isinstance(body, dict) else None,
                     'msg': str(body)}
         return {'status': 'ok', 'retcode': 0, 'data': body}
 

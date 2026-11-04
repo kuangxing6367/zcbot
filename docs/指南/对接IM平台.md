@@ -34,6 +34,8 @@
 | `qq_official` | QQ 官方机器人 | `enabled: true` + `app_id` / `app_secret` |
 | `telegram` | Telegram | `enabled: true` + `token`（找 @BotFather 要） |
 | `discord` | Discord | `enabled: true` + `token`（开发者门户；`MESSAGE_CONTENT` Intent 需开） |
+| `kook` | KOOK | `enabled: true` + `token`（开发者后台，连接模式选 WebSocket） |
+| `matrix` | Matrix（含自建 homeserver） | `enabled: true` + `homeserver` / `access_token` / `user_id` |
 | `ws_client` | 任意 WS 总线 | `enabled: true` + `url`（主动连出去） |
 | `http_inject` | 不接 IM / Webhook | `enabled: true` + 地址端口 |
 
@@ -43,7 +45,32 @@
 
 - 收发消息、文本回复：各端统一走事件与 `send_text` / 动作名。
 - **群管理（踢人 / 禁言等）**：目前完整支持在 OneBot 11；QQ 官方 / Telegram / Discord 等端对这类动作多返回「不支持」，群管类插件换端后请先验证。
-- 限流 / 富媒体下行：各端按自身 API 实现，暂无统一 429 退避。
+- **媒体出站**：Telegram / Discord 支持本地上传与 base64；QQ 官方需先走富媒体上传接口；KOOK 要求资源由机器人自己上传后引用，Matrix 需先 `/_matrix/media/v3/upload`（后两者本端暂只发文本）。
+
+## 失败是怎么报给你的
+
+各平台的错误模型不一样，接入端会把它们统一成同一套 `retcode`，插件不需要按平台分支：
+
+| retcode | 含义 | 触发例子 |
+| --- | --- | --- |
+| `0` | 成功 | — |
+| `-1` | 失败（平台业务错误，或接入端未连接） | Telegram `chat not found`、Discord 403 缺权限、KOOK `code=40000` |
+| `-2` | 请求超时 | OneBot 等待响应超 10s |
+| `-3` | 网络/连接异常 | 发不出去、连接已断 |
+| `-4` | 被平台限流 | HTTP 429；带 `throttled: true` 与 `retry_after`（秒） |
+| `-10` | 该端不支持此动作 | 例如 KOOK 主动私聊、Matrix 媒体出站 |
+
+几个容易踩的点，接入端已经处理：
+
+- **HTTP 200 不代表成功。** QQ 官方失败时仍返回 200，业务码在 body 的 `code` 里；
+  官方文档明确写了 `message` 只用于人工排查、内容可能随时调整，所以判据只取 `code`。
+- **限流必须按平台给的等待时间。** 自己拍一个更短的间隔重试会被继续限，越试越久。
+  各端都会读 `retry_after` / `retry_after_ms` / `Retry-After`，原样放在返回值里。
+- **凭证类错误不重试。** Discord 的 4004/4013/4014、KOOK 的 40101/40103、
+  Matrix 的 `M_UNKNOWN_TOKEN`、Telegram 的 401，都会停止重连并打印原因——
+  这类错误重连一万次也不会好，还会把配额烧光（Discord 限 1000 次 IDENTIFY/天）。
+- **Telegram `getUpdates` 与 webhook 互斥。** 配过 webhook 的 bot 轮询会一直返回 409，
+  接入端会只提示一次并给出 `deleteWebhook` 的修法。
 
 ---
 

@@ -83,6 +83,21 @@ def normalize_event(raw: dict, bot_name: str) -> Optional[dict]:
     if not post_type:
         return None
 
+    # 自身消息回显：NapCat / go-cqhttp / Lagrange 都能把机器人自己发出的消息
+    # 也上报上来（post_type=message_sent，或 message 且 user_id==self_id）。
+    # 不过滤会形成自激：机器人发的消息进管线 → 命中命令前缀 → 再发一条 → 无限循环。
+    # 这是社区里最常见的「机器人自己刷屏」成因，且在日志里看起来完全正常。
+    if post_type == 'message_sent':
+        logger.debug('[%s] 忽略自身消息回显 message_sent id=%s',
+                     bot_name, raw.get('message_id'))
+        return None
+    self_id = raw.get('self_id')
+    if (post_type == 'message' and self_id is not None
+            and str(raw.get('user_id')) == str(self_id)):
+        logger.debug('[%s] 忽略 self_id 发出的消息 id=%s',
+                     bot_name, raw.get('message_id'))
+        return None
+
     event = {
         'type': post_type,
         'sub_type': raw.get(f'{post_type}_type', ''),

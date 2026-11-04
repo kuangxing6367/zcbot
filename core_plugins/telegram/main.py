@@ -4,6 +4,7 @@ Telegram 接入端（telegram）
 
 getUpdates 长轮询收消息 + sendMessage/sendPhoto 出站（仅用 requests，无新三方依赖）：
   - 长轮询 offset 自增，断线自动重试
+  - offset 落盘（data/telegram_offset.json）：重启后接着上次位置，不重放旧消息
   - 私聊 → message_type=private；超级群/群 → message_type=group
   - 出站图片：base64:// / file:// / http(s) / 本地路径 → multipart sendPhoto
 
@@ -17,6 +18,7 @@ import logging
 import os
 import re
 import threading
+import time
 from typing import List, Optional
 
 import requests
@@ -37,6 +39,46 @@ __plugin_meta__ = {
 }
 
 _API_BASE = 'https://api.telegram.org'
+
+
+class TelegramApiError(RuntimeError):
+    """Telegram 返回 ok=false 时的结构化错误。
+
+    官方错误响应形如：
+      {"ok": false, "error_code": 429,
+       "description": "Too Many Requests: retry after 27",
+       "parameters": {"retry_after": 27}}
+    retry_after 只在 429 出现，单位秒，是**必须遵守**的等待时间：
+    自己拍一个更短的间隔重试，会被继续限流，越试越久。
+    """
+
+    def __init__(self, error_code, description='', retry_after=None,
+                 payload=None):
+        self.error_code = int(error_code or 0)
+        self.description = description or ''
+        self.retry_after = retry_after
+        self.payload = payload or {}
+        super().__init__(
+            f'telegram {self.error_code}: {self.description or "未知错误"}')
+
+    @classmethod
+    def from_payload(cls, data):
+        if not isinstance(data, dict):
+            return cls(-1, str(data)[:200])
+        params = data.get('parameters') or {}
+        retry_after = params.get('retry_after')
+        if retry_after is None and data.get('error_code') == 429:
+            # 少数情况下只有 description 里带 "retry after N"
+            m = re.search(r'retry after (\d+)', str(data.get('description')))
+            if m:
+                retry_after = int(m.group(1))
+        try:
+            retry_after = int(retry_after) if retry_after is not None else None
+        except (TypeError, ValueError):
+            retry_after = None
+        return cls(data.get('error_code') or -1,
+                   str(data.get('description') or ''),
+                   retry_after, data)
 
 _B64_RE = re.compile(r'^base64://([A-Za-z0-9+/=\s]+)$', re.DOTALL)
 _CQ_IMAGE_RE = re.compile(
@@ -267,7 +309,9 @@ class TelegramAdapter(ProtocolAdapter):
         self.polling_timeout = max(1, int(polling_timeout or 30))
         self.api_base = (api_base or _API_BASE).rstrip('/')
         self.allowed_updates = allowed_updates or ['message', 'edited_message']
-        self._offset = 0
+        self._offset = self._load_offset()
+        # 409（webhook 冲突）只完整提示一次，否则日志会被同一条刷满
+        self._webhook_conflict_warned = False
         self._connected = False
         self._closing = False
         self._task = None
@@ -276,6 +320,50 @@ class TelegramAdapter(ProtocolAdapter):
 
     def _url(self, method: str) -> str:
         return f'{self.api_base}/bot{self.token}/{method}'
+
+    # ── offset 持久化 ────────────────────────────────────────────
+    # offset 是「已确认到哪一条」的唯一凭据。只放内存时：进程重启 → offset 归 0
+    # → getUpdates 把最近 24 小时未确认的旧消息重新投递一遍，用户收到重复回复；
+    # 而入站去重窗口（300s）在重启后已清空，挡不住。
+    # 写入失败只告警，绝不因为状态文件影响收消息。
+
+    def _offset_file(self) -> str:
+        from framework.config import get_home
+        return os.path.join(get_home(), 'data', 'telegram_offset.json')
+
+    def _token_hint(self) -> str:
+        import hashlib
+        return hashlib.sha1(self.token.encode('utf-8')).hexdigest()[:12]
+
+    def _load_offset(self) -> int:
+        try:
+            with open(self._offset_file(), 'r', encoding='utf-8') as f:
+                state = json.load(f) or {}
+            if state.get('token_hint') != self._token_hint():
+                logger.info('telegram offset 记录属于另一个 bot，忽略并从头开始')
+                return 0
+            value = int(state.get('offset') or 0)
+            if value > 0:
+                logger.info('telegram offset 已从磁盘恢复: %s', value)
+            return value
+        except FileNotFoundError:
+            return 0
+        except Exception as e:
+            logger.warning('telegram offset 读取失败，从 0 开始: %s', e)
+            return 0
+
+    def _save_offset(self):
+        try:
+            path = self._offset_file()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump({'token_hint': self._token_hint(),
+                           'offset': int(self._offset),
+                           'updated_at': time.strftime('%Y-%m-%d %H:%M:%S')}, f)
+            os.replace(tmp, path)
+        except Exception as e:
+            logger.warning('telegram offset 保存失败（不影响收消息）: %s', e)
 
     # ── 连接自描述 ──────────────────────────────────────────────
 
@@ -398,6 +486,7 @@ class TelegramAdapter(ProtocolAdapter):
         while not self._closing:
             try:
                 updates = await asyncio.to_thread(self._get_updates)
+                _offset_before = self._offset
                 for upd in updates or []:
                     if self._closing:
                         break
@@ -410,10 +499,41 @@ class TelegramAdapter(ProtocolAdapter):
                         await self.framework.dispatch_event(event)
                     except Exception as e:
                         logger.error('telegram 事件分发失败: %s', e)
+                # 整批处理完再落盘：崩溃在批中间会重放这一批（at-least-once），
+                # 但不会静默跳过任何一条。
+                if self._offset != _offset_before:
+                    self._save_offset()
                 self._connected = True
                 backoff.reset()
             except asyncio.CancelledError:
                 raise
+            except TelegramApiError as e:
+                self._connected = False
+                if e.error_code == 409:
+                    # 409 = 该 bot 还挂着 webhook，getUpdates 与 webhook 互斥。
+                    # 这不是网络抖动，重试一万次也一样失败，必须说清楚怎么修。
+                    if not self._webhook_conflict_warned:
+                        self._webhook_conflict_warned = True
+                        logger.error(
+                            'telegram 收消息失败：该 bot 仍配置了 webhook（409 Conflict）。'
+                            'getUpdates 与 webhook 只能二选一。两种修法：'
+                            '① 浏览器打开 https://api.telegram.org/bot<token>/deleteWebhook 删除；'
+                            '② 或改成本端不轮询、由你的服务接 webhook 后转 http_inject。')
+                    await asyncio.sleep(300)
+                    continue
+                if e.error_code == 429:
+                    wait = e.retry_after or 30
+                    logger.warning(
+                        'telegram 被限流：按官方 retry_after 等待 %ss 后继续', wait)
+                    await asyncio.sleep(wait)
+                    continue
+                if e.error_code == 401:
+                    logger.error('telegram token 无效（401 Unauthorized），'
+                                 '轮询已无意义，请检查配置里的 token')
+                    await asyncio.sleep(300)
+                    continue
+                logger.warning('telegram 轮询失败: %s', e)
+                await asyncio.sleep(backoff.next_delay(0))
             except Exception as e:
                 self._connected = False
                 logger.warning('telegram 轮询异常: %s', e)
@@ -425,7 +545,26 @@ class TelegramAdapter(ProtocolAdapter):
         data = resp.json() if resp.content else {}
         if data.get('ok'):
             return data.get('result') or {}
-        raise RuntimeError(f'getMe 失败: {data}')
+        raise TelegramApiError.from_payload(data)
+
+    def _result_or_error(self, payload, action='发送') -> dict:
+        """把 ok=false 统一翻成带 retry_after 的失败结构。
+
+        retcode 沿用出站闸门的语义：
+          -4 = 被限流（throttled），插件/闸门据此判断「等一等可以重发」；
+          -1 = 其它平台业务错误（参数错、chat 不存在、权限不足等）。
+        """
+        if isinstance(payload, dict) and payload.get('ok'):
+            return {'status': 'ok', 'retcode': 0, 'data': payload.get('result')}
+        err = TelegramApiError.from_payload(payload)
+        if err.error_code == 429:
+            return {'status': 'failed', 'retcode': -4, 'throttled': True,
+                    'retry_after': err.retry_after,
+                    'msg': f'{action}被限流，官方要求等待 '
+                           f'{err.retry_after or "?"}s：{err.description}'}
+        return {'status': 'failed', 'retcode': -1,
+                'error_code': err.error_code,
+                'msg': f'{action}失败：{err.description or payload}'}
 
     def _get_updates(self) -> list:
         payload = {
@@ -441,7 +580,7 @@ class TelegramAdapter(ProtocolAdapter):
             headers={'Content-Type': 'application/json; charset=utf-8'})
         data = resp.json() if resp.content else {}
         if not data.get('ok'):
-            raise RuntimeError(f'getUpdates 失败: {data}')
+            raise TelegramApiError.from_payload(data)
         return data.get('result') or []
 
     async def stop(self):
@@ -471,9 +610,7 @@ class TelegramAdapter(ProtocolAdapter):
             json=body, timeout=30,
             headers={'Content-Type': 'application/json; charset=utf-8'})
         data = resp.json() if resp.content else {}
-        if data.get('ok'):
-            return {'status': 'ok', 'retcode': 0, 'data': data.get('result')}
-        return {'status': 'failed', 'retcode': -1, 'msg': str(data)}
+        return self._result_or_error(data, 'sendMessage')
 
     def _send_media(self, chat_id, op: dict, reply_to=None) -> dict:
         """
@@ -533,9 +670,7 @@ class TelegramAdapter(ProtocolAdapter):
             payload = resp.json() if resp.content else {}
         except Exception as e:  # noqa: BLE001
             return {'status': 'failed', 'retcode': -4, 'msg': f'{method} 失败: {e}'}
-        if payload.get('ok'):
-            return {'status': 'ok', 'retcode': 0, 'data': payload.get('result')}
-        return {'status': 'failed', 'retcode': -1, 'msg': str(payload)}
+        return self._result_or_error(payload, method)
 
     def _send_photo(self, chat_id, image: dict, caption: str = '',
                     reply_to: int = None) -> dict:
@@ -567,9 +702,7 @@ class TelegramAdapter(ProtocolAdapter):
             resp = self._http.post(
                 self._url('sendPhoto'), data=data, files=files, timeout=60)
         body = resp.json() if resp.content else {}
-        if body.get('ok'):
-            return {'status': 'ok', 'retcode': 0, 'data': body.get('result')}
-        return {'status': 'failed', 'retcode': -1, 'msg': str(body)}
+        return self._result_or_error(body, 'sendPhoto')
 
     # ── ProtocolAdapter 契约 ────────────────────────────────────
 

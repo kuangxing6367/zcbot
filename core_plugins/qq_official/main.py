@@ -53,11 +53,16 @@ __plugin_meta__ = {
     "process": "core",
 }
 
-# 官方接入域名（2026-09-18 指引）：取令牌 bots.qq.com，正式 API api.sgroup.qq.com，
-# 沙箱 sandbox.api.sgroup.qq.com（旧域名 api.bot.qq.com 处于迁移窗口期，仅保留作回退）
-_API_BASE_FALLBACK = 'https://api.bot.qq.com'
-_API_BASE = 'https://api.sgroup.qq.com'
-_TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken'
+# 官方接入域名（依据官方 changelog 20260810 与「接口调用与鉴权」页）：
+#   2026-08-10 起所有接口调用域名统一为 api.bot.qq.com，
+#   独立的沙箱域名 sandbox.api.sgroup.qq.com 已废弃，api.sgroup.qq.com 不再作为调用入口。
+# 两者不是「主用 + 备用」关系：sgroup 是已下线域名，只在用户配置里显式指定时才会用到。
+_API_BASE = 'https://api.bot.qq.com'
+# 仅当用户把 api_base 配成旧域名时作为回退；默认路径永远不会请求它
+_API_BASE_LEGACY = 'https://api.sgroup.qq.com'
+_TOKEN_URL = f'{_API_BASE}/app/getAppAccessToken'
+# 取令牌另有一个长期存在的入口（官方文档两处写法不一致，社区实现两者都在用）
+_TOKEN_URL_ALT = 'https://bots.qq.com/app/getAppAccessToken'
 _GATEWAY_URL = f'{_API_BASE}/gateway/bot'
 
 # GROUP_AND_C2C_EVENT(1<<25)：群 @/全量 + 单聊 + 群/好友生命周期
@@ -588,9 +593,15 @@ class QQOfficialAdapter(ProtocolAdapter):
         self._backoff = Backoff(base=self.reconnect_interval, maximum=60)
         self.api_base = (api_base or _API_BASE).rstrip('/')
         self._token_url = _TOKEN_URL
-        # 旧域名保留作回退（官方迁移窗口期）：新域名连不上/5xx 时自动重试
-        self.api_base_fallback = (_API_BASE_FALLBACK
-                                  if self.api_base != _API_BASE_FALLBACK else '')
+        # 只有用户显式配了旧域名时，才把统一域名当回退。
+        # 反过来（默认走新域名、失败再试 sgroup）在今天是纯浪费：sgroup 已不是调用入口，
+        # 每条请求先撞一次失效域名再重试，发送延迟直接翻倍。
+        self.api_base_fallback = (_API_BASE
+                                  if self.api_base != _API_BASE else '')
+        if self.api_base == _API_BASE_LEGACY:
+            logger.warning(
+                'qq_official.api_base 指向旧域名 api.sgroup.qq.com，'
+                '官方自 2026-08-10 起已统一为 api.bot.qq.com，建议清掉该配置')
 
         self._access_token = ''
         self._token_expire_at = 0.0
@@ -649,11 +660,13 @@ class QQOfficialAdapter(ProtocolAdapter):
             now = time.time()
             if self._access_token and now < self._token_expire_at - self._TOKEN_REFRESH_MARGIN:
                 return self._access_token     # 拿锁后复查，已被并发线程刷过
-            # 官方 2026-09-18 起取令牌域名迁移到 bots.qq.com；旧地址保留作回退
+            # 官方「接口调用与鉴权」页写的取令牌地址是 api.bot.qq.com，
+            # 另一页与多数社区实现（remilia / ErisPulse）用 bots.qq.com。
+            # 两个都保留，主用统一域名，失败再试另一个。
             token_urls = [self._token_url]
-            fallback_token_url = f'{_API_BASE_FALLBACK}/app/getAppAccessToken'
-            if fallback_token_url not in token_urls:
-                token_urls.append(fallback_token_url)
+            for alt in (_TOKEN_URL_ALT, f'{_API_BASE_LEGACY}/app/getAppAccessToken'):
+                if alt not in token_urls:
+                    token_urls.append(alt)
             body = {}
             resp = None
             for tok_url in token_urls:
@@ -1141,9 +1154,9 @@ class QQOfficialAdapter(ProtocolAdapter):
           4. 超时/连接类异常重试最多 2 次（带 msg_seq 的发送平台会按 seq
              去重，重试不会重复投递；读接口天然幂等）。
 
-        域名兼容：默认走正式环境 api.sgroup.qq.com；迁移窗口期内若新域名
-        网络异常 / 404 / 5xx，自动用旧域名 api.bot.qq.com 重试一次
-        （仅当 api_base 与旧域名不同；4xx 业务错误不换域名直接抛出）。
+        域名兼容：默认走官方统一域名 api.bot.qq.com（2026-08-10 起唯一入口）。
+        只有用户把 api_base 显式配成旧域名时才有多主机回退；
+        默认配置下 hosts 只有一个，不会为已下线的 sgroup 白跑一趟。
         """
         headers = {'Authorization': f'QQBot {self._refresh_token_if_stale()}'}
         base = self.api_base
@@ -1188,10 +1201,13 @@ class QQOfficialAdapter(ProtocolAdapter):
                     except Exception:  # noqa: BLE001
                         body = None
                 if resp.status_code < 400:
-                    # HTTP 200 但 body 是业务错误（如 11244 token 失效）
+                    # HTTP 200 但 body 是业务错误（如 11244 token 失效）。
+                    # 判据只取业务码：官方写明了失败时 HTTP 仍是 200，且
+                    # 「message 仅用于人工排查，内容可能随时调整」。早先这里
+                    # 还要求 body 带 message 才算失败，官方一改文案，失败就会被
+                    # 当成成功返回空 dict，插件看到的是「发了但没发出去」。
                     err_code = _resp_error_code(body)
-                    if err_code and isinstance(body, dict) \
-                            and body.get('message'):
+                    if err_code:
                         if err_code == str(_ERR_TOKEN_EXPIRED) \
                                 and not token_retried:
                             token_retried = True
@@ -1205,7 +1221,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 # 4xx（非 404）业务错误不换域名重试，直接抛
                 if resp.status_code < 500 and resp.status_code != 404:
                     raise _ApiError(method, path, body) \
-                        if isinstance(body, dict) and body.get('message') else \
+                        if _resp_error_code(body) else \
                         RuntimeError(
                             f'{method} {path} -> HTTP {resp.status_code}: '
                             f'{(resp.text or "")[:300]}')

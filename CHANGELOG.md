@@ -26,6 +26,108 @@
 
 ---
 
+## [1.20.0] - 2026-11-04
+
+> 主题：**让接入端跟官方现况对齐**。这一版不是加功能，是先纠正几处
+> 「代码按老文档写的、平台早就改了」的问题，再补两个一直缺的接入端。
+
+### QQ 官方：域名迁移写反了（影响每一次 API 调用）
+
+- 官方 changelog `20260810` 写得很清楚：所有接口调用域名统一为 `api.bot.qq.com`，
+  独立的沙箱域名 `sandbox.api.sgroup.qq.com` 已废弃。而接入端把 `api.sgroup.qq.com`
+  当主域名、`api.bot.qq.com` 当「迁移窗口期回退」，注释还写着「旧域名 api.bot.qq.com」。
+  结果就是每条请求先撞一次已下线的域名，失败后再换域名重试，**发送延迟直接翻倍**。
+- 现在默认只走 `api.bot.qq.com`，`hosts` 只有一个。只有用户把 `api_base` 显式配成
+  旧域名时才有回退，并在启动时告警提示清掉配置。
+- 默认配置模板里的 `api_base` 同步改正（之前这里也还是旧域名，等于改了一半）。
+- 取令牌地址补上另一入口：官方两处文档写法不一致（`api.bot.qq.com` 与 `bots.qq.com`），
+  社区实现两者都有在用，本端两个都试。
+
+### QQ 官方：业务错误判定不能依赖 message
+
+- 官方原文：「失败时 HTTP 返回码仍为 200，请优先依据 code 判断是否成功」
+  「message 仅用于人工排查，内容可能随时调整」。
+- 原实现要求 `code` 与 `body['message']` 同时存在才算失败。官方哪天调整文案
+  （改字段名、去掉 message），失败会被当成成功返回空 dict，插件看到的是
+  「发了但没发出去」，日志里一片正常。现在只看业务码。
+
+### Telegram：429 与 409
+
+- 新增 `TelegramApiError`，解析 `ok=false` 的标准结构，读 `parameters.retry_after`
+  （缺失时从 `description` 里解析 `retry after N`）。
+- 轮询侧遇到 429 按官方值休眠；出站返回 `retcode=-4 / throttled / retry_after`，
+  与出站闸门语义一致。
+- 409 单独处理：`getUpdates` 与 webhook 互斥，配过 webhook 的 bot 会一直 409。
+  这不是网络抖动，重试一万次也一样，所以只完整提示一次并给出
+  `deleteWebhook` 的修法，之后长休眠。
+- 401 明确指出 token 无效。
+
+### Discord：心跳 jitter、致命关闭码、Intent 告警
+
+- 首次心跳改为 `heartbeat_interval × random(0,1)`。原来固定用一半间隔，
+  正是官方要求 jitter 想避免的「所有 bot 同一毫秒心跳/重连」。
+- 新增关闭码处理：
+  - `4004 / 4010 / 4011 / 4012 / 4013 / 4014` 标记为致命并**停止重连**。
+    这类是配置或权限错误，继续重试只会烧 IDENTIFY 配额（官方限 1000 次/24h，
+    超了直接重置 bot token），日志里只会看到反复断开。
+  - `1000 / 1001` 按官方语义作废 session，下次重新 IDENTIFY，不拿旧 session 去 RESUME。
+- `MESSAGE_CONTENT` 未订阅时启动告警。官方明确说过：缺失的特权 Intent 不会报错，
+  事件照常到达、被门控的字段为空——现象是「收到了消息但内容是空串」，
+  极易被当成解析 bug 排查半天。
+- REST 失败不再把 HTTP 状态码直接当 `retcode` 透给插件（429 会被当成未知错误）：
+  429 → `-4 + retry_after`，401/403 → 明确提示 token 或权限问题，其余 → `-1`。
+
+### OneBot：过滤自身消息回显
+
+- NapCat / go-cqhttp / Lagrange 都能把机器人自己发出的消息上报（`post_type=message_sent`，
+  或 `message` 且 `user_id == self_id`）。不过滤会形成自激：自己发的消息进管线 →
+  命中命令前缀 → 再发一条 → 无限循环，而日志完全正常。
+- 现在这两类直接丢弃并打 debug。
+
+### 新增接入端：KOOK
+
+- `core_plugins/kook`：Gateway WebSocket 收事件 + REST v3 发消息。
+- 协议细节按官方文档实现：`/api/v3/gateway/index?compress=0` 取网关；
+  6 条信令（0 事件 / 1 HELLO / 2 PING / 3 PONG / 4 RESUME / 5 RECONNECT / 6 RESUME ACK）；
+  心跳 `30s ± 5s`，6 秒无 PONG 判超时；断线用 `resume=1&sn=&session_id=` 补发离线消息。
+- `sn` 重复或乱序直接丢弃（官方要求）——不丢会让同一条命令执行两次，对签到/扣费类是灾难。
+- `RECONNECT` 时清空 `sn` 与会话重新取网关，否则消息会错乱。
+- 过滤 `extra.author.bot` 的消息：官方专门警告过两个机器人互相回复会触发封禁。
+- HELLO 的 40101/40102/40103 直接停止重连（token 问题）。
+- 能力边界写清楚：频道文本、引用、撤回支持；**图片/视频发送不支持**
+  （KOOK 要求资源由本机器人上传后引用，外部 URL 会被拒），主动私聊需要 `chat_code`，
+  都返回明确的「不支持」而不是假装成功。
+
+### 新增接入端：Matrix
+
+- `core_plugins/matrix`：Client-Server API v3，`/sync` 长轮询收、
+  `PUT .../send/m.room.message/{txnId}` 发。不依赖 matrix-nio。
+- `since` 落盘（`data/matrix_sync.json`）：不放的话每次重启都是「首次 sync」，
+  会把最近历史消息重投一遍。记录带 homeserver + user_id 指纹，换账号不沿用旧游标
+  （沿用会静默跳过一段消息，比重复更危险）。
+- `txnId` 作幂等键，一次调用只生成一次；重试复用同一个值，换掉就是真的发第二条。
+- `M_LIMIT_EXCEEDED` 按 `retry_after_ms` 等待；`M_UNKNOWN_TOKEN` 等凭证错误停止轮询。
+- 支持自建 homeserver（只换 `homeserver`，协议一致）。
+- 能力边界：文本收发、媒体入站；媒体出站需先上传，暂未实现；加密房间不在范围。
+
+### 文档
+
+- `docs/指南/对接IM平台.md`：适配器表补 kook / matrix；删除「暂无统一 429 退避」
+  （已不成立）；新增「失败是怎么报给你的」一节，给出 `retcode` 对照表与五个易踩点。
+- `docs/进阶/可靠性与限流.md`：新增「平台侧的限流也要按它说的等」，列出四家的
+  限流信号与处理，以及凭证错误不重试的原因。
+- `docs/接口/高级/协议适配器.md`、`docs/进阶/扩展清单.md`、`docs/指南/安装.md`：补新接入端。
+
+### 测试
+
+- 新增 `tests/test_adapter_error_handling.py`（25 组）：四家的 429/403/409、
+  业务码无 message 仍判失败、Discord 六个致命关闭码与 1000/1001 的 session 作废、
+  QQ 默认单域名、Matrix 限流与致命 token。
+- 新增 `tests/test_new_adapters.py`（16 组）：KOOK/Matrix 事件归一化、bot 与自身过滤、
+  `sn` 去重、`since` 持久化与换账号隔离、OneBot 自身消息过滤、KOOK 私聊不支持明确报错。
+- 全量 pytest **633 passed**；脚本式回归 4 个全过；真实 `main.py` 启动确认两个新接入端
+  在缺凭证时正确跳过连接而不报错。
+
 ## [1.19.0] - 2026-11-04
 
 > 主题：**卡住的时候得有人吭声**——定时任务和命令 handler 是两套执行标准，同步任务一直跑在事件循环上；阻塞发生了则完全没有日志。
