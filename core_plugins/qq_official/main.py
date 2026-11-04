@@ -32,6 +32,7 @@ import requests
 import websockets
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
 
@@ -584,6 +585,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         self.bot_name = bot_name or 'qq_official'
         self.intents = int(intents) if intents else _DEFAULT_INTENTS
         self.reconnect_interval = max(1, int(reconnect_interval or 5))
+        self._backoff = Backoff(base=self.reconnect_interval, maximum=60)
         self.api_base = (api_base or _API_BASE).rstrip('/')
         self._token_url = _TOKEN_URL
         # 旧域名保留作回退（官方迁移窗口期）：新域名连不上/5xx 时自动重试
@@ -845,14 +847,12 @@ class QQOfficialAdapter(ProtocolAdapter):
                          name='qq_official-boot-wait').start()
 
     async def _supervise(self):
-        # 指数退避：连不上（网关故障/断网）时 5s→10s→…封顶 60s，
-        # 连上（recv_loop 正常跑过）即清零，避免故障期固定频率打 gateway
-        failures = 0
+        # 断线重连走统一退避（framework.messaging.backoff）：故障期 5s→10s→…
+        # 封顶 60s 并加抖动，避免多实例同频撞网关；连接存活足够久才清零。
         while not self._closing:
-            connected_once = False
+            started = _mono()
             try:
                 await self._connect_once()
-                connected_once = True
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -863,9 +863,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 await self._cancel_heartbeat()
             if self._closing:
                 break
-            failures = 0 if connected_once else failures + 1
-            await asyncio.sleep(
-                min(self.reconnect_interval * (2 ** failures), 60))
+            await asyncio.sleep(self._backoff.next_delay(_mono() - started))
 
     async def _cancel_heartbeat(self):
         t = self._heartbeat_task

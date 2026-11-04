@@ -57,6 +57,26 @@ class HookPoints:
     MESSAGE_CLASSIFIED = 'message.classified'   # 消息事件完成四类分类后（携带 ev.category / ev.categories）
 
 
+class HookPriority:
+    """扩展点优先级的**段位约定**（数值小的先执行）。
+
+    HookRegistry 早就按优先级排序并支持短路，但插件普遍用默认 50，顺序实际
+    退化成"注册顺序"——两个都自称守卫的插件谁先跑，取决于加载拓扑序，改一个
+    插件的依赖就可能悄悄换掉拦截顺序。这里把段位固定下来：
+
+    - EARLY   前置改写：归一化字段补全、敏感词替换（会改事件内容）
+    - GUARD   拦截判定：黑白名单、频控、场景开关（返回 False 丢事件）
+    - NORMAL  普通观察/统计（默认值，与历史行为一致）
+    - LATE    兜底与收尾：需要看到被前面处理过的最终事件的逻辑
+
+    同段位内仍按注册顺序执行（稳定排序），跨段位的先后是有保证的。
+    """
+    EARLY = 10
+    GUARD = 20
+    NORMAL = 50
+    LATE = 80
+
+
 # 各扩展点约定返回 False 时是否触发"短路"语义
 _SHORT_CIRCUIT = {
     HookPoints.HTTP_BEFORE_REQUEST: True,     # 返回 Flask Response 即短路
@@ -104,8 +124,8 @@ class HookRegistry:
             self._snapshots[point] = snap
             return snap
 
-    def register(self, point: str, name: str, handler: Callable, priority: int = 50,
-                 serial: bool = True):
+    def register(self, point: str, name: str, handler: Callable,
+                 priority: int = HookPriority.NORMAL, serial: bool = True):
         """注册一个扩展点处理器。同名（同一 name）重复注册自动覆盖（去重）。
 
         :param serial: 是否要求串行执行（默认 True）。

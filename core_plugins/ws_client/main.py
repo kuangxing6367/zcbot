@@ -36,6 +36,7 @@ from urllib.parse import urlparse
 import websockets
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
 
@@ -179,13 +180,20 @@ class WsClientAdapter(ProtocolAdapter):
     adapter_id = 'ws_client'
 
     def __init__(self, framework, url, bot_name='ws_client', token='',
-                 reconnect_interval=5, max_queue=256):
+                 reconnect_interval=5, max_queue=256,
+                 reconnect_max_interval=60, reconnect_jitter=0.25):
         self.framework = framework
         self.url = url
         self.bot_name = bot_name or 'ws_client'
         self.token = token or ''
         self.reconnect_interval = max(1, int(reconnect_interval or 5))
         self.max_queue = max(16, int(max_queue or 256))
+        # 重连后冲刷积压的间隔：宁可慢几百毫秒，也不要一口气把队列推给对端
+        self._flush_interval = 0.05
+        # 断线重连指数退避：固定间隔会在故障期猛敲对端，多实例同频还会一起撞上去
+        self._backoff = Backoff(base=self.reconnect_interval,
+                                maximum=reconnect_max_interval,
+                                jitter=reconnect_jitter)
         self._ws = None
         self._connected = False
         self._closing = False
@@ -210,15 +218,18 @@ class WsClientAdapter(ProtocolAdapter):
                 {'key': 'url', 'label': '远端 URL', 'type': 'string'},
                 {'key': 'bot_name', 'label': 'Bot 名', 'type': 'string'},
                 {'key': 'token', 'label': 'Token', 'type': 'password'},
-                {'key': 'reconnect_interval', 'label': '重连间隔(秒)', 'type': 'number'},
+                {'key': 'reconnect_interval', 'label': '重连初始间隔(秒)', 'type': 'number'},
+                {'key': 'reconnect_max_interval', 'label': '重连最大间隔(秒)', 'type': 'number'},
             ],
             'restart_keys': ['url', 'bot_name'],
             'endpoint_hint': hint,
             'guide': '本端主动连出到外部 WebSocket 服务；远端推送 JSON 事件，'
-                     '本端经 send_msg 回发。图片支持 base64:// 消息段。',
+                     '本端经 send_msg 回发。图片支持 base64:// 消息段。'
+                     '断线按指数退避重连（初始间隔起，逐次翻倍至上限并加抖动）。',
             'status_extra': {
                 'connected': self._connected,
                 'url': self.url,
+                'reconnect': self._backoff.describe(),
             },
         }
 
@@ -252,8 +263,13 @@ class WsClientAdapter(ProtocolAdapter):
             self._supervisor = loop.create_task(self._supervise())
 
     async def _supervise(self):
-        """断线自动重连，直到 stop()"""
+        """断线自动重连，直到 stop()
+
+        退避策略见 framework.messaging.backoff：故障期退避到上限，稳定运行
+        超过 stable_after 才清零——「连上即被踢」不会被当成连接成功。
+        """
         while not self._closing:
+            started = _mono()
             try:
                 await self._connect_once()
             except asyncio.CancelledError:
@@ -265,7 +281,11 @@ class WsClientAdapter(ProtocolAdapter):
                 self._ws = None
             if self._closing:
                 break
-            await asyncio.sleep(self.reconnect_interval)
+            delay = self._backoff.next_delay(_mono() - started)
+            if self._backoff.failures > 1:
+                logger.info("ws_client 第 %d 次重连，等待 %.1fs",
+                            self._backoff.failures, delay)
+            await asyncio.sleep(delay)
 
     async def _connect_once(self):
         headers = {}
@@ -288,10 +308,22 @@ class WsClientAdapter(ProtocolAdapter):
             self._ws = ws
             self._connected = True
             logger.info(f"ws_client 已连接: {self.url}")
-            # 冲刷连接前积压
+            # 冲刷连接前积压：慢一点发，避免重连瞬间把上百条一起推给对端
             pending, self._pending = self._pending, []
-            for item in pending:
-                await ws.send(json.dumps(item, ensure_ascii=False))
+            if pending:
+                logger.info("ws_client 重连后冲刷积压消息 %d 条", len(pending))
+            for idx, item in enumerate(pending):
+                if self._closing or not self._connected:
+                    # 中途又断了：剩下的放回队列头部，等下次连接
+                    self._pending[:0] = pending[idx:]
+                    break
+                try:
+                    await ws.send(json.dumps(item, ensure_ascii=False))
+                except Exception as e:
+                    logger.warning(f"ws_client 冲刷积压失败，剩余 {len(pending) - idx} 条回队: {e}")
+                    self._pending[:0] = pending[idx:]
+                    raise
+                await asyncio.sleep(self._flush_interval)
             await self._recv_loop(ws)
 
     async def _recv_loop(self, ws):
@@ -366,10 +398,12 @@ class WsClientAdapter(ProtocolAdapter):
                 payload['user_id'] = params.get(
                     'user_id', payload.get('user_id'))
                 payload['group_id'] = None
-            ok = await self._send_json(payload)
-            if not ok:
+            res = await self._send_json(payload)
+            if res != 'ok':
                 return {'status': 'failed', 'retcode': -1,
-                        'msg': 'ws_client 未连接或发送失败'}
+                        'queued': res == 'queued',
+                        'msg': 'ws_client 已入队，等待重连后发送'
+                               if res == 'queued' else 'ws_client 发送失败'}
             return {'status': 'ok', 'retcode': 0, 'data': None}
 
         if action in ('get_status', 'get_login_info', 'get_online_clients'):
@@ -389,10 +423,11 @@ class WsClientAdapter(ProtocolAdapter):
             # message 字段一并归一化 base64
             if 'message' in payload:
                 payload['message'] = normalize_message(payload['message'])
-            ok = await self._send_json(payload)
-            if ok:
+            res = await self._send_json(payload)
+            if res == 'ok':
                 return {'status': 'ok', 'retcode': 0, 'data': None}
-            return {'status': 'failed', 'retcode': -1, 'msg': '发送失败'}
+            return {'status': 'failed', 'retcode': -1,
+                    'queued': res == 'queued', 'msg': '发送失败'}
         return {'status': 'failed', 'retcode': -10,
                 'msg': f'ws_client 不支持动作 {action}（未连接）'}
 
@@ -407,21 +442,27 @@ class WsClientAdapter(ProtocolAdapter):
 
     # ── 内部发送 ────────────────────────────────────────────────
 
-    async def _send_json(self, obj: dict) -> bool:
+    async def _send_json(self, obj: dict) -> str:
+        """发送一帧。返回 'ok' / 'queued'（未连接，已入队待重连后发送）/ 'failed'。
+
+        未连接时入队是「尽力而为」而非成功：调用方仍会拿到 failed，但同时带
+        queued=True，避免插件以为已发出而重复补发，也避免它以为彻底丢了。
+        """
         data = json.dumps(obj, ensure_ascii=False)
         ws = self._ws
         if ws is None or not self._connected:
-            # 未连上：入队，连上后由 _connect_once 冲刷（有界）
             if len(self._pending) < self.max_queue:
                 self._pending.append(obj)
-            return False
+                return 'queued'
+            logger.warning("ws_client 未连接且积压已满（%d 条），丢弃本条", self.max_queue)
+            return 'failed'
         try:
             await ws.send(data)
-            return True
+            return 'ok'
         except Exception as e:
             logger.warning(f"ws_client 发送失败: {e}")
             self._connected = False
-            return False
+            return 'failed'
 
 
 # ── 注册入口 ──────────────────────────────────────────────────
@@ -457,6 +498,8 @@ def register(ctx):
         token=cfg.get('token') or '',
         reconnect_interval=cfg.get('reconnect_interval') or 5,
         max_queue=cfg.get('max_queue') or 256,
+        reconnect_max_interval=cfg.get('reconnect_max_interval') or 60,
+        reconnect_jitter=cfg.get('reconnect_jitter', 0.25),
     )
     fw.services.register('protocol_adapter', _adapter_instance)
     fw.services.register('api_caller', _adapter_instance)

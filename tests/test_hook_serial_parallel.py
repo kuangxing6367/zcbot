@@ -13,7 +13,7 @@ import time
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework.hooks import HookRegistry, HookPoints
+from framework.hooks import HookPriority, HookPoints, HookRegistry
 
 
 def test_default_serial_preserves_priority_order():
@@ -112,10 +112,58 @@ def test_non_short_circuit_collects_both_groups():
     assert set(ran) == {"s", "p"}
 
 
+def test_priority_tiers_order_is_guaranteed():
+    """段位约定：跨段位先后有保证，同段位内保持注册顺序（稳定排序）。"""
+    reg = HookRegistry()
+    order = []
+
+    def mk(tag):
+        def h(*a, **k):
+            order.append(tag)
+            return True
+        return h
+
+    # 故意按乱序注册，验证排序按段位而非注册时机
+    reg.register("x.tier", "a_late", mk("late"), priority=HookPriority.LATE)
+    reg.register("x.tier", "b_normal1", mk("normal1"), priority=HookPriority.NORMAL)
+    reg.register("x.tier", "c_guard", mk("guard"), priority=HookPriority.GUARD)
+    reg.register("x.tier", "d_early", mk("early"), priority=HookPriority.EARLY)
+    reg.register("x.tier", "e_normal2", mk("normal2"), priority=HookPriority.NORMAL)
+
+    asyncio.run(reg.trigger_async("x.tier"))
+    assert order == ["early", "guard", "normal1", "normal2", "late"],         f"应按段位执行且同段位按注册顺序，实际 {order}"
+
+
+def test_guard_tier_blocks_later_tiers():
+    """GUARD 段位返回 False 会拦掉 LATE 段位（拦截方永远先于收尾方）。"""
+    reg = HookRegistry()
+    ran = []
+
+    def guard(*a, **k):
+        ran.append("guard")
+        return False
+
+    def late(*a, **k):
+        ran.append("late")
+        return True
+
+    reg.register(HookPoints.EVENT_BEFORE_DISPATCH, "g", guard,
+                 priority=HookPriority.GUARD)
+    reg.register(HookPoints.EVENT_BEFORE_DISPATCH, "l", late,
+                 priority=HookPriority.LATE)
+
+    res = asyncio.run(reg.trigger_async(
+        HookPoints.EVENT_BEFORE_DISPATCH, {}, "bot"))
+    assert ran == ["guard"], f"GUARD 拦截后 LATE 不应执行，实际 {ran}"
+    assert False in res
+
+
 if __name__ == "__main__":
     test_default_serial_preserves_priority_order()
     test_parallel_handlers_run_concurrently()
     test_serial_handlers_still_sequential()
     test_serial_short_circuit_blocks_parallel_group()
     test_non_short_circuit_collects_both_groups()
-    print("OK: 5/5 Hook 串行/并行语义全部符合架构设计")
+    test_priority_tiers_order_is_guaranteed()
+    test_guard_tier_blocks_later_tiers()
+    print("OK: 7/7 Hook 串行/并行与优先级段位语义全部符合架构设计")

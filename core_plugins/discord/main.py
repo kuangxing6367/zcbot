@@ -25,6 +25,7 @@ import requests
 import websockets
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
 
@@ -268,6 +269,7 @@ class DiscordAdapter(ProtocolAdapter):
         self.bot_name = bot_name or 'discord'
         self.intents = int(intents) if intents else _DEFAULT_INTENTS
         self.reconnect_interval = max(1, int(reconnect_interval or 5))
+        self._backoff = Backoff(base=self.reconnect_interval, maximum=60)
         self.api_base = (api_base or _API_BASE).rstrip('/')
         self.gateway_url = gateway_url or _GATEWAY
 
@@ -334,7 +336,10 @@ class DiscordAdapter(ProtocolAdapter):
             self._supervisor = loop.create_task(self._supervise())
 
     async def _supervise(self):
+        # 断线重连走统一退避（framework.messaging.backoff）：指数增长 + 抖动，
+        # 避免故障期猛敲网关、多实例同时重连撞在一起。
         while not self._closing:
+            started = _mono()
             try:
                 await self._connect_once()
             except asyncio.CancelledError:
@@ -347,7 +352,7 @@ class DiscordAdapter(ProtocolAdapter):
                 await self._cancel_heartbeat()
             if self._closing:
                 break
-            await asyncio.sleep(self.reconnect_interval)
+            await asyncio.sleep(self._backoff.next_delay(_mono() - started))
 
     async def _cancel_heartbeat(self):
         t = self._heartbeat_task

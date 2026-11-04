@@ -22,6 +22,7 @@ from typing import List, Optional
 import requests
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.messaging.backoff import Backoff
 
 logger = logging.getLogger('zcbot')
 
@@ -393,6 +394,7 @@ class TelegramAdapter(ProtocolAdapter):
         except Exception as e:
             logger.warning('telegram getMe 失败: %s', e)
 
+        backoff = Backoff(base=3, maximum=60)
         while not self._closing:
             try:
                 updates = await asyncio.to_thread(self._get_updates)
@@ -409,12 +411,14 @@ class TelegramAdapter(ProtocolAdapter):
                     except Exception as e:
                         logger.error('telegram 事件分发失败: %s', e)
                 self._connected = True
+                backoff.reset()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 self._connected = False
                 logger.warning('telegram 轮询异常: %s', e)
-                await asyncio.sleep(3)
+                # 长轮询正常返回即算成功（上面已 reset）；这里的退避只在连续失败时增长
+                await asyncio.sleep(backoff.next_delay(0))
 
     def _get_me(self) -> dict:
         resp = self._http.get(self._url('getMe'), timeout=15)
