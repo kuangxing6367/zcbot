@@ -492,7 +492,7 @@ _DB_METHODS = ('query', 'query_one', 'execute', 'execute_many', 'insert',
 
 _EXPECTED_METHODS = ({f'db.{n}' for n in _DB_METHODS}
                      | {'api.call', 'api.send_text', 'bots.list',
-                        'route.register',
+                        'route.register', 'route.unregister',
                         'tx.begin', 'tx.run', 'tx.commit', 'tx.rollback'})
 
 

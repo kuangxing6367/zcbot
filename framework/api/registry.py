@@ -71,25 +71,80 @@ def _late_setup_allowed(app):
         app._got_first_request = prev
 
 
-def add_route(path, methods, handler, auth=True):
-    """登记一条插件路由；同路径重复登记视为覆盖旧登记项，供兜底挂载与热重载复用"""
+def add_route(path, methods, handler, auth=True, plugin=None):
+    """登记一条插件路由；同路径重复登记视为覆盖旧登记项，供兜底挂载与热重载复用
+
+    plugin: 归属插件的名字。用于卸载/热重载时回收本插件的路由（不传则视为
+    框架内部路由，永不自动回收）。同路径被另一个插件接管时，所有权随之转移，
+    原插件卸载不会再连带删掉新主人的路由。
+    """
     methods = tuple(dict.fromkeys(str(m).upper() for m in (methods or ['GET'])))
     route = _routes_by_path.get(path)
     if route is not None:
+        old_owner = route.get('plugin')
+        if plugin and old_owner and old_owner != plugin:
+            logger.warning(f"API 路由 {path} 由插件 {old_owner} 移交 {plugin}")
         route['methods'] = methods
         route['handler'] = handler
         route['auth'] = auth
+        route['plugin'] = plugin or old_owner
         return route
     route = {
         'path': path,
         'methods': methods,
         'handler': handler,
         'auth': auth,
+        'plugin': plugin,
         'endpoint': _endpoint_for(path),
     }
     _routes_by_path[path] = route
     _plugin_routes.append(route)
     return route
+
+
+def _not_found_view():
+    """插件卸载后残留规则的替身视图：明确 404，而不是继续执行旧代码"""
+    def view(**kwargs):
+        from flask import jsonify
+        return jsonify({'ok': False,
+                        'error': 'route removed (plugin unloaded)'}), 404
+    return view
+
+
+def unregister_plugin(plugin_name):
+    """回收某插件登记的全部 API 路由，返回回收条数。
+
+    两件事必须同时做，否则热重载会留下"活着的旧代码"：
+    1. 从登记表摘除 —— 之后 mount_all 不再挂载，新版本没声明的路由不会复活；
+    2. 把已挂在 Flask url_map 上的视图换成 404 —— Flask 不支持运行时删规则
+       （规则与 endpoint 绑定在 matcher 里），只能换掉 view_functions 里的实现。
+       不换的话，新版本删掉/改名的接口会继续用旧模块的闭包处理请求，
+       既跑旧代码，也让旧模块无法被 gc 回收。
+    """
+    if not plugin_name:
+        return 0
+    removed = []
+    for route in list(_plugin_routes):
+        if route.get('plugin') != plugin_name:
+            continue
+        removed.append(route)
+        _plugin_routes.remove(route)
+        if _routes_by_path.get(route['path']) is route:
+            _routes_by_path.pop(route['path'], None)
+
+    if not removed:
+        return 0
+
+    app = _web_app
+    for route in removed:
+        endpoint = route['endpoint']
+        if app is None:
+            continue
+        # 只换实现、不删规则：Flask 不支持运行时摘规则，而同 endpoint 重复
+        # add_url_rule 会让 url_map 堆规则，口径与热挂载保持一致。
+        app.view_functions[endpoint] = _not_found_view()
+    logger.debug(f"插件 {plugin_name} 回收 {len(removed)} 条 API 路由")
+    return len(removed)
 
 
 def _wrapped_handler(route, require_auth):
@@ -160,8 +215,8 @@ def mount_all(app=None, require_auth=None):
     return mounted
 
 
-def register_route(path, methods, handler, auth=True):
+def register_route(path, methods, handler, auth=True, plugin=None):
     """完整入口：登记 + 立即挂载（若 app 已运行）"""
-    route = add_route(path, methods, handler, auth)
+    route = add_route(path, methods, handler, auth, plugin=plugin)
     live_mount(route)
     return route

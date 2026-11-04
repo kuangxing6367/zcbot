@@ -111,10 +111,16 @@ def make_remote_view(server, route_id):
 
 
 def register_remote_route_handler(server, framework):
-    """远程 REST 路由（务实版）：宿主 route.register → 核心挂远程 stub 路由"""
+    """远程 REST 路由（务实版）：宿主 route.register → 核心挂远程 stub 路由
+
+    核心侧统一走 api.registry 登记（带 plugin 归属）：
+    - 同 path 重载只换视图，不在 url_map 上堆规则（旧实现每次 add_url_rule
+      一条，重载 N 次后第一条旧规则永久胜出 → 一直跑旧代码）；
+    - 宿主卸载插件时可经 route.unregister 一次性摘干净，残留规则换成 404。
+    """
     from framework.api import registry as _api_registry
 
-    def _on_route_register(route_id, path, methods, auth):
+    def _on_route_register(route_id, path, methods, auth, plugin_name=None):
         app = _api_registry.get_web_app()
         if app is None:
             return {'ok': False, 'error': 'web 未启用'}
@@ -124,14 +130,20 @@ def register_remote_route_handler(server, framework):
                 wrap = getattr(_api_registry, '_require_auth', None)
                 if wrap is not None:
                     view = wrap(view)
-            app.add_url_rule(
-                path, endpoint=f'_zcbot_remote_{route_id}',
-                view_func=view, methods=methods or ['GET'])
+            _api_registry.register_route(path, methods or ['GET'], view,
+                                         auth=False, plugin=plugin_name)
             return {'ok': True}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
+    def _on_route_unregister(plugin_name=None):
+        if not plugin_name:
+            return {'ok': False, 'error': 'plugin_name 必填'}
+        n = _api_registry.unregister_plugin(plugin_name)
+        return {'ok': True, 'removed': n}
+
     server.register('route.register', _on_route_register)
+    server.register('route.unregister', _on_route_unregister)
 
 
 def register_tx_handlers(server, tx):

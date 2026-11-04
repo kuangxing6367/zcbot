@@ -314,6 +314,8 @@ class PluginLifecycleMixin:
                 if spec is None or spec.loader is None:
                     logger.error(f"[{plugin_name}] 导入失败: spec 为空")
                     self._purge_plugin_modules(plugin_name, plugin_path)
+                    # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
+                    self._release_plugin_api_routes(plugin_name)
                     self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                     return False
 
@@ -325,6 +327,8 @@ class PluginLifecycleMixin:
                 if not hasattr(module, 'register'):
                     logger.error(f"[{plugin_name}] 缺少 register(ctx) 函数")
                     self._purge_plugin_modules(plugin_name, plugin_path)
+                    # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
+                    self._release_plugin_api_routes(plugin_name)
                     self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                     return False
 
@@ -332,6 +336,8 @@ class PluginLifecycleMixin:
                 if not callable(register_func):
                     logger.error(f"[{plugin_name}] register 不可调用")
                     self._purge_plugin_modules(plugin_name, plugin_path)
+                    # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
+                    self._release_plugin_api_routes(plugin_name)
                     self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                     return False
 
@@ -421,6 +427,8 @@ class PluginLifecycleMixin:
                         )
                     # 回滚 sys.modules 中残留的合成包与子模块
                     self._purge_plugin_modules(plugin_name, plugin_path)
+                    # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
+                    self._release_plugin_api_routes(plugin_name)
                     # 更新 DB 状态为 error
                     try:
                         self.db.execute(
@@ -443,6 +451,8 @@ class PluginLifecycleMixin:
                 logger.error(f"[{plugin_name}] 加载失败: {e}", exc_info=True)
                 # 回滚 sys.modules 中残留的合成包与子模块
                 self._purge_plugin_modules(plugin_name, plugin_path)
+                # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
+                self._release_plugin_api_routes(plugin_name)
                 # 更新 DB 状态为 error
                 try:
                     self.db.execute(
@@ -472,6 +482,27 @@ class PluginLifecycleMixin:
         except OSError:
             pass
         return latest
+    def _release_plugin_api_routes(self, plugin_name: str) -> int:
+        """回收插件注册的 Web API 路由（本地登记表 + 双进程远程注册器）
+
+        必须做：路由登记项与 Flask 视图都持有插件模块的闭包，不摘除则新版本
+        删掉的接口继续跑旧代码，旧模块也无法被 gc 回收；插件被删除后接口
+        仍可访问更是安全问题。返回本地回收条数。
+        """
+        removed = 0
+        try:
+            from framework.api import registry as _api_registry
+            removed = _api_registry.unregister_plugin(plugin_name)
+        except Exception as e:
+            logger.warning(f"[{plugin_name}] 回收本地 API 路由失败: {e}")
+        try:
+            rr = getattr(self.framework, '_remote_routes', None)
+            if rr is not None:
+                rr.unregister_plugin(plugin_name)
+        except Exception as e:
+            logger.warning(f"[{plugin_name}] 回收远程 API 路由失败: {e}")
+        return removed
+
     def unload_plugin(self, plugin_name: str):
         """卸载插件"""
         with self._lock:
@@ -481,6 +512,8 @@ class PluginLifecycleMixin:
                 # 卸载/禁用语义下同样清除自愈记录，避免心跳把已禁用的插件重新拉起
                 self._failed_mtimes.pop(plugin_name, None)
                 self._plugin_mtimes.pop(plugin_name, None)
+                # 半初始化也可能已登记过 API 路由（register 抛错前的部分工作），一并回收
+                self._release_plugin_api_routes(plugin_name)
                 return
 
         try:
@@ -531,6 +564,9 @@ class PluginLifecycleMixin:
             self.framework.hooks.clear_plugin(plugin_name)
         except Exception as e:
             logger.warning(f"[{plugin_name}] 清理扩展点失败: {e}")
+
+        # 回收本插件注册的 Web API 路由（本地 + 双进程远程）
+        self._release_plugin_api_routes(plugin_name)
 
         # 清理 sys.modules：删除该插件目录下的所有模块（点分层级名/下划线别名/短名
         # 指向同一模块对象，按 __file__ 一次清净，避免热重载污染）

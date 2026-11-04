@@ -196,25 +196,46 @@ def test_seed_only_for_newly_created_tables(tmp_path):
 
 # ─────────────── 只读降级：框架自己要吭声（不只靠插件报错） ───────────────
 
-def test_persist_degraded_flag_warns_once_and_recovers(tmp_path, caplog):
-    """只读降级必须置位 persist_degraded，且告警只打一次（不刷屏）。"""
+def test_persist_degraded_flag_warns_once_and_recovers(tmp_path):
+    """只读降级必须置位 persist_degraded，且告警只打一次（不刷屏）。
+
+    日志断言不走 caplog：caplog 依赖 root 传播链，前面跑过“真实 Framework
+    接线”类用例后，框架自带的 logging 重配会把它挡掉，导致本用例在全量运行
+    时假失败（单独跑却过）。这里直接挂在 'zcbot' logger 上收记录，只测被测
+    行为本身，不依赖 pytest 捕获实现。
+    """
     db = _new_db(tmp_path)
     _boot(db)
     assert db.persist_degraded is False
 
     db.execute("PRAGMA query_only = ON")
-    caplog.set_level(logging.DEBUG, logger="zcbot")
 
-    for i in range(3):
-        with pytest.raises(Exception):
-            db.execute(
-                "INSERT INTO users(user_id, role, created_at) VALUES(%s, %s, %s)",
-                ("u%d" % i, "member", "2026-01-01 00:00:00"))
+    records = []
 
-    assert db.persist_degraded is True, "只读失败后必须置降级标记"
-    warned = [r for r in caplog.records
-              if r.levelno >= logging.ERROR and "只读" in r.getMessage()]
-    assert len(warned) == 1, f"只读告警应只打一次，实际 {len(warned)} 条"
+    class _Sink(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    sink = _Sink()
+    sink.setLevel(logging.DEBUG)
+    target = logging.getLogger('zcbot')
+    prev_level = target.level
+    target.addHandler(sink)
+    target.setLevel(logging.DEBUG)
+    try:
+        for i in range(3):
+            with pytest.raises(Exception):
+                db.execute(
+                    "INSERT INTO users(user_id, role, created_at) VALUES(%s, %s, %s)",
+                    ("u%d" % i, "member", "2026-01-01 00:00:00"))
+
+        assert db.persist_degraded is True, "只读失败后必须置降级标记"
+        warned = [r for r in records
+                  if r.levelno >= logging.ERROR and "只读" in r.getMessage()]
+        assert len(warned) == 1, f"只读告警应只打一次，实际 {len(warned)} 条"
+    finally:
+        target.removeHandler(sink)
+        target.setLevel(prev_level)
 
     # 恢复可写：标记清除、写成功
     db.execute("PRAGMA query_only = OFF")

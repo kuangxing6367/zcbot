@@ -96,6 +96,10 @@ class PluginEventsMixin:
         rr = getattr(self._framework, '_remote_routes', None)
         if rr is not None:
             try:
+                rr.register_route(path, methods, handler, auth,
+                                  plugin=self._plugin_name)
+            except TypeError:
+                # 老版本注册器不收 plugin：退回三参调用，保证插件不因框架升级失配
                 rr.register_route(path, methods, handler, auth)
             except Exception as e:
                 self.log(f"远程 API 路由注册失败 {path} {methods}: {e}")
@@ -106,7 +110,8 @@ class PluginEventsMixin:
                 self.log(f"已注册远程 API 路由 {path} {methods}")
             return True
 
-        route = _api_registry.register_route(path, methods, handler, auth)
+        route = _api_registry.register_route(path, methods, handler, auth,
+                                             plugin=self._plugin_name)
         ok = route is not None
         if ok and description:
             self.log(f"已注册 API 路由 {path} {methods}" + (f" ({description})" if description else ""))

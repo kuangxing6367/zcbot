@@ -26,6 +26,34 @@
 
 ---
 
+## [1.18.0] - 2026-11-04
+
+> 主题：**卸载要把东西收干净**——插件注册的 Web 路由以前没人回收，热重载会留下"还在跑旧代码"的接口。
+
+### 插件 API 路由的归属与回收
+
+- `framework/api/registry.py`：路由登记项新增 `plugin` 归属字段，`add_route` / `register_route` 接受 `plugin=`；新增 `unregister_plugin(name)`。
+- 回收做两件事：摘登记项（`mount_all` 不再挂回来）+ 把已挂的 Flask 视图换成 **404 占位**。Flask 不支持运行时删规则（规则与 endpoint 绑在 matcher 里），只能换实现——不换的话，新版本删掉/改名的接口会继续用旧模块的闭包处理请求，既跑旧代码，也把旧模块钉在内存里回收不掉。
+- 同路径被另一个插件接管时所有权转移：原插件卸载不会连带删掉新主人的路由。框架内部路由（`plugin=None`）不参与任何插件回收。
+- **修正** 双进程宿主模式下的规则叠加：核心侧原先每次 `route.register` 都 `add_url_rule` 一条新规则，重载 N 次后 url_map 上 N 条同路径规则，第一条旧规则先注册先匹配 → 永久钉死在旧实现上。现在核心侧统一走 `registry.register_route`（按 path 派生的 endpoint 稳定，只换视图），宿主侧同路径复用 `route_id`。
+- 新增 RPC `route.unregister`：宿主卸载插件时通知核心进程一并摘除 stub 路由；核心侧新增 `_on_route_unregister`。
+
+### 加载失败也要收
+
+- `PluginLifecycleMixin._release_plugin_api_routes()`：卸载路径与**加载失败终态**（spec 为空 / 缺 `register` / `register` 不可调用 / 导入异常 / 其它异常）都调用它，收掉 `register` 中途抛错前已登记的半初始化路由。
+- `unload_plugin()` 的「从未加载成功」早退分支同样回收（禁用/卸载语义下不能留下活着的接口）。
+
+### 测试修复：一个会掩盖真问题的假阳性
+
+- `tests/test_db_resilience.py::test_persist_degraded_flag_warns_once_and_recovers` 原来依赖 `caplog`。在「真实 Framework 接线」类用例跑过之后，框架自带的 logging 重配会挡掉 caplog 的传播链，于是全量运行必失败、单独运行必过——这是个长期存在的假阴性来源（也说明依赖 pytest 捕获实现来断言日志并不可靠）。改为直接挂 handler 到 `zcbot` logger 收记录，只测被测行为本身。
+
+### 测试与文档
+
+- 新增 `tests/test_plugin_api_unmount.py`（8 组）：卸载后 404 而非旧闭包、重载同路径只留一条规则、同路径所有权转移、框架内部路由不被误删、Web 未启用时也摘登记项、远程注册器复用 `route_id` + `route.unregister` 通知、核心侧按 path 去重、loader 卸载真的去回收。
+- `tests/test_task2_arch_split.py` 的 RPC 面白名单补 `route.unregister`。
+- 全量 pytest 563 passed（另 4 个脚本式用例单独跑全过），boot_check 通过。
+- 文档：`docs/进阶/插件加载机制.md` 新增「卸载时怎么回收插件注册的 Web 路由」（含各场景行为表与排错口径，原 5.3 顺延为 5.4，交叉引用同步）；`docs/指南/编写插件.md` 补 `@api` 生命周期说明，并修正 `@api` 与 `ctx.register_api` 的签名对照（原表漏了 `path`）。
+
 ## [1.17.0] - 2026-11-04
 
 > 主题：**把"断线之后怎么办"补齐**——1.15/1.16 管住了事件进出，这一版管连接本身断了怎么重连。
