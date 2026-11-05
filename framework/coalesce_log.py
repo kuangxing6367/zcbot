@@ -105,7 +105,16 @@ class LogCoalescer(logging.Filter):
     # ---- 汇总发送 ----
     def _emit_summary(self, key: str, b: dict):
         try:
-            msg = (f"[日志合并] 该错误在 {self.window:.0f}s 内重复 "
+            # count == 1 表示窗口内只出现过一次：首发已经原样打过了，
+            # 再补一条「重复 1 次」纯属重复且措辞失真
+            # （线上就出现过 webui 依赖已自愈成功、几秒后又补一条加载失败）。
+            if b.get('count', 0) <= 1:
+                return
+            # 措辞跟随级别：合并的可能是 WARNING 甚至 INFO，一律叫「该错误」
+            # 会让人以为线上真报错了（日志里「该错误…安全提示」就很刺眼）。
+            label = {logging.ERROR: '该错误', logging.CRITICAL: '该错误',
+                     logging.WARNING: '该告警'}.get(b['levelno'], '该日志')
+            msg = (f"[日志合并] {label}在 {self.window:.0f}s 内重复 "
                    f"{b['count']} 次：{b['sample']}")
             summary = logging.LogRecord(
                 name=b['name'], level=b['levelno'], pathname='', lineno=0,

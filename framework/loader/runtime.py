@@ -209,7 +209,24 @@ class PluginRuntimeMixin:
         try:
             with self._lock:
                 loaded = set(self._loaded_plugins.keys())
+            # 「存在」的判定必须同时覆盖三个来源，缺一个就会误删：
+            #   1) plugins/        用户插件（discover() 只扫这里）
+            #   2) core_plugins/   官方插件（echo/help/webui… 全在这）
+            #   3) _loaded_plugins 正在内存里跑着的（兜底，绝不误删活插件）
+            # 此前只用了 discover()，于是每次心跳（60s）都把 echo/help 等
+            # 官方插件注册的 commands 行当孤儿删掉，命令随之失效。
             discovered = set(self.discover())
+            try:
+                core_dir = self.framework._get_core_plugins_dir()
+                if os.path.isdir(core_dir):
+                    for n in os.listdir(core_dir):
+                        if n.startswith('_'):
+                            continue
+                        if os.path.isfile(os.path.join(core_dir, n, 'main.py')):
+                            discovered.add(n)
+            except Exception as e:
+                logger.debug(f"[自检] 扫描 core_plugins 失败: {e}")
+            discovered |= set(self._loaded_plugins.keys())
             if not discovered and not loaded:
                 return
 

@@ -696,10 +696,16 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             logger.warning(f"关闭扩展点异常: {e}")
 
         # 停止终端交互
-        self.terminal.stop()
+        try:
+            await asyncio.to_thread(self.terminal.stop)
+        except Exception as e:
+            logger.debug(f"终端交互停止异常: {e}")
         if getattr(self, 'console_server', None) is not None:
             try:
-                self.console_server.stop()
+                # 控制台 stop() 内部要 join accept 线程（最多 5s）。
+                # 在事件循环线程里直接调会把整个框架冻住，
+                # 看门狗就会打「阻塞约 4.8s」——而那时其实正在正常退出。
+                await asyncio.to_thread(self.console_server.stop)
             except Exception:
                 pass
             self.console_server = None
@@ -783,7 +789,9 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                     if asyncio.iscoroutinefunction(svc.stop):
                         await svc.stop()
                     else:
-                        svc.stop()
+                        # 同步 stop 内部普遍 join 服务线程（webserver 是 5s），
+                        # 直接在循环里调 = 退出时白卡 5 秒，故挪到线程里等。
+                        await asyncio.to_thread(svc.stop)
                 except Exception as e:
                     logger.warning(f"服务 [{name}] 停止异常: {e}")
 
