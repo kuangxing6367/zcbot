@@ -90,19 +90,22 @@ async def amain():
         watchdog = None
 
     framework = None
+    # 启动期暂停告警：装依赖 / 建表 / 同步加载全部插件必然阻塞循环，
+    # 这段时间报警等于每次启动刷几条 warning，噪音会让真卡顿被忽略。
+    # 启动期延迟仍会记录，resume() 返回峰值。
+    # 注意：必须在 Framework() 构造**之前**暂停 —— 构造里就要装 MySQL 驱动、
+    # 初始化连接池、建表，那是最容易触发「阻塞 ≥500ms」的一段（此前暂停
+    # 放在构造之后，于是每次首启都先刷一条无意义的阻塞告警）。
+    if watchdog is not None:
+        try:
+            watchdog.suspend()
+        except Exception:
+            pass
     try:
         framework = Framework(config_path)
         # 异步启动模式：config.yaml → startup.wait_ready: false 时不等待插件加载完成，
         # 核心/用户插件在后台异步加载，启动立即返回（可后续 await framework.wait_ready()）
         _startup_cfg = framework.config.get('startup', {}) or {}
-        # 启动期暂停告警：装依赖 / 建表 / 同步加载全部插件必然阻塞循环，
-        # 这段时间报警等于每次启动刷几条 warning，噪音会让真卡顿被忽略。
-        # 启动期延迟仍会记录，resume() 返回峰值。
-        if watchdog is not None:
-            try:
-                watchdog.suspend()
-            except Exception:
-                pass
         try:
             await framework.start(wait_ready=_startup_cfg.get('wait_ready', True))
         finally:

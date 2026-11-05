@@ -49,6 +49,25 @@ ZCBOT 是一个**不绑定任何聊天协议**的机器人框架。内核只负�
 
 ## 快速上手
 
+### 前置：一定要用虚拟环境
+
+框架会在运行期**自己调 `pip` 装插件依赖**（`sys.executable -m pip`）。不隔离环境会有三类问题：
+
+- 现代发行版（Debian 12 / Ubuntu 23+ / 各类容器镜像）系统 Python 禁止全局 pip，
+  直接报 `error: externally-managed-environment`，启动时所有自动补装全部失败；
+- 装到系统 Python 里，插件之间版本冲突无法回退，也污染系统包管理器；
+- 升级 / 回滚框架时无法整体丢弃旧依赖。
+
+```bash
+python3 -m venv .venv
+# Linux / macOS
+source .venv/bin/activate
+# Windows
+.venv\Scripts\activate
+```
+
+之后所有 `pip` / `python` 都在这个环境里，**不要**用 `sudo pip`。
+
 ### 方式一 · pip 安装（推荐）
 
 ```bash
@@ -66,16 +85,22 @@ zcbot
 ```bash
 git clone https://gitee.com/liquanfeng123/zcbot.git   # 或 GitHub 镜像
 cd zcbot
-pip install -r requirements.txt
+python3 -m venv .venv && source .venv/bin/activate    # Windows: py -m venv .venv && .venv\Scripts\activate
+pip install -r requirements.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 python main.py
 ```
 
-配置与数据落在仓库目录下（行为同旧版）。依赖缺了启动时会自动补装。
+配置与数据落在仓库目录下（行为同旧版）。`requirements.txt` 只装内核必需依赖；
+**官方插件专属依赖在启用该插件后自动补装到当前环境**——`webui` 要 `flask`/`flask-cors`/`waitress`，
+`image_renderer` 要 `Pillow`，`llm_load` 要 `sqlite-vec`，`aiwriter` 要 `textual`。所以上一步的 venv 不是可选项。
 
-> **官方插件默认全部关闭。** 需要哪种能力就启用哪个：把 `core_plugins.yaml` 里对应块的 `enabled`
+国内网络建议始终带镜像源参数；插件自动补装也内置了清华→阿里→豆瓣→官方 的回退列表。
+
+> **官方插件默认关闭，但 `echo` / `help` / `scheduler` / `webui` 默认开启。** 需要哪种能力就启用哪个：把 `core_plugins.yaml` 里对应块的 `enabled`
 > 改成 `true`，或运行 `python tools/scan_core_plugins.py --enable <插件名>`，重启生效。
-> 例如进 Web 后台要启用 `webui`（`127.0.0.1:8080`，默认账号 `admin` / `admin123`，**登录后后台会自动建议改密**，一键跳转设置）；
-> 要收发聊天消息要启用某个接入端（如 `onebot_adapter`）。
+> `webui` 默认监听 `127.0.0.1:8080`（默认账号 `admin` / `admin123`，**登录后后台会自动建议改密**，一键跳转设置）；
+> 端口与监听地址在 `config.yaml` 的 `web` 段改（`core_plugins.yaml` 里同名键已废弃）。
+> 要收发聊天消息要启用某个接入端（如 `onebot_adapter`），接入端凭证仍写在 `core_plugins.yaml`。
 
 更多方式（Docker、反向代理、HTTPS、纯 API 部署）见
 [安装](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/%E6%8C%87%E5%8D%97/%E5%AE%89%E8%A3%85.md) ·
