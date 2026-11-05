@@ -45,9 +45,17 @@ class PluginDepsMixin:
         """
         读取插件代码目录下的 requirements.txt
         位置: {plugins_dir}/{plugin_name}/requirements.txt
+        官方插件（core_plugins/<name>）不在 plugins_dir 下，回退到官方目录读取，
+        否则 core 插件的依赖声明永远读不到，启动自愈也就装不上（webui 缺 flask 即此坑）。
         返回依赖列表（去重）
         """
         req_file = os.path.join(self.plugins_dir, plugin_name, 'requirements.txt')
+        if not os.path.isfile(req_file):
+            _root = os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))))
+            _core_req = os.path.join(_root, 'core_plugins', plugin_name, 'requirements.txt')
+            if os.path.isfile(_core_req):
+                req_file = _core_req
         return _parse_requirements_file(req_file)
 
     def _get_merged_dependencies(self, plugin_name: str) -> list:

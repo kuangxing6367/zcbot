@@ -20,8 +20,12 @@ class FrameworkRuntimeMixin:
 
     # 以下方法依赖 Framework.__init__ 建立的实例字段
 
-    def _load_core_plugins(self):
-        """加载官方插件（core_plugins/ 目录）"""
+    def _load_core_plugins(self, only=None):
+        """加载官方插件（core_plugins/ 目录）
+
+        :param only: 只加载这些插件名（依赖自愈后重试单个插件用）；None = 全部。
+                     已加载的插件一律跳过，保证可重复调用而不重复 register。
+        """
         core_plugins_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'core_plugins')
         if not os.path.isdir(core_plugins_dir):
@@ -44,6 +48,11 @@ class FrameworkRuntimeMixin:
 
         for name in os.listdir(core_plugins_dir):
             if name.startswith('_'):
+                continue
+            if only is not None and name not in only:
+                continue
+            # 幂等：自愈后会带着 only= 再调一次，已加载的不能重复 register
+            if name in self.plugin_loader._loaded_plugins:
                 continue
             plugin_dir = os.path.join(core_plugins_dir, name)
             main_file = os.path.join(plugin_dir, 'main.py')
@@ -176,6 +185,18 @@ class FrameworkRuntimeMixin:
                         f"  原始错误：{str(e)}"
                     )
                 logger.error(f"官方插件 [{name}] 加载失败: {e}", exc_info=True)
+                # 登记缺失依赖，交给启动自愈（_auto_heal_plugin_deps）安装后重试。
+                # 不登记的话 core 插件缺依赖只会打一行日志，自愈永远看不到它——
+                # webui 缺 flask 时插件直接失效，而 requirements.txt 里明写着"自动安装"。
+                if info['kind'] == 'missing_module':
+                    try:
+                        with self.plugin_loader._lock:
+                            bucket = self.plugin_loader._missing_deps.setdefault(name, [])
+                            mod = info.get('module')
+                            if mod and mod not in bucket:
+                                bucket.append(mod)
+                    except Exception:
+                        pass
     @staticmethod
     def _read_plugin_process_tag(main_file: str):
         """不执行插件，静态解析 __plugin_meta__ 里的 process 进程归属标记。
@@ -403,11 +424,13 @@ class FrameworkRuntimeMixin:
             f"启动自愈流程: {list(missing_snapshot.keys())}"
         )
 
+        healed = []
         for plugin_name, deps in missing_snapshot.items():
             try:
                 logger.info(f"[{plugin_name}] 自愈：尝试自动安装缺失依赖: {deps}")
                 result = self.plugin_loader.install_missing_deps(plugin_name)
                 if result['success']:
+                    healed.append(plugin_name)
                     if result.get('installed'):
                         logger.info(
                             f"[{plugin_name}] 自愈完成，已安装: "
@@ -431,3 +454,12 @@ class FrameworkRuntimeMixin:
                         )
             except Exception as e:
                 logger.error(f"[{plugin_name}] 依赖自愈异常: {e}")
+
+        # 依赖装好了就立刻重试加载官方插件，不必等下一次重启。
+        # 用户插件由 base.load_all 之后的重试覆盖，这里只补 core 侧。
+        if healed:
+            try:
+                logger.info(f"依赖自愈完成，重试加载官方插件: {healed}")
+                self._load_core_plugins(only=set(healed))
+            except Exception as e:
+                logger.error(f"依赖自愈后重试加载官方插件失败: {e}")
