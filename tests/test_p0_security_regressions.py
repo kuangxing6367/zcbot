@@ -103,11 +103,16 @@ def test_normal_admin_cannot_restart_framework(env):
     assert r.status_code == 403, r.get_json()
 
 
-def test_normal_admin_cannot_read_config_yaml(env):
-    """文件浏览器允许根=项目根，读写权限必须一致：写要 super，读也要 super。"""
+def test_normal_admin_cannot_read_sensitive_file(env):
+    """文件浏览器允许根=项目根，读写权限必须一致：写要 super，读也要 super。
+
+    用仓库里必然存在的 local.debug.js（已列入 _SENSITIVE_NAMES）而不是
+    config.yaml —— 后者被 .gitignore 排除，CI 干净 checkout 里没有，
+    请求会先返回 400「文件不存在」而不是 403（本地全绿≠CI过）。
+    """
     c = env['client']
     token = _login(c, 'normaladmin')
-    r = c.get('/api/files/read?path=config.yaml',
+    r = c.get('/api/files/read?path=core_plugins/webui/web/js/local.debug.js',
               headers={'Authorization': f'Bearer {token}'})
     assert r.status_code == 403, (r.status_code, r.get_json())
 
