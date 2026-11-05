@@ -202,6 +202,14 @@ class ConsoleServer:
         self._stop = True
         if self._sock is not None:
             try:
+                # 先 shutdown 再 close：Linux 上「另一个线程 close 监听 socket」
+                # 并不会唤醒阻塞在 accept() 里的线程，于是下面的 join(5) 必然
+                # 等满 5 秒才返回 —— 用户看到的就是「输入 exit 后卡五秒」。
+                # shutdown(SHUT_RDWR) 会让 accept() 立刻返回错误，线程立即退出。
+                self._sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
                 self._sock.close()
             except Exception:
                 pass
