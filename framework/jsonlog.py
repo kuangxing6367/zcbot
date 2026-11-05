@@ -69,6 +69,11 @@ class JsonFormatter(logging.Formatter):
         if self.service:
             payload['service'] = self.service
 
+        # 事件关联 ID（由 _EventIdFilter 注入，无事件上下文时为空串）
+        _eid = getattr(record, 'zcbot_eid', '')
+        if _eid:
+            payload['eid'] = _eid
+
         extra = getattr(record, EXTRA_KEY, None)
         if isinstance(extra, dict) and extra:
             payload['fields'] = extra

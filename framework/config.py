@@ -304,6 +304,9 @@ scheduler:
   slow_task_threshold: 10
   # 同步 handler 专用线程池大小（与命令 handler 用的默认线程池隔离，互不挤占）
   workers: 4
+  # 优雅停机：stop/卸载时等待在途任务完成的最长秒数（0=立即丢弃在途任务）。
+  # 缺省不写=min(单任务超时, 30s)。超时后放弃等待，在途线程仍在后台跑完（不阻塞退出）。
+  # stop_drain_timeout: 30
 
 # ── 框架基础约定与限制（framework 段） ────────────────────────
 # 集中管理此前散落或写死的基础约定，统一在此可调；WebUI 也通过本段编辑。
@@ -516,6 +519,223 @@ def fill_missing_sections(config: dict) -> list:
     return added
 
 
+# ── 配置 schema 校验（Gap 1：缺段已补，但值与类型从不校验） ──
+# 手写轻量 schema，不引入 pydantic 重依赖；只告警、绝不阻断启动
+# （与 fill_missing_sections 的"补齐+不报错"哲学一致）。load_config 在
+# 缺段补齐之后调用，返回问题清单供日志/测试断言。
+_CONFIG_SCHEMA = {
+    'database': {
+        'type': dict,
+        'keys': {
+            'type': {'allowed': ('sqlite', 'mysql')},
+        },
+    },
+    'event_queue': {
+        'type': dict,
+        'keys': {
+            'maxsize': {'int': True, 'min': 1},
+            'workers': {'int': True, 'min': 1},
+            'drain_timeout': {'int': True, 'min': 0},
+        },
+    },
+    'onebot': {
+        'type': dict,
+        'keys': {
+            'listen_port': {'int': True, 'min': 1, 'max': 65535},
+        },
+    },
+    'web': {
+        'type': dict,
+        'keys': {
+            'host': {'str': True},
+            'port': {'int': True, 'min': 1, 'max': 65535},
+            'session_timeout': {'int': True, 'min': 30},
+        },
+    },
+    'observability': {
+        'type': dict,
+        'keys': {
+            'health': {'bool': True},
+            'metrics': {'bool': True},
+        },
+    },
+    'reliability': {
+        'type': dict,
+        'keys': {
+            'dedup_window': {'int': True, 'min': 0},
+            'rate_limit': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'global_per_min': {'int': True, 'min': 0},
+                    'group_per_min': {'int': True, 'min': 0},
+                    'user_per_min': {'int': True, 'min': 0},
+                },
+            },
+        },
+    },
+    'outbound': {
+        'type': dict,
+        'keys': {
+            'rate_limit': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'global_per_min': {'int': True, 'min': 0},
+                    'group_per_min': {'int': True, 'min': 0},
+                    'user_per_min': {'int': True, 'min': 0},
+                },
+            },
+        },
+    },
+    'security': {
+        'type': dict,
+        'keys': {
+            'level': {'allowed': ('off', 'low', 'medium', 'high', 'paranoid')},
+            'silent_auth': {'bool': True},
+        },
+    },
+    'log': {
+        'type': dict,
+        'keys': {
+            'level': {'allowed': ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')},
+            'format': {'allowed': ('text', 'json')},
+            'coalesce': {'bool': True},
+        },
+    },
+    'scheduler': {
+        'type': dict,
+        'keys': {
+            'timezone': {'str': True},
+            'task_timeout': {'int': True, 'min': 0},
+            'slow_task_threshold': {'int': True, 'min': 0},
+            'workers': {'int': True, 'min': 1},
+            'stop_drain_timeout': {'int': True, 'min': 0},
+        },
+    },
+    'plugin': {
+        'type': dict,
+        'keys': {
+            'max_memory_mb': {'int': True, 'min': 1},
+            'hot_reload': {'bool': True},
+            'auto_install_deps_on_startup': {'bool': True},
+        },
+    },
+    'memory': {
+        'type': dict,
+        'keys': {
+            'limit_mb': {'int': True, 'min': 1},
+        },
+    },
+    'framework': {
+        'type': dict,
+        'keys': {
+            'conventions': {
+                'type': dict,
+                'keys': {
+                    'command_prefix': {'str': True},
+                },
+            },
+        },
+    },
+}
+
+
+def _coerce_int(v):
+    """宽松整数判定：接受 int / 可解析为 int 的字符串（YAML 常写成字符串）。
+    bool 不视为 int 语义；浮点须为整数值。"""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v) if v.is_integer() else None
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            return int(s)
+        except ValueError:
+            return None
+    return None
+
+
+def _validate_keys(path: str, node: dict, spec: dict, issues: list) -> None:
+    for key, kspec in spec.items():
+        full = f"{path}.{key}"
+        if 'type' in kspec:  # 嵌套映射：递归
+            child = node.get(key)
+            if child is None:
+                continue
+            if not isinstance(child, dict):
+                issues.append(f"配置项 [{full}] 应是映射(dict)，实际为 {type(child).__name__}")
+                continue
+            _validate_keys(full, child, kspec.get('keys', {}), issues)
+            continue
+        v = node.get(key)
+        if v is None:
+            continue
+        if kspec.get('bool'):
+            ok = isinstance(v, bool) or (
+                isinstance(v, str)
+                and v.strip().lower() in ('1', '0', 'true', 'false', 'yes',
+                                          'no', 'on', 'off', 'y', 'n'))
+            if not ok:
+                issues.append(f"配置项 [{full}] 应是布尔值/布尔字符串，实际为 {type(v).__name__}：{v!r}")
+            continue
+        if kspec.get('str'):
+            if not isinstance(v, str):
+                issues.append(f"配置项 [{full}] 应是字符串，实际为 {type(v).__name__}：{v!r}")
+            continue
+        if kspec.get('int'):
+            iv = _coerce_int(v)
+            if iv is None:
+                issues.append(f"配置项 [{full}] 应是整数（或整数字符串），实际为 {type(v).__name__}：{v!r}")
+            elif 'min' in kspec and iv < kspec['min']:
+                issues.append(f"配置项 [{full}]={iv} 小于下限 {kspec['min']}")
+            elif 'max' in kspec and iv > kspec['max']:
+                issues.append(f"配置项 [{full}]={iv} 大于上限 {kspec['max']}")
+            continue
+        if 'allowed' in kspec:
+            if v not in kspec['allowed']:
+                issues.append(f"配置项 [{full}]={v!r} 不在允许集合 {kspec['allowed']} 内")
+            continue
+
+
+def validate_config(config: dict) -> list:
+    """校验配置值与类型，返回问题清单（每条为可读中文）。
+
+    只告警、绝不抛异常或改写文件；与 fill_missing_sections 互补：
+    前者补缺失段，本函数查"段存在但值/类型/枚举/范围可疑"。
+
+    设计要点：
+    - 数字字段对"可解析字符串"宽松（YAML 常把端口写成 "8080"），无法解析才报错；
+    - 布尔字段接受 _as_bool 可识别字符串（"true"/"false"…）；
+    - 只校验"类型/枚举/范围"这类会静默误配的硬伤，不评判值是否合理
+      （如 token 是否为空那是部署选择）。
+    """
+    issues = []
+    if not isinstance(config, dict):
+        return ['配置根节点不是映射（dict），请检查 config.yaml 顶层结构']
+
+    for sec, spec in _CONFIG_SCHEMA.items():
+        sec_val = config.get(sec)
+        if sec_val is None:
+            continue  # 缺段已由 fill_missing_sections 补默认值；这里只查存在的段
+        if not isinstance(sec_val, dict):
+            issues.append(f"配置段 [{sec}] 应是映射(dict)，实际为 {type(sec_val).__name__}，该段配置将被忽略")
+            continue
+        _validate_keys(sec, sec_val, spec.get('keys', {}), issues)
+
+    # 跨字段联动：mysql 模式必须补齐连接信息
+    db = config.get('database')
+    if isinstance(db, dict) and db.get('type') == 'mysql':
+        for k in ('host', 'port', 'user', 'database'):
+            if not db.get(k):
+                issues.append(f"database.type=mysql 但缺少 database.{k}，将无法连接数据库")
+
+    return issues
+
+
 def load_config(config_path: str = None) -> dict:
     """
     加载 YAML 配置文件，支持环境变量替换
@@ -566,6 +786,17 @@ def load_config(config_path: str = None) -> dict:
             _get_logger().info(
                 "配置文件缺少新版本引入的配置段，已用默认值生效（未改写文件）：%s。"
                 "如需调整，请参考默认配置补写进 config.yaml。", ", ".join(_added))
+
+    # Gap 1：值与类型校验（只告警、不阻断启动、不改写文件）
+    try:
+        _issues = validate_config(config)
+    except Exception as e:  # noqa: BLE001
+        _get_logger().warning(f"配置校验异常（跳过）: {e}")
+    else:
+        if _issues:
+            _get_logger().warning(
+                "配置文件存在 %d 处可疑配置（不影响启动，但可能静默误配），请检查：\n  - %s",
+                len(_issues), "\n  - ".join(_issues))
 
     return config
 

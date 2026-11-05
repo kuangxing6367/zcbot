@@ -57,6 +57,7 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
     def __init__(self, framework):
         self.framework = framework
         self.db = framework.db
+        self._command_conflicts = []
 
         # ── 内存路由表（后台任务构建，热路径只读）──
         self._routes: dict = {}      # plugin_name -> _PluginRoute
@@ -178,6 +179,9 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             table[name] = _PluginRoute(module=module)
             order.append(name)
 
+        # 冲突结果随本次重建刷新（解决后不应残留旧告警）
+        self._command_conflicts = []
+
         if table:
             # 3. 一次性加载全部已启用命令（is_dynamic 仅展示，不路由）
             base_where = (
@@ -214,6 +218,10 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                     table[name].commands = cmds
                     # 首字符倒排索引（一次性构建，热路径剪枝用）
                     table[name].index = build_command_index(cmds)
+
+            # 跨插件命令冲突检测：相同 pattern / alias 被多插件注册时，
+            # 路由按 plugin_order 第一个匹配胜出，靠后者被静默遮蔽，此前无任何提示。
+            self._detect_command_conflicts(by_plugin, order)
 
         # 4. 加载系统关键词自动回复（dynamic_commands 表，插件未命中时兜底）
         keyword_rules = self._load_keyword_rules()
@@ -259,6 +267,53 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         except Exception as e:
             logger.error(f"命令预编译失败 [{c.get('plugin_name')}]: {e}")
             return None
+
+    def _detect_command_conflicts(self, by_plugin: dict, order: list):
+        """跨插件命令冲突检测（路由表构建期）。
+
+        路由按 plugin_order 遍历、首个匹配插件胜出；若多个插件注册了相同
+        pattern 或 alias，靠后的插件会被静默遮蔽且无任何提示。这里扫描并告警，
+        明确谁是赢家、谁被遮蔽，结果记入 self._command_conflicts 供诊断。
+
+        仅统计实际参与路由的插件（order 内），未加载/未入序的插件不计入。
+        仅检测「同字符串」冲突（pattern 完全相同、alias 完全相同），避免把
+        不同正则但可能重叠匹配的情形误报为冲突。
+        """
+        def _rank(name):
+            return order.index(name) if name in order else 10 ** 9
+
+        pat_owners = {}
+        alias_owners = {}
+        for name, cmds in by_plugin.items():
+            if name not in order:
+                continue
+            for c in cmds:
+                if c.pattern:
+                    pat_owners.setdefault(c.pattern, set()).add(name)
+                for a in c.aliases:
+                    if a:
+                        alias_owners.setdefault(a, set()).add(name)
+
+        conflicts = []
+        for key, owners in pat_owners.items():
+            if len(owners) > 1:
+                ranked = sorted(owners, key=_rank)
+                winner, losers = ranked[0], ranked[1:]
+                conflicts.append({'type': 'pattern', 'key': key,
+                                 'winner': winner, 'losers': losers})
+                logger.warning(
+                    f"命令冲突[pattern]: '{key}' 被 {sorted(owners)} 同时注册，"
+                    f"按 plugin_order 由 '{winner}' 命中，被遮蔽: {losers}")
+        for key, owners in alias_owners.items():
+            if len(owners) > 1:
+                ranked = sorted(owners, key=_rank)
+                winner, losers = ranked[0], ranked[1:]
+                conflicts.append({'type': 'alias', 'key': key,
+                                 'winner': winner, 'losers': losers})
+                logger.warning(
+                    f"命令冲突[alias]: '{key}' 被 {sorted(owners)} 同时注册，"
+                    f"按 plugin_order 由 '{winner}' 命中，被遮蔽: {losers}")
+        self._command_conflicts = conflicts
 
     def _invalidate_cache(self):
         """使路由表立即重建（插件重载 / Web 修改命令后调用）"""

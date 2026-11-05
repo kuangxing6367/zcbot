@@ -26,8 +26,23 @@ from framework.terminal import TerminalInput, terminal_commands, register_builti
 from framework.hooks import HookRegistry, HookPoints
 from framework import i18n
 from framework.blackbox import blackbox as _global_blackbox
+from framework.runtime import current_event_id_var
 
 logger = logging.getLogger('zcbot')
+
+
+class _EventIdFilter(logging.Filter):
+    """把当前事件关联 ID 注入每条日志记录，使同事件的跨模块日志可按 eid 串联。
+
+    contextvars current_event_id_var 由 dispatch._process_event 在事件处理跨度内
+    注入；此处只读。handler.filter 会对流经该 handler 的每条记录生效（含非 zcbot
+    来源如 apscheduler），因此无需依赖 logger.filter，也保证格式串 %(zcbot_eid)s
+    永远有值（无事件上下文时为 ''，不污染正常日志）。
+    """
+
+    def filter(self, record):
+        record.zcbot_eid = current_event_id_var.get() or ''
+        return True
 
 
 from framework.core.stats_writer import AsyncStatsWriter  # noqa: F401  向后兼容 re-export
@@ -338,7 +353,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 控制台日志
         console = logging.StreamHandler(sys.stdout)
         console.setFormatter(logging.Formatter(
-            '[%(asctime)s] %(levelname)s %(message)s',
+            '[%(asctime)s] %(levelname)s%(zcbot_eid)s %(message)s',
             datefmt='%H:%M:%S'
         ))
 
@@ -351,7 +366,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             delay=True  # 延迟打开文件，避免初始化时文件锁问题
         )
         file_handler.setFormatter(logging.Formatter(
-            '[%(asctime)s] %(levelname)s [%(name)s] %(message)s'
+            '[%(asctime)s] %(levelname)s [%(name)s]%(zcbot_eid)s %(message)s'
         ))
 
         root = logging.getLogger()
@@ -361,6 +376,11 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 桥接框架日志到 LogBroker
         root.addHandler(FrameworkLogHandler(log_broker))
+
+        # 事件关联 ID 注入：每条日志记录带当前事件 eid（handler.filter 对全部来源生效）
+        _eid_filter = _EventIdFilter()
+        for _h in root.handlers:
+            _h.addFilter(_eid_filter)
 
         # 结构化日志：log.format=json 时控制台与文件改为 JSON Lines。
         # 桥接 handler 自带格式化，不会被替换（否则后台日志页会显示成 JSON 字符串）。

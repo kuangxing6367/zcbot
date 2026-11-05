@@ -111,6 +111,11 @@ class TaskScheduler:
         self._stopped = False
         self._boot_abort = threading.Event()
         self._executor = None
+        # Gap 9：优雅停机——跟踪在途任务，stop 时带超时 drain。
+        # 含两类：sync handler 经 run_blocking 落地的 concurrent.futures.Future，
+        # 以及 plugin async handler 的 asyncio.Task（_wrapper 内登记）。
+        self._inflight = set()
+        self._inflight_lock = threading.Lock()
         # label -> 执行记录（最近一次耗时/状态 + 累计次数），供 get_jobs 与面板展示
         self._task_records = {}
         self._stats = {'runs': 0, 'failures': 0, 'timeouts': 0, 'slow': 0,
@@ -222,18 +227,85 @@ class TaskScheduler:
             logger.info(f"定时任务时区: {describe_timezone(self._tz)}"
                         f"（配置 scheduler.timezone，默认 local）")
 
-    def stop(self):
+    def stop(self, graceful: bool = True, drain_timeout: float = None):
         """停止调度器：置停止标志（迟到派发 no-op）→ 中断等待线程 → 关闭调度器。
-        幂等，可重复调用。"""
+        幂等，可重复调用。
+
+        graceful=True（默认）：先带超时 drain 在途任务，再关闭调度器与线程池。
+        超时上限由 drain_timeout 指定，缺省取 min(单任务超时, 30s)（单任务超时
+        为 0/不限时按 30s）。超时后放弃等待——在途同步任务仍在后台线程跑完
+        （Python 无法强杀线程，与 task_timeout 哲学一致），但不再阻塞退出。
+        graceful=False：等同旧行为，立即丢弃在途任务（wait=False）直接关。
+
+        ⓪ stop 在插件 register/unregister 的 worker 线程调用（非事件循环线程），
+        故 drain 经 run_coroutine_threadsafe 落到事件循环 await，不会死锁。
+        """
         self._stopped = True
         self._boot_abort.set()
+
+        if graceful:
+            d = self._resolve_drain_timeout(drain_timeout)
+            loop = getattr(self.framework, 'loop', None)
+            with self._inflight_lock:
+                pending = list(self._inflight)
+            if loop is not None and pending:
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(
+                        self._drain(pending, d), loop)
+                    # 多给 1s 余量容纳调度器自身收尾，避免误判超时
+                    fut.result(timeout=d + 1)
+                    logger.info(f"定时任务优雅停机：在途任务已全部完成（drain {d:g}s）")
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"定时任务优雅停机超时（>{d:g}s），放弃等待在途任务"
+                        f"（仍会在后台线程跑完，不阻塞退出）")
+                except Exception as e:
+                    logger.debug(f"定时任务优雅停机等待异常（继续强制关闭）: {e}")
+
         if self._scheduler.running:
-            self._scheduler.shutdown(wait=False)
+            try:
+                self._scheduler.shutdown(wait=False)
+            except Exception:
+                pass
             logger.info("定时任务调度器已停止")
         self._shutdown_executor()
 
+    async def _drain(self, tasks, timeout: float):
+        """await 一批在途任务完成（带超时）。tasks 是 asyncio 可等待对象列表
+        （run_blocking 的 Future 与 plugin _wrapper 的 Task 均可）。"""
+        if not tasks:
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise
+
+    def _resolve_drain_timeout(self, drain_timeout) -> float:
+        """drain 超时上限：显式值优先；缺省 min(单任务超时, 30s)，单任务超时不限时按 30s。"""
+        if drain_timeout is not None:
+            try:
+                d = float(drain_timeout)
+                if d >= 0:
+                    return d
+            except (TypeError, ValueError):
+                pass
+        cfg_d = self._cfg.get('stop_drain_timeout')
+        if cfg_d is not None:
+            try:
+                d = float(cfg_d)
+                if d >= 0:
+                    return d
+            except (TypeError, ValueError):
+                pass
+        t = self.task_timeout
+        if t and t < 30:
+            return t
+        return 30.0
+
     def _shutdown_executor(self):
-        """关闭任务线程池；正在跑的任务允许跑完（不等，避免卡住退出）。"""
+        """关闭任务线程池。在途同步任务已在 stop 的 drain 阶段 await 完，
+        这里 wait=False 即可安全收尾；若 drain 超时未等完，线程仍在后台跑完。"""
         ex, self._executor = self._executor, None
         if ex is not None:
             try:
@@ -247,11 +319,18 @@ class TaskScheduler:
         """把同步可调用丢到任务线程池执行并 await 结果。
 
         内置任务（如权限过期清理）与同步插件 handler 都走这里，
-        避免直接占用事件循环线程。
+        避免直接占用事件循环线程。在途 future 入 _inflight，供优雅停机 drain。
         """
         loop = asyncio.get_running_loop()
         ex = self._ensure_executor()
-        return await loop.run_in_executor(ex, functools.partial(func, *args, **kwargs))
+        fut = loop.run_in_executor(ex, functools.partial(func, *args, **kwargs))
+        with self._inflight_lock:
+            self._inflight.add(fut)
+        try:
+            return await fut
+        finally:
+            with self._inflight_lock:
+                self._inflight.discard(fut)
 
     async def _invoke(self, func, label: str):
         """统一的执行入口：协程 await、同步转线程、超时、耗时统计、慢告警。
@@ -347,7 +426,14 @@ class TaskScheduler:
                            'handler': handler_name, 'job_id': job_id})
 
             async def _wrapper(_fn=handler, _label=label):
-                await self._invoke(_fn, _label)
+                t = asyncio.current_task()
+                with self._inflight_lock:
+                    self._inflight.add(t)
+                try:
+                    await self._invoke(_fn, _label)
+                finally:
+                    with self._inflight_lock:
+                        self._inflight.discard(t)
 
             trigger = CronTrigger(**trigger_kwargs, timezone=self._tz)
             self._scheduler.add_job(

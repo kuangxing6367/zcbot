@@ -8,6 +8,7 @@ from framework.log_broker import log_broker
 from framework.messaging.adapter_registry import namespace_identity
 from framework.messaging.protocol import ProtocolAdapter
 from framework.blackbox import record as _bb_record, new_event_id
+from framework.runtime import current_event_id_var
 
 logger = logging.getLogger('zcbot')
 
@@ -313,6 +314,11 @@ class FrameworkDispatchMixin:
         event_type = event.get('type', '') or event.get('post_type', '')
         bot_name = event.get('bot_name', 'default')
 
+        # 事件关联 ID：把事件的稳定标识注入 contextvar，使本次事件处理跨度内
+        # （router 路由、event_bus 派发、插件 handler 内的日志）都能按 event_id 串联。
+        # _bb_eid 在 dispatch_event 入队时生成；为空时（极早期事件）不注入。
+        _eid = event.get('_bb_eid')
+        _eid_token = current_event_id_var.set(_eid) if _eid else None
         try:
             # 黑匣子：事件分类（classify）—— 事件流第 4 步，记录类型与文本预览
             _bb_record('classify', plugin='dispatch', fn='_process_event',
@@ -372,6 +378,9 @@ class FrameworkDispatchMixin:
                     HookPoints.EVENT_AFTER_DISPATCH, event, bot_name)
             except Exception as e:
                 logger.error(f"event.after_dispatch 扩展点异常: {e}")
+            finally:
+                if _eid_token is not None:
+                    current_event_id_var.reset(_eid_token)
 
     def register_raw_message_handler(self, plugin_name: str, handler, priority: int = 50):
         """注册插件原始消息处理器（同插件同 handler 去重，按优先级升序）"""
