@@ -43,7 +43,22 @@ startup:
 # SQLite 模式（默认，零配置开箱即用）
 #   ⚠️ 适用边界：仅适合小环境与开发环境（单写多读、单文件、无网络扩展）。
 #      多群、高并发、多进程部署等大环境请切换 database.type: mysql。
-# MySQL 模式（大环境推荐）: database: { type: mysql, host: 127.0.0.1, port: 3306, user: root, password: '', database: zcbot }
+#
+# MySQL 模式（大环境推荐）：把 type 改成 mysql，并把下面几个键**平铺**在
+# database 段里（与 type 同级），然后删掉不再需要的 path。
+#   ⚠️ 常见写错：不要写成 database: { type: mysql, ... } 单行，
+#      也不要再嵌一层 database.mysql.host —— 那样框架读到的库名/主机
+#      会是一个对象，pymysql 只会报 "unsupported operand type(s) for +"。
+#
+#   type: mysql
+#   host: 127.0.0.1
+#   port: 3306
+#   user: zcbot
+#   password: "改成你的密码"     # 数字密码建议加引号
+#   database: zcbot              # 库名，需提前建好
+#   charset: utf8mb4
+#   pool_size: 10                # 连接池上限
+#   pool_wait_timeout: 30        # 池满时最多等多久（秒）
 database:
   type: sqlite
   path: data/zcbot.db
