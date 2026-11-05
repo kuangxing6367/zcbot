@@ -463,6 +463,11 @@ def init_db(config: dict):
         )
         from .sql_sim import SqlSimEngine
         db = SqlSimEngine(db_config)
+        # 类属性 degraded=False 只表示「用户显式选了 debug 模拟模式」；
+        # 这里是故障降级，必须给实例打标记，否则 Framework.db_degraded 恒为
+        # False，降级 WARNING 是死代码，/readyz、Prometheus、WebUI 面板
+        # 会一路显示「数据库正常、服务就绪」，运维按 ready 上线才发现数据分叉。
+        db.degraded = True
     return db
 
 

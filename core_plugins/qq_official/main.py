@@ -1187,7 +1187,17 @@ class QQOfficialAdapter(ProtocolAdapter):
                     retryable = (('timeout' in lowered or 'connect' in lowered
                                   or 'connection' in lowered)
                                  and 'pooltimeout' not in lowered)
-                    if retryable and net_retries < 2:
+                    # 只有「平台能去重」或「天然幂等」的请求才允许内部重试。
+                    # 主动消息 / 定时任务发送不带 msg_id+msg_seq（docstring 的
+                    # 去重保证仅对被动回复成立），首次 POST 超时但服务端已建消息时
+                    # 用同一 body 再 POST 会真的发 2~3 遍。这类请求改为交给上层
+                    # 按错误码决定，不在此处盲目重试。
+                    safe_to_retry = (
+                        str(method).upper() == 'GET'
+                        or (isinstance(json_body, dict)
+                            and ('msg_seq' in json_body or 'msg_id' in json_body))
+                    )
+                    if retryable and safe_to_retry and net_retries < 2:
                         net_retries += 1
                         time.sleep(0.5 * net_retries)
                         continue

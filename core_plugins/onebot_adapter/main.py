@@ -280,6 +280,14 @@ class BotConnection:
         if loop is None or not loop.is_running():
             return {"status": "failed", "retcode": -1, "msg": "主事件循环未运行"}
         try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            # 同 ProtocolAdapter.call：别把协程投回自己阻塞着的循环。
+            return {"status": "failed", "retcode": -1,
+                    "msg": "同步 call() 不能在 async handler 内使用，请改用 await acall()"}
+        try:
             future = asyncio.run_coroutine_threadsafe(self.acall(action, **params), loop)
             return future.result(timeout=15)
         except Exception as e:

@@ -172,12 +172,13 @@ def register(ctx):
             framework.plugin_loader.split_installed_files(plugin_name)
 
             load_ok = framework.plugin_loader.load_plugin(plugin_name)
-            if backup_dir and os.path.isdir(backup_dir):
-                try:
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-                except Exception:
-                    pass
             if load_ok:
+                # 只有新版确实加载成功，才丢弃旧版备份。
+                if backup_dir and os.path.isdir(backup_dir):
+                    try:
+                        shutil.rmtree(backup_dir, ignore_errors=True)
+                    except Exception:
+                        pass
                 framework.plugin_loader.register_commands(plugin_name)
                 dep_info = framework.plugin_loader.get_missing_deps(plugin_name)
                 msg = f'插件 [{plugin_name}] 上传并加载成功'
@@ -187,11 +188,23 @@ def register(ctx):
                           'plugin', plugin_name, {'filename': filename}, 'success')
                 return jsonify({'code': 0, 'msg': msg})
             else:
+                # 旧实现在此前就无条件 rmtree 备份，失败时旧代码已删、新代码
+                # 没加载、备份也没了 —— 插件彻底消失。现在必须回滚。
+                restored = False
+                if backup_dir and os.path.isdir(backup_dir):
+                    try:
+                        shutil.rmtree(target_dir, ignore_errors=True)
+                        shutil.move(backup_dir, target_dir)
+                        restored = True
+                    except Exception as e:
+                        logger.error(f"插件 [{plugin_name}] 上传失败回滚旧版异常: {e}")
                 dep_info = framework.plugin_loader.get_missing_deps(plugin_name)
                 if dep_info['has_missing']:
                     err_msg = f'插件 [{plugin_name}] 缺少依赖: {", ".join(dep_info["missing"])}'
                 else:
                     err_msg = f'插件 [{plugin_name}] 加载失败，请检查 main.py'
+                if backup_dir:
+                    err_msg += '；旧版已恢复' if restored else '；注意：旧版恢复失败，请手工检查 .bak 目录'
                 audit_log(admin['id'], admin['username'], 'upload_plugin',
                           'plugin', plugin_name, {'filename': filename}, 'failure', err_msg)
                 return jsonify({'code': 500, 'msg': err_msg}), 500

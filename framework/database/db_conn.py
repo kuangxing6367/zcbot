@@ -30,6 +30,19 @@ class DatabaseConnMixin:
     def _init_sqlite(self):
         """初始化 SQLite"""
         db_path = self.config.get('path', 'data/zcbot.db')
+        # 相对路径必须解析到可写状态目录，不能依赖进程 cwd。
+        # 日志路径早就 join 了项目根，唯独库路径漏了：systemd / cron 不设
+        # WorkingDirectory 时，root 会把库建到 /data/zcbot.db（与 get_home()
+        # 的数据树分叉），非 root 则 makedirs('/data') 失败后静默降级 JSON 模拟引擎。
+        if not os.path.isabs(db_path):
+            try:
+                from framework.config import get_home
+                db_path = os.path.normpath(os.path.join(get_home(), db_path))
+            except Exception:
+                # 极端情况（配置模块不可导入）退回代码根，仍优于 cwd
+                db_path = os.path.normpath(os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__)))), db_path))
         # 确保目录存在
         db_dir = os.path.dirname(db_path)
         if db_dir and not os.path.exists(db_dir):

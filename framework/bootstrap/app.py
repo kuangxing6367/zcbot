@@ -26,7 +26,8 @@ async def amain():
     root = _PROJECT_ROOT
 
     # 单实例文件锁：防止守护进程无脑拉起导致多实例（抢端口 / 抢 DB / 双写）。
-    # 拿不到锁说明已有实例（含安全模式假启动进程）在跑，本进程立即退出、不做任何重活。
+    # None = 确实已有实例在跑 → 立即退出；False = 锁文件不可用（只读目录等），
+    # 只跳过保护、照常启动，不能把「没有保护」误判成「有另一个实例」。
     lock_fd = acquire_instance_lock(root)
     if lock_fd is None:
         sys.exit(1)

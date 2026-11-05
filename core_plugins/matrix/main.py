@@ -197,7 +197,7 @@ class MatrixAdapter(ProtocolAdapter):
                 {'key': 'access_token', 'label': 'Access Token',
                  'type': 'password', 'required': True},
                 {'key': 'user_id', 'label': 'User ID (@bot:server)',
-                 'type': 'string'},
+                 'type': 'string', 'required': True},
                 {'key': 'bot_name', 'label': 'Bot 名', 'type': 'string'},
                 {'key': 'sync_timeout', 'label': '长轮询超时(秒)',
                  'type': 'number'},
@@ -207,7 +207,10 @@ class MatrixAdapter(ProtocolAdapter):
             'guide': '用任意 Matrix 客户端登录机器人账号，'
                      '获取 access token（Element：设置 → 帮助与关于 → '
                      '访问令牌）填入；把机器人邀请进目标房间即可。'
-                     '也支持自建 homeserver。',
+                     '也支持自建 homeserver。'
+                     'user_id 必填：/sync 会回推机器人自己发的事件，'
+                     '缺了它自身消息回显过滤不生效，会命中命令后自激刷屏'
+                     '（留空时框架会尝试用 /account/whoami 自动补全）。',
             'status': {
                 'connected': self._connected,
                 'since': bool(self._since),
@@ -310,8 +313,9 @@ class MatrixAdapter(ProtocolAdapter):
         next_batch = (data or {}).get('next_batch')
         if next_batch:
             self._since = str(next_batch)
-            self._save_since()
-
+            # 先分发、后落盘（at-least-once）。旧实现在这里就 _save_since()：
+            # 进程若在落盘之后、事件入队之前崩溃，服务端不再重放该批 timeline，
+            # 整批消息永久丢失。Telegram 的 offset 正是「整批处理完再落盘」。
         rooms = ((data or {}).get('rooms') or {}).get('join') or {}
         for room_id, payload in rooms.items():
             if self.rooms and room_id not in self.rooms:
@@ -327,6 +331,9 @@ class MatrixAdapter(ProtocolAdapter):
                     await self.framework.dispatch_event(event)
                 except Exception as e:  # noqa: BLE001
                     logger.error('matrix 事件分发失败: %s', e)
+        # 本批全部入队后才推进 since；_closing 时故意不落盘，重启后重放
+        if next_batch and not self._closing:
+            self._save_since()
 
     # ── REST ────────────────────────────────────────────────────
 
@@ -493,6 +500,23 @@ def register(ctx):
     )
     fw.services.register('protocol_adapter', _adapter_instance)
     fw.services.register('api_caller', _adapter_instance)
+    # user_id 是「过滤自身消息回显」的唯一依据。旧配置常只填 homeserver +
+    # access_token，导致 /sync 回推自己的消息 → 命中命令 → 再发 → 自激刷屏。
+    # 优先用 whoami 自动补全，失败则明确告警（不阻断启动，交由部署方补配置）。
+    if (not _adapter_instance.user_id and _adapter_instance.homeserver
+            and _adapter_instance.access_token):
+        try:
+            me = _adapter_instance._request(
+                'GET', '/_matrix/client/v3/account/whoami', timeout=5)
+            _adapter_instance.user_id = (me or {}).get('user_id') or ''
+        except Exception as e:  # noqa: BLE001
+            logger.warning('Matrix 无法自动获取 user_id: %s', e)
+        if _adapter_instance.user_id:
+            ctx.log(f'Matrix 已自动补全 user_id: {_adapter_instance.user_id}')
+        else:
+            logger.warning(
+                'Matrix 未配置 user_id 且 whoami 补全失败：自身消息回显无法过滤，'
+                '可能造成自激刷屏，请在 core_plugins.yaml 补 matrix.user_id')
     if _adapter_instance.homeserver and _adapter_instance.access_token:
         _adapter_instance.start()
         ctx.log('Matrix 接入端已启动')

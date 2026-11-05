@@ -39,8 +39,10 @@ def hello(event, match):
 @on_message
 def on_message(event):
     """订阅所有消息（示例：计数，可删）。"""
-    n = (_ctx.get_config("msg_count", 0) or 0) + 1
-    _ctx.set_config("msg_count", n)
+    # PluginContext 没有 set_config（那是 --iipc py_sdk 的 API）。
+    # 示例只做进程内计数，需要持久化请用 _ctx.get_data_dir() 自行落盘。
+    on_message.count = getattr(on_message, "count", 0) + 1
+    _ctx.log("收到消息 #%d" % on_message.count)
 '''
 
 ADAPTER_TEMPLATE = '''# -*- coding: utf-8 -*-
@@ -87,14 +89,15 @@ database:
   path: data/zcbot.db
 
 onebot:
-  listen_port: 8081
+  listen_port: 6830          # 反向 WS 监听端口，与接入端配置保持一致
   access_token: ''
 
 web:
   port: 8080
-  enabled: false
+  # ui_enabled: false        # 纯 API 模式：只提供 /api，不启动 WebUI 前端
 
-plugins_dat: plugins_dat
+plugin:
+  dat_dir: data/plugins_dat  # 插件数据目录（顶层 plugins_dat 键不会被读取）
 '''
 
 PROJECT_REQUIREMENTS = '''# ZCBOT 项目依赖（核心）

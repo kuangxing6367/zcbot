@@ -81,8 +81,9 @@ def _dml_target_table(stmt: str):
     return m.group(1).lower() if m else None
 
 
-def _apply_init_sql(database, transform=None, label="建表", exec_fn=None) -> dict:
-    """按「只补缺失表」的方式应用 init.sql，返回统计而不是靠异常抛出。
+def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
+                    sql_filename="init.sql") -> dict:
+    """按「只补缺失表」的方式应用初始化 SQL，返回统计而不是靠异常抛出。
 
     为什么不能无脑全量重跑：init.sql 除 18 条 CREATE TABLE 外还有 3 条种子 INSERT
     （默认权限组 / 默认管理员 / 默认系统配置）。其中 admin_users、system_config 的
@@ -98,9 +99,10 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None) -> d
     exec_fn：实际执行器（MySQL 分支需用已 USE 到目标库的专用 cursor）。
     """
     run = exec_fn or database.execute
-    sql_file = _find_sql_file('init.sql')
+    sql_file = _find_sql_file(sql_filename)
     if not sql_file:
-        return {"created": [], "skipped": 0, "failed": [("*", "未找到 sql/init.sql")],
+        return {"created": [], "skipped": 0,
+                "failed": [("*", f"未找到 sql/{sql_filename}")],
                 "no_file": True}
 
     with open(sql_file, 'r', encoding='utf-8') as f:
@@ -314,11 +316,23 @@ def _init_mysql(database) -> dict:
                 f"DEFAULT CHARACTER SET {charset} COLLATE {collation}"
             )
             cursor.execute(f"USE `{db_name}`")
+            # MySQL 5.5/5.6 一张表只允许一个 TIMESTAMP 自动初始化列；init.sql
+            # 每表最多 3 个 DATETIME DEFAULT CURRENT_TIMESTAMP，经过
+            # _adapt_ddl_for_mysql 改写后必然报 Incorrect table definition。
+            # 专为 5.5 写的 init_mysql55.sql 用 DATETIME DEFAULT NULL 回避了该限制，
+            # 但此前从未被加载过（死文件）。这里真正接入它，且不再做 DDL 改写。
+            old_mysql = ver['major'] == 5 and ver['minor'] <= 6
+            init_file = 'init_mysql55.sql' if old_mysql else 'init.sql'
+            if old_mysql:
+                logger.info(
+                    "MySQL 5.5/5.6 检测到，改用 sql/init_mysql55.sql 建表"
+                    "（避免多 TIMESTAMP 自动列导致的建表失败）")
             return _apply_init_sql(
                 database,
-                transform=lambda s: _adapt_ddl_for_mysql(s, ver),
+                transform=None if old_mysql else (lambda s: _adapt_ddl_for_mysql(s, ver)),
                 label="MySQL 建表",
                 exec_fn=cursor.execute,
+                sql_filename=init_file,
             )
         finally:
             cursor.close()

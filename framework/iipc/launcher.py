@@ -226,9 +226,11 @@ def build_rust():
     if os.path.exists(RUST_EXE):
         return True
     log("launcher", "编译 Rust 协议端 -> %s" % RUST_EXE)
+    # 尊重部署方自己的环境，不注入任何本机代理。
+    # 旧实现无条件 setdefault 127.0.0.1:7892（开发机 Clash 端口）：没有该代理的
+    # 服务器上首次 build 拉取 crate 会全部走死代理 → Rust 编译失败并降级为
+    # 「无协议端」，send 类动作全挂。需要代理时由部署方自行设置 http_proxy。
     env = dict(os.environ)
-    env.setdefault("http_proxy", "http://127.0.0.1:7892")
-    env.setdefault("https_proxy", "http://127.0.0.1:7892")
     r = subprocess.run([CARGO, "build", "--release"],
                        cwd=RUST_DIR, env=env, capture_output=True, text=True,
                        encoding="utf-8", errors="replace")

@@ -311,6 +311,12 @@ class OutboundGate:
         for i in range(attempts + 1):
             try:
                 result = await call()
+            except (TimeoutError, asyncio.TimeoutError):
+                # 超时属于契约里的 -2：可能已经送达，重试只会产生重复消息。
+                # 其它异常沿用原有重试语义（本地通道异常，确定没发出去）。
+                with self._lock:
+                    self._stats['failed'] += 1
+                raise
             except Exception as e:
                 if i < attempts:
                     self._note_retry(action, i, e)
@@ -336,6 +342,11 @@ class OutboundGate:
         for i in range(attempts + 1):
             try:
                 result = call()
+            except (TimeoutError, asyncio.TimeoutError):
+                # 同 _retry_async：超时可能已送达，不重试。
+                with self._lock:
+                    self._stats['failed'] += 1
+                raise
             except Exception as e:
                 if i < attempts:
                     self._note_retry(action, i, e)

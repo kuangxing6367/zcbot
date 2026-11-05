@@ -59,10 +59,13 @@ def test_db_gateway_sensitive_tables():
 
 def test_files_download_db_blocked_for_admin():
     src = read_api('files.py')
+    # 敏感判定已收敛为 _is_sensitive_file()（同时覆盖配置文件、.env、密钥后缀），
+    # read 与 download 共用同一守卫；真实 403 行为由 test_api_security.py 和
+    # test_p0_security_regressions.py 发真实请求验证。
     check("download 定义敏感扩展名集合（.db/.sqlite/.sqlite3/wal/shm）",
-          "sensitive_exts = {'.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm'}" in src)
-    check("download 对非 super 命中敏感扩展名返回 403",
-          "if ext in sensitive_exts and admin.get('role') != 'super':" in src)
+          "_SENSITIVE_EXTS" in src and "'.db-wal', '.db-shm'" in src)
+    check("download 对非 super 命中敏感文件返回 403",
+          "if _is_sensitive_file(abs_path) and admin.get('role') != 'super':" in src)
 
 
 # ---- ③ 高危操作收紧为 super ----

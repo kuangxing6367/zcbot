@@ -182,6 +182,8 @@ CREATE TABLE IF NOT EXISTS admin_users (
     id              INT             AUTO_INCREMENT  PRIMARY KEY,
     username        VARCHAR(50)     NOT NULL        COMMENT '用户名',
     password_hash   VARCHAR(255)    NOT NULL        COMMENT '密码哈希(bcrypt)',
+    token           VARCHAR(2048)   DEFAULT NULL    COMMENT '登录令牌(2048位随机)',
+    token_created_at DATETIME       DEFAULT NULL    COMMENT '令牌签发时间',
     role            ENUM('super','admin')           DEFAULT 'admin'  COMMENT '角色',
     is_active       TINYINT(1)      DEFAULT 1       COMMENT '启用/禁用',
     last_login_at   DATETIME        DEFAULT NULL    COMMENT '最后登录时间',
@@ -378,7 +380,7 @@ INSERT INTO admin_users (username, password_hash, role) VALUES
 INSERT INTO system_config (config_key, config_value, description) VALUES
     ('framework.name', '"ZCBOT OneBot Bot"', '框架名称'),
     ('framework.version', '"1.0.0"', '框架版本'),
-    ('framework.port', '8081', 'Web UI 监听端口'),
+    ('framework.port', '8080', 'Web UI 监听端口'),
     ('framework.host', '0.0.0.0', 'Web UI 绑定地址'),
     ('onebot.ws_url', '"ws://127.0.0.1:6700"', 'OneBot WebSocket 地址'),
     ('onebot.access_token', '""', 'OneBot 访问令牌'),
@@ -387,3 +389,20 @@ INSERT INTO system_config (config_key, config_value, description) VALUES
     ('log.level', '"INFO"', '日志级别'),
     ('log.retention_days', '30', '日志保留天数'),
     ('web.session_timeout', '3600', 'Web UI 会话超时(秒)');
+
+-- ============================================================
+-- IP 黑名单表（蜜罐自动封禁 / 手动封禁）
+-- MySQL 5.5 兼容写法：不用 DATETIME DEFAULT CURRENT_TIMESTAMP，
+-- 时间列由应用层写入，避免与 updated_at 形成多个 TIMESTAMP 自动列。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ip_blacklist (
+    id          INT             AUTO_INCREMENT  PRIMARY KEY,
+    ip          VARCHAR(64)     NOT NULL        COMMENT '被封禁的 IP',
+    reason      VARCHAR(255)    DEFAULT NULL    COMMENT '拉黑原因',
+    source      VARCHAR(32)     DEFAULT 'manual' COMMENT '来源: honeypot=蜜罐自动/manual=手动',
+    expires_at  DATETIME        DEFAULT NULL    COMMENT '解封时间(NULL=永久)',
+    created_at  DATETIME        DEFAULT NULL    COMMENT '创建时间',
+    updated_at  DATETIME        DEFAULT NULL    COMMENT '更新时间',
+    UNIQUE KEY uk_ip (ip)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='IP 黑名单表';

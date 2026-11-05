@@ -79,8 +79,9 @@ jobs:
 
   # ── WebUI：构建产物存在性检查 ──────────────────────────
   # 前端源码为闭源资产（不进仓库），仅发布 core_plugins/webui/web 构建产物。
-  # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布
-  # 产物存在且非空（index.html + js/ 含文件），作为前端资产发布门禁。
+  # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布产物。
+  # v1.20.0 曾漏推 >1MB 的 element-plus chunk 导致新 clone 白屏；
+  # 现在校验 index.html / chunk 内所有 hash 引用真实存在（见 tools/check_webui_artifact.py）。
   webui-build:
     runs-on: ubuntu-latest
     steps:
@@ -89,9 +90,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="core_plugins/webui/web"
-          test -f "$ROOT/index.html" || { echo "::error::缺少 $ROOT/index.html"; exit 1; }
-          test -d "$ROOT/js" || { echo "::error::缺少 $ROOT/js"; exit 1; }
-          count=$(find "$ROOT/js" -maxdepth 1 -name '*.js' | wc -l)
-          test "$count" -gt 0 || { echo "::error::$ROOT/js 下无 JS 产物"; exit 1; }
-          echo "WebUI 发布产物校验通过：index.html + $count 个 JS"
+          python3 tools/check_webui_artifact.py --root core_plugins/webui/web

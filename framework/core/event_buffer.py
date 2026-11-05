@@ -292,27 +292,35 @@ class EventBuffer:
             return False
 
     async def _l2_write_batch(self, events: list) -> bool:
-        """批量写多条到 L2 溢出层（统一超时与失败计数语义，L4 flush 路径用）"""
+        """批量写多条到 L2 溢出层（统一超时与失败计数语义，L4 flush 路径用）。
+
+        注意：不能直接用 wait_for 包 to_thread —— 超时取消的是 future，
+        default executor 里已运行的线程不会停。若线程内 executemany+commit
+        其实已成功，上层却按「失败」把同一批回落 L3，就会**重复消费**
+        （同一条消息处理两遍）。因此用 shield 保护底层任务，超时后继续
+        等它给出确定结果：成功即不回落，确定失败才回落。
+        """
         if not events:
             return True
+        if self.l2_mode == 'sqlite':
+            fn = self._write_sqlite_batch
+        elif self.l2_mode == 'file':
+            fn = self._l2_file.write_batch
+        else:
+            return False
+        task = asyncio.ensure_future(asyncio.to_thread(fn, events))
         try:
-            if self.l2_mode == 'sqlite':
+            try:
                 ok = await asyncio.wait_for(
-                    asyncio.to_thread(self._write_sqlite_batch, events),
-                    timeout=self.sqlite_write_timeout)
-            elif self.l2_mode == 'file':
-                ok = await asyncio.wait_for(
-                    asyncio.to_thread(self._l2_file.write_batch, events),
-                    timeout=self.sqlite_write_timeout)
-            else:
-                return False
+                    asyncio.shield(task), timeout=self.sqlite_write_timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"L2 缓冲批量写入超时（>{self.sqlite_write_timeout}s），"
+                    f"等待底层给出确定结果（避免误判失败导致重复消费）")
+                ok = await task
             if ok:
                 self._overflow_to_sqlite += len(events)
                 return True
-            return False
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"L2 缓冲批量写入超时（>{self.sqlite_write_timeout}s），转下一层")
             return False
         except Exception as e:
             logger.warning(f"L2 缓冲批量写入异常: {e}")
@@ -333,12 +341,28 @@ class EventBuffer:
         返回本次 flush 的条数；L2 写失败则回落 L3 兜底，L3 满则丢弃（告警）。
         """
         with self._l4_lock:
+            if self._l4_flushing:
+                # stop_l4() 与 wait_drained() 可能同时触发 flush；没有这道闸门时
+                # 两者会各自取走一批，其中一批可能随协程取消/异常而丢失。
+                return 0
             if not self._l4:
+                self._l4_bytes = 0      # 修正消费者直取路径遗留的虚高水账
                 return 0
             batch = self._l4
             self._l4 = []
             self._l4_bytes = 0
-        if await self._l2_write_batch(batch):
+            self._l4_flushing = True
+        try:
+            ok = await self._l2_write_batch(batch)
+        except asyncio.CancelledError:
+            # 底层 to_thread 不受取消影响，可能已经落 L2。此时归还批次会造成
+            # 「L2 一份 + L4 一份」的重复消费，因此只告警不归还；停机兜底由
+            # close() 的同步落盘负责。至少不再像旧实现那样把整批静默销毁。
+            logger.warning("L4 flush 被取消，该批次结果未知（可能已落 L2）")
+            raise
+        finally:
+            self._l4_flushing = False
+        if ok:
             self._wakeup.set()          # 落 L2 也要唤醒消费者取回
             return len(batch)
         # L2 写失败 → 回落 L3 兜底（内存），L3 也满才丢弃（压力给适配器）
@@ -771,6 +795,10 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
             with self._l4_lock:
                 if self._l4:
                     ev, sz = self._l4.pop(0)
+                    # 直取路径也必须回扣水位，否则 _l4_bytes 只增不减：
+                    # 越过 4MB 后 _l4_append 恒 False，攒批层永久失效，
+                    # 性能退化回逐条 commit，且 stats 的 l4_bytes 虚高误导排空判断。
+                    self._l4_bytes = max(0, self._l4_bytes - sz)
                     return ev, None, 'l4'
             # L2 → L1 回填：批量取回（取出即删），在 L1 剩余容量内回填；
             # 填不下的（单条超 L1 上限的历史大块）暂存 _l2_pending 依次直出。
@@ -829,7 +857,11 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
         except asyncio.TimeoutError:
             return False
         try:
-            await asyncio.wait_for(self._l4_do_flush(), timeout=timeout)
+            # shield：超时只让本调用返回 False，不取消 flush 协程本身。
+            # 旧实现用 wait_for 直接取消，_l4_do_flush 已把 batch 取走并清空
+            # L4，协程一被销毁 batch 就既不在 L4 / L2 / L3，整批永久丢失。
+            await asyncio.wait_for(
+                asyncio.shield(self._l4_do_flush()), timeout=timeout)
         except asyncio.TimeoutError:
             return False
         deadline = time.monotonic() + timeout
@@ -840,6 +872,23 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
         return True
 
     def close(self):
+        # 停机兜底：L4 是纯内存。若 stop_l4 / wait_drained 超时或没能跑完，
+        # 旧实现直接关连接，残留事件随进程退出蒸发。这里在关连接之前把
+        # 剩余批次同步落 L2，重启后由 L2 回填恢复（不依赖事件循环）。
+        with self._l4_lock:
+            pending = self._l4
+            self._l4 = []
+            self._l4_bytes = 0
+        if pending and self.l2_mode == 'sqlite' and self._sqlite_conn is not None:
+            try:
+                if self._write_sqlite_batch(pending):
+                    logger.info(
+                        f"停机兜底：L4 残留 {len(pending)} 条已同步落 L2")
+                else:
+                    logger.error(
+                        f"停机兜底失败：L4 残留 {len(pending)} 条未能落盘")
+            except Exception as e:
+                logger.error(f"停机兜底落盘异常: {e}")
         if self._sqlite_conn is not None:
             try:
                 with self._sqlite_lock:

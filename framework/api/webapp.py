@@ -171,8 +171,13 @@ def create_web_app(framework) -> Flask:
             try:
                 scheme = 'https' if request.is_secure else 'http'
                 if origin.startswith(scheme + '://'):
-                    ohost = origin[len(scheme) + 3:].split(':')[0]
-                    if ohost == (request.host or '').split(':')[0]:
+                    rest = origin[len(scheme) + 3:].rstrip('/')
+                    ohost, sep, oport = rest.partition(':')
+                    oport = oport or ('443' if scheme == 'https' else '80')
+                    # 只放行配置里的 WebUI 端口。旧实现只比主机名、不校验端口，
+                    # 同主机任意端口的页面都能拿到 ACAO + ACAC（SameSite=Lax 对
+                    # 同站跨源仍会带 Cookie），构成完整的跨源读通道。
+                    if ohost == (request.host or '').split(':')[0] and oport == _web_port:
                         return origin
             except Exception:
                 pass
@@ -182,7 +187,10 @@ def create_web_app(framework) -> Flask:
             else:
                 allowed = [str(o).strip() for o in _cors_cfg]
             return origin if origin in allowed else None
-        return origin
+        # 未配置 cors_allowed_origins 时不再反射任意 Origin：旧实现 return origin
+        # 配合 Allow-Credentials:true，任何第三方站点都能跨源读取带凭据的 /api
+        # 响应。同源请求本来就不受 CORS 约束，无需该头。
+        return None
 
     @app.after_request
     def _cors_headers(resp):

@@ -200,7 +200,25 @@ class ProtocolAdapter(ABC):
             loop = getattr(fw, 'loop', None) if fw else None
             if loop is not None and loop.is_running():
                 try:
+                    running = asyncio.get_running_loop()
+                except RuntimeError:
+                    running = None
+                if running is loop:
+                    # 同步 call() 在 async handler 内被调用：run_coroutine_threadsafe
+                    # 会把协程投回「正阻塞在 result(15) 上的同一个循环」，必然等满
+                    # 15 秒再超时，且期间整个消息处理冻结。立即拒绝并给出改法。
+                    coro.close()
+                    return {"status": "failed", "retcode": -1,
+                            "msg": "同步 call() 不能在 async handler 内使用，请改用 await acall()"}
+                try:
                     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=15)
+                except TimeoutError as e:
+                    # 这 15s 是「等结果」的超时：协程可能已经把消息发出去了。
+                    # 按错误码契约属于 -2（超时/可能已送达，不重试）。旧实现
+                    # 把包括超时在内的所有异常统一标成 -3（确定没发出去才重试），
+                    # 闸门据此重发，产生重复消息。
+                    return {"status": "failed", "retcode": -2,
+                            "msg": f"调用结果等待超时: {e}"}
                 except Exception as e:
                     return {"status": "failed", "retcode": -3, "msg": str(e)}
             # 没有可复用的运行循环时，在本线程临时运行（极少路径）

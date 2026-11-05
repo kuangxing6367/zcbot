@@ -152,6 +152,18 @@ _LEDGER_EXTRA_COLUMNS = (
     ('reason', "VARCHAR(255) DEFAULT ''"),
 )
 
+# 执行流水表后续加的列：老库 CREATE TABLE 早于这些列，若不补列，
+# _record_run 的显式列 INSERT 会失败，审计流水同样会静默丢失。
+_RUNS_EXTRA_COLUMNS = (
+    ('level', "VARCHAR(16) DEFAULT 'additive'"),
+    ('operator', "VARCHAR(64) DEFAULT ''"),
+    ('ticket', "VARCHAR(64) DEFAULT ''"),
+    ('reason', "VARCHAR(255) DEFAULT ''"),
+    ('backup', "VARCHAR(255) DEFAULT ''"),
+    ('db_type', "VARCHAR(16) DEFAULT ''"),
+    ('app_version', "VARCHAR(32) DEFAULT ''"),
+)
+
 _MYSQL_LOCK_NAME = 'zcbot_schema_migrations'
 
 # 同进程内的串行保护（SQLite 无命名锁，多进程共用同一个 sqlite 文件极少见）
@@ -300,6 +312,8 @@ def ensure_runs(database) -> bool:
         if not database.table_exists(RUNS_TABLE):
             database.execute(ddl)
             logger.info("数据库迁移: 建立执行流水表 %s", RUNS_TABLE)
+        # 与 ensure_ledger 对齐：老表缺列时补齐，否则 _record_run 写不进去
+        _ensure_columns(database, RUNS_TABLE, _RUNS_EXTRA_COLUMNS)
         return True
     except Exception as e:  # noqa: BLE001
         logger.warning("数据库迁移: 流水表 %s 不可用（%s），本次执行不留审计记录",
@@ -402,12 +416,13 @@ def runs(database, limit: int = 100) -> List[dict]:
     try:
         if not database.table_exists(RUNS_TABLE):
             return []
+        # 必须 SELECT *：老库缺后加列（backup/db_type/app_version 等）时，
+        # 显式列清单会整表查询失败，异常被吞成「暂无执行流水」，审计证据链
+        # 静默消失。下面 out.append 全部用 r.get() 缺列取默认。
         rows = database.query(
-            "SELECT id, version, name, level, started_at, duration_ms, success, "
-            "source, operator, ticket, reason, error, backup, db_type, app_version "
-            f"FROM {RUNS_TABLE} ORDER BY id DESC LIMIT {int(limit)}")
+            f"SELECT * FROM {RUNS_TABLE} ORDER BY id DESC LIMIT {int(limit)}")
     except Exception as e:  # noqa: BLE001
-        logger.debug("数据库迁移: 读取执行流水失败: %s", e)
+        logger.warning("数据库迁移: 读取执行流水失败: %s", e)
         return []
     out = []
     for r in rows or []:
@@ -845,7 +860,21 @@ def run_pending(database, registry: Sequence[Migration],
                     try:
                         _write_record(database, m, csum, cost, True, context=ctx)
                     except Exception as we:  # noqa: BLE001
-                        logger.warning("数据库迁移: 账本写入失败: %s", we)
+                        # DDL 已生效但账本没记上：下次启动会把它当 pending 重跑，
+                        # 非幂等迁移会二次执行并可能卡住后续所有版本。旧实现只
+                        # 打 warning 还照常报「已应用」+ ok=True，运维完全无感。
+                        logger.error(
+                            "数据库迁移: v%d %s 已应用但账本写入失败，本轮中止：%s"
+                            "（下次启动可能重复执行该迁移，请检查账本表后重试）",
+                            m.version, m.name, we)
+                        report['ok'] = False
+                        report['failed'].append({
+                            'version': m.version, 'name': m.name,
+                            'error': f'ledger write failed: {we}'})
+                        _record_run(database, m, ctx, started_at, cost, False,
+                                    error=f'ledger write failed: {we}',
+                                    backup=backup_ref)
+                        break
                 _record_run(database, m, ctx, started_at, cost, True,
                             backup=backup_ref)
                 logger.info("数据库迁移: v%d %s 已应用（%dms，%s）",

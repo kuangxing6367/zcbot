@@ -124,7 +124,11 @@ def test_plugin_self_reload(tmp):
     check("DB 插件状态已更新为 running", bool(ups))
 
 # 3) 直接替换 register_func 为抛异常版本 + touch 文件触发心跳
-    #    （心跳只增量回调 register，不重载模块，因此改写 main.py 内容不会生效）
+    #    心跳默认 plugin.hot_reload=true（全量 unload+reload，会重新导入模块），
+    #    直接替换 register_func 不会生效。本场景验证的是「仅增量 register」路径，
+    #    故显式关掉热重载，否则断言基于过时假设会一直失败（此前被 CI 假 PASS 掩盖）。
+    loader.framework.config['plugin']['hot_reload'] = False
+
     def boom_register(ctx):
         raise RuntimeError('boom')
     with loader._lock:

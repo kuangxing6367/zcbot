@@ -22,6 +22,16 @@ _INSTANCE_LOCK = {'path': None, 'fd': None}
 
 
 def instance_lock_path(root):
+    # 锁文件属于「运行状态」，必须落在可写状态目录。调用方传的是代码根，
+    # pip 安装时那是 site-packages（只读）、容器只读挂载同理 —— 旧实现在
+    # 那种环境下必然创建失败，进而被误判成「已有实例在跑」而拒绝启动。
+    try:
+        from framework.config import get_home
+        home = get_home()
+        if home and os.access(home, os.W_OK):
+            return os.path.join(home, 'data', 'zcbot.lock')
+    except Exception:
+        pass
     return os.path.join(root, 'data', 'zcbot.lock')
 
 
@@ -167,7 +177,10 @@ def acquire_instance_lock(root):
     避免残留锁文件干扰运维判断。若进程被强杀导致锁文件残留，下次启动会通过 PID 探活
     识别 stale 锁并清理后重新获取，不会误判「已在运行」。
 
-    返回 fd（持有锁）或 None（获取失败，调用方应退出；具体原因已打印提示）。
+    返回：
+      - fd（>0）：持有锁；
+      - False：锁文件不可用（目录只读等），已跳过单实例保护，调用方应继续启动；
+      - None：确实已有实例在运行 / 锁获取失败，调用方应退出。
     """
     lock_path = instance_lock_path(root)
     lock_dir = os.path.dirname(lock_path)
@@ -179,8 +192,11 @@ def acquire_instance_lock(root):
     try:
         fd = open_lock_file(lock_path)
     except Exception as e:
-        logger.warning(f"实例锁文件创建失败，跳过单实例保护: {e}")
-        return None
+        # 旧实现这里 return None，而调用方是 `if lock_fd is None: sys.exit(1)`，
+        # 于是日志说「跳过单实例保护」，实际却直接退出，报错方向完全相反。
+        # 锁文件建不出来只是「没有保护」，不是「有另一个实例」。
+        logger.warning(f"实例锁文件不可用（{lock_path}），跳过单实例保护: {e}")
+        return False
 
     if try_lock(fd):
         _INSTANCE_LOCK['path'] = lock_path

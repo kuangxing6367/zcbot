@@ -26,6 +26,7 @@ def register(ctx):
     app = ctx.app
     framework = ctx.framework
     require_auth = ctx.require_auth
+    require_super = ctx.require_super
     audit_log = ctx.audit_log
     get_client_ip = ctx.get_client_ip
     _project_root = ctx._project_root
@@ -48,7 +49,7 @@ def register(ctx):
         })
 
     @app.route('/api/restart', methods=['POST'])
-    @require_auth
+    @require_super
     def restart_framework():
         """重启框架：用 os.execv 原地替换进程，不依赖外部进程管理器"""
         admin = request.admin
@@ -76,10 +77,20 @@ def register(ctx):
         threading.Thread(target=_do_restart, daemon=False).start()
         return jsonify({'code': 0, 'msg': '框架正在重启...'})
 
+    # 普通管理员经 Web 终端可执行的命令白名单（只读查询与常规消息操作）。
+    # 其余一律需超级管理员：shell/sh 是 subprocess.run(shell=True) 的任意命令执行，
+    # dbdump / update / restart / reload / config / enable / disable / plugins / exit
+    # 会改代码、改配置或停进程。旧实现只挂 @require_auth，任一 admin token
+    # （含 role=admin 的 API Key）即可 POST 'shell <任意命令>' 拿到宿主权限。
+    _ADMIN_SAFE_COMMANDS = {
+        'help', 'status', 'log', 'groups', 'users', 'tasks', 'clear',
+        'tui', 'recv', 'send', 'broadcast',
+    }
+
     @app.route('/api/terminal/exec', methods=['POST'])
     @require_auth
     def terminal_exec():
-        """执行终端命令并返回输出"""
+        """执行终端命令并返回输出（危险命令仅超级管理员）"""
         admin = request.admin
         data = request.json or {}
         command = (data.get('command') or '').strip()
@@ -90,6 +101,10 @@ def register(ctx):
 
         # 查找命令处理器
         cmd_name = command.split()[0].lower()
+        if cmd_name not in _ADMIN_SAFE_COMMANDS and admin.get('role') != 'super':
+            audit_log(admin['id'], admin['username'], 'terminal_exec_denied',
+                      'system', 'terminal', {'command': command})
+            return jsonify({'code': 403, 'msg': f'命令 [{cmd_name}] 需要超级管理员权限'}), 403
         handler = terminal_commands.get(cmd_name)
         if handler is None:
             return jsonify({'code': 404, 'msg': f'未知命令: {cmd_name}，输入 help 查看可用命令'})

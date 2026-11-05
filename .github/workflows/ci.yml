@@ -41,6 +41,28 @@ jobs:
       # 如 test_perm.py / test_plugin_imports.py，须用 `python tests/xxx.py` 单独跑）
       # 与「纯 pytest 用例」两类。盲跑 `pytest tests/` 会因脚本式文件的顶层 sys.exit
       # 中断收集，故这里只收编带 def test_ 的纯 pytest 用例。
+      # 脚本式自测（check() 只记录不抛、sys.exit 在 main() 里）必须用
+      # `python tests/xxx.py` 跑。旧版把它们塞进 pytest，pytest 收集 test_*
+      # 后函数体内零 assert，失败也一律 PASS —— CI 全绿是假的。
+      - name: Run script-style regressions
+        run: |
+          set -e
+          for f in \
+            tests/test_json_logging.py \
+            tests/test_config_hotapply.py \
+            tests/test_message_contract.py \
+            tests/test_observability.py \
+            tests/test_plugin_requires.py \
+            tests/test_db_migrations.py \
+            tests/test_buffer_refill.py \
+            tests/test_security_hardening.py \
+            tests/test_self_heal.py \
+            tests/test_config_validation.py \
+            tests/test_scheduler_graceful.py; do
+            echo "== $f =="
+            python "$f"
+          done
+
       # asyncio_mode=auto 让带 async def 的缓冲层用例也能被原生驱动。
       - name: Run tests
         run: |
@@ -49,11 +71,8 @@ jobs:
             tests/test_api_security.py \
             tests/test_buffer_l2_file.py \
             tests/test_core_plugin_switch.py \
-            tests/test_buffer_refill.py \
             tests/test_config_defaults.py \
-            tests/test_config_hotapply.py \
             tests/test_console_server.py \
-            tests/test_db_migrations.py \
             tests/test_db_regression.py \
             tests/test_dual_core.py \
             tests/test_event_buffer.py \
@@ -63,23 +82,30 @@ jobs:
             tests/test_outbound_guard.py \
             tests/test_backoff.py \
             tests/test_ipc_perf.py \
-            tests/test_json_logging.py \
             tests/test_llm_core.py \
             tests/test_llm_load.py \
             tests/test_loop_fix_regression.py \
-            tests/test_observability.py \
-            tests/test_message_contract.py \
-            tests/test_plugin_requires.py \
             tests/test_plugin_decorators.py \
             tests/test_qq_official.py \
             tests/test_qq_official_extra.py \
             tests/test_scheduler.py \
-            tests/test_security_hardening.py \
-            tests/test_self_heal.py \
             tests/test_smoke.py \
             tests/test_sql_sim_debug.py \
             tests/test_task2_arch_split.py \
-            tests/test_terminal_panel.py
+            tests/test_terminal_panel.py \
+            tests/test_orphan_selfcheck.py \
+            tests/test_coalesce_summary.py \
+            tests/test_watchdog_stack.py \
+            tests/test_log_correlation.py \
+            tests/test_command_conflict.py \
+            tests/test_config_authority.py \
+            tests/test_mysql_config_guard.py \
+            tests/test_adapter_error_handling.py \
+            tests/test_db_resilience.py \
+            tests/test_new_adapters.py \
+            tests/test_p0_regressions.py \
+            tests/test_p0_security_regressions.py \
+            tests/test_p1_deploy_regressions.py
 
       # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────────
       # 允许工作流正常产生且已被 .gitignore 覆盖的文件（不出现在 git status）；
@@ -89,8 +115,10 @@ jobs:
 
   # ── WebUI：构建产物存在性检查 ──────────────────────────────
   # 前端源码为闭源资产（不进仓库），仅发布 core_plugins/webui/web 构建产物。
-  # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布
-  # 产物存在且非空（index.html + js/ 含文件），作为前端资产发布门禁。
+  # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布产物。
+  # v1.20.0 曾漏推 >1MB 的 element-plus chunk，index.html 与全部 chunk 静态
+  # import 它但仓库没有 → 新 clone 白屏，而旧门禁只查「js 数量>0」查不出来。
+  # 现在校验 index.html / chunk 内所有 hash 引用真实存在，并拒绝无引用的旧版大文件。
   webui-build:
     runs-on: ubuntu-latest
     steps:
@@ -101,9 +129,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ROOT="core_plugins/webui/web"
-          test -f "$ROOT/index.html" || { echo "::error::缺少 $ROOT/index.html"; exit 1; }
-          test -d "$ROOT/js" || { echo "::error::缺少 $ROOT/js"; exit 1; }
-          count=$(find "$ROOT/js" -maxdepth 1 -name '*.js' | wc -l)
-          test "$count" -gt 0 || { echo "::error::$ROOT/js 下无 JS 产物"; exit 1; }
-          echo "WebUI 发布产物校验通过：index.html + $count 个 JS"
+          python3 tools/check_webui_artifact.py --root core_plugins/webui/web

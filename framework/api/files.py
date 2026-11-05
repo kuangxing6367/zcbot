@@ -55,6 +55,28 @@ def register(ctx):
                 return abs_path
         return None
 
+    # 允许根目录包含整个项目根，而写文件路由是 @require_super。
+    # 若读路由只要求登录，普通 admin 就能 GET /api/files/read?path=config.yaml
+    # 拿到数据库口令 / access_token / http_api token —— 读写权限倒挂。
+    _SENSITIVE_NAMES = {
+        'config.yaml', 'config.yml', 'core_plugins.yaml', 'core_plugins.yml',
+        'local.debug.js', 'system_config.json',
+    }
+    _SENSITIVE_EXTS = {
+        '.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm',
+        '.key', '.pem', '.p12', '.pfx',
+    }
+
+    def _is_sensitive_file(abs_path: str) -> bool:
+        name = os.path.basename(abs_path).lower()
+        if name in _SENSITIVE_NAMES or name.startswith('.env'):
+            return True
+        if os.path.splitext(name)[1] in _SENSITIVE_EXTS:
+            return True
+        norm = abs_path.replace('\\', '/').lower()
+        # 降级后 JSON 行集与系统配置落在这里，同样含全量登录态
+        return '/data/db/' in norm or '/plugins_dat/' in norm and name.endswith('.json')
+
     @app.route('/api/files/list', methods=['GET'])
     @require_auth
     def file_browser_list():
@@ -110,6 +132,9 @@ def register(ctx):
         abs_path = _safe_file_path(path)
         if not abs_path or not os.path.isfile(abs_path):
             return jsonify({'code': 400, 'msg': '文件不存在'}), 400
+        admin = getattr(request, 'admin', None) or {}
+        if _is_sensitive_file(abs_path) and admin.get('role') != 'super':
+            return jsonify({'code': 403, 'msg': '敏感文件需要超级管理员权限'}), 403
         try:
             ext = os.path.splitext(abs_path)[1].lower()
             binary_exts = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.zip', '.pyc', '.db', '.sqlite'}
@@ -320,12 +345,10 @@ def register(ctx):
         abs_path = _safe_file_path(path)
         if not abs_path or not os.path.isfile(abs_path):
             return jsonify({'code': 400, 'msg': '文件不存在'}), 400
-        # 禁止普通管理员下载数据库文件（含 token / 密码哈希的全量登录态）
-        sensitive_exts = {'.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm'}
-        ext = os.path.splitext(abs_path)[1].lower()
+        # 禁止普通管理员下载数据库、配置文件与密钥文件（含全量登录态）
         admin = getattr(request, 'admin', None) or {}
-        if ext in sensitive_exts and admin.get('role') != 'super':
-            return jsonify({'code': 403, 'msg': '权限不足，需要超级管理员'}), 403
+        if _is_sensitive_file(abs_path) and admin.get('role') != 'super':
+            return jsonify({'code': 403, 'msg': '敏感文件需要超级管理员权限'}), 403
         return send_from_directory(
             os.path.dirname(abs_path),
             os.path.basename(abs_path),
