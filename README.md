@@ -11,7 +11,7 @@
 [![PyPI](https://img.shields.io/badge/PyPI-zcbot-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/zcbot/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#开源协议)
-[![Release](https://img.shields.io/badge/release-v1.20.1-orange)](https://gitee.com/liquanfeng123/zcbot/releases)
+[![Release](https://img.shields.io/badge/release-v1.20.2-orange)](https://gitee.com/liquanfeng123/zcbot/releases)
 
 <br>
 
@@ -157,6 +157,20 @@ async def handle_hello(event, match):
 
 ## 开源协议
 
-MIT OR Apache-2.0，任选其一适用。
+**MIT OR Apache-2.0**，任选其一适用（双授权，与 Rust 生态惯例一致）。
+
+| 文件 | 内容 |
+|------|------|
+| [`LICENSE`](LICENSE) | MIT 全文（最常见的选用入口） |
+| [`LICENSE-APACHE`](LICENSE-APACHE) | Apache License 2.0 全文 |
+| [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) | WebUI 打包的第三方组件（element-plus / vue / vue-router，均为 MIT）版权声明 |
+
+版权人：`zgric`。
+
+选 Apache-2.0 的话额外获得明确的专利授权条款；只想要最简单条款就用 MIT。
+
+> WebUI 产物里的 `THIRD-PARTY-NOTICES.txt` 是上述第三方声明的纯文本副本 ——
+> 构建时的压缩与混淆会把源码里的版权注释删干净，MIT 要求副本保留声明，
+> 所以它必须随产物一起分发，CI 有门禁校验。
 
 > 本项目以 AI 生成为主、人工辅助完成。用着顺手的话，给个 Star 吧 ⭐

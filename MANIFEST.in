@@ -1,6 +1,11 @@
 # 随包分发的运行时资源（wheel/sdist）
 include VERSION
 include requirements.txt
+# 许可与第三方声明：sdist 必须带齐两份协议全文 + 打包组件的版权声明，
+# 否则拿到源码包的人看不到 Apache 那份（LICENSE 只放 MIT）。
+include LICENSE
+include LICENSE-APACHE
+include THIRD-PARTY-NOTICES.md
 recursive-include framework *.yaml *.yml *.json *.sql *.txt
 recursive-include core_plugins *.yaml *.yml *.json *.txt *.sql *.html *.js *.css *.so *.pyd *.ttf *.otf
 recursive-include plugins *.yaml *.yml *.json *.txt *.html *.js *.css

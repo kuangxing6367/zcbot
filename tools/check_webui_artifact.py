@@ -9,7 +9,9 @@ index.html 与全部业务 chunk 静态 import 它，但仓库里没有该文件
 校验内容：
   1. index.html 中所有 ./js/、./css/ 引用必须真实存在；
   2. 所有已提交 chunk 内引号包裹的 ./xxx.js 静态引用必须真实存在；
-  3. js/ 下至少有一个产物文件，且不允许残留没有任何 chunk 引用的旧 hash 大文件。
+  3. js/ 下至少有一个产物文件，且不允许残留没有任何 chunk 引用的旧 hash 大文件；
+  4. 第三方许可声明必须随产物分发（MIT 要求保留版权声明，而压缩 + 混淆会把
+     源文件里的注释全部删掉，THIRD-PARTY-NOTICES.txt 是它们在产物中的唯一载体）。
 """
 from __future__ import annotations
 
@@ -57,6 +59,23 @@ def check(root: pathlib.Path) -> list[str]:
     for chunk in chunks:
         if chunk.stat().st_size >= 500 * 1024 and ('js/' + chunk.name) not in refs:
             errors.append(f'无引用的旧版大文件残留: js/{chunk.name}')
+
+    # ── 第三方许可声明必须随产物分发 ──
+    # vite 构建时 terser 的 format.comments=false 加混淆器会把 element-plus /
+    # vue / vue-router 的版权注释全部删掉，产物 js 里 license 出现次数为 0。
+    # MIT 要求副本保留版权声明，故用独立的 NOTICES 文件承载，并且必须真的
+    # 复制进产物目录（只放在仓库根不算随副本分发）。
+    notices = root / 'THIRD-PARTY-NOTICES.txt'
+    if not notices.is_file():
+        errors.append('缺少 THIRD-PARTY-NOTICES.txt（第三方组件版权声明必须随产物分发）')
+    elif notices.stat().st_size < 512:
+        errors.append('THIRD-PARTY-NOTICES.txt 内容过短，疑似占位文件')
+    else:
+        text = notices.read_text(encoding='utf-8', errors='replace')
+        # 打进来的第三方库固定是这几个，缺任一说明声明不完整
+        for pkg in ('element-plus', 'vue', 'vue-router'):
+            if pkg not in text:
+                errors.append(f'THIRD-PARTY-NOTICES.txt 未声明 {pkg}')
 
     return errors
 

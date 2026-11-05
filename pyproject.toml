@@ -15,12 +15,17 @@
 
 [project]
 name = "zcbot"
-version = "1.20.1"
+version = "1.20.2"
 description = "ZCBOT 事件驱动 IM 平台：内核 + 扩展点契约 + 协议无关的接入端（以插件形式提供多平台接入）"
 readme = "README.md"
 requires-python = ">=3.10"
+# PEP 639：许可用 SPDX 表达式（双协议，任选其一），不再用已弃用的
+# `License :: OSI Approved :: ...` classifier（PEP 639 起不推荐混用）。
 license = "MIT OR Apache-2.0"
-authors = [{ name = "kuangxing6367" }]
+# 显式声明随包分发的许可文件。缺这条时，识别工具拿到的「许可文件」集合
+# 完全依赖打包器的默认猜测，Apache 那份很容易被漏掉。
+license-files = ["LICENSE", "LICENSE-APACHE"]
+authors = [{ name = "zgric" }]
 keywords = ["telegram", "discord", "bot", "plugin", "event-driven", "framework", "im", "chatbot"]
 
 # 核心依赖（SQLite 模式必须）—— 与 requirements.txt 上半段保持一致

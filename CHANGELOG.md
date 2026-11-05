@@ -26,6 +26,54 @@
 
 ---
 
+## [1.20.2] - 2026-11-06
+
+> 主题：**许可证合规**。代码没动，只把协议文件按识别标准重新组织。
+> v1.20.0/1.20.1 的 `LICENSE` 把 MIT 与 Apache-2.0 两份全文混在一个文件里，
+> 还盖了 3 行中文说明 —— GitHub 与各类扫描器一律识别成 `NOASSERTION`
+>（查 `repos/.../license` 返回 `spdx_id: "NOASSERTION"`），企业法务流程里
+> 等同于「许可不明」。
+
+### 拆分成识别器认识的结构
+
+- `LICENSE` 只放 MIT 全文（逐字对齐 SPDX 模板，仅替换版权行）→ GitHub 现在
+  能正确识别为 MIT，不再显示 Other。
+- 新增 `LICENSE-APACHE`：直接从 apache.org 的 `LICENSE-2.0.txt` 取原文，
+  只替换 APPENDIX 里的版权占位符。原文件有一处 4(a) 条款的**换行位置**与
+  官方不同（措辞相同但被重排过），Apache 要求原样保留，已一并纠正。
+- 版权人统一为 `zgric`（原来是 `Copyright (c) 2026 ZCBOT` —— ZCBOT 是项目名，
+  不是法律主体，这类写法在合规审查里会被打回）。
+
+### 第三方组件声明
+
+WebUI 打包了 element-plus 2.14.4 / @element-plus/icons-vue 2.3.2 / vue 3.5.41 /
+vue-router 4.6.4，全是 MIT。但构建时 Terser `format.comments: false` 加混淆器
+把版权注释删得干干净净（产物 js 里 `license` 出现次数为 **0**），而 MIT 明确
+要求副本保留版权声明。
+
+- 新增 `THIRD-PARTY-NOTICES.md`（仓库根，给人看）与
+  `core_plugins/webui/web/THIRD-PARTY-NOTICES.txt`（随产物分发的那份）。
+- 产物 `index.html` 顶部加注释指向它，避免只拷 `js/` 就漏掉声明。
+- `tools/check_webui_artifact.py` 增加门禁：产物目录必须存在 NOTICES 且
+  声明了 element-plus / vue / vue-router，否则 CI 失败 —— 防止重建时又丢。
+- 构建侧加了 `licensingPlugin`（closeBundle 阶段，跑在压缩与混淆之后），
+  下次重建会自动生成同一份文件。
+
+### 打包元数据
+
+- `pyproject.toml` 补 `license-files = ["LICENSE", "LICENSE-APACHE"]`，
+  `authors` 改为 `zgric`。实测 `pip wheel` 后：dist-info 里两份协议齐全，
+  `License-Expression: MIT OR Apache-2.0`、两条 `License-File`，
+  `core_plugins/webui/web/THIRD-PARTY-NOTICES.txt` 也在包里。
+- `MANIFEST.in` 显式 include 三份许可文件，sdist 不会再漏 Apache 那份。
+
+### 顺带纠正一处错误表述
+
+`framework/terminal/panel.py` 的模块文档原写「zcbot 为 MIT/Apache-2.0 双协议，
+与 GPL 不兼容」，这话不准确：MIT 分支与 GPLv2/GPLv3 都兼容，只有 Apache-2.0
+分支因专利条款与 GPLv2 不兼容（与 GPLv3 兼容）。已改为准确表述，并注明需要
+并入 GPLv2 项目的下游应选 MIT 分支。
+
 ## [1.20.1] - 2026-11-05
 
 > 主题：**把 v1.20.0 留下的洞补上**。这一版没有新功能，全部是一次针对源码的

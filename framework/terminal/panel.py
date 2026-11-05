@@ -3,8 +3,10 @@
 
 框架自带能力（非插件）：零第三方依赖（psutil 可选）。
 协议说明：界面交互（仪表条/线程表/功能键条/增量刷新）参考 htop（GPLv2+）
-与 NTop（GPLv3）的交互布局思想；zcbot 为 MIT/Apache-2.0 双协议，与 GPL 不
-兼容，未复制、未派生上述项目任何源码，本模块为独立实现。
+与 NTop（GPLv3）的交互布局思想；zcbot 为 MIT/Apache-2.0 双协议——MIT 分支
+与 GPLv2/GPLv3 均兼容，Apache-2.0 分支因专利条款与 GPLv2 不兼容、与 GPLv3
+兼容（故需要并入 GPLv2 项目的下游应选 MIT 分支）。未复制、未派生上述项目
+任何源码，本模块为独立实现。
 - 渲染：ANSI 备用屏（Windows 经 SetConsoleMode 开启 VT，POSIX 原生支持）；
 - 按键：Windows msvcrt / POSIX termios+select；方向键导航、数字直达；
 - 鼠标：SGR 1000/1006 上报，点击选中、再点同项确认（两段式防误触）；
