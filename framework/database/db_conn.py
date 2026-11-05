@@ -37,6 +37,69 @@ class DatabaseConnMixin:
         self._db_path = db_path
         logger.info(f"SQLite 数据库已初始化: {db_path}")
 
+    def _normalize_mysql_params(self) -> dict:
+        """校验并规范化 MySQL 连接参数。
+
+        pymysql 对 dict/list 类型的参数不会报「哪个键写错了」，而是在内部
+        拼接 SQL 时抛 ``unsupported operand type(s) for +: 'dict' and 'bytes'``，
+        完全指不到配置项。典型成因是把参数多嵌套了一层：
+
+            database:
+              type: mysql
+              mysql:            # ← 多出来的这一层
+                host: 127.0.0.1
+
+        这里在建池前把类型问题变成一句能直接照着改的错误。
+        """
+        cfg = self.config
+        expected = {
+            'host': '127.0.0.1',
+            'port': 3306,
+            'user': 'root',
+            'password': '',
+            'database': 'zcbot',
+            'charset': 'utf8mb4',
+        }
+        bad = []
+        for key in expected:
+            val = cfg.get(key, expected[key])
+            if isinstance(val, (dict, list, tuple, set)):
+                bad.append(
+                    f"database.{key} 应为字符串/数字，实际是 {type(val).__name__}"
+                    f"（{val!r}）"
+                )
+        if bad:
+            msg = (
+                "MySQL 连接参数类型错误，请检查 config.yaml 的 database 段："
+                + "；".join(bad)
+                + "。常见原因是把 mysql 参数又嵌套了一层（如 database.mysql.host），"
+                  "或 database.database 被写成了对象——所有键应与 database.type 平级。"
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        def _s(key):
+            val = cfg.get(key, expected[key])
+            return '' if val is None else str(val)
+
+        try:
+            port = int(cfg.get('port', 3306) or 3306)
+        except (TypeError, ValueError):
+            msg = (f"database.port 必须是整数，实际是 "
+                   f"{cfg.get('port')!r}，请检查 config.yaml")
+            logger.error(msg)
+            raise ValueError(msg) from None
+
+        return {
+            'host': _s('host') or '127.0.0.1',
+            'port': port,
+            'user': _s('user') or 'root',
+            # 密码允许写成数字（如 password: 123456），pymysql 只接受字符串
+            'password': _s('password'),
+            'database': _s('database') or 'zcbot',
+            'charset': _s('charset') or 'utf8mb4',
+        }
+
     def _init_mysql(self):
         """初始化 MySQL 连接池（检测到 MySQL 配置时，自动安装 pymysql/DBUtils）"""
         try:
@@ -73,6 +136,10 @@ class DatabaseConnMixin:
         except ImportError:
             logger.error("缺少 DBUtils，请手动执行: pip install DBUtils")
             raise ImportError("缺少 DBUtils，请手动执行: pip install DBUtils")
+        # 建池前校验参数类型：pymysql 对 dict/list 这类参数不会给出可读报错，
+        # 只会在内部拼接时抛 "unsupported operand type(s) for +: 'dict' and 'bytes'"
+        # 这种完全指不到配置项的错误。这里提前拦下并指出具体是哪个键写错了。
+        p = self._normalize_mysql_params()
         self._pool = PooledDB(
             creator=self._pymysql,
             maxconnections=self._pool_max,          # 最大连接数（pool_size）
@@ -83,12 +150,12 @@ class DatabaseConnMixin:
             setsession=[],
             reset=True,                             # 借出时回滚残留事务
             ping=1,                                 # 每次借出 ping 验证，坏连接自动丢弃重建
-            host=self.config.get('host', '127.0.0.1'),
-            port=int(self.config.get('port', 3306)),
-            user=self.config.get('user', 'root'),
-            password=self.config.get('password', ''),
-            database=self.config.get('database', 'zcbot'),
-            charset=self.config.get('charset', 'utf8mb4'),
+            host=p['host'],
+            port=p['port'],
+            user=p['user'],
+            password=p['password'],
+            database=p['database'],
+            charset=p['charset'],
             cursorclass=self._DictCursor,
             autocommit=True,
             connect_timeout=self._connect_timeout,
@@ -120,6 +187,19 @@ class DatabaseConnMixin:
             self._local.conn = conn
         return conn
 
+    @staticmethod
+    def _is_pool_waitable(exc: Exception) -> bool:
+        """是否为「池暂时满/池未开」这类可等待重试的异常。
+
+        只有这些才值得在 pool_wait_timeout 内反复重试。其余异常
+        （参数类型错、认证失败、建连被拒）重试再多次结果也一样，
+        继续重试只会把一次失败放大成整段超时（且会让池内计数失真，
+        最终报成"连接全被占用"这种误导性结论）。
+        """
+        name = type(exc).__name__
+        return any(k in name for k in (
+            'TooManyRequests', 'PoolNotOpen', 'PoolClosed', 'Unavailable'))
+
     def _get_conn_mysql(self):
         """
         从连接池借出连接（PooledDB 自动处理：ping 保活、坏连接丢弃重建、
@@ -137,6 +217,13 @@ class DatabaseConnMixin:
                 return self._pool.connection()
             except Exception as e:
                 last_err = e
+                # 非「池满」类异常立即上抛：重试无意义，且会把启动拖成假死
+                if not self._is_pool_waitable(e):
+                    logger.error(
+                        f"MySQL 借连接失败（不可重试，参数或配置有误）: "
+                        f"{type(e).__name__}: {e}"
+                    )
+                    raise
                 if time.time() >= deadline:
                     logger.error(
                         f"MySQL 连接池繁忙: {self._pool_max} 个连接全被占用超 "
