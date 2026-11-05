@@ -943,19 +943,21 @@ def _as_bool(value) -> bool:
 def _autoload_core_plugins(config: dict) -> dict:
     """官方插件配置中心（core_plugins.yaml）自动同步 + 合并进主 config。
 
-    单一权威：core_plugins.yaml 是官方插件启停与配置的唯一来源，由独立的
-    扫描进程（tools/scan_core_plugins.py）维护；主 config.yaml 的
-    core_plugins 段**不再管理官方插件**（历史权威覆盖行为已移除）。
+    权威划分：
+      - **enabled（启停）**：core_plugins.yaml 唯一权威；
+      - **运行参数（host/port/token 等）**：config.yaml 对应段唯一权威，
+        core_plugins.yaml 里若残留同名键会在下面第 2.5 步被移除，
+        避免「两边都能改、只有一边生效」。
 
     流程：
       1. 扫描 core_plugins/ 目录得到已安装官方插件；
       2. 读 core_plugins.yaml，为「已安装但缺失」的插件补默认配置块，
          **enabled 一律 False（发现即禁用，绝不静默启用）**；
+      2.5 收敛重叠键：config.yaml 已有的同名键从 core_plugins.yaml 移除；
       3. 移除 yaml 中已不再安装的插件块（卸载自动删除）；
       4. 有变化则回写 yaml；
       5. 把每个插件的 enabled 合并进 config['core_plugins']，把插件配置块
-         合并进对应 section（onebot/web/http_api/...），插件现有
-         `fw.config.get('onebot')` 等读取方式无需改动。
+         合并进对应 section（onebot/web/http_api/...），config.yaml 优先。
     返回合并后的 {plugin: cfg}。
     """
     installed = _scan_core_plugins()
@@ -1007,6 +1009,27 @@ def _autoload_core_plugins(config: dict) -> dict:
             if k not in blk:
                 blk[k] = main_sec[k] if k in main_sec else v
                 changed = True
+    # 2.5 重叠键收敛：config.yaml 已经有同名键的，从 core_plugins.yaml 中移除。
+    #     两处都能改、实际只有一处生效，是配置系统最容易踩的坑（改 A 没用、
+    #     改 B 也没用，因为真正生效的是另一处）。这里一次性收敛：
+    #     全局/部署类参数（host/port/token 等）归 config.yaml，
+    #     core_plugins.yaml 只保留 enabled 与插件私有键。
+    for name, blk in list(cps.items()):
+        if not isinstance(blk, dict):
+            continue
+        section = _CORE_PLUGIN_SECTION.get(name, name)
+        main_sec = config.get(section)
+        if not isinstance(main_sec, dict) or not main_sec:
+            continue
+        taken = [k for k in blk if k != 'enabled' and k in main_sec]
+        for k in taken:
+            del blk[k]
+            changed = True
+        if taken:
+            _get_logger().info(
+                f"[{name}] 配置键 {', '.join(sorted(taken))} 已收敛到 config.yaml 的 "
+                f"{section} 段（core_plugins.yaml 中已移除），此后请改 config.yaml")
+
     # 3. 移除已卸载插件
     for name in list(cps.keys()):
         if name not in installed:
@@ -1024,6 +1047,8 @@ def _autoload_core_plugins(config: dict) -> dict:
             _get_logger().warning(f"同步 core_plugins.yaml 失败: {e}")
 
     # 5. 合并进主 config：enabled → core_plugins 段；配置块 → 对应 section
+    #    优先级：config.yaml 的同名段为准（它是部署参数的权威，WebUI 面板也写这里），
+    #    core_plugins.yaml 只补 config.yaml 里没有的键。
     core_cfg = {}
     for name, blk in cps.items():
         if not isinstance(blk, dict):
@@ -1031,8 +1056,8 @@ def _autoload_core_plugins(config: dict) -> dict:
         section = _CORE_PLUGIN_SECTION.get(name, name)
         cur = config.get(section)
         if isinstance(cur, dict):
-            merged = dict(cur)
-            merged.update(blk)
+            merged = dict(blk)
+            merged.update(cur)          # config.yaml 覆盖 core_plugins.yaml
         else:
             merged = dict(blk)
         config[section] = merged

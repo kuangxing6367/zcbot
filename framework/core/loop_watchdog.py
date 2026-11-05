@@ -75,6 +75,11 @@ class LoopWatchdog:
         """启动看门狗；loop 未就绪时由线程等待（最多 60s，与 scheduler 一致）"""
         if self._thread is not None and self._thread.is_alive():
             return self
+        # 直接记下调用方线程 id：start() 由事件循环线程调用（框架启动流程内），
+        # 这是唯一在「循环已经卡死」时仍然可用的获取方式。
+        # 不能只依赖下面的 call_soon_threadsafe 回调——循环一卡，那个回调永远
+        # 不会被执行，于是最需要抓栈的时刻反而只能打「栈不可用」（历史现象）。
+        self._loop_thread_id = threading.get_ident()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, args=(loop, framework), daemon=True,
