@@ -38,6 +38,19 @@ _REQUIRED_TABLES = [
 _EXTENSION_TABLES = ['group_plugin_settings', 'drive']
 
 
+def _all_table_names(database, targets) -> set:
+    """一次性取回当前库全部表名（批量），兼容只有逐表接口的存储后端。
+
+    ``Database.all_table_names()`` 用一次 SELECT 拿全表名，把启动期「缺表
+    自检」的 N 次串行往返压缩成 1 次；SqlSimEngine（debug 模式）/ 测试桩等
+    没有批量接口时回退为逐表 ``table_exists``，语义不变（仅往返数不同）。
+    """
+    batch = getattr(database, 'all_table_names', None)
+    if callable(batch):
+        return {str(t).lower() for t in batch()}
+    return {t for t in targets if database.table_exists(t)}
+
+
 def missing_required_tables(database, include_extension: bool = False) -> list:
     """返回核心表中当前缺失的表名（按 _REQUIRED_TABLES 顺序）。
 
@@ -50,19 +63,18 @@ def missing_required_tables(database, include_extension: bool = False) -> list:
 
     检查本身失败（DB 不可达/权限异常）不视作"表缺失"，向上抛出交由调用方按
     "无法确认表结构完整性"处理——否则连接故障会被误判成需要建表。
+
+    表存在性改为一次批量探测 + 内存过滤：检测结论与逐表 table_exists 完全一致，
+    但把 18 张表的 18 次串行往返降到 1 次。
     """
     targets = list(_REQUIRED_TABLES)
     if include_extension:
         targets += [t for t in _EXTENSION_TABLES if t not in targets]
-    missing = []
-    for table in targets:
-        try:
-            exists = database.table_exists(table)
-        except Exception as e:
-            raise RuntimeError(f"检查表 {table} 是否存在时失败: {e}") from e
-        if not exists:
-            missing.append(table)
-    return missing
+    try:
+        existing = _all_table_names(database, targets)
+    except Exception as e:
+        raise RuntimeError(f"批量检查表结构完整性时失败: {e}") from e
+    return [t for t in targets if t not in existing]
 
 
 def _ddl_table_name(stmt: str):
@@ -109,6 +121,12 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
         sql_content = f.read()
 
     created, skipped, failed = [], 0, []
+    # 一次性取回现有表名：逐条 CREATE 前的 table_exists 改为内存判断，建表
+    # 成功后增量补入，避免「check → CREATE → check」交替触发 N 次串行往返。
+    # 无批量接口的后端（debug 模拟 / 测试桩）仍走原来的逐表检查。
+    batch = getattr(database, 'all_table_names', None)
+    existing = ({str(t).lower() for t in batch()}
+                if callable(batch) else None)
     for raw in _split_sql_statements(sql_content):
         stmt = _strip_leading_comments(raw)
         if not stmt:
@@ -119,18 +137,24 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
 
         table = _ddl_table_name(stmt)
         if table is not None:
-            try:
-                exists = database.table_exists(table)
-            except Exception as e:
-                failed.append((table, f"存在性检查失败: {e}"))
-                continue
-            if exists:
-                skipped += 1
-                continue
+            if existing is not None:
+                if table in existing:
+                    skipped += 1
+                    continue
+            else:
+                try:
+                    if database.table_exists(table):
+                        skipped += 1
+                        continue
+                except Exception as e:
+                    failed.append((table, f"存在性检查失败: {e}"))
+                    continue
             sql = transform(stmt) if transform else stmt
             try:
                 run(sql)
                 created.append(table)
+                if existing is not None:
+                    existing.add(table)
             except Exception as e:
                 failed.append((table, str(e)[:160]))
             continue
@@ -195,6 +219,17 @@ def auto_init_database(database) -> bool:
     except Exception as e:
         logger.error("数据库自动初始化异常中断: %s —— 下方仍会复验缺失表", e)
         stats = {"created": [], "skipped": 0, "failed": [("*", str(e)[:160])]}
+
+    # MySQL 分支用原生 cursor 建表（不走 Database.execute），DDL 不会触发
+    # 元数据快照的增量维护；且 _apply_init_sql 用本地表名集合判断，也需要把
+    # 新建表同步回快照。这里统一重拉一次（一次批量往返），保证后续迁移与
+    # 复验看到的是最新结构，而不是建表前的旧快照。
+    refresh = getattr(database, 'refresh_schema_snapshot', None)
+    if callable(refresh):
+        try:
+            refresh()
+        except Exception as e:
+            logger.debug("刷新表结构元数据快照失败（不影响初始化结果）: %s", e)
 
     # 复验：初始化"跑过"不等于"建成了"
     try:

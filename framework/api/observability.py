@@ -25,6 +25,7 @@
   需要跨机抓取时在 `observability.metrics_token` 设令牌，走 Bearer 鉴权。
 - 三个端点均免登录、免限速、免人机验证，且不写入审计日志（否则探针会刷满审计表）。
 """
+import ipaddress
 import logging
 import os
 import secrets
@@ -42,6 +43,19 @@ PROBE_PATHS = ('/healthz', '/readyz')
 METRICS_PATH = '/metrics'
 
 _CONTENT_TYPE = 'text/plain; version=0.0.4; charset=utf-8'
+
+
+def _is_loopback(addr) -> bool:
+    """请求是否来自本机回环（127.0.0.0/8、::1）。
+
+    地址缺失 / 非法一律按「非本机」处理（拒绝），避免解析失败被当成放行。
+    只看 request.remote_addr（TCP 对端），不采信 X-Forwarded-For —— 后者可被
+    客户端伪造，会让「仅本机」这道边界形同虚设。
+    """
+    try:
+        return ipaddress.ip_address((addr or '').strip()).is_loopback
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 def _truthy(value, default=True) -> bool:
@@ -298,8 +312,15 @@ def register(ctx):
             return out
 
         def _authorized() -> bool:
+            """配了令牌：Bearer / ?token= 常量时间比对（任意来源）；
+            未配令牌：保守默认，仅放行本机回环，非本机一律拒绝读取指标。
+
+            与 /healthz /readyz 区分：那两个探针只暴露「进程活着 / 就绪」这类
+            无敏感信息的状态，故无条件免鉴权；/metrics 含运行时数据，未配令牌
+            时不再对任意来源 fail-open。
+            """
             if not metrics_token:
-                return True
+                return _is_loopback(request.remote_addr)
             hdr = request.headers.get('Authorization') or ''
             if hdr.startswith('Bearer '):
                 return secrets.compare_digest(hdr[7:].strip(), metrics_token)
@@ -411,6 +432,11 @@ def register(ctx):
         def _zcbot_metrics():
             """Prometheus 抓取端点（文本格式，无第三方依赖）"""
             if not _authorized():
+                # 未配令牌且非回环：按保守默认当作端点不存在，404 且不渲染任何
+                # 指标（与蜜罐诱饵语义一致：不暴露端点、不泄露运行数据）。
+                if not metrics_token:
+                    return Response('not found\n', status=404, mimetype='text/plain')
+                # 配了令牌但校验失败：沿用 401 + Bearer 挑战
                 resp = Response('unauthorized\n', status=401, mimetype='text/plain')
                 resp.headers['WWW-Authenticate'] = 'Bearer'
                 return resp
@@ -424,5 +450,14 @@ def register(ctx):
             resp.headers['Cache-Control'] = 'no-store'
             return resp
 
-        logger.info("[可观测性] 指标端点已注册：GET %s（%s）", METRICS_PATH,
-                    '需 Bearer 令牌' if metrics_token else '未设令牌')
+        if metrics_token:
+            logger.info("[可观测性] 指标端点已注册：GET %s（需 Bearer 令牌）",
+                        METRICS_PATH)
+        else:
+            logger.warning(
+                "[可观测性] 指标端点已注册：GET %s，但未配置 "
+                "observability.metrics_token —— 按保守默认仅允许本机回环访问，"
+                "非本机请求返回 404（不泄露指标）。如需跨机抓取，请在 config.yaml "
+                "设置 observability.metrics_token 并携带 Authorization: Bearer <token>；"
+                "如完全不需要指标，可设 observability.metrics: false。",
+                METRICS_PATH)

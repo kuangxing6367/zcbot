@@ -36,8 +36,14 @@ from datetime import timezone as _dt_timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger('zcbot')
+
+# 内置任务：插件缓存 TTL 清理。job_id 固定，重复注册经 replace_existing 覆盖，
+# 不会因重启/重复 start 堆出两个同名任务；前缀不会与任何插件名冲突
+#（remove_plugin_tasks 按 "<插件名>:" 前缀匹配，插件名不会叫 __builtin__）。
+BUILTIN_CACHE_CLEANUP_JOB = '__builtin__:cache_cleanup'
 
 
 def resolve_timezone(spec):
@@ -226,6 +232,86 @@ class TaskScheduler:
             # 而日志里此前没有任何线索能看出用的是哪个时区。
             logger.info(f"定时任务时区: {describe_timezone(self._tz)}"
                         f"（配置 scheduler.timezone，默认 local）")
+            # 内置任务必须在调度器 running 之后注册，否则 add_job 拿不到 jobstore。
+            self._register_builtin_tasks()
+
+    def _register_builtin_tasks(self):
+        """注册框架内置定时任务（幂等）。
+
+        目前只有「插件缓存 TTL 清理」：插件 ``cache/<name>/`` 是可丢弃的中间产物，
+        卸载时已由 loader 的 _release_plugin_api_routes 清掉；这里兜住
+        「插件还装但缓存一直涨」的情况（渲染图、临时下载、缩略图）。
+
+        契约（与 framework/plugin_paths.CACHE_CLEANUP_SPEC 一致）：
+        - ``scheduler.cache_ttl_hours > 0`` 才注册；``<= 0`` 表示**禁用**，
+          此时不注册任务，绝不退化成「无差别全删」；
+        - 清理执行走 ``_invoke`` 的同步分支 → run_blocking 落任务线程池，
+          不能直接在事件循环里 walk 文件树（与「同步 handler 一律转线程」同一条规矩）；
+        - job_id 固定 + replace_existing + max_instances=1：重复调用不堆任务，
+          上一轮没跑完时新一轮直接跳过（重叠清理没有意义）。
+        """
+        try:
+            from framework import plugin_paths
+            cfg = plugin_paths.resolve_cache_cleanup_config(self._cfg)
+        except Exception as e:
+            logger.warning(f"读取缓存清理配置失败，跳过内置清理任务: {e}")
+            return
+        if not cfg.get('enabled'):
+            logger.info("插件缓存 TTL 清理已禁用（scheduler.cache_ttl_hours <= 0）")
+            return
+
+        ttl_hours = cfg['ttl_hours']
+        interval_hours = cfg['interval_hours']
+        min_age_seconds = cfg['min_age_seconds']
+        label = '[内置] 插件缓存清理'
+
+        def _do_cleanup():
+            """同步清理体：被 run_blocking 丢到任务线程池执行。"""
+            try:
+                stats = plugin_paths.purge_expired_cache(
+                    self.framework, ttl_hours=ttl_hours,
+                    min_age_seconds=min_age_seconds)
+            except Exception as e:  # 清理失败不该影响调度器本身
+                logger.warning(f"插件缓存清理失败: {e}")
+                return None
+            if stats['files'] or stats['dirs']:
+                logger.info(
+                    f"插件缓存清理完成：删除 {stats['files']} 个文件 / "
+                    f"{stats['dirs']} 个空目录，释放 {stats['freed']} 字节"
+                    f"（TTL {ttl_hours:g}h）")
+            else:
+                logger.debug(f"插件缓存清理：无过期文件（TTL {ttl_hours:g}h）")
+            return stats
+
+        async def _job():
+            await self._invoke(_do_cleanup, label)
+
+        try:
+            self._scheduler.add_job(
+                _job,
+                IntervalTrigger(seconds=max(30.0, interval_hours * 3600.0)),
+                id=BUILTIN_CACHE_CLEANUP_JOB,
+                replace_existing=True,
+                max_instances=1,
+                misfire_grace_time=600,
+            )
+            # 登记进 _plugin_tasks：get_jobs()/stats()/Web 任务面板才能看到它，
+            # 否则内置任务在面板上是隐形的。plugin_name 用 __builtin__ 占位。
+            record = self._task_records.setdefault(label, {'runs': 0})
+            record.update({'plugin': '__builtin__', 'handler': 'cache_cleanup',
+                           'cron': f'every {interval_hours:g}h'})
+            self._plugin_tasks[BUILTIN_CACHE_CLEANUP_JOB] = {
+                'plugin_name': '__builtin__',
+                'handler_name': 'cache_cleanup',
+                'cron_expression': f'every {interval_hours:g}h',
+                'record': record,
+                'next_run': None,
+            }
+            logger.info(
+                f"插件缓存 TTL 清理任务已注册：TTL {ttl_hours:g}h，"
+                f"每 {interval_hours:g}h 扫描一次，最小保留 {min_age_seconds:g}s")
+        except Exception as e:
+            logger.error(f"注册插件缓存清理任务失败: {e}")
 
     def stop(self, graceful: bool = True, drain_timeout: float = None):
         """停止调度器：置停止标志（迟到派发 no-op）→ 中断等待线程 → 关闭调度器。

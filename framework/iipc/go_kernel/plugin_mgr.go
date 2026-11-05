@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,6 +16,19 @@ import (
 // 避免"崩溃炸弹"（启动即崩的插件每 1s 拉起一个完整 Python 解释器，吞内存/CPU）。
 // 干净退出（exit 0）会重置计数，故偶发崩溃（非持续崩溃循环）不会触发本上限。
 const maxPluginRestarts = 5
+
+// withAuthEnv 返回注入了 ZCBOT_IIPC_AUTH 的子进程环境。令牌走环境变量而非命令行
+// 参数（避免进程列表泄露）；先剔除同名旧项，保证插件进程读到的令牌就是内核用的那个。
+func withAuthEnv(base []string, auth string, extra ...string) []string {
+	out := make([]string, 0, len(base)+len(extra)+1)
+	for _, kv := range base {
+		if !strings.HasPrefix(kv, "ZCBOT_IIPC_AUTH=") {
+			out = append(out, kv)
+		}
+	}
+	out = append(out, extra...)
+	return append(out, "ZCBOT_IIPC_AUTH="+auth)
+}
 
 type PluginManager struct {
 	addr       string
@@ -128,12 +142,11 @@ func (pm *PluginManager) launch(id string) {
 	cmd := exec.Command(pm.python, entry,
 		"--plugin-dir", absPluginDir,
 		"--iipc-addr", pm.addr,
-		"--iipc-auth", pm.auth,
 		"--plugin-id", id,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "ZCBOT_PLUGIN_ID="+id,
+	cmd.Env = withAuthEnv(os.Environ(), pm.auth, "ZCBOT_PLUGIN_ID="+id,
 		"PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 	if err := cmd.Start(); err != nil {
 		logError("pm", "启动插件 %s 失败: %v", id, err)
@@ -215,12 +228,11 @@ func (pm *PluginManager) LaunchHost(hostPath string) {
 		"--plugins-dir", pm.pluginsDir,
 		"--sdk-dir", pm.sdkDir,
 		"--iipc-addr", pm.addr,
-		"--iipc-auth", pm.auth,
 		"--python", pm.python,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "ZCBOT_PYTHON="+pm.python,
+	cmd.Env = withAuthEnv(os.Environ(), pm.auth, "ZCBOT_PYTHON="+pm.python,
 		"PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 	if err := cmd.Start(); err != nil {
 		logError("pm", "启动 pluginhost 失败: %v", err)

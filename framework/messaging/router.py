@@ -16,6 +16,7 @@ import logging
 import re
 import threading
 import time
+from collections import OrderedDict
 from typing import Optional
 
 from framework.log_broker import log_broker
@@ -51,6 +52,75 @@ from framework.messaging.router_match import (  # noqa: E402
 from framework.blackbox import record as _bb_record  # noqa: E402
 
 
+class _PermissionDecisionCache:
+    """命令权限判定的进程内缓存（TTL + 容量上限 + 线程安全 + 显式失效）。
+
+    缓存值是一次权限解析的不可变快照 ``(role, PermissionSet)``：route() 把它
+    预注入 Event，使 ``ev.role`` / ``ev.has_perm`` 在热路径上零 DB、零线程切换。
+
+    设计取舍：
+      - TTL 用 ``time.monotonic()``，不受系统时钟回拨影响；默认与路由表刷新
+        间隔同量级，即便外部未接失效入口，权限变更最多一个 TTL 生效。
+      - 容量上限用 OrderedDict LRU，put 时严格淘汰，避免长期运行无界增长。
+      - 所有访问持 RLock；锁内只做内存字典操作，绝不 await / 查库，避免与
+        ``asyncio.to_thread`` 互等造成死锁。
+      - 失效由 ``MessageRouter.invalidate_permissions()`` 统一触发（清本缓存
+        + 清底层 Event / perm 缓存），权限变更、权限引擎 reload、插件重载都会
+        走到（插件重载 / Web 改命令经 ``_invalidate_cache()`` 联动）。
+    """
+
+    def __init__(self, ttl: float = 5.0, maxsize: int = 4096):
+        self.ttl = ttl
+        self.maxsize = maxsize
+        self._data = OrderedDict()   # key -> (role, pset, ts_monotonic)
+        self._lock = threading.RLock()
+
+    def get(self, key):
+        now = time.monotonic()
+        with self._lock:
+            ent = self._data.get(key)
+            if ent is None:
+                return None
+            role, pset, ts = ent
+            if now - ts > self.ttl:
+                self._data.pop(key, None)
+                return None
+            self._data.move_to_end(key)
+            return role, pset
+
+    def put(self, key, role, pset):
+        with self._lock:
+            self._data[key] = (role, pset, time.monotonic())
+            self._data.move_to_end(key)
+            while len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+
+    def invalidate(self, user_id=None):
+        with self._lock:
+            if user_id is None:
+                self._data.clear()
+                return
+            uid = str(user_id)
+            for k in [k for k in self._data if k[0] == uid]:
+                self._data.pop(k, None)
+
+    def __len__(self):
+        with self._lock:
+            return len(self._data)
+
+
+def invalidate_permission_cache(framework, user_id=None):
+    """模块级失效入口：供 ``framework/api/**`` 等其它修改线在权限变更后调用。
+
+    ``framework`` 传 Framework 实例或任何带 ``.router`` 的对象即可；找不到
+    router（测试桩 / 未启动）时静默跳过，不抛异常。
+    """
+    router = getattr(framework, 'router', None)
+    fn = getattr(router, 'invalidate_permissions', None)
+    if fn is not None:
+        fn(user_id)
+
+
 class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
     """消息路由分发器（纯内存路由表）"""
 
@@ -69,6 +139,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         self._force_refresh = False   # 外部置位后立即重建（插件变更等）
         self._routes_signature = None  # 路由表轻量签名，未变动则跳过重建
         self._last_group_cache_refresh = 0.0  # 群级插件开关缓存刷新时间戳（30s 节流）
+        # 命令权限判定缓存：事件循环零同步 DB IO（见 _prepare_permissions）
+        self._perm_cache = _PermissionDecisionCache()
 
     def start(self, loop):
         """启动后台路由表刷新任务（在主事件循环内调用）"""
@@ -318,6 +390,92 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
     def _invalidate_cache(self):
         """使路由表立即重建（插件重载 / Web 修改命令后调用）"""
         self._force_refresh = True
+        # 插件重载 / Web 改命令可能改动命令上的 require_perm，顺带让权限
+        # 判定缓存失效，避免「改了权限半天不生效」。
+        self.invalidate_permissions()
+
+    @staticmethod
+    def _perm_key(ev):
+        """纯内存构造缓存键：用户 / 群 / 接入端 / 上下文 / 上报身份。
+
+        不含解析结果本身（那正是要缓存的值）；同一键下 DB 权限变更由 TTL
+        与 ``invalidate_permissions()`` 兜底。``context_from_event`` 只读
+        Event 属性，事件循环里调用零 DB、零 IO。
+        """
+        try:
+            from framework import perm
+            ctx = perm.context_from_event(ev)
+        except Exception:
+            ctx = {}
+        ctx_sig = tuple(sorted((str(k), str(v)) for k, v in ctx.items()))
+        return (str(ev.user_id), str(ev.group_id or ''),
+                str(getattr(ev, 'adapter', '') or ''),
+                str(getattr(ev, 'bot_name', '') or ''),
+                ev.sender_role, ctx_sig)
+
+    @staticmethod
+    def _resolve_permissions_sync(ev):
+        """在 ``asyncio.to_thread`` 工作线程里完成首次权限解析（同步 DB 全在这里）。
+
+        复用 ``Event.role`` / ``Event._perm_set()`` 的既有实现，保证权限判定
+        语义不变：命名空间身份、群角色、上下文、内置角色组、三态节点全部照旧，
+        只是把 DB 往返从事件循环线程挪到线程池，并把结果回注给 Event 供热路径用。
+        """
+        try:
+            role = ev.role
+        except Exception:
+            role = getattr(ev, 'sender_role', 'member') or 'member'
+            ev._role_cache = role
+        try:
+            pset = ev._perm_set()
+        except Exception:
+            from framework import perm
+            pset = perm.PermissionSet(ev.user_id, {}, ['default'], {}, {})
+            ev._perm_cache = pset
+        return role, pset
+
+    async def _prepare_permissions(self, ev):
+        """路由前准备权限快照：命中缓存零 DB / 零线程切换，miss 才 to_thread。"""
+        try:
+            key = self._perm_key(ev)
+        except Exception:
+            return
+        hit = self._perm_cache.get(key)
+        if hit is not None:
+            ev._role_cache, ev._perm_cache = hit
+            return
+        try:
+            role, pset = await asyncio.to_thread(
+                self._resolve_permissions_sync, ev)
+        except Exception:
+            # 线程池异常：给 Event 注入安全默认值，避免后续热路径回落到
+            # 事件循环里的同步查库（与 Event 自身降级语义一致）。
+            from framework import perm
+            ev._role_cache = getattr(ev, 'sender_role', 'member') or 'member'
+            ev._perm_cache = perm.PermissionSet(
+                ev.user_id, {}, ['default'], {}, {})
+            return
+        self._perm_cache.put(key, role, pset)
+        ev._role_cache, ev._perm_cache = role, pset
+
+    def invalidate_permissions(self, user_id=None):
+        """权限数据变更后调用：清本缓存 + 清底层三套缓存，保证立即生效。
+
+        覆盖：管理员改权限、权限引擎 reload、插件重载（经 ``_invalidate_cache``）。
+        ``user_id`` 为 None 表示全清；给定则只清该用户的条目。
+        """
+        self._perm_cache.invalidate(user_id)
+        try:
+            from framework.messaging import event as _event_mod
+            _event_mod.invalidate_user_role_cache(user_id)
+            _event_mod.invalidate_group_role_cache()
+        except Exception:
+            pass
+        try:
+            from framework import perm as _perm_mod
+            _perm_mod.invalidate_all()
+        except Exception:
+            pass
 
     async def route(self, event: dict, bot_name: str = 'default'):
         """
@@ -361,6 +519,10 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         message = ev.message
         if not message:
             return  # 防御：存在文本段时提取结果必非空
+
+        # 权限判定准备：命中进程内缓存则零 DB / 零线程切换；首次 miss 的
+        # 同步 DB 解析放到线程池，事件循环线程绝不做同步 DB IO。
+        await self._prepare_permissions(ev)
 
         # 黑匣子：路由开始（route_start）—— 事件流第 6 步，列出本次命令路由的候选插件队列
         _cand = getattr(self, '_plugin_order', []) or []

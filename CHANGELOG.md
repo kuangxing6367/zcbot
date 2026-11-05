@@ -26,6 +26,147 @@
 
 ---
 
+## [1.20.1] - 2026-11-05
+
+> 主题：**把 v1.20.0 留下的洞补上**。这一版没有新功能，全部是一次针对源码的
+> 逐层审查结果：发版链路漏文件导致新 clone 白屏、IIPC 双进程零鉴权、
+> 会话令牌明文落库、几处「数据会丢但日志说成功」的缓冲与迁移问题，以及
+> 一条一直在拖启动和命令分发的同步查库路径。
+
+### 先说最要紧的：v1.20.0 的 WebUI 装不上
+
+- v1.20.0 的 `core_plugins/webui/web/index.html` 引用了
+  `js/element-plus.C4PxGsnR.js`（1.05 MB），但这个文件**没有进仓库**。
+  后果不是「少个按钮」，而是 Vue 应用整体起不来 —— 新 clone / 新部署打开
+  面板就是白屏，而旧门禁只检查「index.html 存在 + js 文件数 > 0」，查不出来。
+- 现在产物已重建并按最小 diff 提交（只补新 chunk、删掉引用已失效的旧孤儿），
+  同时新增 `tools/check_webui_artifact.py`：校验 `index.html` 与每个 chunk 里
+  所有 `./xxx.js` 引用都真实存在，并拒绝没有任何引用的旧版大文件。
+  CI 的 `webui-build` 作业改为跑这个脚本。
+
+### 安全：IIPC 双进程是零鉴权的
+
+- `launcher.py`、`py_sdk/pluginhost.py`、各工具脚本里的 `dev-auth` 是**纯装饰常量**：
+  协议帧里根本没有 auth 字段，Python 客户端收到 `auth` 参数从未发送，Go 内核
+  只把它存进字段、从不比较。也就是说，任何能连上 `127.0.0.1:18730` 的进程
+  都可以直接发 `db.query` / `db.exec` / `debug.inject`。
+- 现在改为：启动器生成 256 bit 随机 token（可用 `ZCBOT_IIPC_AUTH` 显式指定，
+  不存在固定回退串），经**环境变量**传给子进程（不再走命令行，避免出现在进程列表里）；
+  连接首帧必须 `{"t":"auth","auth":"<token>"}`，服务端用常量时间比较，失败回
+  `unauthorized` 并断开；内核缺 token 时**拒绝启动**而不是零鉴权运行。
+- **协议变更，旧二进制不兼容**：Go 内核与 Rust 协议端需要重新编译
+  （`go build -o zcbot_kernel .` / `cargo build --release`）。顺带修了
+  `build_kernel()` / `build_rust()` 的「exe 存在就直接用」—— 现在会比较二进制
+  与源码 mtime，源码更新就重编；编译不了时退回旧二进制但明确告警。
+  没有工具链、只用预编译二进制的部署可设 `ZCBOT_IIPC_SKIP_BUILD=1`。
+
+### 安全：会话令牌明文落库
+
+- 登录时 `token_hex(1024)` 生成的 2048 字符令牌**明文**写进 `admin_users.token`，
+  校验时也按明文 `WHERE token = ?` 查。库文件泄露 = 管理员会话直接可冒用。
+- 改为库里只存 `sha256(token)`（新增 `token_hash` 列 + 索引），校验用
+  `secrets.compare_digest`。**升级后所有存量会话会失效，需要重新登录一次** ——
+  这是刻意的取舍：不把老明文令牌静默升级成可用会话。
+- 顺带补上「改密不踢下线」：`change_password` 现在会清掉 `token_hash`。
+- `/metrics` 未配 `observability.metrics_token` 时原本是**无条件放行**，
+  等于把运行指标暴露给任何能访问 API 端口的人。现在只有 loopback 可访问，
+  非本机一律 404；配了令牌则按 Bearer 校验。`/healthz`、`/readyz` 不受影响。
+  注意：如果前面有同机反向代理，后端看到的 `remote_addr` 会是 127.0.0.1，
+  这类部署请显式配 `metrics_token`。
+
+### 性能：命令分发与启动期的同步查库
+
+- 命令匹配时要判角色与权限，这条路径原先会在**事件循环线程里同步查库**
+  （角色最多 2 次、权限最多 3 次往返）。DB 一慢，整个机器人的消息处理全部停住。
+- 现在路由分发前先把 `(role, PermissionSet)` 解析好（缓存 TTL 5s、容量 4096、
+  LRU 淘汰、线程安全），热路径零 DB、零线程切换；缓存 miss 时用
+  `asyncio.to_thread`，不在循环里查。权限变更后经 `/api/perm/*` 的写请求
+  统一失效（`after_request` 兜住，新增写接口自动覆盖），不用等 TTL。
+- 启动期 DB 初始化：稳态重启的元数据探测从 **61 次往返降到 11 次**。
+  原先 40 次逐表 `sqlite_master` 查询 + 11 次逐列 `PRAGMA table_info`，
+  现在合并成 1 次 `sqlite_master LEFT JOIN pragma_table_info`；保留的 10 次是
+  真实建表 DDL 与迁移账本读取（合并 DDL 会破坏幂等与双方言兼容）。
+  迁移账本语义（`schema_migrations` 当前态 / `schema_migration_runs` 只追加 /
+  `SELECT *` + 缺列取默认）未改动。
+
+### 数据正确性：会丢数据但日志说成功的地方
+
+- **L4 写缓冲**：`wait_for` 超时会取消 future 但底层线程已 commit，上层误判失败
+  回落 L3 → 同一批事件被处理两次；`wait_drained()` 取消 flush 会把整批丢掉；
+  `_l4_bytes` 只增不减；`close()` 不落盘。现在用 `asyncio.shield` + 拿到确定结果
+  再判定、flush 防重入、直取时回扣水位、关库前同步把残留写进 L2。
+- **出站超时被重试**：`TimeoutError` 意味着「可能已经送达」，重试就是重复发消息。
+  闸门现在对超时不重试，其余异常保留原语义。
+- **插件上传失败先删旧版**：旧实现解压/加载失败时已经把备份删了。现在只有加载
+  成功才删备份，失败回滚旧版本并在返回消息里说明旧版是否恢复。
+- **DB 降级标志恒为 False**：故障降级的 `SqlSimEngine` 实例没打 `degraded = True`，
+  于是 `/readyz`、Prometheus、面板一路显示正常。现在降级实例会如实上报。
+- **迁移账本写失败仍报「已应用」**：现在记为失败并中断，不再假成功。
+- **MySQL ≤5.6 初始化**：`sql/init_mysql55.sql` 之前是死文件（从来没被加载），
+  且 `_adapt_ddl_for_mysql` 会把多个 `DATETIME DEFAULT CURRENT_TIMESTAMP`
+  改写成多个 TIMESTAMP 自动列 —— MySQL 5.5/5.6 一张表只允许一个，建表全失败。
+  现在 ≤5.6 直接加载专用 SQL 且不做改写；该文件补了 `admin_users.token`、
+  `token_created_at` 与 `ip_blacklist` 表。
+
+### 并发：限流会污染去重、跨接入端串桶
+
+- 入站去重与限流的判定原本分属两个 `with self._lock` 块，中间释放锁；更关键的
+  是**被限流丢弃的消息会提前占用 `(bot, message_id)` 去重槽位**，重放时被判成
+  重复静默吞掉。现在去重检查、限流判定、去重登记在同一把锁内完成，且只有
+  「最终放行」的事件才写去重表。
+- 限流桶 key 补上接入端：`(bot, group, gid)` / `(bot, user, uid)`。原先多个
+  接入端共用同一个桶，一个端刷屏会把另一个端在同一群上的配额吃光。`global`
+  桶保持跨端共享，它本来就是「整机上限」。
+- 出站节流把「预留槽位」计入滑动窗口：并发请求同时通过配额检查再一起发送，
+  瞬时必然超配额。现在预约发送时刻也进队列，后来的请求按预约时间排队。
+
+### 契约：五个接入端的错误码
+
+- 文档里 retcode 是 `0` 成功 / `-1` 业务失败或不确定 / `-2` 超时（可能已送达，
+  不重试）/ `-3` 本地通道或网络异常（可重试）/ `-4` 限流 / `-10` 该端不支持此动作。
+  实际上各端把参数缺失、前置条件不满足大量标成 `-2`（等于谎报「可能已送达」），
+  Telegram 把网络异常标成 `-4`（会被当成限流）。
+- 逐端改正：参数错 → `-1`，网络/连接异常 → `-3`，真超时仍 `-2`，限流仍 `-4`。
+  `-10` 有文档定义，保留。**QQ 官方主动消息在无 `msg_seq`/`msg_id` 时不做内部重试**
+  这条语义没动 —— 它正是为了避免重复投递。
+
+### 资源回收：插件缓存一直涨
+
+- 插件有两类目录：`plugins_dat/<name>/` 是用户数据（卸载也保留），
+  `cache/<name>/` 是可丢弃中间产物。后者原先没人清。
+- 现在 `framework/plugin_paths.py` 收敛了「插件名 → 目录名」的唯一映射
+  （官方插件 `core:` 前缀 → `_`，与 `ctx.get_data_dir()` 一致，并做目录穿越加固），
+  卸载 / 加载失败终态 / 从未加载成功早退三条路径统一在
+  `_release_plugin_api_routes` 里清缓存（**绝不碰 plugins_dat**）。
+- 另接一个内置定时任务按 TTL 扫全量（`scheduler.cache_ttl_hours`，默认 24h）。
+  `<= 0` 表示**禁用**，不会退化成「无差别全删」；`cache_min_age_seconds`
+  作为保底，避免删掉正在写的文件。
+
+### 其它修正
+
+- 文件浏览器读写权限倒挂：写要 super、读却谁都能读，`config.yaml`、
+  `core_plugins.yaml`、`.env`、密钥类文件现在读也要 super。
+- Web 终端 `shell <命令>` 原本任何 admin 都能执行（等于宿主 RCE），
+  `/api/restart` 也是普通 admin 可调。现在都需要 super。
+- CORS 未配白名单时会反射任意 `Origin`，配合 `Allow-Credentials: true` 等于
+  任意站点可带 Cookie 打 API。现在不再反射。
+- SQLite 相对路径按进程 cwd 解析（systemd / 计划任务下 cwd 不同就换了个库）；
+  实例锁创建失败被当成「已有实例」直接 `sys.exit(1)`。两处都已修正。
+- 同步 `call()` 在 async handler 内会自锁 15 秒（`run_coroutine_threadsafe`
+  等自己所在的循环），现在立即返回 `-1` 并提示改用 `await acall()`。
+- IIPC 启动器不再注入开发机的 `127.0.0.1:7892` 代理（服务器上没有这个代理，
+  首次 `cargo build` 拉 crate 会全部走死代理）。
+- Matrix 的 `since` 改成「先把 timeline 事件分发完再落盘」，进程被杀时重启
+  会重放而不是丢批；未配 `user_id` 时自动调 `whoami` 补全（缺它会自激刷屏）。
+- 文档与脚手架：`快速开始` 的端口权威改为 `config.yaml → web.port`、默认插件
+  补上 `help`；CLI 模板去掉不存在的 `ctx.set_config`、`listen_port` 改 6830、
+  `plugin.dat_dir` 修正；`插件开发.md` 标注 `middleware/transform` 只属于 `--iipc`。
+- CI：把 11 个脚本式自测从「塞进 pytest 收集」改成 `python tests/xxx.py` 真跑
+  （旧的跑法里 98 个 `test_*` 函数零 assert、失败也一律 PASS），并补上漏掉的
+  测试白名单。**真跑立刻抓出两个被假绿掩盖的失败**：`test_security_hardening`
+  的源码断言因本轮 `files.py` 改动过时、`test_self_heal` 假设「心跳只增量注册」
+  而实现早已默认 `hot_reload=true`。
+
 ## [1.20.0] - 2026-11-04
 
 > 主题：**让接入端跟官方现况对齐**。这一版不是加功能，是先纠正几处

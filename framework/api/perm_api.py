@@ -21,6 +21,33 @@ def register(ctx):
         admin = getattr(request, 'admin', None)
         return (admin or {}).get('username', 'system')
 
+    @app.after_request
+    def _invalidate_perm_caches_after_write(response):
+        """权限写操作成功后立刻失效进程内权限缓存。
+
+        分发热路径（router）现在把角色/权限判定缓存在进程内，TTL 只有 5 秒，
+        但「改完权限要等几秒才生效」在管理面板上就是明确的 bug：刚给了权限、
+        用户发消息还是被拒，看起来像改了没用。
+
+        为什么不逐端点加一行：写接口只会越加越多，漏一个就是幽灵问题。
+        这里按「方法 + 路径前缀 + 2xx」统一兜住，新增写接口自动覆盖。
+        组变更会影响该组所有成员，统一全清（管理操作频率低，重算一次可忽略）。
+        """
+        try:
+            if request.method in ('POST', 'PUT', 'DELETE') and \
+                    request.path.startswith('/api/perm/') and \
+                    response.status_code < 400:
+                # Web 侧的 ctx 是 SimpleNamespace，框架实例挂在公开的 .framework；
+                # PluginContext 那边是 ._framework。两处都认，避免因取不到而静默跳过。
+                fw = getattr(ctx, 'framework', None) or getattr(ctx, '_framework', None)
+                if fw is not None:
+                    from framework.messaging.router import invalidate_permission_cache
+                    invalidate_permission_cache(fw, None)
+        except Exception as e:
+            # 失效失败不影响本次写操作的结果，最差退化成等 TTL 自然过期
+            logger.warning(f"失效权限缓存失败（将等 TTL 过期）: {e}")
+        return response
+
     @app.route('/api/perm/builtins', methods=['GET'])
     @require_auth
     def perm_builtins():

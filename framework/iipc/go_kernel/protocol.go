@@ -6,7 +6,7 @@ import "encoding/json"
 
 // Frame 是连接上传输的最小单元，一行一条，JSON 编码。
 type Frame struct {
-	T       string          `json:"t"`       // req | res | evt | ping | pong
+	T       string          `json:"t"`       // req | res | evt | ping | pong | auth | auth_res
 	ID      int64           `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
@@ -14,6 +14,9 @@ type Frame struct {
 	Error   string          `json:"error,omitempty"`
 	Channel string          `json:"channel,omitempty"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+	// Auth 仅出现在连接握手帧（t=auth）：客户端连上内核后的第一帧携带共享令牌。
+	// omitempty 保证其它帧不带令牌，既不增加每帧开销，也避免令牌刷进日志。
+	Auth string `json:"auth,omitempty"`
 }
 
 // 由 Go 服务端提供、Python 插件侧调用的方法
@@ -69,6 +72,15 @@ const (
 
 // 内核回调插件的固定方法名：插件侧用 client.register(MethodPluginInvoke, fn) 接。
 const MethodPluginInvoke = "plugin.invoke"
+
+// 连接鉴权握手帧类型：
+//   auth      C→S：连接建立后的第一帧，携带令牌（Frame.Auth）
+//   auth_res  S→C：握手结果；成功 result=true，失败带 error
+// 服务端在未授权前只接受 auth 帧，其它一切帧一律明确拒绝并关闭连接。
+const (
+	FrameTypeAuth    = "auth"
+	FrameTypeAuthRes = "auth_res"
+)
 
 // EventChannel 事件广播通道名
 const EventChannel = "event"

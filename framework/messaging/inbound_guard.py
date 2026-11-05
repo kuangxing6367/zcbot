@@ -46,9 +46,11 @@ class InboundGuard:
         self.rl_notify = rl.get('notify_text', '消息过于频繁，请稍后再试。')
 
         self._lock = threading.Lock()
-        self._seen = {}          # (bot, message_id) -> expire_at
-        self._hits = {}          # (kind, scope) -> deque(timestamps)
-        self._notified = {}      # ('notify', kind, scope) -> expire_at
+        self._seen = {}          # (bot, message_id) -> expire_at（去重，独立表）
+        # 限流计数：group/user 桶带 bot 隔离，global 桶跨端共享（整机上限）。
+        # 与 _seen 是两份完全独立的状态，互不读写、各自有容量上限与清理逻辑。
+        self._hits = {}          # ('global',) 或 (bot, kind, ident) -> deque(timestamps)
+        self._notified = {}      # ('notify',) + bucket -> expire_at
 
     # ── 主入口 ───────────────────────────────────────────────
     def check(self, event: dict, bot_name: str = 'default'):
@@ -62,42 +64,47 @@ class InboundGuard:
         # 接入端优先取事件自带（归一化后必存在），参数仅作兜底
         bn = event.get('bot_name') or bot_name
 
-        # 1) 去重：只对消息类事件、且 message_id 真实存在
-        if self.dedup_window > 0:
-            mid = event.get('message_id')
-            post = event.get('post_type')
-            if mid and post == 'message':
-                key = (bn, str(mid))
-                with self._lock:
-                    exp = self._seen.get(key)
+        # 去重检查、限流判定、去重登记必须在同一把锁内完成：
+        # - 两段判定原本分属两个 with 块，中间会释放锁；合并后整条判定对并发原子。
+        # - 只有「最终放行」的事件才写 _seen。被限流丢弃的消息并未被处理，
+        #   若提前占用 (bot, message_id) 槽位，其重放会在 dedup_window 内被
+        #   误判成 dedup 静默吞掉（限流污染去重表的真实成因不是共用表，而是时序）。
+        with self._lock:
+            # 1) 去重：只对消息类事件、且 message_id 真实存在
+            dedup_key = None
+            if self.dedup_window > 0:
+                mid = event.get('message_id')
+                post = event.get('post_type')
+                if mid and post == 'message':
+                    dedup_key = (bn, str(mid))
+                    exp = self._seen.get(dedup_key)
                     if exp is not None and exp > now:
                         return (False, 'dedup', False)
-                    self._seen[key] = now + self.dedup_window
-                    if len(self._seen) > self._SEEN_CAP:
-                        self._sweep_seen(now)
 
-        # 2) 限流：三级滑动窗口
-        if self.rl_enabled:
-            uid = event.get('user_id')
-            gid = event.get('group_id')
-            scopes = []
-            if self.rl_global > 0:
-                scopes.append(('global', 'global', self.rl_global))
-            if self.rl_group > 0 and gid:
-                scopes.append(('group', str(gid), self.rl_group))
-            if self.rl_user > 0 and uid:
-                scopes.append(('user', str(uid), self.rl_user))
-            if scopes:
-                with self._lock:
+            # 2) 限流：三级滑动窗口。bucket 按接入端隔离（global 除外，见下），
+            #    与去重键 (bot, message_id) 及出站闸门 (bot, kind, ident) 对齐，
+            #    避免一个接入端刷屏耗尽另一个接入端在同一群/用户上的配额。
+            #    global 是「整机/全接入端合计」上限，刻意保持跨端共享。
+            if self.rl_enabled:
+                uid = event.get('user_id')
+                gid = event.get('group_id')
+                scopes = []
+                if self.rl_global > 0:
+                    scopes.append((('global',), 'global', self.rl_global))
+                if self.rl_group > 0 and gid:
+                    scopes.append(((bn, 'group', str(gid)), 'group', self.rl_group))
+                if self.rl_user > 0 and uid:
+                    scopes.append(((bn, 'user', str(uid)), 'user', self.rl_user))
+                if scopes:
                     win_start = now - self.rl_window
-                    for kind, scope, limit in scopes:
-                        dq = self._hits.setdefault((kind, scope), deque())
+                    for key, kind, limit in scopes:
+                        dq = self._hits.setdefault(key, deque())
                         while dq and dq[0] <= win_start:
                             dq.popleft()
                         if len(dq) >= limit:
                             notify = False
                             if self.rl_action == 'notify':
-                                nkey = ('notify', kind, scope)
+                                nkey = ('notify',) + key
                                 nexp = self._notified.get(nkey, 0)
                                 if nexp <= now:
                                     self._notified[nkey] = now + min(self.rl_window, 60)
@@ -106,6 +113,12 @@ class InboundGuard:
                         dq.append(now)
                     if len(self._hits) > self._HITS_CAP:
                         self._sweep_hits(now)
+
+            # 3) 全部判定通过才登记去重，并做容量惰性淘汰
+            if dedup_key is not None:
+                self._seen[dedup_key] = now + self.dedup_window
+                if len(self._seen) > self._SEEN_CAP:
+                    self._sweep_seen(now)
 
         return (True, '', False)
 

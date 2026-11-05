@@ -751,7 +751,7 @@ class DiscordAdapter(ProtocolAdapter):
                 # 私聊：Discord 用 channel id；允许 user_id 直接当 channel（DM 已有）
                 channel_id = params.get('user_id')
             if channel_id is None:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'send_msg 需要 channel_id/group_id'}
             return await self._send_to_channel(str(channel_id), message)
 

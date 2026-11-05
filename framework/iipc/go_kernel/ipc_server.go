@@ -7,12 +7,14 @@ package main
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,6 +47,10 @@ type Conn struct {
 	out    chan []byte
 	done   chan struct{}
 	once   sync.Once
+
+	// authed：连接是否已完成鉴权握手。readLoop 用它在授权前只接受 auth 帧，
+	// handleReq 用它做逐请求双保险；atomic.Bool 避免读线程与 handler goroutine 竞争。
+	authed atomic.Bool
 
 	// 出站 req/res 关联（内核→对端的调用，按 id 等待对端 res）
 	opMu       sync.Mutex
@@ -169,6 +175,10 @@ func (c *Conn) isClosed() bool {
 	return c.closed
 }
 
+// authRejectFlush 拒绝帧入队后预留给 writeLoop 的写出时间：本地回环足够，
+// 保证客户端能收到明确的错误帧，而不是只看到连接被静默断开。
+const authRejectFlush = 100 * time.Millisecond
+
 func (c *Conn) readLoop() {
 	defer c.close()
 	for c.reader.Scan() {
@@ -178,6 +188,28 @@ func (c *Conn) readLoop() {
 			// 跳过——此前正是如此，连接上"偶发丢事件"成谜。改为告警留痕。
 			logWarn("ipc", "连接 %d 收到损坏帧（JSON 解析失败，可能丢失一条消息）: %v", c.id, err)
 			continue
+		}
+		// 未授权连接：首帧必须是 auth 握手，其它一切帧一律明确拒绝并关闭，
+		// 绝不静默放行（零鉴权修复的核心）。
+		if !c.authed.Load() {
+			remote := c.raw.RemoteAddr().String()
+			if f.T == FrameTypeAuth {
+				if !c.server.verifyAuth(f.Auth) {
+					logWarn("ipc", "连接 %d 鉴权失败（令牌无效）from=%s，已拒绝", c.id, remote)
+					c.sendRaw(&Frame{T: FrameTypeAuthRes, Error: "IIPC auth failed: invalid token"})
+					time.Sleep(authRejectFlush)
+					return
+				}
+				c.authed.Store(true)
+				logInfo("ipc", "连接 %d 鉴权通过 from=%s", c.id, remote)
+				c.sendRaw(&Frame{T: FrameTypeAuthRes, Result: json.RawMessage("true")})
+				continue
+			}
+			logWarn("ipc", "连接 %d 未完成鉴权即发送 t=%s method=%s from=%s，已拒绝",
+				c.id, f.T, f.Method, remote)
+			c.sendRaw(&Frame{T: "res", ID: f.ID, Error: "unauthorized: IIPC auth required"})
+			time.Sleep(authRejectFlush)
+			return
 		}
 		switch f.T {
 		case "req":
@@ -211,6 +243,12 @@ func (s *IpcServer) handleReq(c *Conn, f *Frame) {
 			c.sendRaw(&Frame{T: "res", ID: f.ID, Error: fmt.Sprintf("panic: %v", r)})
 		}
 	}()
+	if !c.authed.Load() {
+		// 逐请求双保险：即使将来有人重构 readLoop 绕过握手，这里仍拒绝未授权请求。
+		logWarn("ipc", "拒绝未授权请求 method=%s conn=%d", f.Method, c.id)
+		c.sendRaw(&Frame{T: "res", ID: f.ID, Error: "unauthorized: IIPC auth required"})
+		return
+	}
 	h := s.methods[f.Method]
 	if h == nil {
 		c.sendRaw(&Frame{T: "res", ID: f.ID, Error: fmt.Sprintf("unknown method: %s", f.Method)})
@@ -272,6 +310,17 @@ func NewIpcServer(addr, auth string, bus *EventBus, store Store) *IpcServer {
 		adaptersBySelf: make(map[string]*Conn),
 		pluginConns:    make(map[string]*Conn),
 	}
+}
+
+// verifyAuth 用常量时间比较校验客户端令牌。s.auth 为空（内核未配置令牌）时一律拒绝，
+// 杜绝「只存不校验」地静默放行。
+func (s *IpcServer) verifyAuth(token string) bool {
+	if s.auth == "" {
+		return false
+	}
+	// subtle.ConstantTimeCompare 在长度不等时立即返回 0（标准库既定行为）；
+	// 令牌长度固定，长度差本身不构成可利用的时序泄露。
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.auth)) == 1
 }
 
 func (s *IpcServer) RegisterMethod(m string, h MethodHandler) { s.methods[m] = h }

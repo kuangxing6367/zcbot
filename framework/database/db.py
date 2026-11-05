@@ -16,6 +16,8 @@
 """
 import logging
 import os
+import re
+import threading
 import time
 from contextlib import contextmanager
 from threading import local
@@ -81,6 +83,11 @@ class Database(DatabaseConnMixin):
         self._pool = None
         # 持久化降级标记：卷变只读时置位，恢复可写后清除（详见 persist_degraded）
         self._persist_degraded = False
+        # 启动期元数据快照：把「逐表 table_exists / 逐列 table_has_column」
+        # 合并成一次批量探测。命中快照时零 DB 往返；DDL 由 _note_ddl 增量
+        # 维护或整体失效，避免快照与真实结构分叉。None = 未加载（惰性）。
+        self._schema_meta = None
+        self._schema_meta_lock = threading.RLock()
 
         if self.db_type == 'mysql':
             self._init_mysql()
@@ -209,6 +216,8 @@ class Database(DatabaseConnMixin):
             self._note_write_failure(e)
             raise
         self._note_write_ok()
+        # DDL 会改变表/列集合，增量维护元数据快照（避免下次探测读到旧结构）
+        self._note_ddl(sql)
         return result
 
     @property
@@ -327,35 +336,189 @@ class Database(DatabaseConnMixin):
                         pass
             # SQLite 线程本地连接不关闭，交给后续复用
 
-    def table_exists(self, table_name: str) -> bool:
-        """检查表是否存在"""
-        if self.db_type == 'sqlite':
-            row = self.query_one(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                (table_name,)
-            )
-            return row is not None
-        else:
-            row = self.query_one(
-                "SHOW TABLES LIKE %s",
-                (table_name,)
-            )
-            return row is not None
+    # ── 启动期元数据快照（批量探测，消除逐表/逐列串行往返）──────────
 
-    def table_info(self, table_name: str) -> list:
-        """获取表结构信息"""
+    _DDL_CREATE = re.compile(
+        r'^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?([A-Za-z0-9_]+)',
+        re.IGNORECASE)
+    _DDL_ALTER_ADD = re.compile(
+        r'^\s*ALTER\s+TABLE\s+[`"\[]?([A-Za-z0-9_]+)[`"\]]?\s+'
+        r'ADD\s+(?:COLUMN\s+)?[`"\[]?([A-Za-z0-9_]+)',
+        re.IGNORECASE)
+    _DDL_DROP = re.compile(
+        r'^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"\[]?([A-Za-z0-9_]+)',
+        re.IGNORECASE)
+
+    def _load_schema_meta(self) -> dict:
+        """一次性拉回全部表名 + 列名（1 次往返；老 SQLite 回退逐表 PRAGMA）。
+
+        表名统一小写存放：框架内表名均为小写，调用方传小写即可精确命中，
+        也规避 sqlite_master / information_schema 的大小写差异。返回的
+        ``columns`` 里某表值为 None 表示「列未加载」，由 table_has_column
+        按需补拉一次，避免新表被误判成「没有任何列」而重复 ADD COLUMN。
+        """
+        tables, columns = set(), {}
+        if self.db_type == 'mysql':
+            try:
+                rows = self.query(
+                    "SELECT table_name AS tbl, column_name AS col "
+                    "FROM information_schema.columns WHERE table_schema = DATABASE()")
+                for r in rows:
+                    t = r.get('tbl') or r.get('table_name')
+                    if t is None:
+                        continue
+                    t = str(t).lower()
+                    tables.add(t)
+                    c = r.get('col') or r.get('column_name')
+                    if c:
+                        columns.setdefault(t, set()).add(str(c).lower())
+            except Exception as e:
+                logger.debug("批量读取表结构元数据失败（回退逐表探测）: %s", e)
+        else:
+            try:
+                # LEFT JOIN 保证空表（无列）也产生一行，表名单次即可取全。
+                rows = self.query(
+                    "SELECT m.name AS tbl, p.name AS col FROM sqlite_master m "
+                    "LEFT JOIN pragma_table_info(m.name) p WHERE m.type='table'")
+                for r in rows:
+                    t = r.get('tbl')
+                    if t is None:
+                        continue
+                    t = str(t).lower()
+                    tables.add(t)
+                    c = r.get('col')
+                    if c:
+                        columns.setdefault(t, set()).add(str(c).lower())
+            except Exception:
+                # SQLite < 3.16 无 pragma_table_info 表值函数：逐表 PRAGMA，
+                # 仍只在本次加载内各拉一次并缓存，不退化成「每列一次」。
+                try:
+                    for r in self.query(
+                            "SELECT name FROM sqlite_master WHERE type='table'"):
+                        t = str(r.get('name')).lower()
+                        tables.add(t)
+                        columns[t] = {
+                            str(c.get('name')).lower()
+                            for c in self.query(f"PRAGMA table_info({t})")}
+                except Exception as e:
+                    logger.debug("回退逐表读取表结构失败: %s", e)
+        return {'tables': tables, 'columns': columns, 'info': {}}
+
+    def schema_snapshot(self) -> dict:
+        with self._schema_meta_lock:
+            if self._schema_meta is None:
+                self._schema_meta = self._load_schema_meta()
+            return self._schema_meta
+
+    def refresh_schema_snapshot(self) -> dict:
+        """显式重拉（外部 DDL / 建表流程结束后调用）。"""
+        with self._schema_meta_lock:
+            self._schema_meta = self._load_schema_meta()
+            return self._schema_meta
+
+    def invalidate_schema_snapshot(self):
+        with self._schema_meta_lock:
+            self._schema_meta = None
+
+    def all_table_names(self) -> set:
+        """批量取全部表名（供启动期自检，一次往返替代逐表 table_exists）。"""
+        return set(self.schema_snapshot()['tables'])
+
+    def _note_ddl(self, sql):
+        """DDL 后增量维护快照；无法增量解析的保守整体失效。
+
+        只处理 CREATE TABLE / ALTER TABLE ADD COLUMN / DROP TABLE 三类高频
+        DDL；其余（RENAME / MODIFY COLUMN）整体失效，下次探测重拉全量。
+        CREATE INDEX / DML 不改变表或列集合，不做处理。
+        """
+        if not isinstance(sql, str):
+            return
+        s = sql.lstrip()
+        head = s[:16].upper()
+        if not (head.startswith('CREATE') or head.startswith('ALTER')
+                or head.startswith('DROP')):
+            return
+        m = self._DDL_CREATE.match(s)
+        if m:
+            with self._schema_meta_lock:
+                if self._schema_meta is not None:
+                    t = m.group(1).lower()
+                    # CREATE TABLE IF NOT EXISTS 对已存在且列已知的表无副作用：
+                    # 不动快照，避免把已缓存的列信息清成「未知」而平白重拉。
+                    already = (t in self._schema_meta['tables']
+                               and isinstance(
+                                   self._schema_meta['columns'].get(t), set))
+                    self._schema_meta['tables'].add(t)
+                    if not already:
+                        # 新表：列未知，下次 table_has_column 按需拉一次真实
+                        # 结构，避免把 DDL 里已声明的列误判成缺列而重复 ALTER。
+                        self._schema_meta['columns'][t] = None
+                        self._schema_meta['info'].pop(t, None)
+            return
+        m = self._DDL_ALTER_ADD.match(s)
+        if m:
+            with self._schema_meta_lock:
+                if self._schema_meta is not None:
+                    t, c = m.group(1).lower(), m.group(2).lower()
+                    cols = self._schema_meta['columns'].get(t)
+                    if isinstance(cols, set):
+                        cols.add(c)
+                    self._schema_meta['info'].pop(t, None)
+            return
+        m = self._DDL_DROP.match(s)
+        if m:
+            with self._schema_meta_lock:
+                if self._schema_meta is not None:
+                    t = m.group(1).lower()
+                    self._schema_meta['tables'].discard(t)
+                    self._schema_meta['columns'].pop(t, None)
+                    self._schema_meta['info'].pop(t, None)
+            return
+        if head.startswith('ALTER'):
+            # RENAME / MODIFY 等：结构可能整体变化，重拉最稳妥
+            self.invalidate_schema_snapshot()
+
+    def _table_info_uncached(self, table_name: str) -> list:
         if self.db_type == 'sqlite':
             return self.query(f"PRAGMA table_info({table_name})")
-        else:
-            return self.query(f"SHOW COLUMNS FROM {table_name}")
+        return self.query(f"SHOW COLUMNS FROM {table_name}")
+
+    def table_exists(self, table_name: str) -> bool:
+        """检查表是否存在（命中元数据快照时零 DB 往返）"""
+        snap = self.schema_snapshot()
+        with self._schema_meta_lock:
+            return str(table_name).lower() in snap['tables']
+
+    def table_info(self, table_name: str) -> list:
+        """获取表结构信息（同一表一次启动内只查一次并缓存）"""
+        t = str(table_name).lower()
+        snap = self.schema_snapshot()
+        with self._schema_meta_lock:
+            if t in snap['info']:
+                return snap['info'][t]
+        info = self._table_info_uncached(t)
+        with self._schema_meta_lock:
+            snap['info'][t] = info
+            snap['columns'][t] = {
+                str(r.get('name') or r.get('Field')).lower() for r in info}
+        return info
 
     def table_has_column(self, table_name: str, column_name: str) -> bool:
-        """检查表是否有指定列"""
-        cols = self.table_info(table_name)
-        if self.db_type == 'sqlite':
-            return any(r['name'] == column_name for r in cols)
-        else:
-            return any(r['Field'] == column_name for r in cols)
+        """检查表是否有指定列（命中元数据快照时零 DB 往返）"""
+        t = str(table_name).lower()
+        snap = self.schema_snapshot()
+        with self._schema_meta_lock:
+            cols = snap['columns'].get(t)
+            if isinstance(cols, set):
+                return str(column_name).lower() in cols
+        # 新表 / 快照未收录该表列：按需拉一次该表结构并补进快照
+        info = self._table_info_uncached(t)
+        with self._schema_meta_lock:
+            cols = {str(r.get('name') or r.get('Field')).lower()
+                    for r in info}
+            snap['columns'][t] = cols
+            snap['info'][t] = info
+        return str(column_name).lower() in cols
 
 
 def _set_autocommit(conn, on=True):

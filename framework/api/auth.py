@@ -39,6 +39,8 @@ def register(ctx):
     get_client_ip = ctx.get_client_ip
     audit_log = ctx.audit_log
     _sync_token_cookie = ctx._sync_token_cookie
+    # 会话令牌哈希函数由 webapp 统一注入，保证「登录写入」与「校验读取」算法一致
+    _hash_token = ctx._hash_token
     _check_login_rate = ctx._check_login_rate
     _record_login_failure = ctx._record_login_failure
     _clear_login_failures = ctx._clear_login_failures
@@ -99,11 +101,15 @@ def register(ctx):
         # 登录成功，清除失败计数
         _clear_login_failures(client_ip)
 
-        # 生成 2048 位随机 token
+        # 生成 2048 位随机 token：明文只随响应 / Cookie 返回客户端，库里只存哈希。
+        # token 列显式置 NULL 是双保险（历史明文列恒空），token_hash 覆盖旧值即让
+        # 该账号此前的会话立即失效（一个管理员同一时刻只有一个有效会话）。
         token = secrets.token_hex(1024)  # 2048 字符
+        token_hash = _hash_token(token)
         db.execute(
-            "UPDATE admin_users SET token = %s, token_created_at = NOW(), last_login_at = NOW(), last_login_ip = %s WHERE id = %s",
-            (token, get_client_ip(), row['id'])
+            "UPDATE admin_users SET token = NULL, token_hash = %s, "
+            "token_created_at = NOW(), last_login_at = NOW(), last_login_ip = %s WHERE id = %s",
+            (token_hash, get_client_ip(), row['id'])
         )
         audit_log(row['id'], username, 'login', result='success')
 
@@ -127,7 +133,8 @@ def register(ctx):
         admin = request.admin
         try:
             db.execute(
-                "UPDATE admin_users SET token = NULL, token_created_at = NULL WHERE id = %s",
+                "UPDATE admin_users SET token = NULL, token_hash = NULL, "
+                "token_created_at = NULL WHERE id = %s",
                 (admin['id'],)
             )
         except Exception as e:
@@ -175,7 +182,13 @@ def register(ctx):
             return jsonify({'code': 500, 'msg': '密码验证失败'}), 500
 
         new_hash = bcrypt.hashpw(new_pwd.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')
-        db.execute("UPDATE admin_users SET password_hash = %s WHERE id = %s", (new_hash, admin['id']))
+        # 改密必须让所有存量会话失效：清 token_hash（及历史明文列、签发时间），
+        # 否则旧 token 在密码改掉后仍能通过 _verify_token 冒用管理员会话。
+        db.execute(
+            "UPDATE admin_users SET password_hash = %s, token = NULL, "
+            "token_hash = NULL, token_created_at = NULL WHERE id = %s",
+            (new_hash, admin['id'])
+        )
         audit_log(admin['id'], admin['username'], 'change_password', result='success')
 
         return jsonify({'code': 0, 'msg': '密码已修改'})

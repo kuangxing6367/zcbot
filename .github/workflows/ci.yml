@@ -105,7 +105,14 @@ jobs:
             tests/test_new_adapters.py \
             tests/test_p0_regressions.py \
             tests/test_p0_security_regressions.py \
-            tests/test_p1_deploy_regressions.py
+            tests/test_p1_deploy_regressions.py \
+            tests/test_adapter_retcodes.py \
+            tests/test_concurrency_regressions.py \
+            tests/test_iipc_auth.py tests/test_iipc_launcher_stale.py \
+            tests/test_perf_regressions.py \
+            tests/test_perm_cache_invalidation.py \
+            tests/test_plugin_cache_regressions.py \
+            tests/test_token_security_regressions.py
 
       # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────────
       # 允许工作流正常产生且已被 .gitignore 覆盖的文件（不出现在 git status）；

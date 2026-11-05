@@ -1481,7 +1481,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         msg_id/event_id 至少一个用于被动窗口（主动流式可不带，受频率限制）。
         """
         if not user_openid:
-            return {'status': 'failed', 'retcode': -2,
+            return {'status': 'failed', 'retcode': -1,
                     'msg': 'send_stream 需要 user_id'}
         body = {
             'input_mode': str(input_mode or 'replace'),
@@ -1511,7 +1511,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                              payload: dict = None, params: dict = None) -> dict:
         """群管理统一入口：GET /v2/groups/{gid}/{endpoint}（带 payload 则 POST）。"""
         if not group_id:
-            return {'status': 'failed', 'retcode': -2,
+            return {'status': 'failed', 'retcode': -1,
                     'msg': '缺少 group_id'}
         path = f'/v2/groups/{group_id}/{endpoint}'
         method = 'POST' if payload is not None else 'GET'
@@ -1613,7 +1613,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 return await self._send_group(str(group_id), message, reply)
             if user_id:
                 return await self._send_c2c(str(user_id), message, reply)
-            return {'status': 'failed', 'retcode': -2,
+            return {'status': 'failed', 'retcode': -1,
                     'msg': 'send_msg 需要 group_id 或 user_id'}
 
         if action in ('delete_msg', 'recall_msg'):
@@ -1622,14 +1622,14 @@ class QQOfficialAdapter(ProtocolAdapter):
             user_id = params.get('user_id')
             msg_id = params.get('message_id') or params.get('msg_id') or ''
             if not msg_id:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'delete_msg 需要 message_id'}
             if group_id:
                 path = f'/v2/groups/{group_id}/messages/{msg_id}'
             elif user_id:
                 path = f'/v2/users/{user_id}/messages/{msg_id}'
             else:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'delete_msg 需要 group_id 或 user_id'}
             try:
                 await asyncio.to_thread(
@@ -1669,7 +1669,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         if action == 'generate_url_link':
             callback = str(params.get('callback_data') or '')
             if not callback:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'generate_url_link 需要 callback_data'}
             try:
                 data = await asyncio.to_thread(
@@ -1689,7 +1689,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         if action in ('set_global_menu', 'update_global_menu'):
             menu = params.get('menu')
             if not isinstance(menu, dict):
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'set_global_menu 需要 menu 字典'}
             try:
                 data = await asyncio.to_thread(
@@ -1713,7 +1713,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         if action == 'get_panel':
             pid = str(params.get('panel_id') or '')
             if not pid:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'get_panel 需要 panel_id'}
             try:
                 data = await asyncio.to_thread(
@@ -1726,7 +1726,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             scope = str(params.get('scope') or '')
             if not isinstance(panel, dict) or scope not in \
                     ('c2c', 'group', 'channel', 'dm'):
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'create_panel 需要 scope(c2c/group/channel/dm) '
                                '和 panel 字典'}
             payload = {'scope': scope,
@@ -1746,7 +1746,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             pid = str(params.get('panel_id') or '')
             panel = params.get('panel')
             if not pid or not isinstance(panel, dict):
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'update_panel 需要 panel_id 和 panel 字典'}
             try:
                 data = await asyncio.to_thread(
@@ -1758,7 +1758,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         if action == 'delete_panel':
             pid = str(params.get('panel_id') or '')
             if not pid:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'delete_panel 需要 panel_id'}
             try:
                 await asyncio.to_thread(
@@ -1770,7 +1770,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             pid = str(params.get('panel_id') or '')
             op = str(params.get('op') or '')
             if not pid or op not in ('add', 'del'):
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'update_panel_targets 需要 panel_id 和 op(add/del)'}
             payload = {'op': op}
             if params.get('user_openids'):
@@ -1802,7 +1802,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             mid = str(params.get('member_id') or params.get('member_openid')
                       or params.get('user_id') or '')
             if not gid or not mid:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'get_group_member 需要 group_id 和 member_id'}
             return await self._group_request(gid, f'members/{mid}')
         if action in ('batch_remove_group_members', 'remove_group_members'):
@@ -1822,7 +1822,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                       'operate_group_member_blacklist'):
             op = str(params.get('op') or '')
             if op not in ('add', 'del'):
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': '群黑名单 op 只能为 add 或 del'}
             payload = {'op': op,
                        'member_openids': params.get('member_openids') or []}
@@ -1845,7 +1845,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             elif action.startswith('decline'):
                 op = 'decline'
             if not gid or not mid or op not in ('approve', 'decline'):
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': '入群审批需要 group_id、member_openid 和 '
                                'op(approve/decline)'}
             payload = {'op': op}
@@ -1864,7 +1864,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         if action in ('set_group_member_mute', 'update_group_member_mute'):
             members = params.get('members')
             if not isinstance(members, list) or not members:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'set_group_member_mute 需要 members 列表'
                                '（单次最多 20 人）'}
             return await self._group_request(str(params.get('group_id') or ''),

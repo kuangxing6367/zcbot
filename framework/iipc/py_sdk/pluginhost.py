@@ -40,12 +40,16 @@ def main():
     ap.add_argument("--plugins-dir", required=True)
     ap.add_argument("--sdk-dir", required=True)
     ap.add_argument("--iipc-addr", required=True)
-    ap.add_argument("--iipc-auth", default="dev-auth")
+    ap.add_argument("--iipc-auth", default=None)
     ap.add_argument("--python", default=sys.executable)
     a = ap.parse_args()
 
     if a.sdk_dir not in sys.path:
         sys.path.insert(0, a.sdk_dir)
+
+    # 令牌优先走环境变量（内核经 exec 注入），命令行参数仅作显式覆盖。
+    from iipc_client import resolve_auth  # noqa: E402
+    a.iipc_auth = resolve_auth(a.iipc_auth)
 
     # 预加载 SDK + 公共依赖（Linux fork 的 COW 共享来源；spawn 模式无此收益但无害）
     run_plugin = None
@@ -90,11 +94,11 @@ def main():
         entry_py = os.path.join(a.sdk_dir, "entry.py")
         env = dict(os.environ)
         env["ZCBOT_PYTHON"] = a.python
+        env["ZCBOT_IIPC_AUTH"] = a.iipc_auth  # 令牌走环境变量，不进命令行
         try:
             proc = subprocess.Popen(
                 [a.python, entry_py, "--plugin-dir", pdir,
-                 "--iipc-addr", a.iipc_addr, "--plugin-id", pid_id,
-                 "--iipc-auth", a.iipc_auth],
+                 "--iipc-addr", a.iipc_addr, "--plugin-id", pid_id],
                 env=env,
             )
         except Exception as e:

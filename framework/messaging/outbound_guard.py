@@ -161,7 +161,13 @@ class OutboundGate:
     # ---- 滑动窗口 ----
 
     def _need(self, key, limit, now):
-        """返回该 key 还需要等多久才腾出一个名额（0=现在就能发）"""
+        """返回该 key 还需要等多久才腾出一个名额（0=现在就能发）。
+
+        dq 里既有已发送时刻，也有 _plan 预留的「预约发送时刻」。要让
+        len(dq) < limit 需等最旧的 len(dq)-limit+1 个时间戳过期，即看
+        dq[len(dq)-limit]；只看 dq[0] 会让多个并发等待者算出同一个等待
+        终点，唤醒时一起冲过闸门（瞬时超配额）。
+        """
         dq = self._hits.get(key)
         if not dq:
             return 0.0
@@ -170,7 +176,7 @@ class OutboundGate:
             dq.popleft()
         if len(dq) < limit:
             return 0.0
-        return max(0.0, dq[0] + self.window - now)
+        return max(0.0, dq[len(dq) - limit] + self.window - now)
 
     def _record(self, keys, now):
         for key in keys:
@@ -178,6 +184,21 @@ class OutboundGate:
             if dq is None:
                 dq = self._hits[key] = deque()
             dq.append(now)
+        self._shrink(now)
+
+    def _reserve(self, keys, reserve_at, now):
+        """在锁内把「预约发送时刻」计入各 key 的滑动窗口（预留槽位）。
+
+        预约与登记都是 append 一个时间戳，区别只在它是未来时刻；后续等待者
+        的 _need() 会把它算进 len(dq)，从而自动错开等待终点，消除惊群。
+        _shrink 必须按当前时刻判断过期，不能按未来的 reserve_at（否则会把
+        尚未过期的键误清）。
+        """
+        for key in keys:
+            dq = self._hits.get(key)
+            if dq is None:
+                dq = self._hits[key] = deque()
+            dq.append(reserve_at)
         self._shrink(now)
 
     def _shrink(self, now):
@@ -204,7 +225,14 @@ class OutboundGate:
         return 0
 
     def _plan(self, bot, params):
-        """返回 (需要等待秒数, keys)；不超限时同时登记时间戳"""
+        """返回 (需要等待秒数, keys)；名额在锁内一次性原子占用。
+
+        wait=0：已在锁内登记当前时刻，调用方立即发送。
+        0<wait<=max_wait：已在锁内 _reserve 预约 now+wait 槽位，调用方睡到点后
+                          直接发送，无需（也不能）再次登记——否则「检查」与
+                          「消费」跨锁就不再原子，并发等待者会一起冲过闸门。
+        wait>max_wait：不预留，由调用方按契约返回 -4 拒绝。
+        """
         if not self.enabled:
             return 0.0, None
         kind, ident = self._target(params)
@@ -220,12 +248,10 @@ class OutboundGate:
             if wait <= 0:
                 self._record(self._keys(bot, kind, ident), now)
                 return 0.0, None
-            return wait, self._keys(bot, kind, ident)
-
-    def _commit(self, keys):
-        """等待结束后确认名额（等待期间可能被别人占走）"""
-        with self._lock:
-            self._record(keys, time.time())
+            keys = self._keys(bot, kind, ident)
+            if wait <= self.max_wait:
+                self._reserve(keys, now + wait, now)
+            return wait, keys
 
     def _reject(self, action, wait):
         with self._lock:
@@ -273,13 +299,14 @@ class OutboundGate:
 
         waited = 0.0
         try:
-            wait, keys = self._plan(bot, params)
+            wait, _keys = self._plan(bot, params)
             waited = wait
             if wait > 0:
                 if wait > self.max_wait:
                     return self._reject(action, wait)
+                # _plan 已在锁内预留该时刻的槽位，睡到点即可发送；不再二次
+                # 登记，避免「检查」与「消费」之间被别的并发请求插队。
                 await asyncio.sleep(wait)
-                self._commit(keys)
                 self._note_wait(wait)
         except Exception as e:  # noqa: BLE001 - 闸门故障一律放行
             logger.debug(f"出站节流判定异常，直通发送: {e}")
@@ -293,13 +320,12 @@ class OutboundGate:
 
         waited = 0.0
         try:
-            wait, keys = self._plan(bot, params)
+            wait, _keys = self._plan(bot, params)
             waited = wait
             if wait > 0:
                 if wait > self.max_wait:
                     return self._reject(action, wait)
                 time.sleep(wait)
-                self._commit(keys)
                 self._note_wait(wait)
         except Exception as e:  # noqa: BLE001
             logger.debug(f"出站节流判定异常，直通发送: {e}")

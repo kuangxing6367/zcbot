@@ -6,11 +6,34 @@
 - 调用模式改为"事件推送 + 动作批量回传"，规避逐调用同步往返
 """
 import json
+import os
 import queue
+import secrets
 import socket
 import sys
 import threading
 import traceback
+
+# 共享令牌的环境变量名。启动器（launcher）在派生任何子进程之前生成/写入该变量，
+# Go 内核、Rust 适配器、Python 插件进程全部继承；令牌不落命令行参数，避免进程列表泄露。
+ENV_NAME = "ZCBOT_IIPC_AUTH"
+
+
+def resolve_auth(explicit=None):
+    """解析本进程应使用的 IIPC 共享令牌。
+
+    优先级：explicit 参数 > 环境变量 ZCBOT_IIPC_AUTH > 自动生成高熵令牌。
+    自动生成的令牌会写回 os.environ，保证「同进程后续派生的所有子进程可见」；
+    用户显式设置 ZCBOT_IIPC_AUTH 时直接沿用（已在环境里，子进程同样可见）。
+    """
+    if explicit:
+        return explicit
+    v = os.environ.get(ENV_NAME)
+    if v:
+        return v
+    v = secrets.token_urlsafe(32)   # 256bit 熵，非固定字符串
+    os.environ[ENV_NAME] = v
+    return v
 
 
 class _Pending:
@@ -35,7 +58,7 @@ class _Pending:
 
 
 class IIPCClient:
-    def __init__(self, addr, auth):
+    def __init__(self, addr, auth=None, handshake_timeout=5.0):
         host, port = addr.rsplit(":", 1)
         self._sock = socket.create_connection((host, int(port)))
         self._f = self._sock.makefile("rwb")
@@ -47,12 +70,48 @@ class IIPCClient:
         self._closed = False
         self._lost = threading.Event()  # 连接丢失信号：读线程退出即置位
         self._event_q = queue.Queue()
+        # 鉴权握手结果（读线程写，构造线程等待）
+        self._auth_event = threading.Event()
+        self._auth_ok = False
+        self._auth_err = ""
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
         self._dispatch = threading.Thread(target=self._dispatch_loop, daemon=True)
         self._dispatch.start()
 
+        # 连接建立后首帧必须是 auth 握手；服务端在未授权前会拒绝其它一切帧。
+        token = resolve_auth(auth)
+        self._send({"t": "auth", "auth": token})
+        if not self._auth_event.wait(handshake_timeout):
+            self.close()
+            raise PermissionError(
+                "IIPC 鉴权超时：服务端在 %.1fs 内未回应握手"
+                "（内核是否为支持鉴权的新版本？）" % handshake_timeout)
+        if not self._auth_ok:
+            err = self._auth_err or "令牌无效"
+            self.close()
+            raise PermissionError("IIPC 鉴权失败: %s" % err)
+
     # ---- 对外接口 ----
+    def close(self):
+        """关闭连接（读线程因 EOF 退出）。幂等。"""
+        if self._closed:
+            return
+        self._closed = True
+        # 先关底层 socket：让后台读线程的 recv 立即收到 EOF/RST 自行退出。
+        # 绝不要在这里 _f.close()——makefile 的文件对象被读线程持有，close 会与
+        # 并发 recv 争用底层缓冲锁，造成死锁（实测 cli.close() 会卡死）。
+        try:
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+        self._event_q.put(None)  # 唤醒派发线程退出
+        self._lost.set()
+
     def is_alive(self):
         """连接是否存活。读线程退出（EOF / 连接被重置）即视为断开。"""
         return not self._lost.is_set()
@@ -109,11 +168,13 @@ class IIPCClient:
         try:
             self._read_loop_inner()
         except Exception as e:
-            # 连接断开/解析崩溃：仅置位 _lost 不够，必须让运维看到「为什么断」。
-            # 此前这里 `except: pass` 把根因（RST/EOF/解码错误）吞掉，断连成谜。
-            print("[iipc] 读循环异常退出（连接已断开）: %s"
-                  % (e if isinstance(e, OSError) else traceback.format_exc()),
-                  file=sys.stderr, flush=True)
+            # 主动 close() 造成的断开是预期行为，不刷误导性的「异常退出」日志。
+            if not getattr(self, "_closed", False):
+                # 连接断开/解析崩溃：仅置位 _lost 不够，必须让运维看到「为什么断」。
+                # 此前这里 `except: pass` 把根因（RST/EOF/解码错误）吞掉，断连成谜。
+                print("[iipc] 读循环异常退出（连接已断开）: %s"
+                      % (e if isinstance(e, OSError) else traceback.format_exc()),
+                      file=sys.stderr, flush=True)
         finally:
             self._lost.set()
 
@@ -130,6 +191,14 @@ class IIPCClient:
                       % e, file=sys.stderr, flush=True)
                 continue
             t = msg.get("t")
+            if t == "auth_res":
+                # 服务端对 auth 握手的应答：成功 result=true，失败带 error。
+                self._auth_ok = bool(msg.get("result")) and not msg.get("error")
+                self._auth_err = msg.get("error") or ""
+                ev = getattr(self, "_auth_event", None)
+                if ev is not None:
+                    ev.set()
+                continue
             if t == "req":
                 h = self._methods.get(msg.get("method"))
                 if h:

@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -38,6 +39,8 @@ struct Config {
     /// 服务端模式监听地址（None=不监听）。
     onebot_listen: Option<String>,
     token: Option<String>,
+    /// IIPC 共享令牌（连接内核鉴权用；来自 ZCBOT_IIPC_AUTH / --iipc-auth）。
+    iipc_auth: Option<String>,
 }
 
 fn parse_args() -> Config {
@@ -47,6 +50,7 @@ fn parse_args() -> Config {
         onebot_url: std::env::var("ZCBOT_ONEBOT_URL").ok().filter(|s| !s.is_empty()),
         onebot_listen: std::env::var("ZCBOT_ONEBOT_LISTEN").ok().filter(|s| !s.is_empty()),
         token: std::env::var("ZCBOT_ONEBOT_TOKEN").ok().filter(|s| !s.is_empty()),
+        iipc_auth: std::env::var("ZCBOT_IIPC_AUTH").ok().filter(|s| !s.is_empty()),
     };
     // 两者都未指定时，默认反向服务端模式（对齐 zcbot 原 reverse_ws 常用形态）
     if c.onebot_url.is_none() && c.onebot_listen.is_none() {
@@ -88,6 +92,12 @@ fn parse_args() -> Config {
                     i += 1;
                 }
             }
+            "--iipc-auth" => {
+                if i + 1 < args.len() {
+                    c.iipc_auth = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -118,7 +128,7 @@ fn main() {
         if cfg.onebot_url.is_some() { "客户端(正向WS)" } else { "服务端(反向WS)" }
     );
 
-    // 1) 连内核
+    // 1) 连内核并完成鉴权握手
     let kstream = match TcpStream::connect(&cfg.iipc_addr) {
         Ok(s) => s,
         Err(e) => {
@@ -128,9 +138,18 @@ fn main() {
     };
     kstream.set_nodelay(true).ok();
     let kwriter = Arc::new(Mutex::new(kstream.try_clone().expect("clone kstream")));
-    let reg = json!({"t":"req","id":1,"method":"adapter.register","params":{"self_id": cfg.self_id}});
-    ksend(&kwriter, &reg);
 
+    // 令牌来自 ZCBOT_IIPC_AUTH（或 --iipc-auth 显式覆盖）；缺失即拒绝连接，
+    // 绝不回退到任何固定字符串。
+    let iipc_auth = match cfg.iipc_auth.clone() {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            eprintln!("[rust-adapter] 缺少 IIPC 令牌：请设置 ZCBOT_IIPC_AUTH（或 --iipc-auth）");
+            std::process::exit(1);
+        }
+    };
+
+    let (auth_tx, auth_rx) = mpsc::channel::<Result<(), String>>();
     let shared: SharedConn = Arc::new(Mutex::new(None));
     let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
 
@@ -142,6 +161,8 @@ fn main() {
         let self_id = cfg.self_id.clone();
         thread::spawn(move || {
             let reader = BufReader::new(kstream);
+            let mut authed = false;
+            let mut auth_done = false;   // 握手结果只回一次
             for line in reader.lines() {
                 let line = match line {
                     Ok(l) => l,
@@ -157,6 +178,26 @@ fn main() {
                         continue;
                     }
                 };
+                if !authed {
+                    // 握手阶段只认 auth_res：服务端在未授权前不会推任何业务帧。
+                    if v.get("t").and_then(|x| x.as_str()) == Some("auth_res") {
+                        let ok = v.get("result").and_then(|x| x.as_bool()).unwrap_or(false)
+                            && v.get("error").is_none();
+                        if ok {
+                            authed = true;
+                            if !auth_done {
+                                auth_done = true;
+                                let _ = auth_tx.send(Ok(()));
+                            }
+                        } else {
+                            let msg = v.get("error").and_then(|x| x.as_str())
+                                .unwrap_or("令牌无效").to_string();
+                            let _ = auth_tx.send(Err(msg));
+                            return;  // 失败即退出，不会走到循环外的兜底 send
+                        }
+                    }
+                    continue;
+                }
                 if v.get("t").and_then(|x| x.as_str()) != Some("req") {
                     continue;
                 }
@@ -213,12 +254,33 @@ fn main() {
                 }
                 eprintln!("[rust-adapter] => api.call {} {}", action, aparams);
             }
+            if !auth_done {
+                let _ = auth_tx.send(Err("内核在鉴权前关闭了连接".into()));
+            }
             eprintln!("[rust-adapter] 与内核的连接已断开");
             std::process::exit(0);
         });
     }
 
-    // 3) OneBot 连接管理（两种模式）
+    // 3) 发 auth 握手帧并等待确认；超时/失败都明确报错，绝不假装已连接。
+    ksend(&kwriter, &json!({"t": "auth", "auth": iipc_auth}));
+    match auth_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(())) => eprintln!("[rust-adapter] IIPC 鉴权通过"),
+        Ok(Err(e)) => {
+            eprintln!("[rust-adapter] IIPC 鉴权失败: {}", e);
+            std::process::exit(1);
+        }
+        Err(_) => {
+            eprintln!("[rust-adapter] IIPC 鉴权超时（内核是否为支持鉴权的新版本？）");
+            std::process::exit(1);
+        }
+    }
+
+    // 4) 握手成功后才注册适配器角色
+    let reg = json!({"t":"req","id":1,"method":"adapter.register","params":{"self_id": cfg.self_id}});
+    ksend(&kwriter, &reg);
+
+    // 5) OneBot 连接管理（两种模式）
     if let Some(url) = cfg.onebot_url.clone() {
         run_client_mode(url, cfg.token.clone(), Arc::clone(&shared),
                         Arc::clone(&pending), Arc::clone(&kwriter), cfg.self_id.clone());

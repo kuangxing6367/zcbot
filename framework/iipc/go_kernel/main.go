@@ -28,7 +28,14 @@ func main() {
 
 	InitLogger(*logFile, parseLevel(*logLevel))
 
-	auth := "dev-auth"
+	// 共享令牌由启动器（launcher）经 ZCBOT_IIPC_AUTH 注入；缺失即拒绝以零鉴权启动。
+	// 不再硬编码任何固定字符串，也不回退到「只存不校验」。
+	auth := os.Getenv("ZCBOT_IIPC_AUTH")
+	if auth == "" {
+		logError("main", "缺少环境变量 ZCBOT_IIPC_AUTH：IIPC 内核拒绝以零鉴权启动。"+
+			"请通过 python main.py --iipc 启动（由 launcher 生成高熵令牌），或显式设置该环境变量。")
+		os.Exit(1)
+	}
 	store, err := NewStore(*dbPath)
 	if err != nil {
 		// 文件型 DB 损坏/不可用：先原子隔离坏文件，避免内核下次启动再次加载同一坏文件，

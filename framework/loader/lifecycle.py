@@ -20,6 +20,24 @@ from framework.blackbox import record as _bb_record
 logger = logging.getLogger('zcbot')
 
 
+def _purge_plugin_cache_for(framework, plugin_name: str) -> bool:
+    """卸载 / 加载失败终态时清空该插件 cache 目录（绝不碰 plugins_dat）。
+
+    写成模块级函数而非 mixin 方法：精简 loader（如
+    tests/test_plugin_api_unmount.py 的 _LoaderStub）只装配了
+    _release_plugin_api_routes / unload_plugin，挂 self 方法会 AttributeError。
+
+    purge_plugin_cache 用 create=False：缓存目录不存在时直接返回，不会创建
+    目录，也不会污染真实项目数据目录。
+    """
+    try:
+        from framework import plugin_paths
+        return plugin_paths.purge_plugin_cache(framework, plugin_name)
+    except Exception as e:
+        logger.debug(f"[{plugin_name}] 清理插件缓存失败（忽略）: {e}")
+        return False
+
+
 class _PluginSourceLoader(importlib.machinery.SourceFileLoader):
     """
     插件模块专用加载器：始终从 .py 源码现场编译，不读取也不写入 __pycache__。
@@ -483,11 +501,18 @@ class PluginLifecycleMixin:
             pass
         return latest
     def _release_plugin_api_routes(self, plugin_name: str) -> int:
-        """回收插件注册的 Web API 路由（本地登记表 + 双进程远程注册器）
+        """卸载 / 加载失败终态的**统一资源回收点**。
 
-        必须做：路由登记项与 Flask 视图都持有插件模块的闭包，不摘除则新版本
-        删掉的接口继续跑旧代码，旧模块也无法被 gc 回收；插件被删除后接口
-        仍可访问更是安全问题。返回本地回收条数。
+        1) 回收插件注册的 Web API 路由（本地登记表 + 双进程远程注册器）：
+           路由登记项与 Flask 视图都持有插件模块的闭包，不摘除则新版本删掉的
+           接口继续跑旧代码、旧模块也无法被 gc 回收，插件删除后接口仍可访问
+           更是安全问题；
+        2) 清空该插件的 ``cache/`` 目录（可丢弃中间产物，卸载即清）。
+
+        两条回收绑在同一入口，是为了让「卸载 / 加载失败终态 / 从未加载成功
+        早退」三条路径都必然覆盖，不出现「路由回收了、缓存没清」的遗漏。
+        **绝不触碰 plugins_dat 用户数据**（仅在 delete_plugin 且
+        delete_data=true 时由调用方显式删除）。返回本地路由回收条数。
         """
         removed = 0
         try:
@@ -501,6 +526,9 @@ class PluginLifecycleMixin:
                 rr.unregister_plugin(plugin_name)
         except Exception as e:
             logger.warning(f"[{plugin_name}] 回收远程 API 路由失败: {e}")
+        # 缓存是可重建的中间产物，卸载即清；用模块级函数以兼容只装配了本方法的
+        # 精简 loader（如 tests/test_plugin_api_unmount.py 的 _LoaderStub）。
+        _purge_plugin_cache_for(self.framework, plugin_name)
         return removed
 
     def unload_plugin(self, plugin_name: str):

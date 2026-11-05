@@ -633,6 +633,64 @@ def _migrate_dynamic_commands_handler(database):
         raise
 
 
+def _migrate_admin_users_token_hash(database):
+    """v10：admin_users 增加 token_hash 列，并清空历史明文 token（安全加固）。
+
+    此前登录把 2048 字符明文 token 写进 admin_users.token，_verify_token 又用
+    WHERE token = %s 明文查库 —— DB 泄露即可直接冒用管理员会话。本版把会话
+    令牌改造为「明文只返回客户端、库里只存 sha256 哈希」：
+
+      1. 加可空列 token_hash（定长 64 hex，适合建索引与常量时间比对）；
+      2. 补 token_hash 索引（2048 字符明文列无法高效索引，哈希列可以）；
+      3. 清空 token 列残留的明文，**不回填哈希** —— 存量会话一律作废，
+         升级后所有管理员必须重新登录（明确取舍，不静默保留可用明文会话）。
+
+    不删 token 列：expand-contract 的「先扩展」阶段保留旧列（值恒为 NULL），
+    删列属 destructive、需人工授权，留待后续 contract 版。
+
+    全部 additive：不删行、不删列、不改类型、不重建表；加列 / 加索引 / 清值
+    分别做幂等判断，中断重入可收敛。
+    """
+    if not database.table_exists('admin_users'):
+        return
+
+    # 1) 加 token_hash 列
+    if not database.table_has_column('admin_users', 'token_hash'):
+        if database.db_type == 'sqlite':
+            database.execute(
+                "ALTER TABLE admin_users ADD COLUMN token_hash VARCHAR(64) DEFAULT NULL")
+        else:
+            database.execute(
+                "ALTER TABLE admin_users ADD COLUMN token_hash VARCHAR(64) DEFAULT NULL "
+                "COMMENT '会话令牌sha256哈希(64 hex), 明文不落库'")
+        logger.info("数据库迁移: admin_users 表添加 token_hash 列")
+
+    # 2) 补 token_hash 索引（定长 64，等值查询可走索引）
+    if database.db_type == 'sqlite':
+        database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_token_hash "
+            "ON admin_users (token_hash)")
+    else:
+        row = database.query_one(
+            "SELECT COUNT(*) AS cnt FROM information_schema.statistics "
+            "WHERE table_schema = DATABASE() AND table_name = 'admin_users' "
+            "AND index_name = 'idx_admin_token_hash'")
+        if not (row or {}).get('cnt'):
+            database.execute(
+                "ALTER TABLE admin_users ADD INDEX idx_admin_token_hash (token_hash)")
+
+    # 3) 清空历史明文 token：不回填哈希，存量会话作废、强制重新登录
+    if database.table_has_column('admin_users', 'token'):
+        row = database.query_one(
+            "SELECT COUNT(*) AS cnt FROM admin_users WHERE token IS NOT NULL")
+        if (row or {}).get('cnt'):
+            database.execute(
+                "UPDATE admin_users SET token = NULL WHERE token IS NOT NULL")
+            logger.warning(
+                "数据库迁移: 已清空 %s 条历史明文会话 token（不回填哈希）—— "
+                "存量会话全部作废，升级后需重新登录", row['cnt'])
+
+
 # ── 迁移注册表 ────────────────────────────────────────────────
 #
 # 铁律：
@@ -673,5 +731,8 @@ MIGRATIONS = (
               level=LEVEL_ADDITIVE),
     Migration(9, 'perm.indexes_default_group', _migrate_perm_tables,
               '权限表补索引并播种默认组 default',
+              level=LEVEL_ADDITIVE),
+    Migration(10, 'admin_users.token_hash', _migrate_admin_users_token_hash,
+              'admin_users 增加 token_hash 并清空历史明文 token（会话令牌改为哈希存储）',
               level=LEVEL_ADDITIVE),
 )

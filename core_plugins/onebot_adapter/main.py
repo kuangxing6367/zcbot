@@ -256,7 +256,7 @@ class BotConnection:
         try:
             success = await self._ws_server.asend(self.name, payload)
             if not success:
-                return {"status": "failed", "retcode": -1, "msg": "发送失败"}
+                return {"status": "failed", "retcode": -3, "msg": "发送失败"}
 
             if action in _SENT_ACTIONS:
                 if _should_log_sent_message():

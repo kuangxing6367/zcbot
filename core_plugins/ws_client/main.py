@@ -399,11 +399,16 @@ class WsClientAdapter(ProtocolAdapter):
                     'user_id', payload.get('user_id'))
                 payload['group_id'] = None
             res = await self._send_json(payload)
-            if res != 'ok':
+            if res == 'queued':
+                # 已入队待重连发送：不可重试，避免同一条消息被重复入队/补发
                 return {'status': 'failed', 'retcode': -1,
-                        'queued': res == 'queued',
-                        'msg': 'ws_client 已入队，等待重连后发送'
-                               if res == 'queued' else 'ws_client 发送失败'}
+                        'queued': True,
+                        'msg': 'ws_client 已入队，等待重连后发送'}
+            if res != 'ok':
+                # 连接断开 / 发送失败：本地通道异常，可重试
+                return {'status': 'failed', 'retcode': -3,
+                        'queued': False,
+                        'msg': 'ws_client 发送失败'}
             return {'status': 'ok', 'retcode': 0, 'data': None}
 
         if action in ('get_status', 'get_login_info', 'get_online_clients'):
@@ -426,7 +431,7 @@ class WsClientAdapter(ProtocolAdapter):
             res = await self._send_json(payload)
             if res == 'ok':
                 return {'status': 'ok', 'retcode': 0, 'data': None}
-            return {'status': 'failed', 'retcode': -1,
+            return {'status': 'failed', 'retcode': -3,
                     'queued': res == 'queued', 'msg': '发送失败'}
         return {'status': 'failed', 'retcode': -10,
                 'msg': f'ws_client 不支持动作 {action}（未连接）'}

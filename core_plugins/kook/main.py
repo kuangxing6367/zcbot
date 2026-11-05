@@ -292,7 +292,7 @@ class KookAdapter(ProtocolAdapter):
             resp = self._http.request(
                 method, url, params=params, json=json_body, timeout=timeout)
         except Exception as e:  # noqa: BLE001
-            return {'status': 'failed', 'retcode': -1,
+            return {'status': 'failed', 'retcode': -3,
                     'msg': f'KOOK 请求失败: {type(e).__name__} {e}'}
         try:
             body = resp.json() if resp.content else {}
@@ -489,7 +489,7 @@ class KookAdapter(ProtocolAdapter):
             channel_id = (params.get('channel_id') or params.get('group_id'))
             text = params.get('message', params.get('text', ''))
             if not channel_id:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'KOOK 发送需要 group_id/channel_id（频道 id）'}
             body = {'type': _MSG_KMARKDOWN, 'target_id': str(channel_id),
                     'content': str(text)}
@@ -516,7 +516,7 @@ class KookAdapter(ProtocolAdapter):
         if action == 'delete_msg':
             msg_id = params.get('message_id')
             if not msg_id:
-                return {'status': 'failed', 'retcode': -2, 'msg': '需要 message_id'}
+                return {'status': 'failed', 'retcode': -1, 'msg': '需要 message_id'}
             return await asyncio.to_thread(
                 self._api, 'POST', '/api/v3/message/delete',
                 json_body={'msg_id': str(msg_id)})

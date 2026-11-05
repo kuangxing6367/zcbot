@@ -102,6 +102,7 @@ var coreSchemaDDL = []string{
 		username        TEXT NOT NULL,
 		password_hash   TEXT NOT NULL,
 		token           TEXT DEFAULT NULL,
+		token_hash      TEXT DEFAULT NULL,
 		token_created_at TEXT DEFAULT NULL,
 		role            TEXT DEFAULT 'admin',
 		is_active       INTEGER DEFAULT 1,
@@ -230,6 +231,52 @@ var coreSchemaIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_pgn_group ON perm_group_nodes(group_name)`,
 	`CREATE INDEX IF NOT EXISTS idx_pun_user ON perm_user_nodes(user_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_gps_group ON group_plugin_settings(group_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_admin_token_hash ON admin_users(token_hash)`,
+}
+
+// coreSchemaColumnPatches 给「表已存在」的老库补列。
+//
+// CREATE TABLE IF NOT EXISTS 对已存在的表是 no-op —— 往 DDL 里加列只对新库生效，
+// 老库升级后仍缺列，随后 Web 鉴权按 token_hash 查询会直接报 no such column。
+// SQLite 的 ALTER TABLE ADD COLUMN 又不支持 IF NOT EXISTS（重复执行报
+// duplicate column name），所以先查 pragma_table_info 再决定要不要 ALTER。
+//
+// 表名/列名是本文件内的常量，不来自用户输入，拼进 pragma 函数没有注入面。
+var coreSchemaColumnPatches = []struct {
+	Table, Column, DDL string
+}{
+	{"admin_users", "token_hash",
+		"ALTER TABLE admin_users ADD COLUMN token_hash TEXT DEFAULT NULL"},
+}
+
+// ensureColumns 幂等补齐 coreSchemaColumnPatches 里的列。
+// 返回 (新增列数, 失败数)；失败只记 warn，不阻断启动（与 EnsureSchema 口径一致）。
+func ensureColumns(store Store) (added int, failed int) {
+	for _, p := range coreSchemaColumnPatches {
+		rows, err := store.Query("SELECT name FROM pragma_table_info('" + p.Table + "')")
+		if err != nil {
+			failed++
+			logWarn("db", "探测 %s 列失败（跳过补列 %s）: %v", p.Table, p.Column, err)
+			continue
+		}
+		has := false
+		for _, r := range rows {
+			if name, ok := r["name"].(string); ok && name == p.Column {
+				has = true
+				break
+			}
+		}
+		if has {
+			continue
+		}
+		if _, err := store.Exec(p.DDL); err != nil {
+			failed++
+			logWarn("db", "给 %s 补列 %s 失败: %v", p.Table, p.Column, err)
+			continue
+		}
+		added++
+	}
+	return added, failed
 }
 
 // coreSchemaTableNames 与 coreSchemaDDL 一一对应（同序），用于建表后的存在性复验。
@@ -268,6 +315,9 @@ func EnsureSchema(store Store) {
 			}
 		}
 	}
+	// 补列必须排在建索引之前：老库缺 token_hash 时，先建
+	// idx_admin_token_hash 会直接报 no such column，索引永远建不上。
+	colAdded, colFailed := ensureColumns(store)
 	for _, idx := range coreSchemaIndexes {
 		if _, err := store.Exec(idx); err != nil {
 			idxFailed++
@@ -296,13 +346,14 @@ func EnsureSchema(store Store) {
 			len(missing), missing, ddlFailed, idxFailed, seedFailed, firstErr)
 		return
 	}
-	if ddlFailed > 0 || idxFailed > 0 || seedFailed > 0 {
-		// 表齐全但索引/播种失败：功能可用，但索引缺失会拖慢查询，仍需可见
-		logWarn("db", "核心表均已存在，但初始化中有 %d 条建表 / %d 条索引 / %d 条播种失败（首条错误：%s）",
-			ddlFailed, idxFailed, seedFailed, firstErr)
+	if ddlFailed > 0 || idxFailed > 0 || seedFailed > 0 || colFailed > 0 {
+		// 表齐全但索引/播种/补列失败：功能可用，但索引缺失会拖慢查询，仍需可见
+		logWarn("db", "核心表均已存在，但初始化中有 %d 条建表 / %d 条索引 / %d 条播种 / %d 条补列失败（首条错误：%s）",
+			ddlFailed, idxFailed, seedFailed, colFailed, firstErr)
 		return
 	}
-	logInfo("db", "核心表结构就绪（%d 表 / %d 索引）", len(coreSchemaDDL), len(coreSchemaIndexes))
+	logInfo("db", "核心表结构就绪（%d 表 / %d 索引 / 补列 %d）",
+		len(coreSchemaDDL), len(coreSchemaIndexes), colAdded)
 }
 
 // SeedSuperAdmins 把 --admin 指定的 user_id 同步为 users.role='super'

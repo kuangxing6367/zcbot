@@ -190,7 +190,8 @@ CREATE TABLE IF NOT EXISTS admin_users (
     id              INT             AUTO_INCREMENT  PRIMARY KEY,
     username        VARCHAR(50)     NOT NULL        COMMENT '用户名',
     password_hash   VARCHAR(255)    NOT NULL        COMMENT '密码哈希(bcrypt)',
-    token           VARCHAR(2048)   DEFAULT NULL    COMMENT '登录令牌(2048位随机)',
+    token           VARCHAR(2048)   DEFAULT NULL    COMMENT '已弃用: 历史明文令牌列, 恒为 NULL',
+    token_hash      VARCHAR(64)     DEFAULT NULL    COMMENT '会话令牌sha256哈希(64 hex), 明文不落库',
     token_created_at DATETIME       DEFAULT NULL    COMMENT '令牌签发时间',
     role            ENUM('super','admin')           DEFAULT 'admin'  COMMENT '角色',
     is_active       TINYINT(1)      DEFAULT 1       COMMENT '启用/禁用',
@@ -198,7 +199,8 @@ CREATE TABLE IF NOT EXISTS admin_users (
     last_login_ip   VARCHAR(45)     DEFAULT NULL    COMMENT '最后登录IP',
     created_at      DATETIME        DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_username (username)
+    UNIQUE KEY uk_username (username),
+    INDEX idx_token_hash (token_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='管理员账号表';
 

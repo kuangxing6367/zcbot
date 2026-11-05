@@ -31,13 +31,13 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 
 from onebot_fake import FakeOneBot, group_msg, ws_write_frame, OP_TEXT  # noqa: E402
-from iipc_client import IIPCClient  # noqa: E402
+from iipc_client import IIPCClient, resolve_auth  # noqa: E402
 
 KERNEL_EXE = os.path.join(IIPC, "go_kernel", "zcbot_kernel.exe")
 RUST_EXE = os.path.join(IIPC, "rust_adapter", "target", "release",
                         "zcbot_adapter.exe")
 PLUGINS_DIR = os.path.join(IIPC, "plugins")
-AUTH = "dev-auth"
+AUTH = resolve_auth()  # 生成/继承高熵令牌并写入 os.environ，内核与客户端同源
 
 PASS, FAIL = [], []
 

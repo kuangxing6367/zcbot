@@ -22,9 +22,13 @@ def main():
     ap.add_argument("--plugin-dir", required=True)
     ap.add_argument("--iipc-addr", required=True)
     ap.add_argument("--plugin-id", required=True)
-    ap.add_argument("--iipc-auth", default="")
+    ap.add_argument("--iipc-auth", default=None)
     a = ap.parse_args()
-    run_plugin(a.plugin_dir, a.plugin_id, a.iipc_addr, a.iipc_auth)
+    # 令牌优先走环境变量（内核经 exec 注入），命令行参数仅作显式覆盖，
+    # 缺省时绝不回退到任何固定字符串。
+    from iipc_client import resolve_auth  # noqa: E402
+    auth = resolve_auth(a.iipc_auth)
+    run_plugin(a.plugin_dir, a.plugin_id, a.iipc_addr, auth)
 
 
 if __name__ == "__main__":

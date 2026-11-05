@@ -45,8 +45,10 @@ def _find_root():
 
 ROOT = _find_root()
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "py_sdk"))
 
 import iipc_log  # noqa: E402
+from iipc_client import resolve_auth  # noqa: E402
 
 
 def _load_iipc_config():
@@ -101,7 +103,6 @@ PLUGINS = os.path.join(HERE, "plugins")
 PLUGINHOST = os.path.join(HERE, "py_sdk", "pluginhost.py")
 PY = sys.executable
 IPC_ADDR = os.environ.get("ZCBOT_IIPC_ADDR", "127.0.0.1:18730")
-AUTH = "dev-auth"
 
 # 内核/Rust 日志行：`2026-10-14 20:08:56 INFO [pm] 消息...`
 _KLOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+(\w+)\s+\[([^\]]+)\]\s*(.*)$")
@@ -209,23 +210,88 @@ def spawn(name, argv, cwd=None, env=None, on_line=None):
     return p
 
 
-def build_kernel():
-    if os.path.exists(KERNEL_EXE):
+def _newest_source_mtime(root, patterns):
+    """源码树里匹配 patterns 的最新 mtime；无匹配返回 0。"""
+    import glob
+    newest = 0.0
+    for pat in patterns:
+        for path in glob.glob(os.path.join(root, "**", pat), recursive=True):
+            try:
+                newest = max(newest, os.path.getmtime(path))
+            except OSError:
+                continue
+    return newest
+
+
+# 参与「是否需要重编」判定的源码文件。测试文件不算：改 *_test.go 不影响二进制。
+_KERNEL_SRC_GLOBS = ("*.go", "go.mod", "go.sum")
+_RUST_SRC_GLOBS = ("*.rs", "Cargo.toml", "Cargo.lock")
+
+
+def _binary_is_stale(exe, src_root, patterns):
+    """exe 存在但比源码旧 → 陈旧。
+
+    旧实现是「exe 存在就直接 return True」，结果源码改了（尤其是**协议变更**，
+    如 IIPC 握手新增 auth 帧）但二进制没重编，新客户端与旧内核握手超时，
+    表现为「连不上、没报错原因」，排查成本极高。
+    """
+    if not os.path.exists(exe):
         return True
-    log("launcher", "编译 Go 内核 -> %s" % KERNEL_EXE)
+    try:
+        exe_mtime = os.path.getmtime(exe)
+    except OSError:
+        return True
+    return _newest_source_mtime(src_root, patterns) > exe_mtime + 1
+
+
+def _skip_build_requested():
+    """允许部署方显式关掉「按源码新鲜度重编」——例如机器上没有 Go/Rust 工具链，
+    只用随包分发的预编译二进制。设置后仍会检查 exe 是否存在。
+    """
+    return os.environ.get("ZCBOT_IIPC_SKIP_BUILD", "").strip() not in ("", "0", "false", "False")
+
+
+def build_kernel():
+    if os.path.exists(KERNEL_EXE) and _skip_build_requested():
+        log("launcher", "跳过 Go 内核重编（ZCBOT_IIPC_SKIP_BUILD=1），直接使用 %s"
+            % KERNEL_EXE)
+        return True
+    if not _binary_is_stale(KERNEL_EXE, KERNEL_DIR, _KERNEL_SRC_GLOBS):
+        return True
+    if os.path.exists(KERNEL_EXE):
+        log("launcher", "Go 内核二进制比源码旧（协议可能已变），重新编译 -> %s"
+            % KERNEL_EXE)
+    else:
+        log("launcher", "编译 Go 内核 -> %s" % KERNEL_EXE)
     r = subprocess.run([GO_BIN, "build", "-o", KERNEL_EXE, "."],
                        cwd=KERNEL_DIR, capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
     if r.returncode != 0:
+        if os.path.exists(KERNEL_EXE):
+            # 没有工具链/编译失败时不让整个链路起不来：退回已有二进制，
+            # 但必须说清楚风险（协议可能不匹配，握手会失败）。
+            log("launcher", "Go 编译失败，退回已有内核二进制（若源码改过协议，"
+                "握手可能失败）：\n%s" % (r.stderr or r.stdout), "ERROR")
+            return True
         log("launcher", "Go 编译失败:\n%s" % (r.stderr or r.stdout), "ERROR")
         return False
     return True
 
 
 def build_rust():
-    if os.path.exists(RUST_EXE):
+    if os.path.exists(RUST_EXE) and _skip_build_requested():
+        log("launcher", "跳过 Rust 协议端重编（ZCBOT_IIPC_SKIP_BUILD=1），直接使用 %s"
+            % RUST_EXE)
         return True
-    log("launcher", "编译 Rust 协议端 -> %s" % RUST_EXE)
+    if not _binary_is_stale(RUST_EXE, os.path.join(RUST_DIR, "src"),
+                            _RUST_SRC_GLOBS) and \
+            not _binary_is_stale(RUST_EXE, RUST_DIR, ("Cargo.toml", "Cargo.lock")):
+        return True
+    if os.path.exists(RUST_EXE):
+        log("launcher", "Rust 协议端二进制比源码旧（协议可能已变），重新编译 -> %s"
+            % RUST_EXE)
+    else:
+        log("launcher", "编译 Rust 协议端 -> %s" % RUST_EXE)
     # 尊重部署方自己的环境，不注入任何本机代理。
     # 旧实现无条件 setdefault 127.0.0.1:7892（开发机 Clash 端口）：没有该代理的
     # 服务器上首次 build 拉取 crate 会全部走死代理 → Rust 编译失败并降级为
@@ -235,6 +301,11 @@ def build_rust():
                        cwd=RUST_DIR, env=env, capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
     if r.returncode != 0:
+        if os.path.exists(RUST_EXE):
+            # 与 kernel 同口径：编译不了就用已有二进制，但明确说清协议可能不匹配。
+            log("launcher", "Rust 编译失败，退回已有协议端二进制（若源码改过协议，"
+                "握手可能失败）:\n%s" % (r.stderr or r.stdout)[-2000:], "ERROR")
+            return True
         log("launcher", "Rust 编译失败（将降级：无协议端，send 类动作会失败）:\n%s"
             % (r.stderr or r.stdout)[-2000:], "ERROR")
         return False
@@ -286,9 +357,8 @@ def shutdown():
 
 
 def iipc_client():
-    sys.path.insert(0, os.path.join(HERE, "py_sdk"))
     from iipc_client import IIPCClient
-    return IIPCClient(IPC_ADDR, AUTH)
+    return IIPCClient(IPC_ADDR, resolve_auth())
 
 
 def _mem_watchdog(max_mb):
@@ -478,6 +548,13 @@ def main(argv=None):
     log("launcher", "IIPC 配置: ipc=%s db=%s onebot=%s"
         % (IPC_ADDR, a.db, a.onebot_url or (a.onebot_listen or "反向WS默认")))
 
+    # 生成/读取高熵共享令牌并写入本进程环境：kernel / rust / 各插件子进程
+    # 均以 exec 继承 ZCBOT_IIPC_AUTH，令牌不进命令行参数（避免进程列表泄露）。
+    _had_auth = bool(os.environ.get("ZCBOT_IIPC_AUTH"))
+    _auth = resolve_auth()
+    log("launcher", "IIPC 鉴权令牌已就绪（%s，长度 %d，不打印明文）"
+        % ("沿用用户显式设置" if _had_auth else "自动生成高熵令牌", len(_auth)))
+
     signal.signal(signal.SIGTERM, lambda *_: shutdown())
 
     if not build_kernel():
@@ -500,6 +577,8 @@ def main(argv=None):
     # 编码统一：内核/插件 stdout 一律 UTF-8，避免 Windows GBK 区域设置下透传乱码
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    # 显式注入共享令牌（os.environ 里已有，这里再钉一次确保 kernel 拿到）
+    env["ZCBOT_IIPC_AUTH"] = _auth
     kargv = [KERNEL_EXE, "--plugins-dir", a.plugins_dir,
              "--ipc-addr", IPC_ADDR, "--db", a.db,
              "--data-dir", os.path.join(ROOT, "plugins_dat")]
@@ -529,7 +608,7 @@ def main(argv=None):
             # 两者都不传：Rust 侧默认反向 WS 127.0.0.1:6701
             if a.onebot_token:
                 rargv += ["--token", a.onebot_token]
-            spawn("rust", rargv)
+            spawn("rust", rargv, env=env)
             log("launcher", "Rust 协议端已就绪（OneBot: %s）"
                 % (a.onebot_url or (a.onebot_listen or "反向WS默认 127.0.0.1:6701")))
         else:

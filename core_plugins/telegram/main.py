@@ -625,7 +625,7 @@ class TelegramAdapter(ProtocolAdapter):
         data = op.get('data') or {}
         ref = media_ref({'type': op.get('type'), 'data': data})
         if not ref:
-            return {'status': 'failed', 'retcode': -2,
+            return {'status': 'failed', 'retcode': -1,
                     'msg': f'{method} 缺少文件引用'}
 
         body = {'chat_id': chat_id}
@@ -642,7 +642,7 @@ class TelegramAdapter(ProtocolAdapter):
             try:
                 raw = base64.b64decode(re.sub(r'\s+', '', b64))
             except Exception as e:  # noqa: BLE001
-                return {'status': 'failed', 'retcode': -3,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': f'base64 解码失败: {e}'}
             files = {field: (name or f'{field}.bin', raw,
                              'application/octet-stream')}
@@ -669,7 +669,7 @@ class TelegramAdapter(ProtocolAdapter):
                     self._url(method), data=body, files=files, timeout=60)
             payload = resp.json() if resp.content else {}
         except Exception as e:  # noqa: BLE001
-            return {'status': 'failed', 'retcode': -4, 'msg': f'{method} 失败: {e}'}
+            return {'status': 'failed', 'retcode': -3, 'msg': f'{method} 失败: {e}'}
         return self._result_or_error(payload, method)
 
     def _send_photo(self, chat_id, image: dict, caption: str = '',
@@ -721,7 +721,7 @@ class TelegramAdapter(ProtocolAdapter):
             if chat_id is None:
                 chat_id = params.get('chat_id')
             if chat_id is None:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'send_msg 需要 chat_id/user_id/group_id'}
             reply_to = params.get('reply_to') or params.get('message_id')
             # 规范消息段 → Telegram 发送指令（支持图/语音/视频/文件/贴纸）

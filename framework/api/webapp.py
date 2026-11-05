@@ -32,6 +32,7 @@ Web 应用核心：Flask app 构建 + 共享基础设施（鉴权/CORS/限速/�
 
 向后兼容：framework/apis.py 仍导出 create_web_app / WebServer。
 """
+import hashlib
 import json
 import logging
 import os
@@ -52,6 +53,18 @@ logger = logging.getLogger('zcbot')
 
 # 项目根目录（framework/api/webapp.py 向上三级：api → framework → 根目录）
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _hash_token(token: str) -> str:
+    """会话令牌的库内表示：sha256 十六进制摘要（64 字符，定长、可索引）。
+
+    明文 token 只经响应体 / HttpOnly Cookie 返回客户端，库里只存这里的哈希。
+    选 sha256 而非 HMAC：token 本身是 token_hex(1024) 的 1024 字节高熵随机值，
+    离线爆破不可行；框架也没有稳定的服务端密钥可用于 HMAC，引入密钥管理
+    反而扩大故障面。定长 64 字符让等值查询能走索引、compare_digest 代价恒定，
+    避免对 2048 字符明文列做比较 / 建索引。
+    """
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 
 def create_web_app(framework) -> Flask:
@@ -591,11 +604,17 @@ def create_web_app(framework) -> Flask:
         if not token:
             return None
         if len(token) == 2048:
+            # 库里只存 sha256 摘要：用定长 64 字符的 token_hash 走索引定位，
+            # 再以 compare_digest 做常量时间二次确认（DB 等值匹配受 collation
+            # 大小写 / 尾随空格影响，且把「是否命中」收敛到一处更安全）。
+            expected = _hash_token(token)
             row = db.query_one(
-                "SELECT id, username, role, is_active, token_created_at FROM admin_users WHERE token = %s",
-                (token,)
+                "SELECT id, username, role, is_active, token_created_at, token_hash "
+                "FROM admin_users WHERE token_hash = %s",
+                (expected,)
             )
-            if row and row['is_active']:
+            if row and row['is_active'] and row.get('token_hash') \
+                    and secrets.compare_digest(str(row['token_hash']), expected):
                 timeout = web_cfg.get('token_timeout') or web_cfg.get('session_timeout', 86400)
                 if row['token_created_at']:
                     created = row['token_created_at']
@@ -690,6 +709,7 @@ def create_web_app(framework) -> Flask:
         _verify_token=_verify_token,
         _sync_token_cookie=_sync_token_cookie,
         _auth_wrap=_auth_wrap,
+        _hash_token=_hash_token,
         # 限速 / 登录防爆破
         _check_login_rate=_check_login_rate,
         _record_login_failure=_record_login_failure,

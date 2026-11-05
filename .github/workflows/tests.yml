@@ -69,7 +69,7 @@ jobs:
       - name: Pytest suite (smoke + html_assembler + event_buffer + qq_official + scheduler + db_regression + loop_fix_regression + file_store_fallback + sql_sim_debug + terminal_panel + llm + arch_split)
         run: |
           pip install pytest
-          python -m pytest tests/test_aiwriter.py tests/test_console_server.py tests/test_smoke.py tests/test_html_assembler.py tests/test_event_buffer.py tests/test_qq_official.py tests/test_qq_official_extra.py tests/test_scheduler.py tests/test_db_regression.py tests/test_loop_fix_regression.py tests/test_file_store_fallback.py tests/test_sql_sim_debug.py tests/test_terminal_panel.py tests/test_llm_load.py tests/test_llm_core.py tests/test_message_contract.py tests/test_task2_arch_split.py -q
+          python -m pytest tests/test_aiwriter.py tests/test_console_server.py tests/test_smoke.py tests/test_html_assembler.py tests/test_event_buffer.py tests/test_qq_official.py tests/test_qq_official_extra.py tests/test_scheduler.py tests/test_db_regression.py tests/test_loop_fix_regression.py tests/test_file_store_fallback.py tests/test_sql_sim_debug.py tests/test_terminal_panel.py tests/test_llm_load.py tests/test_llm_core.py tests/test_message_contract.py tests/test_task2_arch_split.py tests/test_adapter_retcodes.py tests/test_concurrency_regressions.py tests/test_iipc_auth.py tests/test_iipc_launcher_stale.py tests/test_perf_regressions.py tests/test_perm_cache_invalidation.py tests/test_plugin_cache_regressions.py tests/test_token_security_regressions.py -q
       # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────
       # 本作业 pytest 未加 -p no:cacheprovider，会正常产生 .pytest_cache/ 与
       # __pycache__/——已被 .gitignore 覆盖，git status 不可见，天然放行；

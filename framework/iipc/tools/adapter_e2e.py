@@ -33,7 +33,7 @@ PYSIDE = os.path.dirname(ROOT)                   # python_side/
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "py_sdk"))
 from onebot_fake import FakeOneBot, group_msg, private_msg  # noqa: E402
-from iipc_client import IIPCClient  # noqa: E402
+from iipc_client import IIPCClient, resolve_auth  # noqa: E402
 
 KERNEL_EXE = os.path.join(ROOT, "go_kernel", "zcbot_kernel.exe")
 
@@ -52,6 +52,8 @@ def _find_rust():
 
 
 RUST_EXE = _find_rust()
+# 生成/继承高熵令牌并写入 os.environ：本脚本拉起的 kernel / rust 子进程都继承它。
+AUTH = resolve_auth()
 PLUGINS_DIR = os.path.join(ROOT, "plugins")
 GO = os.environ.get("ZCBOT_GO_BIN") or r"E:/make_path/go/bin/go.exe"
 
@@ -82,7 +84,7 @@ def wait_plugins_ready(addr, needed, timeout=45):
     while time.time() < deadline:
         cli = None
         try:
-            cli = IIPCClient(addr, "dev-auth")
+            cli = IIPCClient(addr, AUTH)
             r = cli.call("plugin.list", {}, timeout=3)
             ids = set((r or {}).get("plugins", []) and
                       [p.get("plugin_id") for p in (r or {}).get("plugins", [])])

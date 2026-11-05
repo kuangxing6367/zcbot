@@ -331,7 +331,7 @@ class RustAccelService:
             self._task = None
         for fut in list(self._pending.values()):
             if not fut.done():
-                fut.set_result({'status': 'failed', 'retcode': -4,
+                fut.set_result({'status': 'failed', 'retcode': -3,
                                 'msg': 'Rust 加速层已停止'})
         self._pending.clear()
         if self._writer is not None:

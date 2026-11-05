@@ -386,6 +386,10 @@ class MatrixAdapter(ProtocolAdapter):
         try:
             data = self._request('PUT', path, json_body=content, timeout=30)
         except MatrixApiError as e:
+            if e.errcode == 'M_NETWORK':
+                # _request 把连接/请求异常统一翻成 M_NETWORK：本地通道问题，可重试
+                return {'status': 'failed', 'retcode': -3,
+                        'error_code': e.errcode, 'msg': str(e)}
             if e.errcode == 'M_LIMIT_EXCEEDED':
                 return {'status': 'failed', 'retcode': -4, 'throttled': True,
                         'retry_after': int((e.retry_after_ms or 3000) / 1000),
@@ -431,7 +435,7 @@ class MatrixAdapter(ProtocolAdapter):
                        or params.get('channel_id'))
             text = params.get('message', params.get('text', ''))
             if not room_id:
-                return {'status': 'failed', 'retcode': -2,
+                return {'status': 'failed', 'retcode': -1,
                         'msg': 'matrix 发送需要 group_id/room_id'}
             return await asyncio.to_thread(
                 self.send_message, str(room_id), str(text),

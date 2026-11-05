@@ -29,11 +29,11 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 sys.path.insert(0, HERE)
 
-from iipc_client import IIPCClient  # noqa: E402
+from iipc_client import IIPCClient, resolve_auth  # noqa: E402
 from portutil import pick_addr  # noqa: E402
 
 ADDR = pick_addr("ZCBOT_PIPELINE_ADDR")
-AUTH = "dev-auth"
+AUTH = resolve_auth()  # 生成/继承高熵令牌并写入 os.environ，内核与客户端同源
 
 results = []
 
