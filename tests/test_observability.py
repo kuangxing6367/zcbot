@@ -210,9 +210,23 @@ def test_runtime_stats_shares_health():
     check(all(c.get('ok') for c in checks.values() if c.get('required', True)),
           "必需检查项均通过")
 
-    # 与 /readyz 返回完全同构，避免两处口径漂移
     readyz = c.get('/readyz').get_json() or {}
-    check(readyz.get('checks') == checks, "与 /readyz 的 checks 完全一致")
+
+    # 与 /readyz 返回同构，避免两处口径漂移。
+    # 注意**不能要求 detail 全等**：database 的 detail 是 f'{耗时:.1f}ms'，
+    # 两次请求各自实时探测，耗时必然不同（本地偶然通过只是两次恰好落在同一个
+    # 0.1ms 档）。CI 在 Python 3.14 上因此偶发失败过一次，属于断言写错而不是
+    # 产品缺陷。这里比较键集合 + ok + required，语义等价且稳定。
+    def _stable(c):
+        out = {}
+        for k, v in (c or {}).items():
+            v = dict(v or {})
+            v.pop('detail', None)
+            out[k] = v
+        return out
+
+    check(_stable(readyz.get('checks')) == _stable(checks),
+          "与 /readyz 的 checks 同构（键/ok/required 一致，忽略 detail 耗时）")
 
     check(isinstance(data.get('event_buffer'), dict), "带事件缓冲统计字段")
     reqs = data.get('requests')
