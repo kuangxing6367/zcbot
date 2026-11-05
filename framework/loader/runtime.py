@@ -14,6 +14,11 @@ import threading
 
 logger = logging.getLogger('zcbot')
 
+# 框架内置调度任务的 job_id 前缀。内置任务不隶属任何插件，孤儿自检必须跳过，
+# 否则心跳会把框架自己的任务当「插件已不存在的孤儿」删掉。
+# 与 framework/scheduler.py 的 BUILTIN_CACHE_CLEANUP_JOB 前缀保持一致。
+_BUILTIN_TASK_PREFIX = '__builtin__:'
+
 
 class PluginRuntimeMixin:
     """内存监控 / 心跳刷新 / 孤儿自检"""
@@ -260,9 +265,14 @@ class PluginRuntimeMixin:
                 if scheduler is None:
                     pass
                 else:
+                    # 内置任务（job_id 前缀 __builtin__:，如插件缓存 TTL 清理）
+                    # 不隶属任何插件，不能按「插件是否加载」判定为孤儿 ——
+                    # 否则每次心跳（60s）都会把框架自己的任务删掉，而且日志
+                    # 只说「移除孤儿任务」，根本看不出是内置任务被误杀。
                     stale = [
                         tid for tid, info in scheduler._plugin_tasks.items()
                         if info.get('plugin_name') not in loaded
+                        and not str(tid).startswith(_BUILTIN_TASK_PREFIX)
                     ]
                     for tid in stale:
                         try:

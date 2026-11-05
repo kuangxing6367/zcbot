@@ -114,9 +114,61 @@ def test_no_core_dir_falls_back_safely():
     return '目录缺失时安全'
 
 
+def _loader_with_scheduler(core_dir, user_dir, loaded, rows, plugin_tasks):
+    """带最小调度器桩：只看 _plugin_tasks 的键与 plugin_name。"""
+    obj = _loader(core_dir, user_dir, loaded, rows)
+    removed = []
+
+    class _Sched:
+        def __init__(self):
+            self._plugin_tasks = dict(plugin_tasks)
+
+            class _Inner:
+                @staticmethod
+                def remove_job(tid):
+                    removed.append(tid)
+            self._scheduler = _Inner()
+
+    obj.framework.scheduler = _Sched()
+    obj._removed_jobs = removed
+    return obj
+
+
+def test_builtin_task_not_removed_as_orphan():
+    """框架内置任务（__builtin__ 前缀）不隶属任何插件，孤儿自检必须放过。
+
+    线上现象：v1.20.1 引入内置「插件缓存 TTL 清理」后，启动约 60 秒出现
+        [自检] 移除调度器孤儿任务: __builtin__:cache_cleanup
+    缓存清理从此再也不执行，而日志只说「移除孤儿任务」，完全看不出是内置
+    任务被误杀 —— 与之前 echo/help 命令被当孤儿删掉是同一类事故。
+    """
+    tmp = tempfile.mkdtemp()
+    core, user = os.path.join(tmp, 'core_plugins'), os.path.join(tmp, 'plugins')
+    os.makedirs(core, exist_ok=True)
+    os.makedirs(user, exist_ok=True)
+    _mkplugin(core, 'echo')
+
+    obj = _loader_with_scheduler(
+        core, user, loaded=['echo'], rows=['echo'],
+        plugin_tasks={
+            '__builtin__:cache_cleanup': {'plugin_name': '__builtin__',
+                                          'handler_name': 'cache_cleanup'},
+            'echo:cleanup': {'plugin_name': 'echo', 'handler_name': 'cleanup'},
+            'gone:tick': {'plugin_name': 'gone', 'handler_name': 'tick'},
+        })
+    PluginRuntimeMixin.self_check_orphans(obj)
+
+    assert '__builtin__:cache_cleanup' not in obj._removed_jobs, \
+        f'内置任务被误删: {obj._removed_jobs}'
+    assert 'echo:cleanup' not in obj._removed_jobs, '已加载插件的任务被删'
+    assert 'gone:tick' in obj._removed_jobs, '真孤儿任务应被清理'
+    return '内置任务受保护、真孤儿仍清理'
+
+
 if __name__ == '__main__':
     tests = [test_core_plugins_not_deleted, test_loaded_plugin_not_deleted,
-             test_really_removed_plugin_still_cleaned, test_no_core_dir_falls_back_safely]
+             test_really_removed_plugin_still_cleaned, test_no_core_dir_falls_back_safely,
+             test_builtin_task_not_removed_as_orphan]
     ok = fail = 0
     for t in tests:
         try:
