@@ -23,14 +23,20 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ── 启动期引导（必须在 import 重型 framework 之前；可能 execv 自重启）──
+# 只有「作为入口直接运行」才允许套用分配器策略并 execv 重启自身。
+# 被 import 时（pytest 收集、打包脚本、插件复用本模块符号）绝不能替换调用方
+# 进程：pytest 会把 fd 1/2 重定向到捕获临时文件，execv 出的新进程会继承那对
+# fd，把用例跑进捕获文件里 —— 外部表现是「零输出 + 退出码 0」的假绿。
 from framework.bootstrap.allocator import apply_allocator_policy
-apply_allocator_policy()
+if __name__ == '__main__':
+    apply_allocator_policy()
 
 # 对外兼容再导出（cli 子命令与回归测试直接 import 这些符号）
 from framework.bootstrap.deps_check import (
     read_self_check_allow_missing as _read_self_check_allow_missing,
     resolve_self_check_missing as _resolve_self_check_missing,
     check_and_install_deps as _check_and_install_deps,
+    ensure_optional_driver as _ensure_optional_driver,
 )
 from framework.bootstrap.cli_dispatch import (
     print_usage as _print_usage,
@@ -136,6 +142,9 @@ def main():
         cfg = load_config(config_path)
     except Exception:
         cfg = {}
+    # 可选数据库驱动的补装必须在 asyncio.run(amain()) 之前完成：
+    # 放到 Framework() 构造里会同步阻塞事件循环最长 120s。
+    _ensure_optional_driver(config_path)
     dual = cfg.get('dual_process', {}) or {}
     if dual.get('enabled'):
         from framework.ipc.core_runtime import CoreRuntime

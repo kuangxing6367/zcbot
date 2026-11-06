@@ -246,6 +246,10 @@ def test_persist_degraded_flag_warns_once_and_recovers(tmp_path):
     db.close()
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root 无视文件权限位（S_IREAD 文件仍可写），该场景需非特权用户才有意义",
+)
 def test_readonly_file_startup_reads_ok_write_fails(tmp_path):
     """真实只读文件：能启动、能读、写明确失败并置降级标记。"""
     import stat

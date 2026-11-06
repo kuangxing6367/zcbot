@@ -19,6 +19,27 @@ import threading
 _lock = threading.Lock()
 
 
+def process_memory_snapshot(proc=None) -> tuple:
+    """返回 (rss_mb, commit_mb)：工作集 RSS 与「真实占用的提交内存」。
+
+    Windows 上 ``SetProcessWorkingSetSize(-1,-1)`` 会把工作集页换出，RSS 可以在
+    一瞬间从 100MB 掉到 1MB，而私有提交字节（``memory_info().private``）纹丝不动
+    ——对象根本没释放。只看 RSS 会让看门狗「清理一次就再也不判超限」，并且把
+    工作集收缩误报成「节省 99MB」。故判定必须同时看 commit。
+
+    Linux 的 psutil ``memory_info()`` 没有 private 字段（malloc_trim 是真归还），
+    此时退化为 commit == rss，行为与旧版一致。
+    """
+    if proc is None:
+        import psutil
+        proc = psutil.Process()
+    info = proc.memory_info()
+    rss_mb = float(info.rss) / 1048576
+    private = getattr(info, 'private', None)
+    commit_mb = float(private) / 1048576 if private else rss_mb
+    return rss_mb, commit_mb
+
+
 def trim_memory() -> bool:
     """尽力把已释放内存归还 OS，返回是否成功执行归还动作（不含"回收了多少"）。
 

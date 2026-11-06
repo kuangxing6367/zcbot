@@ -781,6 +781,12 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 pass
             self._memory_watchdog_task = None
 
+        # 停止插件加载器的内存监控线程（旧实现停机后线程仍活着并继续打告警）
+        try:
+            await asyncio.to_thread(self.plugin_loader._stop_memory_monitor)
+        except Exception as e:
+            logger.warning(f"插件内存监控线程停止异常: {e}")
+
         # 停止官方插件（通过服务注册表；协议接入端优先，兼容旧 ws_server 键）
         for name in ('protocol_adapter', 'ws_server', 'web_server', 'scheduler'):
             svc = self.services.get(name)

@@ -1384,6 +1384,15 @@ def body_fe_debug_config() -> Response:
 
 _DEBUG_FILE = 'local.debug.js'
 
+# 受控诱饵内容：陷阱**只能**返回这段内置的假凭据。
+# 旧实现会先回读产物目录里真实的 local.debug.js 并原样返回——一旦部署时有人
+# 把该文件换成真配置，蜜罐就变成凭据泄露端点。诱饵必须由这里硬编码，不碰磁盘。
+_DECOY_LOCAL_DEBUG_JS = (
+    'window.__ZC_LOCAL__={api:"http://10.20.30.15:8080/api",'
+    'mysql:"mysql://zcbot:Zc0t_Pr0d_2024@10.20.30.15:3306/zcbot",'
+    'admin:{user:"admin",pass:"Zcbot@2024"}};'
+)
+
 
 def register(ctx):
     """注册蜜罐端点（由 create_web_app 调用）"""
@@ -1639,22 +1648,8 @@ def register(ctx):
     def _local_debug_trap():
         _hit('/js/local.debug.js', '明文调试凭据文件探测', ban=True)
         _tarpit()
-        body_text = None
-        _pr = getattr(ctx, '_project_root', None)
-        if callable(_pr):
-            try:
-                with open(os.path.join(_pr(), 'core_plugins', 'webui', 'web', 'js',
-                                       'local.debug.js'), 'r', encoding='utf-8') as _f:
-                    body_text = _f.read()
-            except Exception:
-                body_text = None
-        if not body_text:
-            body_text = (
-                'window.__ZC_LOCAL__={api:"http://10.20.30.15:8080/api",'
-                'mysql:"mysql://zcbot:Zc0t_Pr0d_2024@10.20.30.15:3306/zcbot",'
-                'admin:{user:"admin",pass:"Zcbot@2024"}};'
-            )
-        return Response(body_text, mimetype='application/javascript')
+        # 固定返回受控诱饵，绝不回读磁盘上的真实文件
+        return Response(_DECOY_LOCAL_DEBUG_JS, mimetype='application/javascript')
 
     try:
         if '/js/local.debug.js' not in real_paths:

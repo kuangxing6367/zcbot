@@ -36,6 +36,11 @@ def register(ctx):
 
     @app.route('/js/<path:filename>')
     def serve_js(filename):
+        # local.debug.js 是「明文调试凭据」受控诱饵，绝不能经静态路由直出。
+        # 蜜罐启用时精确规则 /js/local.debug.js 优先命中陷阱（返回假凭据并拉黑）；
+        # 蜜罐禁用时这里必须挡住，否则未登录访客能直接读到磁盘上的文件原文。
+        if os.path.basename(filename) == 'local.debug.js':
+            return Response('Not Found', status=404, mimetype='text/plain')
         return send_from_directory(os.path.join(_web_root_dir(), 'js'), filename)
 
     @app.route('/img/<path:filename>')

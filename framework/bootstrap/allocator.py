@@ -36,6 +36,8 @@ def apply_allocator_policy():
     if alloc == 'malloc' and os.environ.get('PYTHONMALLOC') != 'malloc':
         os.environ['PYTHONMALLOC'] = 'malloc'
         os.environ['ZCBOT_ALLOC_APPLIED'] = '1'
+        # flush=True 必需：紧接着就 os.execv 换掉整个进程，
+        # 缓冲未刷出时这行提示会直接丢失（生产上看不到策略生效）。
         print('[内存策略] 已自动以 PYTHONMALLOC=malloc 重启进程'
-              '（追求更低内存地板；小对象分配略慢，详见日志）')
+              '（追求更低内存地板；小对象分配略慢，详见日志）', flush=True)
         os.execv(sys.executable, [sys.executable] + sys.argv)

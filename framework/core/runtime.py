@@ -10,7 +10,7 @@ import os
 import sys
 import time
 
-from framework.memory import trim_memory, log_malloc_hint
+from framework.memory import trim_memory, log_malloc_hint, process_memory_snapshot
 from framework.deps import classify_load_error
 
 logger = logging.getLogger('zcbot')
@@ -303,7 +303,7 @@ class FrameworkRuntimeMixin:
                 await asyncio.sleep(self._memory_check_interval)
                 if not self._running:
                     break
-                rss_mb = process.memory_info().rss / 1024 / 1024
+                rss_mb, commit_mb = process_memory_snapshot(process)
                 # 懒初始化：基线 / 峰值 / 节流时间戳 / 回收状态机 / 分配器提示
                 if not hasattr(self, '_baseline_rss'):
                     self._baseline_rss = rss_mb
@@ -314,9 +314,24 @@ class FrameworkRuntimeMixin:
                     self._reclaim_since = 0.0
                     self._reclaim_cooldown = 0.0
                     self._last_reclaim = 0.0
+                    # 超限状态钉住 / 节流：防止 trim 把 RSS 压低后看门狗自我抑制
+                    self._sticky_over_mb = 0.0
+                    self._last_hard_clean = 0.0
+                    self._last_over_warning = 0.0
                     log_malloc_hint(logger)
                 now = time.monotonic()
                 self._peak_rss = max(self._peak_rss, rss_mb)
+                # Windows 工作集裁剪会让 RSS 假性暴跌，但私有提交字节不降（对象仍持有）。
+                # 用 commit 把「仍超限」钉住，直到真实占用回落到阈值内。
+                if self._sticky_over_mb:
+                    if commit_mb < self._memory_limit_mb * 0.9:
+                        self._sticky_over_mb = 0.0
+                        logger.info("[内存看门狗] 提交内存已回落到限制内，解除超限钉住")
+                        effective_rss = rss_mb
+                    else:
+                        effective_rss = max(rss_mb, self._sticky_over_mb)
+                else:
+                    effective_rss = rss_mb
                 # 基线采样：启动后前 120s 取 RSS 滚动最低值作为「健康基线」
                 if now < self._baseline_until:
                     self._baseline_rss = min(self._baseline_rss, rss_mb)
@@ -325,7 +340,7 @@ class FrameworkRuntimeMixin:
 
                 # —— 层 3：自动回收模式（地板检测 + 持续回收）——
                 if not self._reclaim_mode:
-                    if rss_mb > floor:
+                    if effective_rss > floor:
                         if self._reclaim_since == 0.0:
                             self._reclaim_since = now
                         elif now - self._reclaim_since > 30.0:  # 持续 30s 高于地板才判定
@@ -348,7 +363,7 @@ class FrameworkRuntimeMixin:
                             f"RSS {rss_mb:.1f}→{after_rss:.1f}MB"
                         )
                     # 退出条件：RSS 回落到基线 1.2 倍内持续 60s
-                    if rss_mb < self._baseline_rss * 1.2:
+                    if effective_rss < self._baseline_rss * 1.2:
                         if self._reclaim_cooldown == 0.0:
                             self._reclaim_cooldown = now
                         elif now - self._reclaim_cooldown > 60.0:
@@ -359,25 +374,46 @@ class FrameworkRuntimeMixin:
                         self._reclaim_cooldown = 0.0
 
                 # —— 层 1：超限硬清（独立于回收模式的兜底）——
-                if rss_mb > self._memory_limit_mb:
-                    logger.warning(
-                        f"[内存看门狗] RSS {rss_mb:.1f}MB 超过限制 {self._memory_limit_mb}MB，触发清理"
-                    )
-                    from framework.messaging.event import _user_role_cache, _group_role_cache
-                    cache_before = len(_user_role_cache) + len(_group_role_cache)
-                    _user_role_cache.clear()
-                    _group_role_cache.clear()
-                    if hasattr(self, 'stats_writer'):
-                        self.stats_writer._cmd_hits.clear()
-                        self.stats_writer._kw_hits.clear()
-                    collected = gc.collect()
-                    trimmed = trim_memory()
-                    after_rss = process.memory_info().rss / 1024 / 1024
-                    self._last_trim = now
-                    logger.info(
-                        f"[内存看门狗] 清理完成：缓存 {cache_before} 条，GC 回收 {collected} 对象，"
-                        f"trim={trimmed}，RSS {rss_mb:.1f}→{after_rss:.1f}MB（节省 {rss_mb - after_rss:.1f}MB）"
-                    )
+                if effective_rss > self._memory_limit_mb:
+                    # 全量清理有成本（GC + 系统调用），冷却期内不重复执行；
+                    # 但「持续超限」不能被静默，按 30s 节流如实告警。
+                    if now - self._last_hard_clean > 60.0:
+                        logger.warning(
+                            f"[内存看门狗] RSS {rss_mb:.1f}MB / 提交内存 {commit_mb:.1f}MB "
+                            f"超过限制 {self._memory_limit_mb}MB，触发清理"
+                        )
+                        from framework.messaging.event import _user_role_cache, _group_role_cache
+                        cache_before = len(_user_role_cache) + len(_group_role_cache)
+                        _user_role_cache.clear()
+                        _group_role_cache.clear()
+                        if hasattr(self, 'stats_writer'):
+                            self.stats_writer._cmd_hits.clear()
+                            self.stats_writer._kw_hits.clear()
+                        collected = gc.collect()
+                        trimmed = trim_memory()
+                        after_rss, after_commit = process_memory_snapshot(process)
+                        self._last_trim = now
+                        self._last_hard_clean = now
+                        # 不再把「工作集换出」写成「节省 XX MB」：只看提交内存的变化
+                        logger.info(
+                            f"[内存看门狗] 清理完成：缓存 {cache_before} 条，GC 回收 {collected} 对象，"
+                            f"trim={trimmed}，RSS {rss_mb:.1f}→{after_rss:.1f}MB，"
+                            f"提交内存 {commit_mb:.1f}→{after_commit:.1f}MB"
+                        )
+                        rss_drop = max(0.0, rss_mb - after_rss)
+                        commit_drop = max(0.0, commit_mb - after_commit)
+                        if rss_drop > 5.0 and commit_drop < rss_drop * 0.5:
+                            self._sticky_over_mb = max(after_commit, effective_rss)
+                            logger.warning(
+                                f"[内存看门狗] 工作集收缩 {rss_drop:.1f}MB 但提交内存仅下降 "
+                                f"{commit_drop:.1f}MB：对象未释放（仅页面换出），超限状态保持"
+                            )
+                    elif now - self._last_over_warning > 30.0:
+                        self._last_over_warning = now
+                        logger.warning(
+                            f"[内存看门狗] 仍超限（提交内存 {commit_mb:.1f}MB > "
+                            f"{self._memory_limit_mb}MB），等待清理冷却"
+                        )
                 else:
                     # —— 层 2：峰值回落后主动归还（趁释放窗口）——
                     fallen = self._peak_rss - rss_mb

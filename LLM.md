@@ -9,7 +9,7 @@
 - **官方插件默认 `{echo, help, scheduler, webui}` 开启**,其余需显式启用:`core_plugins.yaml` 改 true 或 `python tools/scan_core_plugins.py --enable <名>`
 - 数据在 `data/`(db/logs/plugins_dat),代码目录更新会被覆盖,数据禁止写代码目录
 - 配置两份:`config.yaml`(全局) + `core_plugins.yaml`(官方插件开关,启动自动同步)
-- 适用版本 v1.10.0;文档站 docs/(VitePress);可 pip 安装(`pip install zcbot`,入口 `zcbot`,状态落 `~/.zcbot`)
+- 适用版本以仓库根 `VERSION` 为准（不在本文写死版本号，避免文档漂移）;文档站 docs/(VitePress);可 pip 安装(`pip install zcbot`,入口 `zcbot`,状态落 `~/.zcbot`)
 - **三条启动路径并存**:单进程(默认) / `dual_process` 双 Python 进程 / **`python main.py --iipc`**
   (IIPC:Go 内核 + Rust 协议端 + 独立进程插件)。后两者**不是一回事**,别混:IIPC 内核是 Go 进程,
   DB 在 Go 侧执行不占 GIL;不带 `--iipc` 时主框架行为完全不变

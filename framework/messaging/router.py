@@ -206,13 +206,21 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
 
         # 2. 轻量签名：路由表未变动则跳过完整重建（省去命令全量加载 + 正则重编译）。
         #    外部变更经 _invalidate_cache() 置 _force_refresh，仍会强制重建。
+        #
+        #    注意：签名必须包含「已加载插件集」。核心插件（core_plugins/）**不入
+        #    plugins 表**，所以「插件加载完成」不会改变任何 DB 签名。若只靠 DB 三表
+        #    判定，会出现：启动早期那次重建时 loaded 还是空 → 建出空路由表；随后插件
+        #    加载完，签名不变 + force=False → 永远跳过重建 → 所有命令 unmatched。
+        #    （plugins/ 目录为空、只装核心插件的部署必踩，实测 ROUTES=[] 而 LOADED 有四个）
+        loaded = self.framework.plugin_loader.get_loaded_plugins()
+        loaded_key = tuple(sorted(loaded))
         sig = self._compute_signature()
+        if sig is not None:
+            sig = (sig, loaded_key)
         if (sig is not None and sig == self._routes_signature
                 and not self._force_refresh):
             return
         self._routes_signature = sig
-
-        loaded = self.framework.plugin_loader.get_loaded_plugins()
 
         try:
             rows = self.db.query(

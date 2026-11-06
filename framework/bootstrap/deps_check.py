@@ -131,3 +131,61 @@ def check_and_install_deps():
         print(f"[自检] 依赖安装失败: {result['error']}")
         print(f"[自检] 请手动执行: pip install -r requirements.txt")
         sys.exit(1)
+
+
+def ensure_optional_driver(config_path=None):
+    """启动前（**事件循环之外**）按需补装可选数据库驱动。
+
+    requirements.txt 里 pymysql / DBUtils 是注释掉的可选依赖，通用自检不会装。
+    以前由 `db_conn._init_mysql()` 在 Framework() 构造里 `subprocess.run(pip)`
+    兜底，而那条调用栈已经在 `asyncio.run(amain())` 里面 —— 缺驱动时会同步
+    阻塞整个事件循环最长 120s，启动期所有异步任务全部停摆。
+
+    这里把它前移到 main() 的同步阶段：只有配置明确为 MySQL 且驱动确实缺失
+    时才装，走与通用自检相同的镜像/回退管线；装不上只打印指引，不打断启动
+    （运行期会给出清晰的 ImportError）。
+    """
+    path = config_path or os.path.join(_PROJECT_ROOT, 'config.yaml')
+    try:
+        import yaml
+        with open(path, 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f) or {}
+    except Exception:
+        return  # 读不到配置就不猜；自定义配置格式由运行期自己处理
+    db = cfg.get('database') or {}
+    if not isinstance(db, dict) or str(db.get('type') or '').lower() != 'mysql':
+        return
+
+    import importlib.util
+    need = []
+    if importlib.util.find_spec('pymysql') is None:
+        need.append('pymysql>=1.0.0')
+    if importlib.util.find_spec('dbutils') is None:
+        need.append('DBUtils>=3.0.0')
+    if not need:
+        return
+
+    print(f"[自检] MySQL 模式缺少驱动（{', '.join(need)}），启动前安装...")
+    tmp_req = None
+    try:
+        fd, tmp_req = tempfile.mkstemp(prefix='zcbot_dbdrv_', suffix='.txt')
+        os.close(fd)
+        with open(tmp_req, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(need) + '\n')
+        from framework.deps.pip import pip_install_requirements
+        result = pip_install_requirements(sys.executable, tmp_req, timeout=180)
+    except Exception as e:  # noqa: BLE001
+        print(f"[自检] 数据库驱动安装异常: {e}")
+        return
+    finally:
+        if tmp_req and os.path.isfile(tmp_req):
+            try:
+                os.remove(tmp_req)
+            except OSError:
+                pass
+
+    if result.get('success'):
+        print(f"[自检] 数据库驱动安装完成（镜像: {result.get('mirror', '')}）")
+    else:
+        print(f"[自检] 数据库驱动安装失败: {result.get('error', '')}")
+        print("[自检] 请手动执行: pip install pymysql DBUtils")

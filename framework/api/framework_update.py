@@ -29,9 +29,11 @@ def register(ctx):
     _download_zip_file = ctx._download_zip_file
     _github_url_candidates = ctx._github_url_candidates
 
-    # 框架源码更新白名单：只覆盖这些代码/配置文件，用户数据一律跳过
+    # 框架源码更新白名单：只覆盖这些代码/配置文件，用户数据一律跳过。
+    # 不含根目录 'webui' —— 那是闭源前端源码（.gitignore: /webui/），
+    # 发布包里本就不该有；线上前端只用 core_plugins/webui/web 构建产物。
     _FW_UPDATE_INCLUDE = {
-        'framework', 'core_plugins', 'core_plugins/webui/web', 'webui', 'sql', 'main.py', 'requirements.txt',
+        'framework', 'core_plugins', 'core_plugins/webui/web', 'sql', 'main.py', 'requirements.txt',
         'start.sh', '.gitignore', 'README.md', 'LICENSE', 'VERSION', 'CHANGELOG.md',
     }
 
@@ -244,17 +246,36 @@ def register(ctx):
                     updated.append(name)
 
                 # 新版本可能引入新增依赖：自动安装缺失项（不覆盖已安装包）
+                dep_error = None
                 try:
                     _install_new_requirements()
                 except Exception as e:
+                    dep_error = str(e)
                     logger.warning(f"框架更新：依赖自动安装异常: {e}")
 
-                audit_log(admin['id'], admin['username'], 'update_framework', 'system', 'framework',
-                          {'files': updated, 'target': tag or branch}, 'success')
+                detail = {'files': updated, 'target': tag or branch}
+                if dep_error:
+                    # 源码已经覆盖完成，不能回滚成 500；但绝不能记 success / 提示
+                    # 「更新成功」——重启后缺依赖会直接起不来，必须如实回报。
+                    detail['dependency_error'] = dep_error
+                    audit_log(admin['id'], admin['username'], 'update_framework', 'system',
+                              'framework', detail, 'partial', dep_error)
+                    return jsonify({
+                        'code': 0,
+                        'msg': (f'源码已更新到 {tag or "最新"}（{len(updated)} 项），'
+                                f'但依赖安装失败，请手动安装后重启：{dep_error}'),
+                        'data': {'updated': updated, 'target': tag or 'latest',
+                                 'dependency_status': 'failed',
+                                 'dependency_error': dep_error},
+                    })
+
+                audit_log(admin['id'], admin['username'], 'update_framework', 'system',
+                          'framework', detail, 'success')
                 return jsonify({
                     'code': 0,
                     'msg': f'框架已更新到 {tag or "最新"}（{len(updated)} 项），请重启框架生效。',
-                    'data': {'updated': updated, 'target': tag or 'latest'},
+                    'data': {'updated': updated, 'target': tag or 'latest',
+                             'dependency_status': 'ok'},
                 })
             finally:
                 try:

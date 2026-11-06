@@ -73,6 +73,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         self._conflict_deps: Dict[str, list] = {}  # plugin_name -> [{name, required, installed}, ...]
         self._isolated_plugins: set = set()         # plugin_name -> 已启用隔离环境的插件
         self._memory_monitor_running = False
+        self._memory_monitor_stop = threading.Event()   # 可唤醒采样等待，停机时置位
+        self._memory_monitor_thread = None
         self._memory_violations: Dict[str, int] = {}  # plugin_name -> 连续超限次数
 
         # ── 群级插件开关缓存 {group_id: {plugin_name: enabled}} ──

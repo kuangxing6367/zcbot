@@ -35,7 +35,10 @@ ARCHIVE="$PROJECT_DIR/tmp/zcbot_deploy.tar.gz"
 
 say() { printf '\n=== %s ===\n' "$1"; }
 
-say "打包代码（排除配置 / 数据 / 原生库）"
+say "打包代码（排除配置 / 数据 / 原生库 / 闭源前端源码）"
+# 前端源码是闭源资产（.gitignore: /webui/），发布只带 core_plugins/webui/web
+# 构建产物；整仓打包若不排除，会把 .vue / vite.config.js / 混淆插件源码一起
+# 传到线上。注释必须写在 tar 命令**之前**，不能插进反斜杠续行中间。
 cd "$PROJECT_DIR"
 mkdir -p tmp
 tar czf "$ARCHIVE" \
@@ -51,19 +54,24 @@ tar czf "$ARCHIVE" \
   --exclude='./.workbuddy' --exclude='./.workbuddy-ai' \
   --exclude='./.kilo' --exclude='./.commandcode' \
   --exclude='node_modules' \
+  --exclude='./webui' --exclude='./webui/*' \
+  --exclude='./docs/.vitepress/dist' --exclude='./docs/.vitepress/cache' \
   --exclude='*.so' --exclude='*.pyd' --exclude='*.dll' --exclude='*.dylib' \
   --exclude='./core_plugins/image_renderer/native' \
   --exclude='./core_plugins/rust_accel/native' \
   .
 ls -lh "$ARCHIVE" | awk '{print "  归档:", $5}'
 
-# 安全校验：敏感文件绝不能进包
+# 安全校验：敏感文件与闭源前端源码绝不能进包
 for f in ./config.yaml ./core_plugins.yaml; do
   if tar tzf "$ARCHIVE" | grep -qx -- "$f"; then
     echo "  !! 归档误含 $f，已中止"; rm -f "$ARCHIVE"; exit 1
   fi
 done
-echo "  已确认不含 config.yaml / core_plugins.yaml"
+if tar tzf "$ARCHIVE" | grep -q '^\./webui/'; then
+  echo "  !! 归档误含闭源前端源码 ./webui/，已中止"; rm -f "$ARCHIVE"; exit 1
+fi
+echo "  已确认不含 config.yaml / core_plugins.yaml / ./webui/ 源码"
 
 if [ "$DRY_RUN" = "1" ]; then
   say "DRY_RUN=1，跳过上传/重启"

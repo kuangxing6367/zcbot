@@ -50,6 +50,23 @@ class AsyncStatsWriter:
         :param adapter_key: 事件来源适配器连接标识（onebot/qq_official/…），
             用于多平台接入身份命名空间（multi_platform.namespace 开启时生效）
         """
+        # 身份键要当 dict key 和 DB 参数用：畸形/攻击型输入（dict/list 等）必须
+        # 在入队前收敛，否则 _aggregate_registrations 会以 unhashable type 抛错，
+        # 让整批统计写库（含正常用户的数据）一起失败。
+        if not isinstance(user_id, (int, str)):
+            logger.debug("忽略非法 user_id 类型: %s", type(user_id).__name__)
+            return
+        # 超大整数（如攻击者构造 2**200）虽是合法 int，但超出 SQL BIGINT 范围，
+        # executemany 会抛 OverflowError，使同一批次里所有正常用户的注册一起失败。
+        # 与上面的类型收敛同理：坏身份键必须在入队前挡掉，不能带进批量写库。
+        if isinstance(user_id, int) and not (-(1 << 63) <= user_id <= (1 << 63) - 1):
+            logger.debug("忽略超出 BIGINT 范围的 user_id（%d 位）", len(str(abs(user_id))))
+            return
+        if group_id is not None and not isinstance(group_id, (int, str)):
+            group_id = None
+        if isinstance(group_id, int) and not (-(1 << 63) <= group_id <= (1 << 63) - 1):
+            logger.debug("忽略超出 BIGINT 范围的 group_id")
+            group_id = None
         try:
             self._reg_queue.put_nowait(
                 (user_id, dict(sender), message_type, group_id, adapter_key))
@@ -189,55 +206,82 @@ class AsyncStatsWriter:
                     m[3] += 1
         return users, groups, members
 
-    def _write_users(self, users: dict):
-        """用户自动注册/活跃更新（executemany 单事务）"""
+    def _execute_many_resilient(self, sql: str, rows: list, label: str):
+        """批量写入；整批失败时逐行隔离，坏行不再拖垮整批。
+
+        旧实现是单事务 executemany：一个 user_id 超 BIGINT、一个 nickname
+        含非法编码，整批几百行全部回滚（实测 492 个用户注册全丢）。
+        正常路径仍是一次事务，只有失败才退化为逐行，代价可控。
+        """
+        if not rows:
+            return
         try:
             with self.db.transaction():
-                self.db.execute_many(
-                    "INSERT INTO users (user_id, nickname, first_seen_at, last_active_at) "
-                    "VALUES (%s, %s, NOW(), NOW()) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "nickname = IF(VALUES(nickname) != '', VALUES(nickname), nickname), "
-                    "last_active_at = NOW()",
-                    [(uid, nick) for uid, nick in users.items()]
-                )
+                self.db.execute_many(sql, rows)
+            return
         except Exception as e:
-            logger.error(f"用户注册批量写库失败（{len(users)} 用户）: {e!r}")
+            logger.warning(f"{label} 整批写入失败（{len(rows)} 行），转为逐行隔离: {e!r}")
+
+        ok = bad = 0
+        first_error = None
+        for row in rows:
+            try:
+                with self.db.transaction():
+                    self.db.execute_many(sql, [row])
+                ok += 1
+            except Exception as re:
+                bad += 1
+                if first_error is None:
+                    first_error = repr(re)
+                # 连续全失败基本可判定是数据库不可用，别把每行都试一遍
+                if bad >= 20 and ok == 0:
+                    logger.error(f"{label} 逐行写入连续 {bad} 行失败，疑似数据库不可用，中止本批")
+                    break
+        if bad:
+            logger.error(f"{label} 逐行写入完成：成功 {ok} 行，丢弃 {bad} 行，首个错误 {first_error}")
+        else:
+            logger.info(f"{label} 逐行写入完成：{ok} 行全部落库")
+
+    def _write_users(self, users: dict):
+        """用户自动注册/活跃更新（批量 + 坏行隔离）"""
+        self._execute_many_resilient(
+            "INSERT INTO users (user_id, nickname, first_seen_at, last_active_at) "
+            "VALUES (%s, %s, NOW(), NOW()) "
+            "ON DUPLICATE KEY UPDATE "
+            "nickname = IF(VALUES(nickname) != '', VALUES(nickname), nickname), "
+            "last_active_at = NOW()",
+            [(uid, nick) for uid, nick in users.items()],
+            f"用户注册（{len(users)} 用户）",
+        )
 
     def _write_groups(self, groups: dict):
-        """群信息自动注册（executemany 单事务）"""
-        try:
-            with self.db.transaction():
-                self.db.execute_many(
-                    "INSERT INTO groups_info (group_id, group_name, is_active, join_at) "
-                    "VALUES (%s, %s, 1, NOW()) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "is_active = 1, "
-                    "group_name = IF(VALUES(group_name) != '', VALUES(group_name), group_name)",
-                    [(gid, gname) for gid, gname in groups.items()]
-                )
-        except Exception as e:
-            logger.error(f"群注册批量写库失败（{len(groups)} 群）: {e!r}")
+        """群信息自动注册（批量 + 坏行隔离）"""
+        self._execute_many_resilient(
+            "INSERT INTO groups_info (group_id, group_name, is_active, join_at) "
+            "VALUES (%s, %s, 1, NOW()) "
+            "ON DUPLICATE KEY UPDATE "
+            "is_active = 1, "
+            "group_name = IF(VALUES(group_name) != '', VALUES(group_name), group_name)",
+            [(gid, gname) for gid, gname in groups.items()],
+            f"群注册（{len(groups)} 群）",
+        )
 
     def _write_members(self, members: dict):
-        """群成员关系自动注册/活跃计数更新（executemany 单事务）"""
-        try:
-            with self.db.transaction():
-                self.db.execute_many(
-                    "INSERT INTO group_members (group_id, user_id, card, role, title, "
-                    "last_active_at, message_count) "
-                    "VALUES (%s, %s, %s, %s, %s, NOW(), %s) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "card = IF(VALUES(card) != '', VALUES(card), card), "
-                    "role = VALUES(role), "
-                    "title = IF(VALUES(title) != '', VALUES(title), title), "
-                    "last_active_at = NOW(), "
-                    "message_count = message_count + VALUES(message_count)",
-                    [(gid, uid, m[0], m[1], m[2], m[3])
-                     for (gid, uid), m in members.items()]
-                )
-        except Exception as e:
-            logger.error(f"群成员注册批量写库失败（{len(members)} 成员）: {e!r}")
+        """群成员关系自动注册/活跃计数更新（批量 + 坏行隔离）"""
+        self._execute_many_resilient(
+            "INSERT INTO group_members (group_id, user_id, card, role, title, "
+            "last_active_at, message_count) "
+            "VALUES (%s, %s, %s, %s, %s, NOW(), %s) "
+            "ON DUPLICATE KEY UPDATE "
+            "card = IF(VALUES(card) != '', VALUES(card), card), "
+            "role = VALUES(role), "
+            "title = IF(VALUES(title) != '', VALUES(title), title), "
+            "last_active_at = NOW(), "
+            "message_count = message_count + VALUES(message_count)",
+            [(gid, uid, m[0], m[1], m[2], m[3])
+             for (gid, uid), m in members.items()],
+            f"群成员注册（{len(members)} 成员）",
+        )
 
     async def stop(self):
         """停止并执行最后一次落库"""

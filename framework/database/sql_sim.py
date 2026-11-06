@@ -37,12 +37,30 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger('zcbot')
+
+
+def _log_streams_alive(log: logging.Logger) -> bool:
+    """日志链（含 propagate 到的父 logger）上的流是否仍可写。
+
+    StreamHandler.emit 在流已关闭时抛 ValueError，logging 内部用
+    handleError 打印整段 traceback 到 sys.stderr —— 异常不会抛给调用方，
+    调用处 try/except 拦不住，因此只能在打日志之前检查。
+    """
+    node = log
+    while node is not None:
+        for handler in node.handlers:
+            stream = getattr(handler, 'stream', None)
+            if stream is not None and getattr(stream, 'closed', False):
+                return False
+        node = node.parent if node.propagate else None
+    return True
 
 
 def _ensure_dir(path: str):
@@ -395,7 +413,13 @@ class SqlSimEngine:
             pending = [(t, self._cache[t]) for t in self._dirty if t in self._cache]
         for t, data in pending:
             self._flush_table(t, data)
-        logger.debug("SQL 模拟引擎 close()：缓冲行集已全部落盘")
+        # close() 同时被 atexit 兜底调用，此时 logging 的 StreamHandler 常已
+        # 指向被 pytest capture / 解释器退出关闭的流。logging 在 emit 抛 I/O
+        # 异常时由 handleError 打印整段 traceback（不抛给调用方，调用处
+        # try/except 拦不住），实测能把 744 用例的输出刷到 3000+ 行。
+        # 故只在日志链上的流仍可写、且确有脏表落盘时才打这条调试日志。
+        if pending and not sys.is_finalizing() and _log_streams_alive(logger):
+            logger.debug("SQL 模拟引擎 close()：%d 张缓冲表已落盘", len(pending))
 
     def __repr__(self):
         return f"<SqlSimEngine dir={self._sql_dir}>"

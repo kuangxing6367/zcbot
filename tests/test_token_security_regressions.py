@@ -201,11 +201,12 @@ def test_migration_adds_hash_column_and_purges_plaintext(tmp_path):
     from framework.database import migrations as M
     from framework.database.schema import MIGRATIONS
 
-    # 注册表形状：v1–v9 不变、只在末尾追加 v10
+    # 注册表形状：v1–v10 不可变，末尾追加 v11（api_tokens 摘要化）
     versions = [m.version for m in MIGRATIONS]
     assert versions == list(range(1, len(versions) + 1))
-    assert M.latest_version(MIGRATIONS) == 10
-    assert M.checksum_of(MIGRATIONS[-1]), 'v10 必须能算出源码校验和'
+    assert M.latest_version(MIGRATIONS) == 11
+    assert MIGRATIONS[-2].version == 10, 'v10 仍在原位，未被重排'
+    assert M.checksum_of(MIGRATIONS[-1]), 'v11 必须能算出源码校验和'
 
     db = Database({'type': 'sqlite',
                    'path': (tmp_path / 'legacy.db').as_posix()})
@@ -220,7 +221,7 @@ def test_migration_adds_hash_column_and_purges_plaintext(tmp_path):
 
     report = M.run_pending(db, MIGRATIONS, M.MigrationContext(source='test'))
     assert report['ok'] is True, report
-    assert report['current'] == 10
+    assert report['current'] == 11, report
     assert db.table_has_column('admin_users', 'token_hash')
 
     row = db.query_one("SELECT * FROM admin_users WHERE username = %s", ('admin',))

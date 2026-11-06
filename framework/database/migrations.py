@@ -746,6 +746,21 @@ def run_pending(database, registry: Sequence[Migration],
                 "已应用的迁移必须不可变：若确需调整，请新增一版迁移，不要改旧版。",
                 m.version, m.name, recorded[:12], actual[:12])
 
+    # 上次执行在 apply 中途被杀：账本停在 running（success=0），DDL 可能已
+    # 部分生效。迁移体要求幂等，本轮重跑是安全的，但不能静默当「从未执行」。
+    interrupted = []
+    if report['ledger']:
+        interrupted = [
+            {'version': v, 'name': r.get('name', '')}
+            for v, r in rows.items()
+            if not r['success'] and str(r.get('note') or '').startswith('running')]
+    report['interrupted'] = interrupted
+    if interrupted:
+        logger.error(
+            "数据库迁移: 检测到 %s 上次执行在 apply 中断（DDL 可能已部分生效）；"
+            "本轮按幂等语义重跑并覆盖账本",
+            ', '.join('v%d %s' % (x['version'], x['name']) for x in interrupted))
+
     report['current'] = max(done) if done else None
     report['pending'] = [
         {'version': m.version, 'name': m.name, 'description': m.description,
@@ -831,6 +846,18 @@ def run_pending(database, registry: Sequence[Migration],
                 started_at = _now()
                 t0 = time.time()
                 backup_ref = report['backup'] if m.level != LEVEL_ADDITIVE else ''
+                # 两阶段记账 ①：apply 之前先落 running。MySQL DDL 不是事务性的，
+                # 进程若在 apply 中途被杀，旧实现账本里一片空白，运维无法判断
+                # 该版本是否曾经执行过；现在至少留下可审计的痕迹（② 在成功
+                # 路径覆盖为 success=1，失败路径覆盖为 success=0 + 错误）。
+                if report['ledger']:
+                    try:
+                        _write_record(database, m, csum, 0, False,
+                                      note='running', context=ctx)
+                    except Exception as we:  # noqa: BLE001
+                        logger.warning(
+                            "数据库迁移: v%d %s 预写 running 失败（不阻塞执行）: %s",
+                            m.version, m.name, we)
                 try:
                     m.apply(database)
                 except Exception as e:  # noqa: BLE001

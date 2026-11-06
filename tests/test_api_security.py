@@ -205,6 +205,7 @@ def test_db_file_download_blocked_for_normal_admin(env):
     normal_token = _login(c, 'normaladmin', 'admin123')
 
     target = os.path.join(ROOT, '_sec_dl_tmp.db')
+    responses = []
     try:
         with open(target, 'wb') as f:
             f.write(b'SQLite format 3\x00')
@@ -212,15 +213,27 @@ def test_db_file_download_blocked_for_normal_admin(env):
 
         r = c.get(f'/api/files/download?path={path}',
                   headers={'Authorization': f'Bearer {normal_token}'})
+        responses.append(r)
         assert r.status_code == 403
         r = c.get(f'/api/files/download?path={path}',
                   headers={'Authorization': f'Bearer {super_token}'})
+        responses.append(r)
         assert r.status_code == 200
     finally:
+        # send_file 的 direct_passthrough 会一直持有文件句柄：Windows 上不先
+        # 关响应就 os.remove 会抛 PermissionError。旧代码 except OSError:pass
+        # 把它吞掉，每跑一轮就留一个 16 字节残留，guard_workspace 本地变红。
+        for resp in responses:
+            try:
+                resp.close()
+            except Exception:
+                pass
         try:
             os.remove(target)
-        except OSError:
+        except FileNotFoundError:
             pass
+        # 清理契约显性化：残留由本用例负责，不再靠事后护栏发现。
+        assert not os.path.exists(target), '测试临时库未清理干净'
 
 
 if __name__ == '__main__':

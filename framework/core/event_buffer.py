@@ -267,26 +267,37 @@ class EventBuffer:
         return 0
 
     async def _l2_write(self, event) -> bool:
-        """写一条到 L2 溢出层（统一超时与失败计数语义）"""
+        """写一条到 L2 溢出层（统一超时与失败计数语义）。
+
+        与批量路径同理：不能裸用 wait_for 包 to_thread。超时取消的是 future，
+        default executor 里已跑起来的线程不会停；若线程内 INSERT+commit 其实
+        已成功，上层却按「失败」把同一条回落 L3，同一事件就会被消费两遍。
+        用 shield 保护底层任务，超时后继续等它给出确定结果：成功即不回落。
+        """
+        if self.l2_mode == 'sqlite':
+            fn = self._write_sqlite
+        elif self.l2_mode == 'file':
+            fn = self._l2_file.write
+        else:
+            return False
+        task = asyncio.ensure_future(asyncio.to_thread(fn, event))
         try:
-            if self.l2_mode == 'sqlite':
+            try:
                 ok = await asyncio.wait_for(
-                    asyncio.to_thread(self._write_sqlite, event),
-                    timeout=self.sqlite_write_timeout)
-            elif self.l2_mode == 'file':
-                ok = await asyncio.wait_for(
-                    asyncio.to_thread(self._l2_file.write, event),
-                    timeout=self.sqlite_write_timeout)
-            else:
-                return False
+                    asyncio.shield(task), timeout=self.sqlite_write_timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"L2 缓冲单条写入超时（>{self.sqlite_write_timeout}s），"
+                    f"等待底层给出确定结果（避免误判失败导致重复消费）")
+                ok = await task
             if ok:
                 self._overflow_to_sqlite += 1
                 return True
             return False
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"L2 缓冲写入超时（>{self.sqlite_write_timeout}s），转下一层")
-            return False
+        except asyncio.CancelledError:
+            # 调用方被取消：底层线程可能已经落盘，不能当作失败回落。
+            # 保留 task 引用让它跑完，结果由 close()/重启恢复链路兜底。
+            raise
         except Exception as e:
             logger.warning(f"L2 缓冲写入异常: {e}")
             return False

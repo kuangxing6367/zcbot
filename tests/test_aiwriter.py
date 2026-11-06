@@ -27,6 +27,19 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# rich 是 aiwriter TUI（tui.py）的依赖，未随核心 requirements 分发。
+# 缺失时整模块 skip：否则 15 条用例会因导入失败集体报假红，
+# 把「环境没装可选依赖」误报成「功能坏了」。脚本直跑时退化为干净跳过。
+try:
+    import rich  # noqa: F401
+except ImportError:  # pragma: no cover - 仅在无 rich 的最小化环境触发
+    try:
+        import pytest
+        pytest.skip("aiwriter TUI 依赖 rich 未安装", allow_module_level=True)
+    except ImportError:
+        print("SKIP test_aiwriter: aiwriter TUI 依赖 rich 未安装")
+        sys.exit(0)
+
 from core_plugins.aiwriter import agent as aw_agent  # noqa: E402
 from core_plugins.aiwriter import main as aw_main  # noqa: E402
 from core_plugins.aiwriter import prompt as aw_prompt  # noqa: E402

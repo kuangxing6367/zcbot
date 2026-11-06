@@ -381,7 +381,7 @@ CREATE TABLE IF NOT EXISTS perm_audit (
 -- 接口令牌表（API Key）：与用户会话 token 解耦，供外部程序调用 REST API
 CREATE TABLE IF NOT EXISTS api_tokens (
     id              INT             AUTO_INCREMENT  PRIMARY KEY,
-    token           VARCHAR(512)    NOT NULL        COMMENT '令牌（外部程序持有，仅创建时返回一次）',
+    token           VARCHAR(512)    NOT NULL        COMMENT 'API Key 摘要 sha256:<64hex>，明文仅创建时返回一次（v11 起）',
     name            VARCHAR(100)    NOT NULL        COMMENT '令牌名称（便于辨识用途）',
     role            VARCHAR(20)     DEFAULT 'admin' COMMENT '作用身份: admin / super',
     created_by      VARCHAR(100)    DEFAULT NULL    COMMENT '创建者（Web账号）',

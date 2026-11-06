@@ -64,12 +64,47 @@ jobs:
         run: python tests/test_backoff.py
       - name: Config missing-section fill regression
         run: python tests/test_config_defaults.py
-      # pytest 用例与脚本式回归并存：显式列文件（其余 test_*.py 是模块级 sys.exit 的脚本，
-      # 被 pytest 收集会 INTERNALERROR），test_smoke.py 本身两种方式兼容
-      - name: Pytest suite (smoke + html_assembler + event_buffer + qq_official + scheduler + db_regression + loop_fix_regression + file_store_fallback + sql_sim_debug + terminal_panel + llm + arch_split)
+      # 脚本式回归（模块顶层 sys.exit，pytest 收集会 INTERNALERROR / 零断言假绿）
+      - name: Extreme script-style regressions
+        run: |
+          set -e
+          for f in \
+            tests/test_blackbox_extreme.py \
+            tests/test_blackbox_integration.py \
+            tests/test_disable_vs_selfheal_bug.py \
+            tests/test_multi_platform.py; do
+            echo "== $f =="
+            python "$f"
+          done
+      # pytest 用例与脚本式回归并存：显式列文件（模块级 sys.exit 的脚本走上面的
+      # 脚本式步骤，不能塞进 pytest），test_smoke.py 本身两种方式兼容
+      - name: Pytest suite (all collectible regressions)
         run: |
           pip install pytest
-          python -m pytest tests/test_aiwriter.py tests/test_console_server.py tests/test_smoke.py tests/test_html_assembler.py tests/test_event_buffer.py tests/test_qq_official.py tests/test_qq_official_extra.py tests/test_scheduler.py tests/test_db_regression.py tests/test_loop_fix_regression.py tests/test_file_store_fallback.py tests/test_sql_sim_debug.py tests/test_terminal_panel.py tests/test_llm_load.py tests/test_llm_core.py tests/test_message_contract.py tests/test_task2_arch_split.py tests/test_adapter_retcodes.py tests/test_concurrency_regressions.py tests/test_iipc_auth.py tests/test_iipc_launcher_stale.py tests/test_perf_regressions.py tests/test_perm_cache_invalidation.py tests/test_plugin_cache_regressions.py tests/test_token_security_regressions.py -q
+          python -m pytest \
+            tests/test_aiwriter.py tests/test_console_server.py tests/test_smoke.py \
+            tests/test_html_assembler.py tests/test_event_buffer.py \
+            tests/test_qq_official.py tests/test_qq_official_extra.py \
+            tests/test_scheduler.py tests/test_db_regression.py \
+            tests/test_loop_fix_regression.py tests/test_file_store_fallback.py \
+            tests/test_sql_sim_debug.py tests/test_terminal_panel.py \
+            tests/test_llm_load.py tests/test_llm_core.py \
+            tests/test_message_contract.py tests/test_task2_arch_split.py \
+            tests/test_adapter_retcodes.py tests/test_concurrency_regressions.py \
+            tests/test_iipc_auth.py tests/test_iipc_launcher_stale.py \
+            tests/test_perf_regressions.py tests/test_perm_cache_invalidation.py \
+            tests/test_plugin_cache_regressions.py tests/test_token_security_regressions.py \
+            tests/test_runtime_hardening_regressions.py \
+            tests/test_blackbox.py tests/test_blackbox_trace.py \
+            tests/test_core_plugin_deps.py tests/test_crash_guard.py \
+            tests/test_dispatch_drop_visibility.py tests/test_event_classify.py \
+            tests/test_extreme_conditions.py tests/test_hook_serial_parallel.py \
+            tests/test_iipc_client_dispatch.py tests/test_iipc_silent_drop.py \
+            tests/test_image_rect_normalization.py tests/test_loop_watchdog.py \
+            tests/test_main_selfcheck_config.py tests/test_message_classified_hook.py \
+            tests/test_plugin_api_unmount.py tests/test_plugin_route_hotmount.py \
+            tests/test_scheduler_reliability.py tests/test_session_tokens.py \
+            tests/test_telegram_offset.py -q
       # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────
       # 本作业 pytest 未加 -p no:cacheprovider，会正常产生 .pytest_cache/ 与
       # __pycache__/——已被 .gitignore 覆盖，git status 不可见，天然放行；

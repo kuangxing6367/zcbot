@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import threading
+import time
 
 logger = logging.getLogger('zcbot')
 
@@ -18,6 +19,55 @@ logger = logging.getLogger('zcbot')
 # 否则心跳会把框架自己的任务当「插件已不存在的孤儿」删掉。
 # 与 framework/scheduler.py 的 BUILTIN_CACHE_CLEANUP_JOB 前缀保持一致。
 _BUILTIN_TASK_PREFIX = '__builtin__:'
+
+
+def _estimate_module_size(module, max_items: int = 4096) -> float:
+    """估算插件模块全局对象占用的 MB（对模块级容器展开一层）。
+
+    旧口径 ``sum(sys.getsizeof(v) for v in vars(module).values())`` 有个洞：
+    65MB 的 bytearray 只要塞进 list / dict，容器本身只有几十字节，完全漏判。
+    这里把模块级容器展开一层、把元素自身的 getsizeof 计入；同一对象只计一次
+    （seen），模块/函数/类不计入，避免把框架共享对象算到插件头上。
+
+    注意：这仍是**估算**，不是 USS，也不递归孙层容器；只用于「连续两次超阈值
+    自动卸载」的粗判定，日志里必须写明是估算。
+    """
+    seen = set()
+    total = 0
+
+    def _size_of(value):
+        try:
+            return max(0, sys.getsizeof(value))
+        except Exception:
+            return 0
+
+    def _skip(value):
+        try:
+            return value.__class__.__name__.startswith(('module', 'function', 'type'))
+        except Exception:
+            return True
+
+    for value in list(vars(module).values()):
+        try:
+            if _skip(value) or id(value) in seen:
+                continue
+            seen.add(id(value))
+            total += _size_of(value)
+            if isinstance(value, dict):
+                children = list(value.values())[:max_items]
+            elif isinstance(value, (list, tuple, set, frozenset)):
+                children = list(value)[:max_items]
+            else:
+                children = ()
+            for item in children:
+                oid = id(item)
+                if oid in seen or _skip(item):
+                    continue
+                seen.add(oid)
+                total += _size_of(item)
+        except Exception:
+            continue
+    return total / 1024 / 1024
 
 
 class PluginRuntimeMixin:
@@ -32,6 +82,10 @@ class PluginRuntimeMixin:
         if self._memory_monitor_running:
             return
         self._memory_monitor_running = True
+        stop_event = getattr(self, '_memory_monitor_stop', None)
+        if stop_event is None:
+            stop_event = self._memory_monitor_stop = threading.Event()
+        stop_event.clear()  # 支持 stop() 后再次 start()
 
         cfg = self.framework.config.get('plugin', {})
         max_mb = cfg.get('max_memory_mb', 64)
@@ -39,30 +93,28 @@ class PluginRuntimeMixin:
         def monitor():
             import psutil  # 延迟导入：psutil 导入较慢，仅在启动内存监控线程时加载
             process = psutil.Process(os.getpid())
+            last_proc_warn = 0.0
 
-            while self._memory_monitor_running:
-                threading.Event().wait(3)
+            # 用可唤醒的 Event 等待：stop() 置位后立即退出，不必干等一个采样周期
+            while not stop_event.is_set():
+                if stop_event.wait(3):
+                    break
 
                 try:
-                    # 进程级内存监控
+                    # 进程级内存监控（同一状态 60s 只告警一次，避免刷屏）
                     proc_mem = process.memory_info().rss / 1024 / 1024
-                    if proc_mem > max_mb * 1.5:  # 进程总内存超过 1.5 倍阈值
+                    if proc_mem > max_mb * 1.5 and time.monotonic() - last_proc_warn > 60.0:
+                        last_proc_warn = time.monotonic()
                         logger.warning(
                             f"[内存监控] 进程内存 {proc_mem:.1f}MB 超过警戒线 "
                             f"({max_mb * 1.5:.0f}MB)，可能存在插件泄漏"
                         )
 
-                    # 逐个插件粗略估计内存（通过模块全局变量大小）
+                    # 逐个插件估算内存（模块全局对象 + 一层容器内元素）
                     with self._lock:
                         for name, info in list(self._loaded_plugins.items()):
                             try:
-                                module = info['module']
-                                # 估算：模块的 __dict__ 里所有对象大小之和
-                                module_size = sum(
-                                    sys.getsizeof(v) for v in
-                                    vars(module).values()
-                                    if not v.__class__.__name__.startswith(('module', 'function', 'type'))
-                                ) / 1024 / 1024
+                                module_size = _estimate_module_size(info['module'])
 
                                 if module_size > max_mb:
                                     count = self._memory_violations.get(name, 0) + 1
@@ -70,9 +122,10 @@ class PluginRuntimeMixin:
                                     if count >= 2:
                                         logger.error(
                                             f"[内存监控] [{name}] 连续 {count} 次超限 "
-                                            f"({module_size:.1f}MB > {max_mb}MB)，自动卸载"
+                                            f"(估算 {module_size:.1f}MB > {max_mb}MB)，自动卸载"
                                         )
-                                        # 异步卸载（不在此线程内执行耗时操作）
+                                        # 已发起卸载，清计数，避免每 3s 重复拉起卸载线程
+                                        self._memory_violations.pop(name, None)
                                         threading.Thread(
                                             target=self.unload_plugin,
                                             args=(name,),
@@ -80,11 +133,10 @@ class PluginRuntimeMixin:
                                         ).start()
                                     else:
                                         logger.warning(
-                                            f"[内存监控] [{name}] 内存使用 {module_size:.1f}MB "
+                                            f"[内存监控] [{name}] 估算内存 {module_size:.1f}MB "
                                             f"超过限制 {max_mb}MB（第 {count} 次警告）"
                                         )
                                 else:
-                                    # 恢复正常，清除违规计数
                                     self._memory_violations.pop(name, None)
 
                             except Exception:
@@ -94,8 +146,31 @@ class PluginRuntimeMixin:
                     pass  # 监控异常不干扰主流程
 
         t = threading.Thread(target=monitor, daemon=True, name="memory_monitor")
+        self._memory_monitor_thread = t
         t.start()
-        logger.info(f"内存监控线程已启动 (采样间隔 3s, 单插件上限 {max_mb}MB)")
+        logger.info(f"内存监控线程已启动 (采样间隔 3s, 单插件上限 {max_mb}MB, 估算含一层容器)")
+
+    def _stop_memory_monitor(self):
+        """停止内存监控线程（由 Framework.stop() 调用）。
+
+        旧实现停机时没人置 ``_memory_monitor_running``，且循环用
+        ``threading.Event().wait(3)``（每次新建、外部拿不到），导致框架退出后
+        线程仍活着并继续打告警。这里用共享 Event 唤醒 + 有限 join。
+        """
+        self._memory_monitor_running = False
+        ev = getattr(self, '_memory_monitor_stop', None)
+        if ev is not None:
+            ev.set()
+        t = getattr(self, '_memory_monitor_thread', None)
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=3.5)
+        self._memory_monitor_thread = None
+        if t is None:
+            return
+        if not t.is_alive():
+            logger.info("内存监控线程已停止")
+        else:
+            logger.warning("内存监控线程未在 3.5s 内退出（daemon，不阻塞停机）")
 
 
 

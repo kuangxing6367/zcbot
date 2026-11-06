@@ -26,6 +26,7 @@
   保证服务停用后不残留线程、不出现「已停止又被拉起」的僵尸调度器。
 """
 import asyncio
+import concurrent.futures
 import functools
 import logging
 import threading
@@ -122,6 +123,14 @@ class TaskScheduler:
         # 以及 plugin async handler 的 asyncio.Task（_wrapper 内登记）。
         self._inflight = set()
         self._inflight_lock = threading.Lock()
+        # label -> 正在执行的 runner task 集合。两个用途：
+        #   1) 超时只是「不再等待」，底层同步线程仍在跑；label 必须留到它真正
+        #      结束才释放，否则 APScheduler 释放实例后会重入同一个还在跑的
+        #      handler（max_instances 只认协程生命周期，不认线程池任务）。
+        #   2) 插件卸载时按 label 前缀 await 在途任务，避免模块已清、闭包仍持
+        #      有旧引用继续执行。
+        self._active: dict = {}
+        self._active_lock = threading.Lock()
         # label -> 执行记录（最近一次耗时/状态 + 累计次数），供 get_jobs 与面板展示
         self._task_records = {}
         self._stats = {'runs': 0, 'failures': 0, 'timeouts': 0, 'slow': 0,
@@ -332,12 +341,12 @@ class TaskScheduler:
         if graceful:
             d = self._resolve_drain_timeout(drain_timeout)
             loop = getattr(self.framework, 'loop', None)
-            with self._inflight_lock:
-                pending = list(self._inflight)
-            if loop is not None and pending:
+            # 不在 stop() 里取一次快照：drain 期间仍可能有新任务登记，
+            # 旧实现只等快照那批就打「全部完成」，实际漏等了新任务。
+            if loop is not None and loop.is_running():
                 try:
                     fut = asyncio.run_coroutine_threadsafe(
-                        self._drain(pending, d), loop)
+                        self._drain(d), loop)
                     # 多给 1s 余量容纳调度器自身收尾，避免误判超时
                     fut.result(timeout=d + 1)
                     logger.info(f"定时任务优雅停机：在途任务已全部完成（drain {d:g}s）")
@@ -356,16 +365,129 @@ class TaskScheduler:
             logger.info("定时任务调度器已停止")
         self._shutdown_executor()
 
-    async def _drain(self, tasks, timeout: float):
-        """await 一批在途任务完成（带超时）。tasks 是 asyncio 可等待对象列表
-        （run_blocking 的 Future 与 plugin _wrapper 的 Task 均可）。"""
-        if not tasks:
-            return
-        try:
+    @staticmethod
+    def _as_awaitables(items):
+        """把 concurrent.futures.Future 转成 asyncio Future。
+
+        `asyncio.run_coroutine_threadsafe` 返回的是 concurrent Future，
+        Python 3.13 的 `asyncio.gather` 已不再自动包装它（直接抛
+        "An asyncio.Future, a coroutine or an awaitable is required"）。
+        _inflight 里两类都可能来自外部登记，这里统一收敛。
+        """
+        out = []
+        for x in items:
+            if isinstance(x, concurrent.futures.Future) \
+                    and not isinstance(x, asyncio.Future):
+                out.append(asyncio.wrap_future(x))
+            else:
+                out.append(x)
+        return out
+
+    async def _drain(self, timeout: float):
+        """等到 _inflight 真正清空（含等待期间新登记的任务）或整体超时。
+
+        每轮重新取快照，直到集合为空；总时限用同一个 deadline 控制，
+        不会因为不断有新任务而无限等下去。
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._inflight_lock:
+                # 已完成但尚未摘除的成员（例如外部手工登记、回调还没跑）不能
+                # 让循环一直认为「还有在途」；先清掉，再取真正待等的快照。
+                for t in [x for x in self._inflight if x.done()]:
+                    self._inflight.discard(t)
+                pending = list(self._inflight)
+            if not pending:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
             await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
-        except asyncio.TimeoutError:
-            raise
+                asyncio.gather(*self._as_awaitables(pending),
+                               return_exceptions=True),
+                timeout=remaining)
+
+    # ---- 活跃 label 状态（防重入 / 卸载在途隔离）----
+
+    def _claim_label(self, label, runner) -> bool:
+        with self._active_lock:
+            bucket = self._active.get(label)
+            if bucket:
+                return False
+            self._active[label] = {runner}
+            return True
+
+    def _release_label(self, label, runner) -> None:
+        with self._active_lock:
+            bucket = self._active.get(label)
+            if not bucket:
+                return
+            bucket.discard(runner)
+            if not bucket:
+                self._active.pop(label, None)
+
+    def _active_tasks(self, prefix=None) -> list:
+        with self._active_lock:
+            out = []
+            for label, bucket in self._active.items():
+                if prefix is None or label.startswith(prefix):
+                    out.extend(bucket)
+            return out
+
+    def _finish_runner(self, label, runner) -> None:
+        """runner 真正结束时释放 label 与在途登记（幂等，可能被 finally 与
+        done_callback 各调一次）。顺带消费异常，避免超时后无人 await 的
+        'Task exception was never retrieved' 噪声。"""
+        self._release_label(label, runner)
+        with self._inflight_lock:
+            self._inflight.discard(runner)
+        if runner.done() and not runner.cancelled():
+            try:
+                exc = runner.exception()
+            except Exception:
+                exc = None
+            if exc is not None:
+                logger.debug(f"{label} 在途任务最终异常: {exc!r}")
+
+    async def _drain_plugin(self, prefix: str, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while True:
+            tasks = self._active_tasks(prefix)
+            if not tasks:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    f"插件 {prefix.strip('[] ')} 在途任务 drain 超时（>{timeout:g}s），"
+                    f"不再等待；Python 无法强杀线程，任务仍会在后台跑完")
+                return False
+            await asyncio.wait_for(
+                asyncio.gather(*self._as_awaitables(tasks),
+                               return_exceptions=True),
+                timeout=remaining)
+
+    def drain_plugin_tasks(self, plugin_name: str, timeout: float = 5.0) -> bool:
+        """同步入口：等某插件在途任务真正结束，供 unload_plugin 在清理模块前调用。
+
+        unload_plugin 常从 worker 线程调用，故落到事件循环 await；若恰好就在
+        循环线程里（同线程 fut.result() 会死锁），直接跳过并如实返回 False。
+        """
+        loop = getattr(self.framework, 'loop', None)
+        if loop is None or not loop.is_running():
+            return False
+        try:
+            if asyncio.get_running_loop() is loop:
+                logger.debug("插件卸载在事件循环线程内执行，跳过在途任务 drain")
+                return False
+        except RuntimeError:
+            pass
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                self._drain_plugin(f'[{plugin_name}] ', timeout), loop)
+            return bool(fut.result(timeout=timeout + 1))
+        except Exception as e:
+            logger.warning(f"[{plugin_name}] 在途任务 drain 异常: {e}")
+            return False
 
     def _resolve_drain_timeout(self, drain_timeout) -> float:
         """drain 超时上限：显式值优先；缺省 min(单任务超时, 30s)，单任务超时不限时按 30s。"""
@@ -418,43 +540,73 @@ class TaskScheduler:
             with self._inflight_lock:
                 self._inflight.discard(fut)
 
+    async def _execute(self, func):
+        """真正跑一次 handler：协程直接 await，同步转任务线程池。"""
+        if asyncio.iscoroutinefunction(func):
+            return await func()
+        return await self.run_blocking(func)
+
+    @staticmethod
+    def _silence_task(task):
+        """消费被取消 / 被跳过的 runner 异常，避免 'never retrieved' 噪声。"""
+        if not task.cancelled():
+            try:
+                task.exception()
+            except Exception:
+                pass
+
     async def _invoke(self, func, label: str):
         """统一的执行入口：协程 await、同步转线程、超时、耗时统计、慢告警。
 
         label 形如 `[插件名] handler名` / `[内置] 任务名`，出现在所有日志里，
         保证「谁的定时任务出问题」不需要靠猜。
+
+        超时语义：wait_for 只停止「等待」，shield 保证底层线程任务继续跑完；
+        label 与 _inflight 登记一直留到 runner 真正结束，这样 APScheduler
+        即便释放了实例，下一次触发也会因 label 被占用而跳过，不会重入。
         """
         started = time.monotonic()
         timeout = self.task_timeout
         status = 'ok'
         error = None
+        runner = asyncio.ensure_future(self._execute(func))
+        if not self._claim_label(label, runner):
+            runner.cancel()
+            runner.add_done_callback(self._silence_task)
+            logger.warning(
+                f"{label} 上一次执行尚未真正结束，跳过本次触发（防重入）")
+            return 'skipped'
+        with self._inflight_lock:
+            self._inflight.add(runner)
         try:
-            if asyncio.iscoroutinefunction(func):
-                coro = func()
+            try:
                 if timeout:
-                    await asyncio.wait_for(coro, timeout=timeout)
+                    await asyncio.wait_for(asyncio.shield(runner), timeout=timeout)
                 else:
-                    await coro
-            else:
-                fut = self.run_blocking(func)
-                if timeout:
-                    await asyncio.wait_for(fut, timeout=timeout)
-                else:
-                    await fut
-        except (asyncio.TimeoutError, TimeoutError):
-            status = 'timeout'
-            error = f'超时（>{timeout:g}s）'
-            self._stats['timeouts'] += 1
-            logger.error(f"{label} 定时任务执行超时（>{timeout:g}s）；"
-                         f"注意：超时只是不再等待，线程仍会在后台跑完")
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            status = 'error'
-            error = str(e)
-            self._stats['failures'] += 1
-            logger.error(f"{label} 定时任务异常: {e}", exc_info=True)
+                    await runner
+            except (asyncio.TimeoutError, TimeoutError):
+                status = 'timeout'
+                error = f'超时（>{timeout:g}s）'
+                self._stats['timeouts'] += 1
+                logger.error(f"{label} 定时任务执行超时（>{timeout:g}s）；"
+                             f"注意：超时只是不再等待，线程仍会在后台跑完，"
+                             f"该任务结束前不会再次触发")
+                runner.add_done_callback(
+                    lambda _t, l=label, r=runner: self._finish_runner(l, r))
+            except asyncio.CancelledError:
+                runner.add_done_callback(
+                    lambda _t, l=label, r=runner: self._finish_runner(l, r))
+                raise
+            except Exception as e:
+                status = 'error'
+                error = str(e)
+                self._stats['failures'] += 1
+                logger.error(f"{label} 定时任务异常: {e}", exc_info=True)
         finally:
+            # runner 尚未结束（超时/被取消）时，label 由 done_callback 释放，
+            # 此处绝不能提前清，否则重入保护立即失效。
+            if runner.done():
+                self._finish_runner(label, runner)
             duration_ms = int((time.monotonic() - started) * 1000)
             self._stats['runs'] += 1
             if duration_ms > self._stats['max_duration_ms']:

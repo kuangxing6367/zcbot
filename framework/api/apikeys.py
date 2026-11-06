@@ -8,6 +8,8 @@ import time
 
 from flask import jsonify, request
 
+from framework.token_hash import hash_api_key
+
 logger = logging.getLogger('zcbot')
 
 
@@ -65,12 +67,15 @@ def register(ctx):
         if isinstance(expires_in, (int, float)) and expires_in > 0:
             expires_at = str(int(time.time()) + int(expires_in))
         token = secrets.token_hex(32)  # 64 字符，>=40 且 != 2048，避开会话 token 分支
+        # 明文只随本次响应返回一次；库里落带前缀的 sha256 摘要（v11 起）。
+        # 外部程序仍用原始 token 调用，_verify_token 按同一算法算摘要比对。
+        stored = hash_api_key(token)
         now = str(int(time.time()))
         try:
             db.execute(
                 "INSERT INTO api_tokens (token, name, role, created_by, created_at, expires_at, is_active) "
                 "VALUES (%s, %s, %s, %s, %s, %s, 1)",
-                (token, name, role, request.admin.get('username'), now, expires_at)
+                (stored, name, role, request.admin.get('username'), now, expires_at)
             )
             audit_log(request.admin['id'], request.admin['username'], 'apikey_create',
                       'api_token', name, {'role': role, 'expires_at': expires_at})

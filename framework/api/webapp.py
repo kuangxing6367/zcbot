@@ -48,6 +48,8 @@ from flask import Flask, Response, jsonify, request
 from framework.dual_auth import DualRequestAuthSystem
 from framework.log_broker import log_broker
 from framework.api.honeypot import tarpit as _tarpit_sleep
+from framework.token_hash import (
+    hash_session_token, hash_api_key, api_key_matches, is_hashed_api_key)
 
 logger = logging.getLogger('zcbot')
 
@@ -64,7 +66,7 @@ def _hash_token(token: str) -> str:
     反而扩大故障面。定长 64 字符让等值查询能走索引、compare_digest 代价恒定，
     避免对 2048 字符明文列做比较 / 建索引。
     """
-    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+    return hash_session_token(token)
 
 
 def create_web_app(framework) -> Flask:
@@ -628,11 +630,27 @@ def create_web_app(framework) -> Flask:
                         return None
                 return {'id': row['id'], 'username': row['username'], 'role': row['role']}
         if len(token) >= 40:
-            row = db.query_one(
-                "SELECT id, name, role, is_active, expires_at, last_used_at FROM api_tokens WHERE token = %s",
-                (token,)
-            )
-            if row and row['is_active']:
+            # 库里只存摘要（v11 起）：明文 API Key 先算摘要再等值查索引，
+            # 命中后用 compare_digest 二次确认，避免 collation 带来的误判。
+            expected = hash_api_key(token)
+            _cols = ("SELECT id, name, role, is_active, expires_at, last_used_at, token "
+                     "FROM api_tokens WHERE token = %s")
+            row = db.query_one(_cols, (expected,))
+            matched = bool(row) and api_key_matches(str(row.get('token') or ''), token)
+            if not matched:
+                # 兼容尚未执行 v11 迁移的老库：明文等值查一次，命中即立刻把该行
+                # 收敛成摘要。正常（已迁移）路径只有上面一次查询，没有额外开销。
+                old = db.query_one(_cols, (token,))
+                if old and not is_hashed_api_key(str(old.get('token') or '')):
+                    row, matched = old, True
+                    try:
+                        db.execute(
+                            "UPDATE api_tokens SET token = %s WHERE id = %s",
+                            (expected, old['id']))
+                        logger.info("API Key 明文已即时收敛为摘要: id=%s", old['id'])
+                    except Exception as e:
+                        logger.warning(f"API Key 明文即时收敛失败: {e}")
+            if matched and row and row['is_active']:
                 if row['expires_at']:
                     try:
                         if time.time() > float(row['expires_at']):

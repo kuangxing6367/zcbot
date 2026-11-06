@@ -455,10 +455,18 @@ def test_group_admin_passthrough():
     assert captured['body'] == {'op': 'decline', 'reject_reason': 'no'}
 
 
-def test_upload_media_size_cap():
+def test_upload_media_size_cap(monkeypatch):
+    """超限必须在解码后、发请求前拒绝。
+
+    不真造 100MB 载荷：原写法 b'x'*(100MB+1) → b64encode → decode → f-string
+    四份拷贝叠起来峰值 300MB+，在小内存机器上直接把自己 OOM 掉（实测 cgroup
+    OOM，anon-rss 326MB）。改为把上限压到 32B：走的是同一段校验代码，
+    内存降到常数级。
+    """
     import asyncio as _aio
+    monkeypatch.setattr(main, '_MAX_MEDIA_BYTES', 32)
     a = _adapter()
-    big = base64.b64encode(b'x' * (main._MAX_MEDIA_BYTES + 1)).decode()
+    big = base64.b64encode(b'x' * 64).decode()
     with pytest.raises(Exception, match='上限'):
         _aio.run(a._upload_media('G1', 'image', {'file': f'base64://{big}'}))
 

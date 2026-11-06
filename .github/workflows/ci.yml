@@ -58,7 +58,11 @@ jobs:
             tests/test_security_hardening.py \
             tests/test_self_heal.py \
             tests/test_config_validation.py \
-            tests/test_scheduler_graceful.py; do
+            tests/test_scheduler_graceful.py \
+            tests/test_blackbox_extreme.py \
+            tests/test_blackbox_integration.py \
+            tests/test_disable_vs_selfheal_bug.py \
+            tests/test_multi_platform.py; do
             echo "== $f =="
             python "$f"
           done
@@ -112,7 +116,27 @@ jobs:
             tests/test_perf_regressions.py \
             tests/test_perm_cache_invalidation.py \
             tests/test_plugin_cache_regressions.py \
-            tests/test_token_security_regressions.py
+            tests/test_token_security_regressions.py \
+            tests/test_runtime_hardening_regressions.py \
+            tests/test_blackbox.py \
+            tests/test_blackbox_trace.py \
+            tests/test_core_plugin_deps.py \
+            tests/test_crash_guard.py \
+            tests/test_dispatch_drop_visibility.py \
+            tests/test_event_classify.py \
+            tests/test_extreme_conditions.py \
+            tests/test_hook_serial_parallel.py \
+            tests/test_iipc_client_dispatch.py \
+            tests/test_iipc_silent_drop.py \
+            tests/test_image_rect_normalization.py \
+            tests/test_loop_watchdog.py \
+            tests/test_main_selfcheck_config.py \
+            tests/test_message_classified_hook.py \
+            tests/test_plugin_api_unmount.py \
+            tests/test_plugin_route_hotmount.py \
+            tests/test_scheduler_reliability.py \
+            tests/test_session_tokens.py \
+            tests/test_telegram_offset.py
 
       # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────────
       # 允许工作流正常产生且已被 .gitignore 覆盖的文件（不出现在 git status）；

@@ -122,6 +122,24 @@ def uptime_of(framework) -> float:
         return 0.0
 
 
+def _is_select_one(value) -> bool:
+    """SELECT 1 必须真的返回 1。
+
+    调试 / 降级引擎可能吞掉查询异常并返回 None、[] 或空 dict——旧实现不检查
+    返回值，于是「数据库已经读不出来」也被判成 ready 200。
+    """
+    if isinstance(value, (list, tuple)):
+        return _is_select_one(value[0]) if value else False
+    if isinstance(value, dict):
+        return any(_is_select_one(v) for v in value.values()) if value else False
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return int(value) == 1
+    except (TypeError, ValueError):
+        return False
+
+
 def db_probe(framework):
     """探针级数据库检查：一次 SELECT 1，返回 (ok, detail)"""
     db = getattr(framework, 'db', None)
@@ -130,12 +148,16 @@ def db_probe(framework):
     t0 = time.perf_counter()
     try:
         try:
-            db.scalar('SELECT 1')
+            value = db.scalar('SELECT 1')
         except AttributeError:
-            db.query_one('SELECT 1')
+            row = db.query_one('SELECT 1')
+            value = (next(iter(row.values()), None) if isinstance(row, dict)
+                     else row[0] if row else None)
     except Exception as e:  # noqa: BLE001
         return False, f'{type(e).__name__}: {e}'
     ms = (time.perf_counter() - t0) * 1000
+    if not _is_select_one(value):
+        return False, f'SELECT 1 未返回预期值: {value!r}（{ms:.1f}ms）'
     if getattr(framework, 'db_degraded', False):
         return True, f'{ms:.1f}ms（降级写缓冲中）'
     return True, f'{ms:.1f}ms'

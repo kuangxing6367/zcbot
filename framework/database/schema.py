@@ -201,6 +201,7 @@ def _auto_create_tables(database, context=None):
 
         # ── 接口令牌（API Key）──────────────────────────────────
         # 与用户会话 token 解耦：不随登录/登出轮换，可长期有效，专供外部程序调 REST API
+        # token 存的是 'sha256:'+64hex 摘要（v11 起），**不是明文**；明文只在创建时返回一次
         # token 长度不固定（>=40 字符），故不放进 _verify_token 的 2048 长度校验分支
         # expires_at / last_used_at / created_at 统一存 unix 时间戳字符串（SQLite/MySQL 一致）
         'api_tokens': """
@@ -691,6 +692,55 @@ def _migrate_admin_users_token_hash(database):
                 "存量会话全部作废，升级后需重新登录", row['cnt'])
 
 
+def _migrate_api_tokens_hash(database):
+    """v11：api_tokens.token 里的明文 API Key 原地换成带前缀的 sha256 摘要。
+
+    此前创建接口令牌把 `secrets.token_hex(32)` 明文写进 api_tokens.token，
+    `_verify_token` 又用 `WHERE token = %s` 直接拿客户端提交值等值查库 ——
+    DB 泄露即可直接冒用 API Key（含 role=super 的令牌）。
+
+    这里**不加列、不删列、不改索引**：token VARCHAR(512) NOT NULL UNIQUE
+    本来就装得下 71 字符的 `'sha256:' + 64hex`，UNIQUE 顺带保证不同 Key 的
+    摘要不会撞车。前缀让本迁移幂等（已迁移的行不会被二次哈希），也让校验
+    侧能一眼区分摘要与历史明文。
+
+    与会话 token 的 v10 取舍不同：v10 选择「清列、存量会话强制重新登录」；
+    这里存量 API Key **不失效** —— 外部程序持有原始 token，服务端按同一算法
+    算摘要比对即可，无需所有调用方轮换密钥。
+
+    纯 DML + 逐行 UPDATE，中断重入可收敛；不改表结构，故为 additive。
+    """
+    if not database.table_exists('api_tokens'):
+        return
+    from framework.token_hash import API_KEY_HASH_PREFIX, hash_api_key
+
+    try:
+        rows = database.query(
+            "SELECT id, token FROM api_tokens "
+            "WHERE token IS NOT NULL AND token != ''") or []
+    except Exception as e:
+        logger.warning("数据库迁移: 读取 api_tokens 失败，跳过本版: %s", e)
+        raise
+
+    migrated = 0
+    for r in rows:
+        stored = str(r.get('token') or '')
+        if stored.startswith(API_KEY_HASH_PREFIX):
+            continue
+        try:
+            database.execute(
+                "UPDATE api_tokens SET token = %s WHERE id = %s",
+                (hash_api_key(stored), r['id']))
+            migrated += 1
+        except Exception as e:
+            # 单条失败不吞：抛出让账本记 success=0，下次启动重跑收敛
+            logger.error("数据库迁移: api_tokens id=%s 摘要化失败: %s", r['id'], e)
+            raise
+    if migrated:
+        logger.info("数据库迁移: 已把 %s 条明文 API Key 收敛为 sha256 摘要"
+                    "（存量 Key 仍可正常使用）", migrated)
+
+
 # ── 迁移注册表 ────────────────────────────────────────────────
 #
 # 铁律：
@@ -734,5 +784,8 @@ MIGRATIONS = (
               level=LEVEL_ADDITIVE),
     Migration(10, 'admin_users.token_hash', _migrate_admin_users_token_hash,
               'admin_users 增加 token_hash 并清空历史明文 token（会话令牌改为哈希存储）',
+              level=LEVEL_ADDITIVE),
+    Migration(11, 'api_tokens.hash', _migrate_api_tokens_hash,
+              'api_tokens 明文 API Key 原地收敛为 sha256 摘要（存量 Key 不失效）',
               level=LEVEL_ADDITIVE),
 )

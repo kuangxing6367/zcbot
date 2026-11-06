@@ -271,7 +271,12 @@ class FrameworkDispatchMixin:
         if isinstance(key, int):
             h = (key * 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
         else:
-            h = hash(key) & 0xFFFFFFFFFFFFFFFF
+            # 攻击者可把 user_id/group_id 塞成 dict/list 等不可哈希值；
+            # 直接 hash(key) 会抛 TypeError 且逃逸出分发器循环，静默打死整个事件管线。
+            try:
+                h = hash(key) & 0xFFFFFFFFFFFFFFFF
+            except TypeError:
+                h = hash(repr(key)) & 0xFFFFFFFFFFFFFFFF
         h ^= h >> 32
         h ^= h >> 16
         return h % len(self._shard_queues)
@@ -289,6 +294,12 @@ class FrameworkDispatchMixin:
                 event, done, source = await self._event_buffer.get_async()
             except asyncio.CancelledError:
                 raise
+            except Exception as e:
+                # 分发器是常驻任务：任何非取消异常都不能让它退出，否则后续事件
+                # 全部滞留缓冲、wait=True 永久挂起且日志没有任何线索。
+                logger.error("事件分发器取事件失败，已重试: %s", e, exc_info=True)
+                await asyncio.sleep(0)
+                continue
             self._event_seq = (self._event_seq + 1) % 10_000_000
             if isinstance(event, dict):
                 event['_seq'] = self._event_seq
@@ -297,6 +308,13 @@ class FrameworkDispatchMixin:
                     (event, done, source))
             except asyncio.CancelledError:
                 raise
+            except Exception as e:
+                # 单条畸形事件投递失败：记日志 + 立刻回执该事件，让调用方和
+                # task_done 都能收尾；分发器继续跑下一条，绝不整条管线停摆。
+                logger.error("事件分发器投递失败，已跳过该事件: %s", e, exc_info=True)
+                if done is not None and not done.done():
+                    done.set_result(True)
+                self._event_buffer.task_done(source)
 
     def _event_pipeline_empty(self) -> bool:
         """事件管线是否已空（缓冲三层 + 全部分片队列，worker 停机判定用）"""

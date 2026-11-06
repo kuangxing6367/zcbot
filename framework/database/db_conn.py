@@ -114,41 +114,32 @@ class DatabaseConnMixin:
         }
 
     def _init_mysql(self):
-        """初始化 MySQL 连接池（检测到 MySQL 配置时，自动安装 pymysql/DBUtils）"""
+        """初始化 MySQL 连接池（驱动由启动前自检补装，这里不再跑 pip）。
+
+        旧实现在 ImportError 时 `subprocess.run([python, -m pip, install ...],
+        timeout=120)`，而本方法位于 `asyncio.run(amain()) → Framework()` 的调用栈
+        内 —— 缺驱动时会同步阻塞整条事件循环最长 120 秒。依赖补装已前移到
+        `framework/bootstrap/deps_check.ensure_optional_driver()`（main() 的同步
+        阶段），这里只做导入并给出可执行的错误信息。
+        """
         try:
             import pymysql
             from pymysql.cursors import DictCursor
             self._pymysql = pymysql
             self._DictCursor = DictCursor
             logger.info("MySQL 模式已启用（适合大环境：多群/高并发/多进程部署）")
-        except ImportError:
-            logger.warning("MySQL 模式需要 pymysql，正在自动安装...")
-            import subprocess
-            import sys
-            try:
-                result = subprocess.run(
-                    [sys.executable, '-m', 'pip', 'install', 'pymysql', 'DBUtils'],
-                    capture_output=True, text=True, timeout=120
-                )
-                if result.returncode == 0:
-                    logger.info("pymysql 安装成功，重新导入...")
-                    import pymysql
-                    from pymysql.cursors import DictCursor
-                    self._pymysql = pymysql
-                    self._DictCursor = DictCursor
-                else:
-                    logger.error(f"pymysql 自动安装失败: {result.stderr}")
-                    raise ImportError("pymysql 安装失败，请手动执行: pip install pymysql DBUtils")
-            except Exception as e:
-                logger.error(f"pymysql 自动安装异常: {e}")
-                raise ImportError(f"无法自动安装 pymysql: {e}")
+        except ImportError as e:
+            logger.error("缺少 pymysql，请手动执行: pip install pymysql DBUtils")
+            raise ImportError(
+                "MySQL 驱动缺失，请在启动前执行: pip install pymysql DBUtils"
+            ) from e
 
         # 创建 DBUtils 连接池（真正限制连接数：空闲回收、坏连接自动重建、池满阻塞）
         try:
             from dbutils.pooled_db import PooledDB
-        except ImportError:
+        except ImportError as e:
             logger.error("缺少 DBUtils，请手动执行: pip install DBUtils")
-            raise ImportError("缺少 DBUtils，请手动执行: pip install DBUtils")
+            raise ImportError("缺少 DBUtils，请手动执行: pip install DBUtils") from e
         # 建池前校验参数类型：pymysql 对 dict/list 这类参数不会给出可读报错，
         # 只会在内部拼接时抛 "unsupported operand type(s) for +: 'dict' and 'bytes'"
         # 这种完全指不到配置项的错误。这里提前拦下并指出具体是哪个键写错了。

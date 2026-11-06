@@ -5,6 +5,7 @@
 import json
 import logging
 import os
+import re
 import sys
 import time
 
@@ -12,6 +13,45 @@ import yaml
 from flask import jsonify, request
 
 logger = logging.getLogger('zcbot')
+
+# GET /api/config/yaml 与 GET /api/connection 此前只要求登录：任意 admin（含
+# 低权限 API Key）都能拿到 access_token / DB 密码 / api_key，等于绕过 files.py
+# 的超级管理员限制。普通管理员仍要能看配置页，故按字段脱敏而不是整接口收紧。
+_SENSITIVE_KEY = re.compile(
+    r'(pass(word|wd)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|'
+    r'credential|jwt|cookie|dsn|auth[_-]?key)', re.I)
+# token_timeout / secret_length 之类是普通数值，不能当凭据打码
+_SAFE_KEY_HINT = re.compile(
+    r'(timeout|expire|ttl|interval|count|limit|enabled|length|size|level)', re.I)
+_MASK = '***'
+
+
+def _mask_sensitive(value):
+    """递归脱敏：只替换「敏感键名 + 标量值」，容器继续下钻。"""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            is_secret = (isinstance(k, str) and _SENSITIVE_KEY.search(k)
+                         and not _SAFE_KEY_HINT.search(k))
+            if is_secret and not isinstance(v, (dict, list, tuple)):
+                out[k] = v if v in (None, '', _MASK) else _MASK
+            else:
+                out[k] = _mask_sensitive(v)
+        return out
+    if isinstance(value, list):
+        return [_mask_sensitive(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_mask_sensitive(v) for v in value)
+    return value
+
+
+def _is_super() -> bool:
+    return (getattr(request, 'admin', None) or {}).get('role') == 'super'
+
+
+def _strip_masks(values: dict) -> dict:
+    """PUT 回写时剔除脱敏占位符，避免前端把 '***' 当真实值覆盖进 config.yaml。"""
+    return {k: v for k, v in values.items() if v != _MASK}
 
 
 def register(ctx):
@@ -119,10 +159,17 @@ def register(ctx):
         primary = adapters[0] if adapters else {
             'config': {}, 'status': {'connected_bots': [], 'total': 0},
         }
+        masked = not _is_super()
+        if masked:
+            adapters = _mask_sensitive(adapters)
+            primary_config = _mask_sensitive(primary.get('config') or {})
+        else:
+            primary_config = primary.get('config') or {}
         return jsonify({'code': 0, 'data': {
             'adapters': adapters,
-            'config': primary.get('config') or {},
+            'config': primary_config,
             'status': primary.get('status') or {'connected_bots': [], 'total': 0},
+            'masked': masked,
         }})
 
     @app.route('/api/connection', methods=['PUT'])
@@ -154,8 +201,9 @@ def register(ctx):
         # 兼容旧客户端：直接平铺字段
         if not allowed and not payload.get('data'):
             allowed = {k: data[k] for k in field_keys if k in data}
+        allowed = _strip_masks(allowed)
         if not allowed:
-            return jsonify({'code': 400, 'msg': '没有可更新的字段'}), 400
+            return jsonify({'code': 400, 'msg': '没有可更新的字段（脱敏占位符已忽略）'}), 400
         if 'listen_port' in allowed:
             try:
                 allowed['listen_port'] = int(allowed['listen_port'])
@@ -276,14 +324,17 @@ def register(ctx):
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth
     def get_yaml_config():
-        """读取 config.yaml 全量配置"""
+        """读取 config.yaml（超级管理员看明文，普通管理员看凭据脱敏版）"""
         path = _yaml_config_path()
         if not os.path.isfile(path):
             return jsonify({'code': 404, 'msg': 'config.yaml 不存在'}), 404
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 doc = yaml.safe_load(f) or {}
-            return jsonify({'code': 0, 'data': doc})
+            masked = not _is_super()
+            if masked:
+                doc = _mask_sensitive(doc)
+            return jsonify({'code': 0, 'data': doc, 'masked': masked})
         except Exception as e:
             logger.error(f"get_yaml_config 内部错误: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
@@ -297,9 +348,14 @@ def register(ctx):
             return jsonify({'code': 400, 'msg': f'非法配置段，可选: {", ".join(_YAML_SECTIONS)}'}), 400
 
         data = request.get_json(silent=True) or {}
-        values = data.get('data')
-        if not isinstance(values, dict) or not values:
+        raw_values = data.get('data')
+        if not isinstance(raw_values, dict) or not raw_values:
             return jsonify({'code': 400, 'msg': 'data 必须是非空对象'}), 400
+        values = _strip_masks(raw_values)
+        if not values:
+            # 前端把脱敏页整表单回传时，不能把 '***' 写成真配置
+            return jsonify({'code': 0, 'msg': '无字段需要更新（脱敏占位符已忽略）',
+                            'data': {'notes': [], 'restart_required': False}})
 
         merged = dict(_read_yaml_section(section))
         merged.update(values)

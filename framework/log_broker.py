@@ -13,7 +13,11 @@ from collections import deque
 from typing import Optional
 
 MAX_CACHE = 2000  # 最大缓存条数
+MAX_ERROR_CACHE = 200  # ERROR/WARN 独立保留条数
 MAX_SSE_SUBSCRIBERS = 32  # SSE 订阅者上限（防资源耗尽）
+# 洪水消息会把主环形缓存冲满，ERROR 往往在事发后几分钟才被查。
+# 单独留一条错误通道，保证「出过什么错」不会因为后续 INFO 刷屏而消失。
+_RETAINED_LEVELS = ('ERROR', 'WARN')
 
 
 class LogBroker:
@@ -21,6 +25,7 @@ class LogBroker:
 
     def __init__(self, max_size: int = MAX_CACHE):
         self._cache = deque(maxlen=max_size)
+        self._error_cache = deque(maxlen=MAX_ERROR_CACHE)
         self._lock = threading.Lock()
         self._seq = 0  # 自增序号
         self._subscribers: list[queue.Queue] = []
@@ -47,6 +52,8 @@ class LogBroker:
                 'source': source or '',
             }
             self._cache.append(entry)
+            if entry['level'] in _RETAINED_LEVELS:
+                self._error_cache.append(entry)
 
         # 推送给 SSE 订阅者
         for q in self._subscribers:
@@ -116,10 +123,16 @@ class LogBroker:
         :param keyword: 关键词搜索
         :param limit: 最大返回条数
         :param after_seq: 只返回序号大于此值的日志（用于轮询增量）
+
+        按 ERROR/WARN 查询时改读独立保留通道：主缓存是 2000 条环形队列，
+        消息洪水会把最早的 ERROR 冲掉，错误就再也无法从 WebUI 查到。
         """
         with self._lock:
+            source = (self._error_cache
+                      if level and level.upper() in _RETAINED_LEVELS
+                      else self._cache)
             result = []
-            for entry in reversed(self._cache):
+            for entry in reversed(source):
                 if entry['seq'] <= after_seq:
                     break
                 if category and entry['category'] != category:
@@ -145,12 +158,14 @@ class LogBroker:
                 stats['by_level'][lvl] = stats['by_level'].get(lvl, 0) + 1
             stats['latest_seq'] = self._seq
             stats['subscribers'] = len(self._subscribers)
+            stats['errors_retained'] = len(self._error_cache)
             return stats
 
     def clear(self):
         """清空缓存"""
         with self._lock:
             self._cache.clear()
+            self._error_cache.clear()
             self._seq = 0
 
 
