@@ -8,6 +8,7 @@
     python tests/test_smoke.py
 """
 import asyncio
+import base64
 import contextlib
 import importlib.util
 import inspect
@@ -547,14 +548,17 @@ def test_qq_official_msg_seq_and_async_read():
             adapter._upload_group_image('grp_openid', {'file': img_path}))
         chk("本地图片上传返回 file_info",
             result == {'file_info': 'FILE_INFO_SMOKE'}, repr(result))
-        chk("上传真的发起了 POST files",
+        chk("上传真的发起了 POST 文件接口",
             len(api_calls) == 1 and api_calls[0][0] == 'POST'
             and api_calls[0][1] == '/v2/groups/grp_openid/files',
             repr([(c[0], c[1]) for c in api_calls]))
-        files = api_calls[0][2].get('files') if api_calls else None
+        # 官方请求体只有 file_data(base64) / url / upload_id 三种载体，没有
+        # multipart 的说明，所以这里断言的是 file_data，不是 files。
+        body = (api_calls[0][2].get('json_body') or {}) if api_calls else {}
         chk("上传携带读到的原始字节",
-            bool(files) and files.get('file', (None, None, None))[1] == png,
-            repr(files))
+            base64.b64decode(body.get('file_data') or '') == png,
+            repr({k: (v[:24] + '…' if isinstance(v, str) and len(v) > 24 else v)
+                  for k, v in body.items()}))
     except Exception as e:
         chk("_upload_group_image 本地路径", False, repr(e))
     finally:
