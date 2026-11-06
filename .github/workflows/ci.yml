@@ -111,6 +111,7 @@ jobs:
             tests/test_p0_security_regressions.py \
             tests/test_p1_deploy_regressions.py \
             tests/test_adapter_retcodes.py \
+            tests/test_adapter_outbound.py \
             tests/test_concurrency_regressions.py \
             tests/test_iipc_auth.py tests/test_iipc_launcher_stale.py \
             tests/test_perf_regressions.py \
@@ -129,6 +130,7 @@ jobs:
             tests/test_iipc_client_dispatch.py \
             tests/test_iipc_silent_drop.py \
             tests/test_image_rect_normalization.py \
+            tests/test_image_renderer_assets.py \
             tests/test_loop_watchdog.py \
             tests/test_main_selfcheck_config.py \
             tests/test_message_classified_hook.py \
