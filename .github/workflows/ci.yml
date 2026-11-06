@@ -131,6 +131,7 @@ jobs:
             tests/test_iipc_silent_drop.py \
             tests/test_image_rect_normalization.py \
             tests/test_image_renderer_assets.py \
+            tests/test_core_plugin_config_api.py \
             tests/test_loop_watchdog.py \
             tests/test_main_selfcheck_config.py \
             tests/test_message_classified_hook.py \

@@ -321,6 +321,51 @@ def register(ctx):
                       'security', 'framework', 'observability',
                       'reliability', 'outbound', 'scheduler')
 
+    def _yaml_sections():
+        """面板允许读写的 config.yaml 段 = 固定部署段 + 各官方插件的配置段。
+
+        官方插件的配置块写在 core_plugins.yaml，启动时由 load_config 合并进
+        主配置的同名段，且 config.yaml 的值优先（见 framework/config.py）。
+        如果这里不放行这些段，就会出现「配置项存在、面板改不了」——
+        用户只能去手改 yaml，而面板看起来一切正常。
+        """
+        base = tuple(_YAML_SECTIONS)
+        try:
+            from framework.config import list_core_plugins_state
+            extra = {it['section'] for it in list_core_plugins_state()}
+        except Exception:
+            extra = set()
+        return base + tuple(sorted(extra - set(base)))
+
+    def _merged_core_sections(doc):
+        """把官方插件段的生效值补进 config.yaml 的 doc。
+
+        config.yaml 里通常没有 image_renderer 这类段（它们来自
+        core_plugins.yaml）。面板看不到这些段就等于改不了，所以用合并后的
+        内存配置补齐；enabled 不补——它的唯一权威是 core_plugins.yaml，
+        混进 config.yaml 只会变成改一处不生效的另一处。
+        写回时这些键会落到 config.yaml，从此它以覆盖方身份生效。
+        """
+        try:
+            from framework.config import get_config, list_core_plugins_state
+            full = get_config() or {}
+            for item in list_core_plugins_state():
+                sec = item['section']
+                blk = full.get(sec)
+                if not isinstance(blk, dict):
+                    continue
+                vals = {k: v for k, v in blk.items() if k != 'enabled'}
+                if not vals:
+                    continue
+                cur = doc.get(sec)
+                merged = dict(vals)
+                if isinstance(cur, dict):
+                    merged.update(cur)      # config.yaml 已有值优先
+                doc[sec] = merged
+        except Exception as e:
+            logger.debug(f"补充官方插件配置段失败（不影响读取）: {e}")
+        return doc
+
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth
     def get_yaml_config():
@@ -331,6 +376,7 @@ def register(ctx):
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 doc = yaml.safe_load(f) or {}
+            doc = _merged_core_sections(doc)
             masked = not _is_super()
             if masked:
                 doc = _mask_sensitive(doc)
@@ -344,8 +390,9 @@ def register(ctx):
     def update_yaml_config(section):
         """分组更新 config.yaml（合并更新，保留未提交字段）"""
         admin = request.admin
-        if section not in _YAML_SECTIONS:
-            return jsonify({'code': 400, 'msg': f'非法配置段，可选: {", ".join(_YAML_SECTIONS)}'}), 400
+        allowed = _yaml_sections()
+        if section not in allowed:
+            return jsonify({'code': 400, 'msg': f'非法配置段，可选: {", ".join(allowed)}'}), 400
 
         data = request.get_json(silent=True) or {}
         raw_values = data.get('data')

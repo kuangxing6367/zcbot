@@ -529,3 +529,93 @@ def test_backend_status_keys_match_state_dict(tmp_path):
     main._ASSETS = None
     fallback = main.backend_status()['assets']
     assert set(fallback) == set(real), set(real) ^ set(fallback)
+
+
+# ---------------------------------------------------------------- 配置读取
+#
+# 核心插件的配置在 core_plugins.yaml 的 image_renderer 块，启动时被合并进
+# 主配置的同名段。早期实现用 ctx.get_config() 读——那个接口查的是
+# plugin_configs 表（userspace 插件专用），核心插件从没往表里写过值，
+# 于是任何配置都读成 default：配置写了等于没写，而且不报错。
+
+def test_read_cfg_uses_framework_config(monkeypatch):
+    import framework.config as fcfg
+    main = _load_main()
+    monkeypatch.setattr(fcfg, 'get_config',
+                        lambda: {'image_renderer': {'backend': 'rust',
+                                                    'asset_consent': 'auto'}})
+    assert main._read_cfg('backend') == 'rust'
+    assert main._read_cfg('asset_consent') == 'auto'
+
+
+def test_read_cfg_falls_back_to_default(monkeypatch):
+    import framework.config as fcfg
+    main = _load_main()
+    monkeypatch.setattr(fcfg, 'get_config', lambda: {})
+    assert main._read_cfg('backend', 'pil') == 'pil'
+    monkeypatch.setattr(fcfg, 'get_config', lambda: {'image_renderer': {'backend': None}})
+    assert main._read_cfg('backend', 'pil') == 'pil', 'None 必须回落，不能把 None 当配置值'
+
+
+def test_read_cfg_ignores_ctx_database(monkeypatch):
+    """ctx 存在也不该改变读取来源：DB 里放个值，配置仍以主配置为准。"""
+    import framework.config as fcfg
+    main = _load_main()
+
+    class CtxWithDbValue:
+        def get_config(self, key, default=None):
+            return 'db-value'
+
+    main._CTX = CtxWithDbValue()
+    monkeypatch.setattr(fcfg, 'get_config',
+                        lambda: {'image_renderer': {'backend': 'pil'}})
+    assert main._read_cfg('backend') == 'pil'
+
+
+# ---------------------------------------------------------------- 状态接口
+#
+# WebUI 打开时靠这个接口决定要不要显示「资源缺失」横幅。它必须是纯读的：
+# 打开后台就触发 9MB 下载，是按流量计费环境下的严重事故。
+
+def test_status_route_serves_json():
+    from flask import Flask
+    from framework.api import registry
+    main = _load_main()
+    app = Flask(__name__)
+    old_app = registry._web_app
+    try:
+        registry._web_app = app
+        registry.register_route('/api/plugins/image_renderer/status', ['GET'],
+                                main._status_view, auth=False,
+                                plugin='image_renderer_probe')
+        r = app.test_client().get('/api/plugins/image_renderer/status')
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['code'] == 0
+        assert set(body['data']) >= {'backend', 'assets', 'asset_consent'}
+        assert 'ok' in body['data']['assets']
+    finally:
+        registry.unregister_plugin('image_renderer_probe')
+        registry._web_app = old_app
+
+
+def test_status_view_does_not_build_assets_or_download(monkeypatch):
+    """状态查询必须是纯读：既不建资源管理器，也不走下载分支。
+
+    WebUI 打开时就会调它，若顺手触发下载，按流量计费的环境会当成事故。
+    """
+    main = _load_main()
+    main._ASSETS = None
+    main._BACKEND_READY = False
+
+    called = []
+
+    def _boom(*a, **k):
+        called.append('download')
+        raise AssertionError('状态查询不该下载资源')
+
+    monkeypatch.setattr(main, '_resolve_backend', _boom)
+    st = main.backend_status()
+    assert called == [], '状态查询触发了后端解析（可能连带下载）'
+    assert main._ASSETS is None, '状态查询不得创建资源管理器'
+    assert st['assets']['ok'] is False

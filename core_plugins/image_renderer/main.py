@@ -174,13 +174,24 @@ def _assets_module():
 
 
 def _read_cfg(key, default=None):
-    if _CTX is None:
-        return default
+    """读本插件配置项。
+
+    配置写在 core_plugins.yaml 的 image_renderer 块，启动时由
+    framework.config.load_config() 合并进主配置的同名段，这里读合并后的结果。
+
+    **不能用 ctx.get_config()**：那个接口查的是 plugin_configs 表，只服务
+    userspace 插件（它们的值由 WebUI 写表）。核心插件从未往表里写过任何行，
+    用它只会永远拿到 default——配置写了等于没写，且不会有任何报错。
+    """
     try:
-        v = _CTX.get_config(key, default)
-        return default if v is None else v
+        from framework.config import get_config
+        sec = (get_config() or {}).get('image_renderer')
+        if isinstance(sec, dict) and key in sec:
+            v = sec[key]
+            return default if v is None else v
     except Exception:
-        return default
+        pass
+    return default
 
 
 # 资源提示文案：必须把「干什么用」和「做不到什么」一起说清。
@@ -549,6 +560,22 @@ def _get_font(size, bold=False):
         return None
 
 
+def _status_view(params=None):
+    """GET /api/plugins/image_renderer/status
+
+    供 WebUI 打开时取一次状态，决定是否显示「资源缺失」横幅。
+    params 有默认值：Flask 以无参视图调用，双进程宿主的远程派发则传 dict，
+    两种调用方式都要能跑。
+    """
+    payload = {'code': 0, 'data': backend_status()}
+    try:
+        from flask import jsonify
+        return jsonify(payload)
+    except Exception:
+        # 没有 Flask 时（纯 IPC 宿主）退回纯 dict，由调用方序列化
+        return payload
+
+
 def _init_context(ctx):
     """绑定上下文并解析后端（register 时调用一次）。"""
     global _CTX
@@ -570,6 +597,13 @@ def _init_context(ctx):
 
 def register(ctx):
     _init_context(ctx)
+    # 状态查询：WebUI 打开时拉一次，资源缺失才显示横幅。
+    # 只读、不触发下载——否则「打开管理后台」就等于偷偷花用户的流量。
+    try:
+        ctx.register_api('/api/plugins/image_renderer/status', _status_view,
+                         methods=['GET'], description='图片渲染后端与资源状态')
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[image_renderer] 状态接口注册失败（不影响渲染）: {e}")
     ctx.command(
         "/render_card",
         handle_render_card,
