@@ -35,10 +35,19 @@ _RE_ON_DUP_KEY = re.compile(
 )
 # ENUM('a','b',...)：支持嵌套引号和逗号，匹配到对应的右括号
 _RE_ENUM = re.compile(r'\bENUM\s*\(([^)]*(?:\([^)]*\)[^)]*)*)\)', re.IGNORECASE)
-# 匹配 INDEX idx_name (col1, col2) / KEY idx_name (col)（普通索引；PRIMARY/UNIQUE/FULLTEXT 不处理）
+# 匹配 INDEX idx_name (col1, col2) / KEY idx_name (col) / UNIQUE KEY uk (col)
+# PRIMARY / FULLTEXT / SPATIAL 不处理（PRIMARY 是主键不走这里，全文索引语法不同）
+# UNIQUE 必须一并匹配：它的列超长时同样会触发 1071，
+# 且注释里旧实现把它漏掉，导致 api_tokens.uk_token(token VARCHAR(512)) 在
+# MySQL 5.5/5.6 上直接建表失败。
 _RE_MYSQL_INDEX = re.compile(
-    r"^(INDEX|KEY)\s+(?:`?[A-Za-z0-9_]+`?\s+)?\(([^)]*)\)\s*$",
+    r"^(?:UNIQUE\s+)?(INDEX|KEY)\s+(?:`?[A-Za-z0-9_]+`?\s+)?\(([^)]*)\)\s*$",
     re.IGNORECASE)
+
+# 廉价预判：SQL 里是否可能出现需要翻译的 MySQL 专有函数。
+# 不区分 DDL/DML，因为 SELECT 里同样会出现；命中后才跑字符级扫描。
+_RE_MAYBE_MYSQL_FUNC = re.compile(
+    r'\b(?:IF|IFNULL|UNIX_TIMESTAMP)\s*\(', re.IGNORECASE)
 
 
 def _strip_mysql_ddl_syntax(sql: str) -> str:
@@ -102,22 +111,148 @@ def _strip_mysql_ddl_syntax(sql: str) -> str:
 
 
 def _convert_placeholders(sql: str) -> str:
-    """将 %s 占位符转换为 ?（SQLite 用）"""
-    return sql.replace('%s', '?')
+    """将 %s 占位符转换为 ?（SQLite 用）。
+
+    必须只替换**字符串字面量之外**的 %s。历史实现是无脑 `sql.replace('%s','?')`，
+    而 `_translate_mysql_funcs` 会把 UNIX_TIMESTAMP() 翻成 `strftime('%s','now')` ——
+    其中的 '%s' 是 SQLite 的**格式符**，被一起替换后变成 `strftime('?','now')`，
+    返回值是字面量 '?' 而不是 unix 秒。表现为：默认权限组的 created_at 被写成
+    字符串 '?'，SQLite 松散类型照收，不报错也就一直没被发现。
+    """
+    if '%s' not in sql:
+        return sql
+    out = []
+    i, n = 0, len(sql)
+    in_str = False
+    quote = None
+    while i < n:
+        ch = sql[i]
+        if in_str:
+            out.append(ch)
+            if ch == '\\' and i + 1 < n:        # 反斜杠转义（MySQL 风格）
+                out.append(sql[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                if i + 1 < n and sql[i + 1] == quote:   # '' 转义
+                    out.append(sql[i + 1])
+                    i += 2
+                    continue
+                in_str = False
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_str = True
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '%' and i + 1 < n and sql[i + 1] == 's':
+            out.append('?')
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
 
 
-def _translate_sql_for_mysql(sql: str) -> str:
+# 单行索引定义：INDEX/KEY name (cols) / UNIQUE KEY name (cols)
+_RE_INDEX_DECL = re.compile(
+    r'^\s*(?:(UNIQUE)\s+)?(?:KEY|INDEX)\s+`?([A-Za-z0-9_]+)`?\s*\(([^)]*)\)',
+    re.IGNORECASE)
+
+
+def extract_plain_indexes(sql_text: str) -> list:
+    """从建表 SQL 中抽取**普通索引**定义，供 SQLite 建表后补建。
+
+    为什么需要：SQLite 的 CREATE TABLE 不支持内联 `KEY idx (col)` / `INDEX idx (col)`，
+    `_strip_mysql_ddl_syntax` 只能把它们整行删掉。删语法不等于不需要索引——
+    不补建的话 SQLite 部署**一个二级索引都没有**，所有按非唯一列过滤的查询退化成
+    全表扫描（实测 users 表 20 万行：is_blacklist 过滤 99.34ms → 建索引后 0.74ms，
+    last_active_at 范围 134.49ms → 9.71ms）。
+
+    UNIQUE 不在此列：`_strip_mysql_ddl_syntax` 已把它改写成表级 `UNIQUE(cols)`
+    约束，SQLite 会自动建 sqlite_autoindex，无需重复补建。
+
+    :return: [(table, index_name, [col, ...]), ...]，按出现顺序
+    """
+    out = []
+    cur_table = None
+    for raw in sql_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('--'):
+            continue
+        m = re.search(r'CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+`?([A-Za-z0-9_]+)`?',
+                      line, re.IGNORECASE)
+        if m:
+            cur_table = m.group(1)
+            continue
+        if cur_table is None:
+            continue
+        if re.match(r'^\)', line):          # 表定义结束
+            cur_table = None
+            continue
+        m2 = _RE_INDEX_DECL.match(line)
+        if not m2 or m2.group(1):           # 跳过 UNIQUE（已由约束承担）
+            continue
+        cols = []
+        for c in m2.group(3).split(','):
+            c = c.strip().strip('`')
+            if not c:
+                continue
+            cols.append(c.split('(')[0].strip().strip('`'))
+        if cols:
+            out.append((cur_table, m2.group(2), cols))
+    return out
+
+
+def build_sqlite_index_ddl(indexes: list) -> list:
+    """把抽取出的索引声明转成 SQLite 的 CREATE INDEX IF NOT EXISTS 语句。
+
+    索引名统一改写为 `{表名}_{原索引名}`。原因：init.sql 是 MySQL 方言，索引名
+    只需**表内**唯一，所以 idx_active / idx_blacklist / idx_user 等在多张表重复
+    出现（37 个声明只有 21 个不同名字）；而 SQLite 的索引名是**库内全局唯一**，
+    直接用原名会让第一个之后的同名声明的 CREATE INDEX IF NOT EXISTS 全部变成
+    空操作，实际只建出 21 个索引。加表名前缀后既唯一又稳定。
+    """
+    out = []
+    for table, name, cols in indexes:
+        col_sql = ', '.join('"{}"'.format(c) for c in cols)
+        out.append('CREATE INDEX IF NOT EXISTS "{}_{}" ON "{}" ({})'.format(
+            table, name, table, col_sql))
+    return out
+
+
+def _translate_sql_for_mysql(sql: str, max_key_bytes: int = 3072) -> str:
     """SQLite 方言 DDL → MySQL 兼容（防御：AUTOINCREMENT → AUTO_INCREMENT；长列索引 → 前缀索引）"""
     sql = sql.replace('AUTOINCREMENT', 'AUTO_INCREMENT')
-    return _mysql_prefix_indexes(sql)
+    return _mysql_prefix_indexes(sql, max_key_bytes=max_key_bytes)
 
 
-def _mysql_prefix_indexes(sql: str) -> str:
+# 各版本 InnoDB 单列/组合索引的字节上限：
+#   5.5 / 5.6         767  （COMPACT 行格式，innodb_large_prefix 默认 OFF）
+#   5.7 / 8.0        3072  （DYNAMIC 行格式，utf8mb4 下约 768 字符）
+MYSQL_KEY_LIMIT_OLD = 767
+MYSQL_KEY_LIMIT_MODERN = 3072
+
+
+def _mysql_prefix_indexes(sql: str, max_key_bytes: int = MYSQL_KEY_LIMIT_MODERN) -> str:
     """
-    MySQL DDL 兼容：被索引的列若是 TEXT 或 VARCHAR 长度 > 191，
-    自动改写为前缀索引 `col`(191)，避免错误 1170（BLOB/TEXT column used in key specification）
-    与 MySQL 5.7+ 的 Specified key was too long。
-    仅处理 CREATE TABLE 语句；已有前缀（col(191)）的列不重复改写。
+    MySQL DDL 兼容：索引列总字节数超过引擎上限时，自动把字符串列改写为前缀索引。
+
+    两个触发场景：
+      1. TEXT / LONGTEXT 列做索引 —— MySQL 报 1170（BLOB/TEXT column used in key
+         specification without a key length），必须给长度；
+      2. 组合索引的各列字节数之和超过 max_key_bytes —— MySQL 报 1071
+         （Specified key was too long）。注意**必须按累计字节算**：单列 191 字符
+         的旧判据救不了 `(target_type VARCHAR(50), target_name VARCHAR(200))`
+         这种 1000 字节的组合索引。
+
+    UNIQUE KEY 同样处理。前缀唯一索引会放宽唯一性语义（前缀相同的两行视为冲突），
+    但这是 5.5/5.6 上唯一可行的方案；调用方如需精确唯一性应缩短列宽。
+
+    :param max_key_bytes: 767 = MySQL 5.5/5.6；3072 = 5.7/8.0（默认）
     """
     if not sql.lstrip().upper().startswith('CREATE TABLE'):
         return sql
@@ -153,17 +288,39 @@ def _mysql_prefix_indexes(sql: str) -> str:
     for part in _split_top_level(body):
         m = re.match(r"^\s*`?(\w+)`?\s+(\w+(?:\([^)]*\))?)", part, re.IGNORECASE)
         if m and m.group(2).upper() not in ('INDEX', 'KEY', 'PRIMARY', 'UNIQUE',
-                                             'CONSTRAINT', 'FULLTEXT', 'SPATIAL', 'CHECK'):
+                                            'CONSTRAINT', 'FULLTEXT', 'SPATIAL', 'CHECK'):
             col_types[m.group(1)] = m.group(2).upper()
 
-    def _need_prefix(col: str) -> bool:
-        t = col_types.get(col)
+    def _col_bytes(t: str):
+        """返回 (kind, 字节数)。
+
+        kind:
+          'fixed'   —— 宽度已知，按字节累计；
+          'text'    —— TEXT/BLOB 系列，必须给前缀长度（否则 1170）；
+          'unknown' —— ENUM/SET/JSON/GEOMETRY 等，**不能**加前缀
+                       （MySQL 对非字符串类型写前缀会报 1089），原样保留。
+        """
         if not t:
-            return False
-        if t.startswith('TEXT') or t.startswith('LONGTEXT') or t.startswith('MEDIUMTEXT'):
-            return True
-        m = re.match(r'VARCHAR\((\d+)\)', t)
-        return bool(m) and int(m.group(1)) > 191
+            return ('unknown', 0)
+        tu = t.upper()
+        if tu.startswith(('TEXT', 'LONGTEXT', 'MEDIUMTEXT', 'TINYTEXT', 'BLOB')):
+            return ('text', 0)
+        m = re.match(r'(?:VAR)?CHAR\((\d+)\)', tu)
+        if m:
+            return ('fixed', int(m.group(1)) * 4)      # utf8mb4
+        if tu.startswith('DECIMAL'):
+            return ('fixed', 16)
+        if tu.startswith(('ENUM(', 'SET(')):
+            return ('fixed', 2)                        # 内部按整数存，不参与前缀
+        if tu in ('INT', 'INTEGER', 'FLOAT'):
+            return ('fixed', 4)
+        if tu in ('BIGINT', 'DOUBLE', 'DATETIME', 'TIMESTAMP'):
+            return ('fixed', 8)
+        if tu in ('TINYINT', 'SMALLINT', 'MEDIUMINT'):
+            return ('fixed', 2)
+        if tu == 'DATE':
+            return ('fixed', 3)
+        return ('unknown', 0)
 
     def _fix_index(part: str) -> str:
         m = _RE_MYSQL_INDEX.match(part)
@@ -172,14 +329,40 @@ def _mysql_prefix_indexes(sql: str) -> str:
         idx_open = part.find('(', m.end(1))
         head = part[:idx_open + 1]
         cols_text = part[idx_open + 1:part.rfind(')')]
+        used = 0
         fixed = []
         for col in cols_text.split(','):
             col = col.strip()
             name = col.split('(')[0].strip().strip('`')
-            if '(' not in col and _need_prefix(name):
-                fixed.append(f"`{name}`(191)")
-            else:
+            if '(' in col:
+                # 已带前缀（col(191)）——计入预算，不再重复改写
+                pm = re.search(r'\((\d+)\)', col)
+                if pm:
+                    used += int(pm.group(1)) * 4
                 fixed.append(col)
+                continue
+            kind, nb = _col_bytes(col_types.get(name, ''))
+            if kind == 'unknown':
+                fixed.append(col)                      # 不碰
+                continue
+            if kind == 'text':
+                room = (max_key_bytes - used) // 4
+                if room > 0:
+                    fixed.append("`{}`({})".format(name, room))
+                    used += room * 4
+                else:
+                    fixed.append(col)
+                continue
+            if used + nb <= max_key_bytes:
+                used += nb
+                fixed.append(col)
+            else:
+                room = (max_key_bytes - used) // 4
+                if room > 0:
+                    fixed.append("`{}`({})".format(name, room))
+                    used += room * 4
+                else:
+                    fixed.append(col)      # 预算已耗尽，保持原样交给 DB 报错
         return head + ', '.join(fixed) + ')'
 
     new_parts = [_fix_index(p) for p in _split_top_level(body)]
@@ -237,10 +420,24 @@ def _split_top_level(text: str) -> list:
 
 
 def _if_to_case(sql: str) -> str:
+    """将 MySQL 的 IF(cond, a, b) 转换为 SQLite 兼容的 CASE WHEN cond THEN a ELSE b END
+
+    支持嵌套括号与字符串字面量。嵌套 IF 需要多轮替换：单轮扫描时，外层 IF 的
+    整个括号体被原样搬进 THEN 分支后指针会直接跳过，内层 IF 就留在那里没被翻译，
+    SQLite 运行时仍报 `no such function: IF`。因此这里迭代到不再变化为止。
     """
-    将 MySQL 的 IF(cond, a, b) 转换为 SQLite 兼容的 CASE WHEN cond THEN a ELSE b END
-    支持嵌套括号与字符串字面量，IFNULL 单独用正则处理
-    """
+    prev = None
+    cur = sql
+    for _ in range(8):          # 深度上限，防御病态输入
+        if cur == prev:
+            break
+        prev = cur
+        cur = _if_to_case_once(cur)
+    return cur
+
+
+def _if_to_case_once(sql: str) -> str:
+    """单轮扫描替换（见 _if_to_case）。"""
     out = []
     i = 0
     n = len(sql)
@@ -379,10 +576,9 @@ def _replace_now(sql: str, params: tuple = None) -> tuple:
 
 
 def _translate_sql_for_sqlite(sql: str) -> str:
-    """
-    完整翻译 SQL 供 SQLite 使用：
+    """完整翻译 SQL 供 SQLite 使用：
     1. DDL 语法清理
-    2. MySQL 专有函数（IF/IFNULL）→ SQLite 兼容
+    2. MySQL 专有函数（IF/IFNULL/UNIX_TIMESTAMP）→ SQLite 兼容（含 SELECT）
     3. ON DUPLICATE KEY UPDATE → ON CONFLICT DO UPDATE
     4. INSERT IGNORE → INSERT OR IGNORE
     5. NOW() → 由调用方处理参数
@@ -394,9 +590,17 @@ def _translate_sql_for_sqlite(sql: str) -> str:
     if needs_translate:
         sql = _strip_mysql_ddl_syntax(sql)
 
-        # MySQL 专有函数 → SQLite 兼容（IF / IFNULL）
+    # MySQL 专有函数 → SQLite 兼容（IF / IFNULL / UNIX_TIMESTAMP）
+    #
+    # 这一步**不能**只在 DDL/DML 分支里做：`SELECT IF(cond, a, b)` 是查询语句，
+    # `_is_ddl_or_dml` 判 False 就整段跳过，SQLite 上没有 IF() 这个函数，
+    # 运行时直接 `no such function: IF`。能力暴露给插件后（插件可以写任意 SELECT），
+    # 这类语句只在 MySQL 部署下能跑、SQLite 部署必挂，属于纯方言陷阱。
+    # 用正则先做一次廉价的命中判断，避免给每条高频 SELECT 都跑字符级扫描。
+    if _RE_MAYBE_MYSQL_FUNC.search(sql):
         sql = _translate_mysql_funcs(sql)
 
+    if needs_translate:
         # ON DUPLICATE KEY UPDATE → ON CONFLICT DO UPDATE SET
         if 'ON DUPLICATE KEY' in sql.upper() and 'INSERT' in sql.upper():
             sql = _on_duplicate_to_sqlite(sql)

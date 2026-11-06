@@ -204,6 +204,13 @@ def auto_init_database(database) -> bool:
 
     if not missing:
         logger.debug("核心表齐全（%d 张），跳过自动初始化", len(_REQUIRED_TABLES))
+        # 表齐不等于索引齐：早期版本在 SQLite 上把内联 INDEX 整行删掉了，
+        # 存量库至今没有任何二级索引。这里幂等补建（已有则空操作）。
+        if getattr(database, 'db_type', '') == 'sqlite':
+            try:
+                _ensure_sqlite_indexes(database)
+            except Exception as e:
+                logger.debug("SQLite 索引补建异常（不影响启动）: %s", e)
         return False
 
     logger.info("检测到 %d 张核心表缺失（%s），开始自动初始化...",
@@ -362,9 +369,31 @@ def _init_mysql(database) -> dict:
                 logger.info(
                     "MySQL 5.5/5.6 检测到，改用 sql/init_mysql55.sql 建表"
                     "（避免多 TIMESTAMP 自动列导致的建表失败）")
+
+            from framework.database.dialect import (
+                _mysql_prefix_indexes, MYSQL_KEY_LIMIT_OLD, MYSQL_KEY_LIMIT_MODERN)
+            key_limit = MYSQL_KEY_LIMIT_OLD if old_mysql else MYSQL_KEY_LIMIT_MODERN
+
+            def _transform_ddl(stmt):
+                """建表前的 DDL 改写。
+
+                两件事必须分开看：
+                  1. DATETIME → TIMESTAMP 只对 5.5/5.6 **之前**的 init.sql 有意义；
+                     init_mysql55.sql 已用 DATETIME DEFAULT NULL 自行规避，不能再改。
+                  2. 索引前缀改写**两个分支都要做**，5.5/5.6 的 767 字节上限更严。
+                历史 bug：这里只传了 _adapt_ddl_for_mysql，而 _apply_init_sql 用
+                exec_fn=cursor.execute 裸执行、不经过 Database.execute 的方言翻译，
+                于是 _mysql_prefix_indexes 在建表路径上从未生效 ——
+                init.sql / init_mysql55.sql 里的 dynamic_commands、audit_logs、
+                api_tokens 在 5.5/5.6 上直接报 1071 建不出来。
+                """
+                if not old_mysql:
+                    stmt = _adapt_ddl_for_mysql(stmt, ver)
+                return _mysql_prefix_indexes(stmt, max_key_bytes=key_limit)
+
             return _apply_init_sql(
                 database,
-                transform=None if old_mysql else (lambda s: _adapt_ddl_for_mysql(s, ver)),
+                transform=_transform_ddl,
                 label="MySQL 建表",
                 exec_fn=cursor.execute,
                 sql_filename=init_file,
@@ -377,12 +406,69 @@ def _init_mysql(database) -> dict:
 
 # ── SQLite 初始化 ─────────────────────────────────────────────
 
+def _ensure_sqlite_indexes(database, sql_filename="init.sql") -> dict:
+    """为 SQLite 补建 init.sql 里声明的**普通索引**（幂等，可反复执行）。
+
+    背景：SQLite 的 CREATE TABLE 不支持内联 `INDEX idx (col)`，方言层只能把这些
+    声明删掉。历史上删完就没了，导致 SQLite 部署**一个二级索引都不存在**，
+    所有按非唯一列过滤的查询都是全表扫描。
+
+    这条路必须独立于「只补缺失表」：`_apply_init_sql` 在表已存在时会直接跳过，
+    存量部署永远走不到补建逻辑。所以这里用 CREATE INDEX IF NOT EXISTS 无条件跑，
+    已有的索引是空操作，缺的补上；大表首次补建会有一次性耗时，属必要成本。
+    """
+    from framework.database.dialect import extract_plain_indexes, build_sqlite_index_ddl
+
+    sql_file = _find_sql_file(sql_filename)
+    if not sql_file:
+        return {"created": 0, "failed": []}
+
+    with open(sql_file, 'r', encoding='utf-8') as f:
+        sql_content = f.read()
+
+    indexes = extract_plain_indexes(sql_content)
+    if not indexes:
+        return {"created": 0, "failed": []}
+
+    try:
+        existing_tables = {str(t).lower() for t in database.all_table_names()}
+    except Exception:
+        existing_tables = set()
+
+    created, failed = 0, []
+    for ddl in build_sqlite_index_ddl(indexes):
+        # 表不存在就别建（CREATE INDEX 会报 no such table）
+        m = re.search(r'ON\s+"([^"]+)"', ddl)
+        if m and m.group(1).lower() not in existing_tables:
+            continue
+        try:
+            database.execute(ddl)
+            created += 1
+        except Exception as e:
+            failed.append((ddl[:60], str(e)[:100]))
+
+    if failed:
+        logger.warning("SQLite 索引补建：失败 %d 个（首个：%s → %s）",
+                       len(failed), failed[0][0], failed[0][1])
+    else:
+        logger.debug("SQLite 索引补建：%d 个索引已就绪", created)
+    return {"created": created, "failed": failed}
+
+
 def _init_sqlite(database) -> dict:
     """SQLite 模式自动建表（复用 db.py 的 SQL 翻译）：只补缺失表。"""
     from framework.database.db import _translate_sql_for_sqlite
 
-    return _apply_init_sql(
+    stats = _apply_init_sql(
         database, transform=_translate_sql_for_sqlite, label="SQLite 建表")
+    # 建表后补建普通索引（见 _ensure_sqlite_indexes 的说明）
+    try:
+        idx = _ensure_sqlite_indexes(database)
+        stats = dict(stats)
+        stats['indexes'] = idx.get('created', 0)
+    except Exception as e:
+        logger.debug("SQLite 索引补建异常（不影响建表结果）: %s", e)
+    return stats
 
 
 def _init_debug(database) -> dict:

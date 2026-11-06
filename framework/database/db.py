@@ -303,13 +303,22 @@ class Database(DatabaseConnMixin):
             borrowed = self.db_type == 'mysql'  # 池借出的连接需归还
         else:
             borrowed = False
+        if self.db_type == 'mysql':
+            # 事务连接会被 pin 到事务结束；死连接一旦 pin 住，整段事务全失败，
+            # 所以这里**强制**做一次存活检测（不像普通借出那样按空闲时长跳过）。
+            # 旧实现用 conn.ping(reconnect=True)，该参数在 pymysql / DBUtils 都已弃用。
+            if not self._ping_if_idle(conn, force=True):
+                try:
+                    conn.close()        # 归还即丢弃失效连接
+                except Exception:
+                    pass
+                conn = self._get_conn()
+                self._ping_if_idle(conn, force=True)
         # 固定事务连接：事务内所有 db.* 调用走同一连接
         self._local.txn_conn = conn
         self._local.in_txn = True
         try:
             if self.db_type == 'mysql':
-                # 借出的连接可能已被服务端空闲断开，先 ping 重建，避免死连接被 pin 死
-                conn.ping(reconnect=True)
                 _set_autocommit(conn, False)
             else:
                 conn.execute('BEGIN')
