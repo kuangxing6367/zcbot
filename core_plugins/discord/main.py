@@ -752,6 +752,13 @@ class DiscordAdapter(ProtocolAdapter):
 
         if files:
             multipart = []
+            if len(files) > 10:
+                # 官方单条上限 10 个附件，超出部分无法随这条消息发出。
+                # 静默截断会让调用方以为全发出去了，这里必须留下痕迹——
+                # 但也不强行拆第二条消息（会打乱正文与附件的时间顺序）。
+                logger.warning(
+                    'discord 单条消息最多 10 个附件，已丢弃后 %d 个（共 %d 个）',
+                    len(files) - 10, len(files))
             for item in files[:10]:  # Discord 单条最多 10 个附件
                 ref = item['ref']
                 name = item['name'] or 'file.bin'
@@ -790,6 +797,11 @@ class DiscordAdapter(ProtocolAdapter):
                     if result.get('status') != 'ok':
                         return result
                 return result
+
+            # multipart 为空：附件全读失败（不是没附件）。正文照发但要说清楚，
+            # 否则调用方只看到「发送成功」，以为图发出去了。
+            logger.warning(
+                'discord 消息的 %d 个附件全部读取失败，本条只发送了正文', len(files))
 
         result = await asyncio.to_thread(
             self._rest_post, path, json_body={'content': head})

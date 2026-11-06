@@ -75,6 +75,11 @@ image_renderer:
   asset_timeout: 30
 ```
 
+**这些项在 WebUI 里就能改**：设置 → 「图片渲染」分组（`/settings?tab=image_renderer`）。
+保存写进 `config.yaml` 的 `image_renderer` 段，启动时覆盖 `core_plugins.yaml` 里的同名字段。
+改完需重启框架生效。资源没就绪时，打开后台顶部会出现一条横幅说明缺什么、多大、以及
+「PIL 后端根本不需要它」，点「前往设置」直达该分组——横幅只读，**不会触发任何下载**。
+
 `asset_url` 指向**独立的资源仓库** `zcbot-render-assets`，不是主仓的 Release。
 二进制与字体的更新节奏和代码发版无关（补个字形、重编一个平台的 `.so` 不该逼框架 bump
 版本号），混在一个仓库只会让 clone / CI / wheel 一起变胖。资源仓库的 latest 是固定链接，
