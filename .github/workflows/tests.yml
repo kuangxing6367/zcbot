@@ -80,7 +80,10 @@ jobs:
       # 脚本式步骤，不能塞进 pytest），test_smoke.py 本身两种方式兼容
       - name: Pytest suite (all collectible regressions)
         run: |
-          pip install pytest
+          # pytest-asyncio 必须显式装：pyproject.toml 里 asyncio_mode=auto 只在
+          # 插件存在时才有意义，缺插件的表现是 7 个裸 async 用例直接判失败
+          # （"async def functions are not natively supported"），而不是跳过。
+          pip install pytest pytest-asyncio
           python -m pytest \
             tests/test_aiwriter.py tests/test_console_server.py tests/test_smoke.py \
             tests/test_html_assembler.py tests/test_event_buffer.py \
