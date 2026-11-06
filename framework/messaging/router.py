@@ -121,6 +121,24 @@ def invalidate_permission_cache(framework, user_id=None):
         fn(user_id)
 
 
+def _norm_priority(value, default: int = 50) -> int:
+    """把插件优先级收敛成可比较的 int。
+
+    路由表按 (priority, created_at) 排序。库里/插件元数据里这个值可能是
+    字符串（SQLite 不校验列类型、插件 __plugin_meta__ 也可能写成 "high"），
+    一旦混入 int 里，sorted() 会抛
+    ``TypeError: '<' not supported between instances of 'str' and 'int'``，
+    整个路由表重建直接失败 —— 所有命令永远 unmatched。
+
+    注意不能用 ``value or default``：合法的 priority=0（最高优先级）
+    会被 falsy 判成 default。
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
     """消息路由分发器（纯内存路由表）"""
 
@@ -240,10 +258,10 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         for r in rows:
             # created_at 在库里是字符串时间戳，统一转 str 以保证跨来源可比较排序
             plugin_order_meta[r['plugin_name']] = (
-                r.get('priority') or 50, str(r.get('created_at') or 0))
+                _norm_priority(r.get('priority')), str(r.get('created_at') or 0))
         for _n in loaded:
             if _n not in plugin_order_meta:
-                plugin_order_meta[_n] = ((loaded[_n].get('priority') or 50), "0")
+                plugin_order_meta[_n] = (_norm_priority(loaded[_n].get('priority')), "0")
 
         table = {}
         order = []

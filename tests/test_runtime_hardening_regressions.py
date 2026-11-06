@@ -877,3 +877,105 @@ def test_route_table_rebuilds_after_core_plugins_loaded(tmp_path):
     assert "echo" in router._routes, (
         "插件加载完成后路由表仍为空：签名未纳入「已加载插件集」")
     assert [c.pattern for c in router._routes["echo"].commands] == ["/echo"]
+
+
+def test_route_table_tolerates_non_numeric_priority(tmp_path):
+    """priority 是字符串时排序不能崩（否则整个路由表建不出来）。
+
+    SQLite 不校验列类型，插件 __plugin_meta__ 也可能把 priority 写成
+    "high"；_rebuild_routes 用 (priority, created_at) 当 sorted key，一旦
+    str 和 int 混在一起就抛
+    ``TypeError: '<' not supported between instances of 'str' and 'int'``，
+    路由表永久建不出来 → 所有命令 unmatched（实测由 db_malformed_probe 抓到）。
+
+    顺带守住 priority=0（最高优先级）不能被 `or 50` 的 falsy 判断吞成 50。
+    """
+    from framework.database.db import Database
+    from framework.database.init_db import auto_init_database
+    from framework.database.schema import _auto_create_tables
+    from framework.messaging.router import MessageRouter
+
+    db = Database({"type": "sqlite", "path": str(tmp_path / "prio.db")})
+    auto_init_database(db)
+    _auto_create_tables(db)
+
+    class _Loader:
+        def __init__(self):
+            self.loaded = {}
+
+        def get_loaded_plugins(self):
+            return dict(self.loaded)
+
+        def get_plugin_module(self, name):
+            return object() if name in self.loaded else None
+
+        def _refresh_group_plugin_cache(self):
+            pass
+
+    class _Fw:
+        def __init__(self, db):
+            self.db = db
+            self.plugin_loader = _Loader()
+
+    fw = _Fw(db)
+    fw.plugin_loader.loaded = {
+        'p_int': {'priority': 10},
+        'p_str': {'priority': 'abc'},
+        'p_zero': {'priority': 0},
+    }
+    router = MessageRouter(fw)
+    router._rebuild_routes()   # 修复前这里抛 TypeError
+
+    assert set(router._routes) == {'p_int', 'p_str', 'p_zero'}
+    # priority=0 必须排在 10 前面：不能被 `value or 50` 误判成默认值
+    assert router._plugin_order[0] == 'p_zero'
+
+
+def test_sync_commands_sanitizes_and_isolates_bad_priority(tmp_path):
+    """一条 priority 越界/非法的命令不能毁掉整批命令注册。
+
+    _sync_commands 用 execute_many 批量写；SQLite INTEGER 是 64 位有符号，
+    priority=2**200 在 bind 阶段抛 OverflowError → 整批失败 → 该插件**所有**
+    命令都注册不上，只在日志留一行「同步命令失败」（实测 38 例探针中命中）。
+    """
+    from framework.database.db import Database
+    from framework.database.init_db import auto_init_database
+    from framework.database.schema import _auto_create_tables
+    from framework.loader.base import PluginLoader, _safe_priority
+
+    assert _safe_priority(2 ** 200) == 50
+    assert _safe_priority('abc') == 50
+    assert _safe_priority('7') == 7
+    assert _safe_priority(0) == 0          # 0 是合法优先级，不能当 falsy 丢掉
+
+    db = Database({"type": "sqlite", "path": str(tmp_path / "sync.db")})
+    auto_init_database(db)
+    _auto_create_tables(db)
+
+    class _Holder:
+        _cmd_has_perm_col = True
+
+        def __init__(self, db):
+            self.db = db
+
+        def _commands_has_require_perm(self):
+            return True
+
+    def _cmd(handler, pattern, prio):
+        return {'plugin_name': 'p1', 'pattern': pattern, 'alias': None,
+                'description': None, 'priority': prio, 'handler_name': handler,
+                'is_dynamic': 0, 'require_level': '', 'require_perm': ''}
+
+    holder = _Holder(db)
+    PluginLoader._sync_commands(holder, 'p1', [
+        _cmd('h_ok', '/ok', 50),
+        _cmd('h_bad', '/bad', 2 ** 200),
+        _cmd('h_str', '/str', 'high'),
+    ])
+
+    rows = db.query(
+        "SELECT handler, priority FROM commands WHERE plugin_name = %s", ('p1',))
+    got = {r['handler']: r['priority'] for r in rows}
+    assert 'h_ok' in got, '正常命令没写进去：整批被坏行毁了'
+    assert got.get('h_bad') == 50, '越界 priority 未被收敛'
+    assert got.get('h_str') == 50, '非数值 priority 未被收敛'

@@ -56,6 +56,26 @@ _CODE_FILE_NAMES = {
     'pyproject.toml', 'setup.cfg', 'tox.ini',
 }
 
+# SQLite 的 INTEGER 是 64 位有符号；超出范围驱动在 bind 阶段直接抛
+# OverflowError。plugins/commands 的 priority 来自插件元数据或注册参数
+# （作者可能写成 "high" 或一个离谱大数），而 _sync_commands 是
+# execute_many 批量写 —— 一条脏 priority 会让整个插件**所有**命令注册失败，
+# 只在日志留一行「同步命令失败」。所以在入库前统一收敛。
+_SQLITE_INT_MIN = -(2 ** 63)
+_SQLITE_INT_MAX = 2 ** 63 - 1
+
+
+def _safe_priority(value, default: int = 50) -> int:
+    """把优先级收敛成库能安全存储的 int；不可解析或越界回退 default。"""
+    try:
+        p = int(value)
+    except (TypeError, ValueError):
+        return default
+    if p < _SQLITE_INT_MIN or p > _SQLITE_INT_MAX:
+        return default
+    return p
+
+
 class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, PluginGroupSettingsMixin, PluginConfigMixin, PluginRuntimeMixin, PluginLifecycleMixin, PluginGraphMixin):
     """插件加载器，管理插件生命周期"""
 
@@ -210,13 +230,15 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
                 self.db.execute(
                     "UPDATE plugins SET version=%s, author=%s, description=%s, priority=%s, "
                     "has_register=1, status='running', loaded_at=NOW() WHERE plugin_name=%s",
-                    (meta['version'], meta['author'], meta['desc'], meta['priority'], plugin_name)
+                    (meta['version'], meta['author'], meta['desc'],
+                     _safe_priority(meta.get('priority')), plugin_name)
                 )
             else:
                 self.db.execute(
                     "INSERT INTO plugins (plugin_name, version, author, description, priority, "
                     "has_register, status, loaded_at) VALUES (%s,%s,%s,%s,%s,1,'running',NOW())",
-                    (plugin_name, meta['version'], meta['author'], meta['desc'], meta['priority'])
+                    (plugin_name, meta['version'], meta['author'], meta['desc'],
+                     _safe_priority(meta.get('priority')))
                 )
         except Exception as e:
             logger.error(f"写入插件数据库失败 [{plugin_name}]: {e}")
@@ -386,7 +408,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
                     final_active = override.get('is_active', 1)
                     params.append((
                         c['plugin_name'], c['pattern'], final_alias, final_desc,
-                        c['priority'], handler_name, c.get('is_dynamic', 0),
+                        _safe_priority(c.get('priority')), handler_name,
+                        c.get('is_dynamic', 0),
                         c.get('require_level', ''), final_active
                     ))
 
@@ -405,7 +428,24 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
                         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
                         f"ON DUPLICATE KEY UPDATE {base_upd}"
                     )
-                self.db.execute_many(sql, params)
+                try:
+                    self.db.execute_many(sql, params)
+                except Exception as batch_err:
+                    # 批量写是一条坏行毁整批（例如某字段超方言上限、编码不可用）。
+                    # 降级为逐条写：坏行单独跳过并记日志，其余命令照常注册。
+                    logger.warning(
+                        f"[{plugin_name}] 批量写入命令失败，降级为逐条隔离: {batch_err}")
+                    ok_n = 0
+                    for one in params:
+                        try:
+                            self.db.execute(sql, one)
+                            ok_n += 1
+                        except Exception as row_err:
+                            logger.error(
+                                f"[{plugin_name}] 命令写入失败已跳过 "
+                                f"pattern={one[1]!r}: {row_err}")
+                    logger.info(
+                        f"[{plugin_name}] 逐条写入完成: 成功 {ok_n}/{len(params)}")
         except Exception as e:
             logger.error(f"[{plugin_name}] 同步命令失败: {e}")
 
