@@ -11,6 +11,14 @@ Gateway WSS（Hello/Identify/Heartbeat/Resume）收事件 + REST v10 发消息
 
 配置（core_plugins.yaml → discord，默认 enabled: false）：
   token / bot_name / intents / reconnect_interval
+
+官方变更核对（2026-11，discord/discord-api-docs）：
+  - API v10 仍是现行版本（v11 只在 changelog 里列为 upcoming）
+  - content 上限 2000 字符；正文与附件都空时官方返回 400 Empty Message
+  - 2026-11-16 起 Channel Obfuscation 对 bot 强制生效：看不见的频道仍会经
+    Gateway 下发，但 name 变 "___hidden___"、flags 置 CHANNEL_OBFUSCATED(1<<17)，
+    HTTP 的频道列表直接省略。本端只消费 MESSAGE_CREATE 的 channel_id/guild_id，
+    不读频道元数据，因此不受影响；将来若加频道列表功能需按该 flag 过滤。
 """
 import asyncio
 import base64
@@ -76,6 +84,39 @@ _INTENT_MESSAGE_CONTENT = 1 << 15
 _B64_RE = re.compile(r'^base64://([A-Za-z0-9+/=\s]+)$', re.DOTALL)
 _CQ_IMAGE_RE = re.compile(
     r'\[CQ:image,file=([^\],]+)(?:,([^\]]*))?\]', re.IGNORECASE)
+
+#: 官方上限：消息 content 2000 字符（按 UTF-16 code unit 计），超长直接 400。
+_MAX_CONTENT_LEN = 2000
+
+
+def _utf16_len(s: str) -> int:
+    return len(s.encode('utf-16-le')) // 2
+
+
+def _split_content(text: str, limit: int = _MAX_CONTENT_LEN) -> list:
+    """按上限切分正文，优先在换行/空格处断开。"""
+    text = str(text or '')
+    if _utf16_len(text) <= limit:
+        return [text]
+    chunks, buf, buf_len = [], [], 0
+    for ch in text:
+        n = _utf16_len(ch)
+        if buf_len + n > limit:
+            piece = ''.join(buf)
+            cut = max(piece.rfind('\n'), piece.rfind(' '))
+            if cut > len(piece) * 0.5:
+                head, tail = piece[:cut + 1], piece[cut + 1:]
+            else:
+                head, tail = piece, ''
+            if head:
+                chunks.append(head)
+            buf = list(tail)
+            buf_len = _utf16_len(tail)
+        buf.append(ch)
+        buf_len += n
+    if buf:
+        chunks.append(''.join(buf))
+    return [c for c in chunks if c] or ['']
 
 
 def _extract_b64(data: str) -> Optional[str]:
@@ -503,9 +544,12 @@ class DiscordAdapter(ProtocolAdapter):
             self._heartbeat_interval_ms / 1000.0 * random.random())
         while self._connected and not self._closing:
             if not self._heartbeat_acked:
-                logger.warning('discord 心跳未 ACK，断开重连')
+                # 官方：上个心跳没收到 ACK 说明连接已 zombie（TCP 还在、实际已死），
+                # 必须用 4000 关闭后重连，否则会一直挂着收不到任何事件
+                logger.warning('discord 心跳未 ACK（zombied 连接），'
+                               '以 4000 关闭后重连')
                 try:
-                    await ws.close()
+                    await ws.close(code=4000)
                 except Exception:
                     pass
                 return
@@ -699,6 +743,12 @@ class DiscordAdapter(ProtocolAdapter):
         text = native.get('content') or ''
         files = native.get('files') or []
         path = f'/channels/{channel_id}/messages'
+        # 正文与附件都空时官方返回 400 Cannot send an empty message，本地先挡掉
+        if not files and not text.strip():
+            return {'status': 'failed', 'retcode': -1, 'msg': 'discord 消息为空'}
+        # 正文超 2000 直接 400：切成多条，附件只挂第一条
+        chunks = _split_content(text)
+        head, rest = chunks[0], chunks[1:]
 
         if files:
             multipart = []
@@ -727,13 +777,30 @@ class DiscordAdapter(ProtocolAdapter):
             if multipart:
                 form_files = {f'files[{i}]': (name, raw, 'application/octet-stream')
                               for i, (name, raw) in enumerate(multipart)}
-                form = {'payload_json': json.dumps({'content': text},
+                form = {'payload_json': json.dumps({'content': head},
                                                    ensure_ascii=False)}
-                return await asyncio.to_thread(
+                result = await asyncio.to_thread(
                     self._rest_post, path, files=form_files, data=form)
+                if result.get('status') != 'ok':
+                    return result
+                for chunk in rest:
+                    result = await asyncio.to_thread(
+                        self._rest_post, path,
+                        json_body={'content': chunk})
+                    if result.get('status') != 'ok':
+                        return result
+                return result
 
-        return await asyncio.to_thread(
-            self._rest_post, path, json_body={'content': text})
+        result = await asyncio.to_thread(
+            self._rest_post, path, json_body={'content': head})
+        if result.get('status') != 'ok':
+            return result
+        for chunk in rest:
+            result = await asyncio.to_thread(
+                self._rest_post, path, json_body={'content': chunk})
+            if result.get('status') != 'ok':
+                return result
+        return result
 
     # ── ProtocolAdapter 契约 ────────────────────────────────────
 

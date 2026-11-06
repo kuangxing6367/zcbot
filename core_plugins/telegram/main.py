@@ -9,7 +9,14 @@ getUpdates 长轮询收消息 + sendMessage/sendPhoto 出站（仅用 requests�
   - 出站图片：base64:// / file:// / http(s) / 本地路径 → multipart sendPhoto
 
 配置（core_plugins.yaml → telegram，默认 enabled: false）：
-  token / bot_name / polling_timeout / allowed_updates
+  token / bot_name / polling_timeout / parse_mode / allowed_updates
+
+官方变更核对（2026-11，core.telegram.org/bots/api → Bot API 10.3）：
+  - 文本上限 4096、caption 上限 1024，计数单位是「解析实体之后」的 UTF-16 码元
+  - parse_mode 合法值只有 HTML / MarkdownV2 / Markdown
+  - message_thread_id 用于论坛话题；reply_parameters 才是引用（reply_to_message_id 已废）
+  - 10.x 新增的 RichMessage / EphemeralMessage 本端**未接**：字段多、对纯文本
+    场景无收益，接一半反而容易出现实体解析失败
 """
 import asyncio
 import base64
@@ -83,6 +90,49 @@ class TelegramApiError(RuntimeError):
 _B64_RE = re.compile(r'^base64://([A-Za-z0-9+/=\s]+)$', re.DOTALL)
 _CQ_IMAGE_RE = re.compile(
     r'\[CQ:image,file=([^\],]+)(?:,([^\]]*))?\]', re.IGNORECASE)
+
+#: 官方上限：sendMessage.text 4096、媒体 caption 1024。
+#: 超长不是「截断」而是 400 整条失败，所以必须切分后分条发送。
+#: 计数单位是 UTF-16 code unit（非 BMP 的 emoji 占 2），用 _utf16_len 精确算。
+_MAX_TEXT_LEN = 4096
+_MAX_CAPTION_LEN = 1024
+#: parse_mode 取值；空串 = 纯文本，不带格式化（默认，行为与旧版一致）
+_PARSE_MODES = ('', 'HTML', 'MarkdownV2', 'Markdown')
+
+
+def _utf16_len(s: str) -> int:
+    return len(s.encode('utf-16-le')) // 2
+
+
+def _split_text(text: str, limit: int) -> list:
+    """按 UTF-16 长度切分，优先在换行/空格处断开。
+
+    切点处不做 parse_mode 闭合补偿：调用方在解析失败时整体降级纯文本，
+    比在任意位置插入闭合标签更安全（实体可能跨行）。
+    """
+    text = str(text or '')
+    if limit <= 0 or _utf16_len(text) <= limit:
+        return [text]
+    chunks, buf, buf_len = [], [], 0
+    for ch in text:
+        n = _utf16_len(ch)
+        if buf_len + n > limit:
+            piece = ''.join(buf)
+            # 回退到最后一个换行/空格，避免把单词或一行切两半
+            cut = max(piece.rfind('\n'), piece.rfind(' '))
+            if cut > len(piece) * 0.5:
+                head, tail = piece[:cut + 1], piece[cut + 1:]
+            else:
+                head, tail = piece, ''
+            if head:
+                chunks.append(head)
+            buf = list(tail)
+            buf_len = _utf16_len(tail)
+        buf.append(ch)
+        buf_len += n
+    if buf:
+        chunks.append(''.join(buf))
+    return [c for c in chunks if c] or ['']
 
 
 def _extract_b64(data: str) -> Optional[str]:
@@ -290,6 +340,8 @@ def normalize_event(update: dict, bot_name: str) -> Optional[dict]:
         'adapter': 'telegram',
         'chat_id': chat_id,
         'chat_type': chat_type,
+        # 论坛/话题群：回帖时要带上同一个 thread，否则会掉到 General 话题
+        'thread_id': msg.get('message_thread_id'),
         'raw': msg,
     }
     return event
@@ -302,13 +354,17 @@ class TelegramAdapter(ProtocolAdapter):
 
     def __init__(self, framework, token: str, bot_name: str = 'telegram',
                  polling_timeout: int = 30, api_base: str = _API_BASE,
-                 allowed_updates=None):
+                 allowed_updates=None, parse_mode: str = ''):
         self.framework = framework
         self.token = str(token or '').strip()
         self.bot_name = bot_name or 'telegram'
         self.polling_timeout = max(1, int(polling_timeout or 30))
         self.api_base = (api_base or _API_BASE).rstrip('/')
-        self.allowed_updates = allowed_updates or ['message', 'edited_message']
+        self.parse_mode = self._normalize_parse_mode(parse_mode)
+        # callback_query 必须显式订阅：getUpdates 的 allowed_updates 是白名单，
+        # 不写就永远收不到，下面的按钮回调归一化就成了死代码
+        self.allowed_updates = allowed_updates or [
+            'message', 'edited_message', 'callback_query']
         self._offset = self._load_offset()
         # 409（webhook 冲突）只完整提示一次，否则日志会被同一条刷满
         self._webhook_conflict_warned = False
@@ -320,6 +376,35 @@ class TelegramAdapter(ProtocolAdapter):
 
     def _url(self, method: str) -> str:
         return f'{self.api_base}/bot{self.token}/{method}'
+
+    @staticmethod
+    def _target_from(params: dict):
+        """(chat_id, message_id)：chat_id 允许用 group_id/user_id 代替。"""
+        chat_id = params.get('chat_id')
+        if chat_id is None:
+            chat_id = params.get('group_id')
+        if chat_id is None:
+            chat_id = params.get('user_id')
+        mid = params.get('message_id')
+        if mid is None:
+            mid = params.get('msg_id')
+        try:
+            mid = int(mid) if mid is not None else None
+        except (TypeError, ValueError):
+            mid = None
+        return chat_id, mid
+
+    @staticmethod
+    def _normalize_parse_mode(value) -> str:
+        """配置值 → 官方 parse_mode 常量；不认识的值按纯文本处理，不静默报错。"""
+        mode = str(value or '').strip()
+        for allowed in _PARSE_MODES:
+            if allowed and allowed.lower() == mode.lower():
+                return allowed
+        if mode:
+            logger.warning('telegram parse_mode 取值 %r 不受支持，已按纯文本发送'
+                           '（可选：HTML / MarkdownV2 / Markdown）', mode)
+        return ''
 
     # ── offset 持久化 ────────────────────────────────────────────
     # offset 是「已确认到哪一条」的唯一凭据。只放内存时：进程重启 → offset 归 0
@@ -376,11 +461,15 @@ class TelegramAdapter(ProtocolAdapter):
                 {'key': 'token', 'label': 'Bot Token', 'type': 'password'},
                 {'key': 'bot_name', 'label': 'Bot 名', 'type': 'string'},
                 {'key': 'polling_timeout', 'label': '轮询超时(秒)', 'type': 'number'},
+                {'key': 'parse_mode', 'label': '解析模式(HTML/MarkdownV2/空)',
+                 'type': 'string'},
             ],
-            'restart_keys': ['token', 'bot_name'],
+            'restart_keys': ['token', 'bot_name', 'parse_mode'],
             'endpoint_hint': f'@{self.bot_name}（getUpdates 长轮询）',
             'guide': '向 @BotFather 申请 token 填入；本端长轮询 getUpdates，'
-                     '出站 sendMessage/sendPhoto（图片支持 base64://）。',
+                     '出站 sendMessage/sendPhoto（图片支持 base64://）。'
+                     'parse_mode 留空=纯文本（默认），填 HTML 或 MarkdownV2 时'
+                     '正文按该格式解析，解析失败会自动降级纯文本重发一次。',
             'status_extra': {
                 'connected': self._connected,
                 'offset': self._offset,
@@ -392,14 +481,14 @@ class TelegramAdapter(ProtocolAdapter):
 
     def capabilities(self):
         from framework.messaging.contract import (
-            CAP_FILE, CAP_IMAGE, CAP_NOTICE, CAP_STICKER, CAP_TEXT,
-            CAP_VIDEO, CAP_VOICE, Capabilities,
+            CAP_EDIT, CAP_FILE, CAP_IMAGE, CAP_NOTICE, CAP_REACT, CAP_RECALL,
+            CAP_STICKER, CAP_TEXT, CAP_VIDEO, CAP_VOICE, Capabilities,
         )
         return Capabilities(
             inbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
                      CAP_STICKER, CAP_NOTICE],
             outbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
-                      CAP_STICKER],
+                      CAP_STICKER, CAP_RECALL, CAP_EDIT, CAP_REACT],
         )
 
     def normalize_incoming(self, raw_message) -> list:
@@ -601,18 +690,98 @@ class TelegramAdapter(ProtocolAdapter):
     # ── 出站发送 ────────────────────────────────────────────────
 
     def _send_message(self, chat_id, text: str,
-                      reply_to: int = None) -> dict:
+                      reply_to: int = None,
+                      thread_id: int = None) -> dict:
+        """发文本：按 4096 上限切条，引用只挂在第一条上。"""
+        chunks = _split_text(text, _MAX_TEXT_LEN)
+        last = None
+        for i, chunk in enumerate(chunks):
+            last = self._send_text_once(
+                chat_id, chunk, reply_to if i == 0 else None, thread_id)
+            if last.get('status') != 'ok':
+                break
+        return last or {'status': 'failed', 'retcode': -1, 'msg': '消息为空'}
+
+    def _send_text_once(self, chat_id, text: str, reply_to: int = None,
+                        thread_id: int = None) -> dict:
         body = {'chat_id': chat_id, 'text': text}
         if reply_to:
             body['reply_parameters'] = json.dumps({'message_id': reply_to})
-        resp = self._http.post(
-            self._url('sendMessage'),
-            json=body, timeout=30,
-            headers={'Content-Type': 'application/json; charset=utf-8'})
-        data = resp.json() if resp.content else {}
+        if thread_id:
+            body['message_thread_id'] = int(thread_id)
+        if self.parse_mode:
+            body['parse_mode'] = self.parse_mode
+        data = self._post_json('sendMessage', body)
+        # 实体解析失败（未转义的 _ * [ 等）是 400 且描述固定含 can't parse entities：
+        # 这时整条消息是发不出去的，降级成纯文本重发一次，而不是让插件看到失败。
+        if (self.parse_mode and data.get('error_code') == 400
+                and "can't parse entities" in str(data.get('description') or '')):
+            logger.warning('telegram %s 解析失败，本条降级为纯文本重发：%s',
+                           self.parse_mode, data.get('description'))
+            body.pop('parse_mode', None)
+            data = self._post_json('sendMessage', body)
         return self._result_or_error(data, 'sendMessage')
 
-    def _send_media(self, chat_id, op: dict, reply_to=None) -> dict:
+    def _post_json(self, method: str, body: dict, timeout: int = 30) -> dict:
+        resp = self._http.post(
+            self._url(method), json=body, timeout=timeout,
+            headers={'Content-Type': 'application/json; charset=utf-8'})
+        return resp.json() if resp.content else {}
+
+    def _delete_message(self, chat_id, message_id) -> dict:
+        """官方限制：只能删 48 小时内的消息，超时返回 400。"""
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': f'message_id 非法: {message_id!r}'}
+        data = self._post_json('deleteMessage',
+                               {'chat_id': chat_id, 'message_id': mid})
+        if data.get('ok'):
+            return {'status': 'ok', 'retcode': 0, 'data': True}
+        err = TelegramApiError.from_payload(data)
+        desc = err.description.lower()
+        if err.error_code == 400 and ('not found' in desc or 'too old' in desc):
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': '删除失败：消息不存在或已超过 48 小时删除窗口'
+                           '（Telegram 只允许删 48 小时内的消息）'}
+        return self._result_or_error(data, 'deleteMessage')
+
+    def _edit_message(self, chat_id, message_id, text: str) -> dict:
+        # 不收 thread_id：editMessageText 按 message_id 定位，没有该字段；
+        # 留一个不读的参数只会让人以为论坛话题的编辑需要它。
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': f'message_id 非法: {message_id!r}'}
+        body = {'chat_id': chat_id, 'message_id': mid, 'text': text}
+        if self.parse_mode:
+            body['parse_mode'] = self.parse_mode
+        data = self._post_json('editMessageText', body)
+        if (self.parse_mode and data.get('error_code') == 400
+                and "can't parse entities" in str(data.get('description') or '')):
+            body.pop('parse_mode', None)
+            data = self._post_json('editMessageText', body)
+        return self._result_or_error(data, 'editMessageText')
+
+    def _set_reaction(self, chat_id, message_id, emoji: str) -> dict:
+        """emoji 为空 = 清空该消息上本 bot 的回应。"""
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': f'message_id 非法: {message_id!r}'}
+        reaction = [{'type': 'emoji', 'emoji': emoji}] if emoji else []
+        data = self._post_json(
+            'setMessageReaction',
+            {'chat_id': chat_id, 'message_id': mid, 'reaction': reaction})
+        if data.get('ok'):
+            return {'status': 'ok', 'retcode': 0, 'data': True}
+        return self._result_or_error(data, 'setMessageReaction')
+
+    def _send_media(self, chat_id, op: dict, reply_to=None,
+                    thread_id=None) -> dict:
         """
         通用媒体发送：sendPhoto / sendVoice / sendVideo / sendDocument / sendSticker。
 
@@ -630,10 +799,20 @@ class TelegramAdapter(ProtocolAdapter):
 
         body = {'chat_id': chat_id}
         caption = op.get('caption') or ''
+        overflow = ''
+        if _utf16_len(caption) > _MAX_CAPTION_LEN:
+            # caption 上限 1024，超了整条会 400；正文改由随后的文本消息承载
+            overflow, caption = caption, ''
         if caption:
             body['caption'] = caption
+            # caption 与正文用同一个 parse_mode：配置开了 HTML/MarkdownV2 却只
+            # 对纯文本生效，是让配置项静默失效。解析失败由下面统一降级。
+            if self.parse_mode:
+                body['parse_mode'] = self.parse_mode
         if reply_to:
             body['reply_parameters'] = json.dumps({'message_id': reply_to})
+        if thread_id:
+            body['message_thread_id'] = int(thread_id)
 
         name = str(data.get('name') or '')
         files = None
@@ -659,7 +838,7 @@ class TelegramAdapter(ProtocolAdapter):
                 # 不是本地文件 → 当作 Telegram file_id 直接引用
                 body[field] = ref
 
-        try:
+        def _post_media():
             if files is None:
                 resp = self._http.post(
                     self._url(method), json=body, timeout=60,
@@ -667,10 +846,30 @@ class TelegramAdapter(ProtocolAdapter):
             else:
                 resp = self._http.post(
                     self._url(method), data=body, files=files, timeout=60)
-            payload = resp.json() if resp.content else {}
+            return resp.json() if resp.content else {}
+
+        try:
+            payload = _post_media()
         except Exception as e:  # noqa: BLE001
             return {'status': 'failed', 'retcode': -3, 'msg': f'{method} 失败: {e}'}
-        return self._result_or_error(payload, method)
+        # caption 的实体解析失败同样是整条 400（媒体和 caption 一起发不出去），
+        # 与文本路径一样降级纯文本重发；files 是内存 bytes，重发不产生二次读盘。
+        if (self.parse_mode and payload.get('error_code') == 400
+                and "can't parse entities" in str(payload.get('description') or '')):
+            logger.warning('telegram %s 的 caption 解析失败，本条降级为纯文本重发：%s',
+                           self.parse_mode, payload.get('description'))
+            body.pop('parse_mode', None)
+            try:
+                payload = _post_media()
+            except Exception as e:  # noqa: BLE001
+                return {'status': 'failed', 'retcode': -3,
+                        'msg': f'{method} 失败: {e}'}
+        result = self._result_or_error(payload, method)
+        if overflow and result.get('status') == 'ok':
+            sent = self._send_message(chat_id, overflow, None, thread_id)
+            if sent.get('status') != 'ok':
+                return sent
+        return result
 
     def _send_photo(self, chat_id, image: dict, caption: str = '',
                     reply_to: int = None) -> dict:
@@ -724,6 +923,8 @@ class TelegramAdapter(ProtocolAdapter):
                 return {'status': 'failed', 'retcode': -1,
                         'msg': 'send_msg 需要 chat_id/user_id/group_id'}
             reply_to = params.get('reply_to') or params.get('message_id')
+            thread_id = (params.get('message_thread_id')
+                         or params.get('thread_id'))
             # 规范消息段 → Telegram 发送指令（支持图/语音/视频/文件/贴纸）
             from framework.messaging.segments import normalize_message as _canon
             ops = self.to_native(_canon(message))
@@ -732,11 +933,39 @@ class TelegramAdapter(ProtocolAdapter):
                 if op.get('method') == 'sendMessage':
                     last = await asyncio.to_thread(
                         self._send_message, chat_id,
-                        (op.get('data') or {}).get('text', ''), reply_to)
+                        (op.get('data') or {}).get('text', ''), reply_to,
+                        thread_id)
                 else:
                     last = await asyncio.to_thread(
-                        self._send_media, chat_id, op, reply_to)
+                        self._send_media, chat_id, op, reply_to, thread_id)
             return last or {'status': 'failed', 'retcode': -1, 'msg': '发送无内容'}
+
+        if action in ('delete_msg', 'recall', 'delete_message'):
+            chat_id, mid = self._target_from(params)
+            if chat_id is None or mid is None:
+                return {'status': 'failed', 'retcode': -1,
+                        'msg': 'delete_msg 需要 chat_id(或 group_id/user_id) '
+                               '与 message_id'}
+            return await asyncio.to_thread(self._delete_message, chat_id, mid)
+
+        if action in ('edit_msg', 'edit_message', 'edit_text'):
+            chat_id, mid = self._target_from(params)
+            text = params.get('message', params.get('text', ''))
+            if chat_id is None or mid is None:
+                return {'status': 'failed', 'retcode': -1,
+                        'msg': 'edit_msg 需要 chat_id 与 message_id'}
+            return await asyncio.to_thread(
+                self._edit_message, chat_id, mid, str(text))
+
+        if action in ('set_reaction', 'react'):
+            chat_id, mid = self._target_from(params)
+            emoji = str(params.get('emoji') or params.get('reaction') or '')
+            if chat_id is None or mid is None:
+                return {'status': 'failed', 'retcode': -1,
+                        'msg': 'set_reaction 需要 chat_id 与 message_id'
+                               '（emoji 留空表示清除回应）'}
+            return await asyncio.to_thread(
+                self._set_reaction, chat_id, mid, emoji)
 
         if action == 'get_me':
             return {'status': 'ok', 'retcode': 0, 'data': self._me}
@@ -790,6 +1019,7 @@ def register(ctx):
         bot_name=cfg.get('bot_name') or 'telegram',
         polling_timeout=cfg.get('polling_timeout') or 30,
         api_base=cfg.get('api_base') or _API_BASE,
+        parse_mode=cfg.get('parse_mode') or '',
     )
     fw.services.register('protocol_adapter', _adapter_instance)
     fw.services.register('api_caller', _adapter_instance)

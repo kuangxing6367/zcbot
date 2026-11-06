@@ -425,13 +425,17 @@ def test_card_and_prompt_keyboard_in_body():
     captured = {}
     a._api_request = lambda m, p, json_body=None, **kw: captured.update(
         path=p, body=json_body) or {'id': 'M'}
+    # tuwen 的 content 四个字段都是官方硬约束，本地预检会拦；这里给一份合法内容，
+    # 本用例只关心 card / prompt_keyboard 是否进了 body。
+    content = {'title': '标题', 'description': '描述',
+               'url': 'https://example.com/a', 'pic_url': 'https://example.com/a.png'}
     r = _aio.run(a.call_api(
-        'send_msg', group_id='G1', active=True, card={'card_type': 'tuwen',
-                                                      'content': {'a': 1}},
+        'send_msg', group_id='G1', active=True,
+        card={'card_type': 'tuwen', 'content': content},
         prompt_buttons=[{'text': '提示', 'data': 'p1'}]))
     assert r['status'] == 'ok'
     assert captured['body']['msg_type'] == 8
-    assert captured['body']['card'] == {'type': 'tuwen', 'content': {'a': 1}}
+    assert captured['body']['card'] == {'type': 'tuwen', 'content': content}
     assert captured['body']['prompt_keyboard']['content']['rows']
 
 
@@ -467,8 +471,22 @@ def test_upload_media_size_cap(monkeypatch):
     monkeypatch.setattr(main, '_MAX_MEDIA_BYTES', 32)
     a = _adapter()
     big = base64.b64encode(b'x' * 64).decode()
-    with pytest.raises(Exception, match='上限'):
+    with pytest.raises(Exception, match='上限') as ei:
         _aio.run(a._upload_media('G1', 'image', {'file': f'base64://{big}'}))
+    # 回归：曾用 n // 1024 // 1024 取整，上限 < 1MB 时报「超过 0MB 硬限制」
+    msg = str(ei.value)
+    assert '0MB' not in msg, msg
+    assert '32 字节' in msg, msg
+
+
+def test_human_size_units():
+    assert main._human_size(0) == '0 字节'
+    assert main._human_size(999) == '999 字节'
+    assert main._human_size(1024) == '1 KB'
+    assert main._human_size(1536) == '1.5 KB'
+    assert main._human_size(5 * 1024 * 1024) == '5 MB'
+    assert main._human_size(200 * 1024 * 1024) == '200 MB'
+    assert main._human_size(3 * 1024 ** 3) == '3 GB'
 
 
 def test_normalize_incoming_dict_yields_media_segments():

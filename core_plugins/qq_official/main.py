@@ -14,9 +14,21 @@ QQ 官方机器人接入端（qq_official）
 
 配置（core_plugins.yaml → qq_official，默认 enabled: false）：
   app_id / app_secret / bot_name / intents / reconnect_interval
+
+官方文档自相矛盾之处（2026-11 实核，bot.q.qq.com）：
+  - 发送消息的 msg_type，接口页写 0=文本 / 2=Markdown / 7=富媒体 / 8=图文卡片(card)，
+    而「消息类型总览」页（2026-07-23 更新）还停在「只有 0/2/3/7」。
+    接口页才是新的：8 是 2026-10-28 新增的图文卡片，3/4 已不再支持发送。
+    本端以接口页为准。
+  - 图文卡片 card.type=tuwen 的 content 是硬约束：title 1-50、description 1-200、
+    url/pic_url 必须 https 且 ≤1024，超一项整条 400，所以本地先做预检。
+  - <qqbot-at-everyone /> 是 2026-10-26 新增，只对文本/markdown 生效，
+    要求机器人是群管理员，且每个群每天只能发 1 次。
+  - 域名自 2026-08-10 统一为 api.bot.qq.com；旧的 sandbox.api.sgroup.qq.com 已废。
 """
 import asyncio
 import base64
+import hashlib
 import itertools
 import json
 import logging
@@ -90,12 +102,31 @@ _ERR_GROUP_LEFT = 40011026        # 机器人已退群/群已解散
 _ERR_RATE_LIMITED = 40023001      # 接口频率限制
 _ERR_VIOLATION = 40034006         # 消息内容违规被拦截
 
-# 富媒体整体读内存的上限（官方富媒体下载无流式接口，防大视频 OOM）
-_MAX_MEDIA_BYTES = 100 * 1024 * 1024
+# 富媒体整体读内存的上限 = 官方硬限制 200MB（图片/视频/语音/文件同）
+_MAX_MEDIA_BYTES = 200 * 1024 * 1024
+# 直接上传二进制的官方上限：file_data 超过 5MB 必须改 URL 上传或分片上传
+_MEDIA_DIRECT_MAX = 5 * 1024 * 1024
+# 分片秒传判断用的前 N 字节（官方写明 10002432 字节 ≈ 9.54MB）
+_MD5_10M_BYTES = 10002432
 
 # 消息段类型 → 上传 file_type（1图 2视频 3语音 4文件）
 _FILE_TYPE = {'image': 1, 'video': 2, 'record': 3, 'voice': 3, 'file': 4}
 _MEDIA_SEGS = ('image', 'record', 'voice', 'video', 'file')
+
+
+def _human_size(n: int) -> str:
+    """字节数 → 可读尺寸。
+
+    不用首数取整的 ``n // 1024 // 1024``：上限被压小（测试或用户配置）时
+    会算出「超过 0MB 上限」这种没法看的提示。
+    """
+    n = int(n or 0)
+    for unit, base in (('GB', 1024 ** 3), ('MB', 1024 ** 2), ('KB', 1024)):
+        if n >= base:
+            val = n / base
+            return ('{} {}'.format(int(val), unit) if val == int(val)
+                    else '{:.1f} {}'.format(val, unit))
+    return '{} 字节'.format(n)
 # 段类型 → 上传文件后缀（用于 multipart 文件名，服务端按后缀识别）
 _MEDIA_EXT = {'image': 'png', 'video': 'mp4', 'record': 'silk',
               'voice': 'silk', 'file': 'bin'}
@@ -333,8 +364,15 @@ def _split_outgoing(message):
         if seg_type == 'text':
             texts.append(str(data.get('text') or ''))
         elif seg_type == 'at':
-            # 官方不支持 CQ:at，退化成 @昵称 文本，避免整条消息被吞
-            texts.append('@' + str(data.get('name') or data.get('qq') or ''))
+            # 官方群/单聊不支持 CQ:at 语法，只有 @全体 有专门标签：
+            # 2026-10-26 起文本/markdown 支持 <qqbot-at-everyone />，
+            # 条件是机器人是群管理员、且每群每天只能发 1 次。
+            if data.get('everyone') or str(data.get('qq') or '') == 'all' \
+                    or str(data.get('name') or '') in ('全体成员', '所有人'):
+                texts.append('<qqbot-at-everyone />')
+            else:
+                # 单个用户没有官方语法，退化成 @昵称 文本，避免整条消息被吞
+                texts.append('@' + str(data.get('name') or data.get('qq') or ''))
         elif seg_type == 'markdown':
             markdown = str(data.get('content') or data.get('text') or '')
         elif seg_type == 'card':
@@ -347,6 +385,27 @@ def _split_outgoing(message):
             media = (seg_type, data)
     return (''.join(texts).strip(), media, markdown, buttons,
             card, prompt_buttons)
+
+
+def _check_tuwen_card(content: dict) -> str:
+    """图文卡片（msg_type=8, card.type=tuwen）的本地预检。
+
+    官方对四个字段都是硬约束，超一个字符就整条 400，且错误信息只有业务码；
+    这里提前拦下来，把「哪里不对、限制多少」直接说清楚。
+    """
+    if not isinstance(content, dict):
+        return '图文卡片 content 必须是对象（含 title/description/url/pic_url）'
+    checks = (('title', 50, '标题'), ('description', 200, '描述'),
+              ('url', 1024, '链接'), ('pic_url', 1024, '图片地址'))
+    for key, limit, label in checks:
+        val = content.get(key)
+        if not isinstance(val, str) or not val.strip():
+            return f'图文卡片缺少 {label}（{key}）'
+        if len(val) > limit:
+            return f'图文卡片 {label}（{key}）超过 {limit} 字符（当前 {len(val)}）'
+        if key in ('url', 'pic_url') and not val.lower().startswith('https://'):
+            return f'图文卡片 {label}（{key}）必须是 https 链接'
+    return ''
 
 
 def build_keyboard(buttons) -> Optional[dict]:
@@ -1243,6 +1302,100 @@ class QQOfficialAdapter(ProtocolAdapter):
                 f'{(last_resp.text or "")[:300]}')
         raise RuntimeError(f'{method} {path} 请求失败: {last_exc}')
 
+    def _put_part(self, url: str, raw: bytes, timeout: int = 300) -> None:
+        """把一片 PUT 到预签名 URL。
+
+        必须用不带 Authorization 的裸请求：预签名 URL 的签名是给对象存储的，
+        多带一个 QQ 的 Bot token 头，存储侧会按「带鉴权头的请求」校验签名而拒绝。
+        """
+        resp = requests.put(url, data=raw, timeout=timeout)
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f'分片 PUT 失败 HTTP {resp.status_code}: '
+                f'{(resp.text or "")[:200]}')
+
+    def _upload_chunked(self, scope: str, openid: str, file_type: int,
+                        raw: bytes, name: str) -> dict:
+        """官方推荐路径：预上传 → 逐片 PUT → 分片完成 → 带 upload_id 合并。
+
+        依据（/wiki/develop/api-v2 群聊富媒体预上传、群聊分片上传完成）：
+          POST /v2/{scope}/{id}/upload_prepare   file_type/file_size/file_name/
+                                                md5/sha1/md5_10m → upload_id+parts
+          PUT  presigned_url                     每片二进制
+          POST /v2/{scope}/{id}/upload_part_finish  upload_id/part_index/
+                                                block_size/md5
+          POST /v2/{scope}/{id}/files            带 upload_id 完成合并 → file_info
+        """
+        base = f'/v2/{scope}/{openid}'
+        prep = self._api_request('POST', base + '/upload_prepare', json_body={
+            'file_type': file_type,
+            'file_size': str(len(raw)),
+            'file_name': name,
+            'md5': hashlib.md5(raw).hexdigest(),
+            'sha1': hashlib.sha1(raw).hexdigest(),
+            'md5_10m': hashlib.md5(raw[:_MD5_10M_BYTES]).hexdigest(),
+        }, timeout=60)
+        upload_id = prep.get('upload_id')
+        parts = prep.get('parts') or []
+        if not upload_id or not parts:
+            raise RuntimeError(f'预上传响应缺少 upload_id/parts: {prep}')
+        default_block = int(prep.get('block_size') or 0)
+        offset = 0
+        for part in parts:
+            size = int(part.get('block_size') or default_block or 0)
+            chunk = raw[offset:offset + size] if size > 0 else raw[offset:]
+            if not chunk:
+                break
+            offset += len(chunk)
+            self._put_part(str(part.get('presigned_url') or ''), chunk)
+            self._api_request('POST', base + '/upload_part_finish', json_body={
+                'upload_id': upload_id,
+                'part_index': int(part.get('index') or 0),
+                'block_size': str(len(chunk)),
+                'md5': hashlib.md5(chunk).hexdigest(),
+            }, timeout=60)
+        if offset != len(raw):
+            # 分片覆盖不满整个文件时必须停手：带 upload_id 合并会得到一个截断
+            # 的文件，比直接失败更难排查
+            raise RuntimeError(
+                f'分片覆盖不完整：已上传 {offset} / {len(raw)} 字节，'
+                f'parts={len(parts)} block_size={default_block}')
+        return self._api_request('POST', base + '/files', json_body={
+            'file_type': file_type, 'upload_id': upload_id,
+            'file_name': name, 'srv_send_msg': False,
+        }, timeout=120)
+
+    def _upload_binary(self, scope: str, openid: str, file_type: int,
+                       raw: bytes, name: str, mime: str = '') -> dict:
+        """二进制上传：≤5MB 走 file_data(base64)，更大走分片上传。
+
+        官方请求体只列了 file_data / url / upload_id 三种载体，没有 multipart
+        的说明；file_data 若被拒（老服务端与文档不一致），再退回 multipart。
+        """
+        if not raw:
+            raise ValueError('上传内容为空')
+        if len(raw) > _MAX_MEDIA_BYTES:
+            raise ValueError(
+                f'超过上传上限 {_human_size(_MAX_MEDIA_BYTES)}: '
+                f'{_human_size(len(raw))}')
+        path = f'/v2/{scope}/{openid}/files'
+        if len(raw) > _MEDIA_DIRECT_MAX:
+            return self._upload_chunked(scope, openid, file_type, raw, name)
+        try:
+            return self._api_request('POST', path, json_body={
+                'file_type': file_type,
+                'file_data': base64.b64encode(raw).decode(),
+                'file_name': name,
+                'srv_send_msg': False,
+            }, timeout=120)
+        except _ApiError as e:
+            logger.warning('qq_official file_data 上传被拒，退回 multipart: %s', e)
+        return self._api_request(
+            'POST', path,
+            files={'file': (name, raw, mime or 'application/octet-stream')},
+            data={'file_type': str(file_type), 'srv_send_msg': 'false'},
+            timeout=120)
+
     async def _upload_media(self, openid: str, seg_type: str,
                             media_data: dict, is_group: bool = True) -> dict:
         """上传任意富媒体（图 / 语音 / 视频 / 文件）并返回 media dict。
@@ -1263,38 +1416,27 @@ class QQOfficialAdapter(ProtocolAdapter):
                 raw = _b64_to_bytes(b64)
                 if not raw:
                     raise ValueError(f'{label} base64 解码失败: {b64[:64]}...')
-                if len(raw) > _MAX_MEDIA_BYTES:
-                    raise ValueError(
-                        f'{label} 超过 {_MAX_MEDIA_BYTES // 1024 // 1024}MB 上限: '
-                        f'{len(raw)} bytes')
                 mime = _mime_for(seg_type, raw)
-                files = {'file': (_media_name(seg_type, mime), raw, mime)}
-                form = {'file_type': str(file_type), 'srv_send_msg': 'false'}
                 data = await asyncio.to_thread(
-                    self._api_request, 'POST', path,
-                    files=files, data=form)
+                    self._upload_binary, scope, openid, file_type, raw,
+                    _media_name(seg_type, mime), mime)
             elif file.startswith(('http://', 'https://')):
+                # 平台代下转存：省一次上行，且不受本地 5MB/分片限制
                 data = await asyncio.to_thread(
                     self._api_request, 'POST', path,
                     json_body={'file_type': file_type, 'url': file,
-                               'srv_send_msg': False})
+                               'srv_send_msg': False}, timeout=120)
             else:
                 local = file[7:] if file.startswith('file://') else file
                 raw = await asyncio.to_thread(_read_file_bytes, local)
                 if not raw:
                     raise FileNotFoundError(f'读取本地{label}失败: {local}')
-                if len(raw) > _MAX_MEDIA_BYTES:
-                    raise ValueError(
-                        f'{label} 超过 {_MAX_MEDIA_BYTES // 1024 // 1024}MB 上限: '
-                        f'{len(raw)} bytes')
                 mime = _mime_for(seg_type, raw, local)
                 name = _media_name(seg_type, mime,
                                    local.rsplit('/', 1)[-1].rsplit('\\', 1)[-1])
-                files = {'file': (name, raw, mime)}
-                form = {'file_type': str(file_type), 'srv_send_msg': 'false'}
                 data = await asyncio.to_thread(
-                    self._api_request, 'POST', path,
-                    files=files, data=form)
+                    self._upload_binary, scope, openid, file_type, raw,
+                    name, mime)
         except Exception as e:
             logger.warning('qq_official %s上传失败: %s', label, e)
             raise
@@ -1329,14 +1471,16 @@ class QQOfficialAdapter(ProtocolAdapter):
         pk = build_keyboard(prompt_buttons) if prompt_buttons else None
 
         if card is not None:
-            # msg_type=8 卡片：data 形如 {'card_type': 'tuwen',
-            # 'content': {...}}，content 缺省按空 dict
+            # msg_type=8 图文卡片：card = {type: 'tuwen', content: {...}}。
+            # 官方约束：title 1-50、description 1-200、url/pic_url 必须 https 且 ≤1024
+            card_type = str(card.get('card_type') or card.get('type') or 'tuwen')
+            card_content = card.get('content') or {}
+            if card_type == 'tuwen':
+                _err = _check_tuwen_card(card_content)
+                if _err:
+                    return None, _err
             body['msg_type'] = _MSG_TYPE_CARD
-            body['card'] = {
-                'type': str(card.get('card_type') or card.get('type')
-                            or 'tuwen'),
-                'content': card.get('content') or {},
-            }
+            body['card'] = {'type': card_type, 'content': card_content}
             if text:
                 body['content'] = text
             if pk:

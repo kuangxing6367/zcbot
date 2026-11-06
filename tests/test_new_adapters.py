@@ -133,7 +133,11 @@ def test_matrix_image_segment_and_mxc_convert():
     }), '!r:m.example', 'mx')
     assert ev['segments'][0]['type'] == 'image'
     url = mx._mxc_to_http('mxc://example/media1', 'https://m.example')
-    assert url == 'https://m.example/_matrix/media/v3/download/example/media1'
+    # spec v1.11 起 /_matrix/media/v3/download 已 deprecated，
+    # 统一走需认证的 Client-Server v1 media 端点
+    assert url == (
+        'https://m.example/_matrix/client/v1/media/download'
+        '/example/media1')
 
 
 def test_matrix_since_persisted(tmp_path, monkeypatch):

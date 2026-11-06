@@ -47,6 +47,16 @@ __plugin_meta__ = {
 }
 
 
+_MATRIX_MEDIA_MSGTYPE = {'image': 'm.image', 'video': 'm.video',
+                         'voice': 'm.audio', 'file': 'm.file'}
+#: 官方 spec：GET /_matrix/media/v3/download 已标 deprecated，
+#: 替代端点是 GET /_matrix/client/v1/media/download/{serverName}/{mediaId}（**必须**带认证）。
+#: 冻结未认证访问后，旧端点对新媒体直接 404 M_NOT_FOUND。
+_MEDIA_DOWNLOAD_V1 = '/_matrix/client/v1/media/download/{server}/{media_id}'
+_MEDIA_UPLOAD = '/_matrix/media/v3/upload'  # 上传端点未变，spec 未标 deprecated
+_DEFAULT_MEDIA_MAX = 16 * 1024 * 1024
+
+
 class MatrixApiError(RuntimeError):
     """Matrix 标准错误：{"errcode": "M_...", "error": "..."}"""
 
@@ -107,15 +117,23 @@ def _seg_from_content(content: dict) -> list:
 
 
 def _mxc_to_http(mxc_url: str, homeserver: str) -> str:
-    """mxc://server/mediaid → 可下载的 HTTPS 地址（私有媒体仍需带 token）。"""
+    """mxc://server/mediaid → 认证下载地址。
+
+    spec 已把 /_matrix/media/v3/download 标为 deprecated，替代端点是
+    GET /_matrix/client/v1/media/download/{serverName}/{mediaId}，**必须**带
+    Authorization 头；access token 不允许再拼进 query（spec 明文禁止）。
+    所以这里给出的地址必须配合 headers 使用——插件若只拿 URL 裸抓会 401，
+    实际走的是下面的本地缓存路径。
+    """
     if not isinstance(mxc_url, str) or not mxc_url.startswith('mxc://'):
         return mxc_url or ''
     rest = mxc_url[len('mxc://'):]
     if '/' not in rest:
         return mxc_url
     server, media_id = rest.split('/', 1)
-    return (f'{homeserver.rstrip("/")}/_matrix/media/v3/download/'
-            f'{quote(server)}/{quote(media_id)}')
+    return (f'{homeserver.rstrip("/")}'
+            + _MEDIA_DOWNLOAD_V1.format(server=quote(server),
+                                        media_id=quote(media_id)))
 
 
 def normalize_event(event: dict, room_id: str, bot_name: str,
@@ -159,7 +177,9 @@ class MatrixAdapter(ProtocolAdapter):
     def __init__(self, framework, homeserver: str = '',
                  access_token: str = '', user_id: str = '',
                  bot_name: str = 'matrix', sync_timeout: int = 30,
-                 rooms=None, reconnect_interval: int = 3):
+                 rooms=None, reconnect_interval: int = 3,
+                 cache_media: bool = True,
+                 media_max_bytes: int = _DEFAULT_MEDIA_MAX):
         self.framework = framework
         self.homeserver = (homeserver or '').rstrip('/')
         self.access_token = (access_token or '').strip()
@@ -169,6 +189,10 @@ class MatrixAdapter(ProtocolAdapter):
         # 空 = 所有已加入房间；配置了就只有这些房间
         self.rooms = [r for r in (rooms or []) if r]
         self.reconnect_interval = max(1, int(reconnect_interval or 3))
+        # 入站媒体本地化：认证媒体端点不能裸 URL 抓，先落到 data/matrix_media/
+        # 再以 file:// 交给插件，插件侧零改动
+        self.cache_media = bool(cache_media)
+        self.media_max_bytes = max(1024, int(media_max_bytes or _DEFAULT_MEDIA_MAX))
         self._backoff = Backoff(base=self.reconnect_interval, maximum=60)
 
         self._connected = False
@@ -324,7 +348,9 @@ class MatrixAdapter(ProtocolAdapter):
             for ev in events:
                 if self._closing:
                     return
-                event = normalize_event(ev, room_id, self.bot_name, self.user_id)
+                raw = dict(ev) if isinstance(ev, dict) else {}
+                raw['room_id'] = room_id
+                event = await self.handle_event(raw, self.bot_name)
                 if event is None:
                     continue
                 try:
@@ -370,17 +396,12 @@ class MatrixAdapter(ProtocolAdapter):
         return self._request('GET', '/_matrix/client/v3/sync', params=params,
                              timeout=self.sync_timeout + 20)
 
-    def send_message(self, room_id: str, text: str,
-                     reply_to: str = None) -> dict:
-        """发文本。
+    def _send_event(self, room_id: str, content: dict) -> dict:
+        """PUT 一条 m.room.message；txnId 每次调用生成一次，重试复用。
 
-        txnId 只在这一次调用里生成一次：Matrix 用它做幂等，
-        同一个 txnId 重试不会重复发；换 txnId 就会真的发第二条。
+        Matrix 用 txnId 做幂等：同 txnId 重试不会重复发，换一个就真发第二条。
         """
         txn_id = f'zcbot{int(time.time() * 1000)}{uuid.uuid4().hex[:8]}'
-        content = {'msgtype': 'm.text', 'body': text}
-        if reply_to:
-            content['m.relates_to'] = {'m.in_reply_to': {'event_id': reply_to}}
         path = (f'/_matrix/client/v3/rooms/{quote(room_id, safe="")}/send/'
                 f'm.room.message/{txn_id}')
         try:
@@ -404,6 +425,110 @@ class MatrixAdapter(ProtocolAdapter):
                     'error_code': e.errcode, 'msg': str(e)}
         return {'status': 'ok', 'retcode': 0, 'data': data}
 
+    def send_message(self, room_id: str, text: str,
+                     reply_to: str = None) -> dict:
+        """发文本。
+
+        txnId 只在这一次调用里生成一次：Matrix 用它做幂等，
+        同一个 txnId 重试不会重复发；换 txnId 就会真的发第二条。
+        """
+        content = {'msgtype': 'm.text', 'body': text}
+        if reply_to:
+            content['m.relates_to'] = {'m.in_reply_to': {'event_id': reply_to}}
+        return self._send_event(room_id, content)
+
+    def upload_media(self, raw: bytes, mime: str = '',
+                     filename: str = '') -> str:
+        """POST /_matrix/media/v3/upload → mxc:// 内容地址。"""
+        url = f'{self.homeserver}{_MEDIA_UPLOAD}'
+        params = {'filename': filename} if filename else None
+        resp = self._http.post(
+            url, data=raw, params=params, timeout=120,
+            headers={'Content-Type': mime or 'application/octet-stream'})
+        try:
+            body = resp.json() if resp.content else {}
+        except Exception:  # noqa: BLE001
+            body = {}
+        if resp.status_code >= 400 or not body.get('content_uri'):
+            raise MatrixApiError(
+                (body or {}).get('errcode') or f'HTTP_{resp.status_code}',
+                (body or {}).get('error') or '媒体上传失败',
+                (body or {}).get('retry_after_ms'), resp.status_code)
+        return str(body['content_uri'])
+
+    def send_media(self, room_id: str, seg: dict,
+                   reply_to: str = None) -> dict:
+        """上传并发送一个媒体段（image / video / voice / file）。"""
+        from framework.messaging.segments import canonical_type, media_ref
+        stype = canonical_type(seg.get('type'))
+        msgtype = {'image': 'm.image', 'video': 'm.video',
+                   'voice': 'm.audio', 'file': 'm.file'}.get(stype)
+        if not msgtype:
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': f'matrix 不支持发送 {stype}'}
+        ref = media_ref(seg)
+        if not ref:
+            return {'status': 'failed', 'retcode': -1, 'msg': '媒体段缺少引用'}
+        raw, name, mime = self._read_media_ref(ref, seg)
+        if ref.startswith('mxc://'):
+            # 已经是 Matrix 内容地址，不再重复上传
+            mxc = ref
+        elif not raw:
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': f'matrix 无法读取媒体引用（只支持本地路径/base64）：'
+                           f'{ref[:120]}'}
+        else:
+            try:
+                mxc = self.upload_media(raw, mime, name)
+            except MatrixApiError as e:
+                retcode = -4 if e.errcode == 'M_LIMIT_EXCEEDED' else -1
+                return {'status': 'failed', 'retcode': retcode,
+                        'error_code': e.errcode, 'msg': str(e)}
+        info = {'mimetype': mime}
+        if raw:
+            info['size'] = len(raw)
+        content = {'msgtype': msgtype, 'body': name or 'file',
+                   'url': mxc, 'info': info}
+        if reply_to:
+            content['m.relates_to'] = {'m.in_reply_to': {'event_id': reply_to}}
+        return self._send_event(room_id, content)
+
+    def _read_media_ref(self, ref: str, seg: dict):
+        """媒体引用 → (bytes, 文件名, mime)。远程 URL 不代下（避免替插件做选择）。"""
+        import base64
+        import re as _re
+        data = seg.get('data') or {}
+        name = str(data.get('name') or '')
+        mime = str(data.get('mime') or '')
+        try:
+            if ref.startswith('mxc://'):
+                return b'', name, mime
+            m = _re.match(r'^base64://([A-Za-z0-9+/=\s]+)$', ref, _re.DOTALL)
+            if m:
+                b64 = _re.sub(r'\s+', '', m.group(1))
+                # 先按 base64 长度估算，别等解码完才发现超限：解码峰值是
+                # 原文 + 明文两份，一个 2GB 的串足以把进程打穿。
+                if len(b64) * 3 // 4 > self.media_max_bytes:
+                    logger.warning('matrix base64 媒体超过 %s 字节上限，拒绝解码',
+                                   self.media_max_bytes)
+                    return b'', name, mime
+                raw = base64.b64decode(b64)
+                return raw, name or 'file', mime
+            if ref.startswith(('http://', 'https://')):
+                return b'', name, mime
+            path = ref[7:] if ref.startswith('file://') else ref
+            if os.path.isfile(path):
+                if os.path.getsize(path) > self.media_max_bytes:
+                    logger.warning('matrix 本地媒体超过 %s 字节上限，拒绝读取: %s',
+                                   self.media_max_bytes, path)
+                    return b'', name, mime
+                with open(path, 'rb') as f:
+                    raw = f.read()
+                return raw, name or os.path.basename(path) or 'file', mime
+        except Exception as e:  # noqa: BLE001
+            logger.warning('matrix 读取媒体失败: %s', e)
+        return b'', name, mime
+
     # ── 消息契约 ────────────────────────────────────────────────
 
     def capabilities(self):
@@ -412,8 +537,9 @@ class MatrixAdapter(ProtocolAdapter):
         )
         return Capabilities(
             inbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_VOICE, CAP_FILE],
-            # 媒体出站要先上传到 /_matrix/media/v3/upload，本端暂未实现
-            outbound=[CAP_TEXT],
+            # 出站媒体先上传到 /_matrix/media/v3/upload 再发 m.image/m.file；
+            # 远程 URL 不代下（交给插件决定要不要拉），mxc:// 视为已上传直接发
+            outbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_VOICE, CAP_FILE],
         )
 
     def normalize_incoming(self, raw_message) -> list:
@@ -425,21 +551,126 @@ class MatrixAdapter(ProtocolAdapter):
     async def handle_event(self, raw_event: dict,
                            bot_name: str) -> Optional[dict]:
         room_id = raw_event.get('room_id') or raw_event.get('group_id') or ''
-        return normalize_event(raw_event, room_id,
-                               bot_name or self.bot_name, self.user_id)
+        event = normalize_event(raw_event, room_id,
+                                bot_name or self.bot_name, self.user_id)
+        if event is not None:
+            await self._localize_media(event)
+        return event
+
+    # ── 入站媒体本地化 ──────────────────────────────────────────
+
+    def _media_dir(self) -> str:
+        from framework.config import get_home
+        return os.path.join(get_home(), 'data', 'matrix_media')
+
+    async def _localize_media(self, event: dict):
+        """把媒体段的 mxc:// 变成拿得到的东西。
+
+        为什么必须本地化：spec v1.11 起 Media 走认证端点，token 只能放
+        Authorization 头，不能拼 URL；插件拿裸 URL 抓必然 401。
+        下载失败时保留 mxc:// 原值与认证 URL + headers，至少有据可查。
+        """
+        from framework.messaging.segments import canonical_type, media_ref
+        for seg in event.get('segments') or []:
+            if not isinstance(seg, dict):
+                continue
+            if canonical_type(seg.get('type')) not in _MATRIX_MEDIA_MSGTYPE:
+                continue
+            data = seg.setdefault('data', {})
+            mxc = media_ref(seg)
+            if not str(mxc).startswith('mxc://'):
+                continue
+            data['mxc'] = mxc
+            data['url'] = _mxc_to_http(mxc, self.homeserver)
+            data['headers'] = {'Authorization': f'Bearer {self.access_token}'}
+            if not self.cache_media:
+                continue
+            try:
+                path = await asyncio.to_thread(self._download_media, mxc, data)
+            except Exception as e:  # noqa: BLE001
+                logger.warning('matrix 媒体下载失败 %s: %s', mxc, e)
+                path = ''
+            if path:
+                data['path'] = path
+                # media_ref 优先取 file/url，所以这里直接改 url 才能让插件
+                # 走本地文件而不是去抓认证端点
+                data['url'] = f'file://{path}'
+
+    def _download_media(self, mxc: str, data: dict) -> str:
+        import re as _re
+        size = data.get('size')
+        if isinstance(size, int) and size > self.media_max_bytes:
+            logger.info('matrix 媒体 %s 大于上限（%s > %s），跳过下载',
+                        mxc, size, self.media_max_bytes)
+            return ''
+        rest = mxc[len('mxc://'):]
+        if '/' not in rest:
+            return ''
+        _server, media_id = rest.split('/', 1)
+        safe = _re.sub(r'[^A-Za-z0-9_.-]', '_', media_id)[:120] or 'media'
+        directory = self._media_dir()
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, safe)
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
+        url = _mxc_to_http(mxc, self.homeserver)
+        tmp = path + '.part'
+        total = 0
+        with self._http.get(url, stream=True, timeout=(5, 20)) as resp:
+            if resp.status_code >= 400:
+                logger.warning('matrix 媒体下载被拒 %s：HTTP %s',
+                               mxc, resp.status_code)
+                return ''
+            with open(tmp, 'wb') as f:
+                for chunk in resp.iter_content(64 * 1024):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > self.media_max_bytes:
+                        f.close()
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                        logger.warning('matrix 媒体 %s 超过上限 %s 字节，已中止',
+                                       mxc, self.media_max_bytes)
+                        return ''
+                    f.write(chunk)
+        os.replace(tmp, path)
+        return path
 
     async def call_api(self, action, bot=None, **params) -> dict:
         action = (action or '').strip()
         if action in ('send_msg', 'send_group_msg', 'send_text'):
             room_id = (params.get('group_id') or params.get('room_id')
                        or params.get('channel_id'))
-            text = params.get('message', params.get('text', ''))
             if not room_id:
                 return {'status': 'failed', 'retcode': -1,
                         'msg': 'matrix 发送需要 group_id/room_id'}
-            return await asyncio.to_thread(
-                self.send_message, str(room_id), str(text),
-                params.get('reply_to'))
+            from framework.messaging.segments import (
+                canonical_type, normalize_message as _canon,
+            )
+            segs = _canon(params.get('message', params.get('text', '')))
+            text = ''.join(str((s.get('data') or {}).get('text') or '')
+                           for s in segs
+                           if canonical_type(s.get('type')) == 'text')
+            medias = [s for s in segs
+                      if canonical_type(s.get('type')) in
+                      ('image', 'video', 'voice', 'file')]
+            reply_to = params.get('reply_to')
+            last = None
+            # 文本先发，媒体按顺序跟在后面（Matrix 一条事件只能带一个附件）
+            if text or not medias:
+                last = await asyncio.to_thread(
+                    self.send_message, str(room_id), text, reply_to)
+                if last.get('status') != 'ok':
+                    return last
+            for seg in medias:
+                last = await asyncio.to_thread(
+                    self.send_media, str(room_id), seg, None)
+                if last.get('status') != 'ok':
+                    return last
+            return last or {'status': 'ok', 'retcode': 0, 'data': None}
 
         if action in ('get_status', 'get_login_info'):
             return {'status': 'ok', 'retcode': 0,
@@ -492,6 +723,12 @@ def register(ctx):
     if cfg.get('enabled') is not True:
         ctx.log('Matrix 接入端已禁用 (matrix.enabled: true 才开启)')
         return
+    # 配置可能来自 YAML（bool）或 WebUI（"true"/"false" 字符串），统一归一
+    _cache = cfg.get('cache_media')
+    if isinstance(_cache, str):
+        _cache = _cache.strip().lower() not in ('0', 'false', 'no', 'off', '')
+    else:
+        _cache = True if _cache is None else bool(_cache)
     _adapter_instance = MatrixAdapter(
         fw,
         homeserver=cfg.get('homeserver') or '',
@@ -501,6 +738,8 @@ def register(ctx):
         sync_timeout=cfg.get('sync_timeout') or 30,
         rooms=cfg.get('rooms') or None,
         reconnect_interval=cfg.get('reconnect_interval') or 3,
+        cache_media=_cache,
+        media_max_bytes=cfg.get('media_max_bytes') or _DEFAULT_MEDIA_MAX,
     )
     fw.services.register('protocol_adapter', _adapter_instance)
     fw.services.register('api_caller', _adapter_instance)

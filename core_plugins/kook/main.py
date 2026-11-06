@@ -17,11 +17,24 @@ Gateway WebSocket 收事件 + REST v3 发消息（仅用 websockets + requests�
     否则会消息错乱。
 
 配置（core_plugins.yaml → kook，默认 enabled: false）：
-  token / bot_name / api_base / reconnect_interval
+  token / bot_name / api_base / reconnect_interval / media_max_bytes
+
+出站媒体依据（2026-11 核对 developer.kookapp.cn/doc/http/asset 与 http/message）：
+  - POST /api/v3/asset/create，Header 必须 form-data、字段名 file，
+    返回 data.url；官方原文明确「发送的图片必须由你的机器人上传，否则
+    会失败并提示找不到资源」，此规则对视频同样适用。故本端对 http(s)
+    外部地址会先下载再上传（受 media_max_bytes 限制）。
+
+两处依据不足的地方，写清楚免得后人当成事实：
+  - 消息 type 8 = 语音（audio）在官方文档里没有集中枚举页，只有 attachments
+    的 kind=audio 说明与各 SDK 常量；本端按 8 放行，并且「放行后没解析出任何
+    段落」时直接丢弃事件，不会造出空消息。
+  - 出站没有语音消息类型，send_media 把 voice 段按文件(type 4)发送。
 """
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from typing import Optional
@@ -69,12 +82,32 @@ _MSG_TEXT = 1
 _MSG_IMAGE = 2
 _MSG_VIDEO = 3
 _MSG_FILE = 4
+#: 8 = 语音（audio）。官方消息类型表里它跟 4 是并列项，漏掉会让语音消息
+#: 整条被丢弃——build_segments 里已经按 audio→voice 映射，这里必须放行。
+_MSG_AUDIO = 8
 _MSG_KMARKDOWN = 9
 _MSG_CARD = 10
 
 _HEARTBEAT_BASE = 30.0
 _HEARTBEAT_JITTER = 5.0
 _PONG_TIMEOUT = 6.0
+
+#: 单次媒体上传的读取上限。官方 /api/v3/asset/create 未写明体积上限，
+#: 这里只防「把整段视频读进内存把进程打死」，不当作平台限制声明。
+_DEFAULT_MEDIA_MAX = 30 * 1024 * 1024
+
+
+def _is_kook_cdn(url: str) -> bool:
+    """该地址是否已是 KOOK 自家 CDN（消息里引用的媒体就是这种）。
+
+    这类 url 直接发，不再下载重传——省一次上下行，也少一个失败点。
+    """
+    if not isinstance(url, str) or not url.startswith(('http://', 'https://')):
+        return False
+    host = url.split('://', 1)[1].split('/', 1)[0].split('?', 1)[0]
+    host = host.split(':', 1)[0].lower()
+    return any(host == h or host.endswith('.' + h)
+               for h in ('kookapp.cn', 'kaiheila.cn'))
 
 
 def _safe_text(content) -> str:
@@ -115,10 +148,10 @@ def normalize_event(d: dict, bot_name: str, self_id: str = '') -> Optional[dict]
     """KOOK 消息体 → 内部事件 dict。"""
     if not isinstance(d, dict):
         return None
-    # 只处理消息类事件：1/2/3/4/9/10 是消息，12 是道具，其余系统事件不进来
+    # 只处理消息类事件：1/2/3/4/8/9/10 是消息，12 是道具，其余系统事件不进来
     msg_type = d.get('type')
     if msg_type not in (_MSG_TEXT, _MSG_IMAGE, _MSG_VIDEO, _MSG_FILE,
-                        _MSG_KMARKDOWN, _MSG_CARD):
+                        _MSG_AUDIO, _MSG_KMARKDOWN, _MSG_CARD):
         return None
     extra = d.get('extra') or {}
     author = extra.get('author') or {}
@@ -133,6 +166,11 @@ def normalize_event(d: dict, bot_name: str, self_id: str = '') -> Optional[dict]
     target_id = str(d.get('target_id') or '')
     text = _safe_text(d.get('content'))
     is_group = channel_type == 'GROUP'
+    segs = build_segments(d)
+    if not segs:
+        # 白名单里的 type 但没有任何可用内容（例如只有附件的消息却没带 extra）
+        # 不要往下做成一条空事件
+        return None
 
     return {
         'type': 'message',
@@ -144,7 +182,7 @@ def normalize_event(d: dict, bot_name: str, self_id: str = '') -> Optional[dict]
         'message_id': d.get('msg_id'),
         'message': text,
         'raw_message': text,
-        'segments': build_segments(d),
+        'segments': segs,
         'sender': {
             'user_id': author_id,
             'nickname': author.get('nickname') or author.get('username')
@@ -161,12 +199,14 @@ class KookAdapter(ProtocolAdapter):
     """KOOK 协议接入端。"""
 
     def __init__(self, framework, token: str = '', bot_name: str = 'kook',
-                 api_base: str = _API_BASE, reconnect_interval: int = 5):
+                 api_base: str = _API_BASE, reconnect_interval: int = 5,
+                 media_max_bytes: int = _DEFAULT_MEDIA_MAX):
         self.framework = framework
         self.token = (token or '').strip()
         self.bot_name = bot_name or 'kook'
         self.api_base = (api_base or _API_BASE).rstrip('/')
         self.reconnect_interval = max(1, int(reconnect_interval or 5))
+        self.media_max_bytes = max(1, int(media_max_bytes or _DEFAULT_MEDIA_MAX))
         self._backoff = Backoff(base=self.reconnect_interval, maximum=60)
 
         self._ws = None
@@ -281,16 +321,24 @@ class KookAdapter(ProtocolAdapter):
         return url
 
     def _api(self, method: str, path: str, *, params=None,
-             json_body=None, timeout: int = 20) -> dict:
+             json_body=None, files=None, data=None, timeout: int = 20) -> dict:
         """统一 REST 调用：把 KOOK 的业务码错误翻成框架约定的失败结构。
 
         KOOK 与 QQ 官方不同：它的 HTTP 状态码基本可信（401/403/429 都真实），
         但 body 里还有一层 code/message，两者都要看。
+        files/data 用于 /api/v3/asset/create 的 form-data 上传；requests 不允许
+        json= 与 files= 同时出现，两者互斥，这里显式择一。
         """
         url = f'{self.api_base}{path}'
         try:
-            resp = self._http.request(
-                method, url, params=params, json=json_body, timeout=timeout)
+            if files is not None or data is not None:
+                resp = self._http.request(
+                    method, url, params=params, files=files, data=data,
+                    timeout=timeout)
+            else:
+                resp = self._http.request(
+                    method, url, params=params, json=json_body,
+                    timeout=timeout)
         except Exception as e:  # noqa: BLE001
             return {'status': 'failed', 'retcode': -3,
                     'msg': f'KOOK 请求失败: {type(e).__name__} {e}'}
@@ -327,6 +375,125 @@ class KookAdapter(ProtocolAdapter):
             return {'status': 'failed', 'retcode': -1,
                     'http_status': resp.status_code, 'msg': str(body)}
         return {'status': 'ok', 'retcode': 0, 'data': body.get('data', body)}
+
+    # ── 媒体出站（asset/create）─────────────────────────────────
+
+    def upload_asset(self, raw: bytes, name: str = 'file',
+                     mime: str = '') -> dict:
+        """POST /api/v3/asset/create 上传文件，返回 {'status','data':{'url'}}。
+
+        官方要求 Content-Type 必须是 form-data、字段名 file，支持图片、
+        视频(.mp4/.mov) 与普通文件；返回的 url 才能用来发消息。
+        """
+        if not raw:
+            return {'status': 'failed', 'retcode': -1, 'msg': '上传内容为空'}
+        return self._api(
+            'POST', '/api/v3/asset/create',
+            files={'file': (name or 'file', raw,
+                            mime or 'application/octet-stream')},
+            timeout=120)
+
+    def _read_media_ref(self, ref: str, seg: dict):
+        """媒体引用 → (bytes, 文件名, mime)。http(s) 远程地址也代下。
+
+        和 Matrix 不同：KOOK 官方明确「发送的图片必须由你的机器人上传，
+        否则会失败并提示找不到资源」，所以外部 URL 必须下载后重传，
+        否则整条消息发不出去。下载受 media_max_bytes 限制。
+        """
+        import base64
+        import re as _re
+        data = seg.get('data') or {}
+        name = str(data.get('name') or '')
+        mime = str(data.get('mime') or '')
+        try:
+            m = _re.match(r'^base64://([A-Za-z0-9+/=\s]+)$', ref, _re.DOTALL)
+            if m:
+                # 先按 base64 长度估算解码后大小再解码：直接 b64decode 一段
+                # 几百 MB 的串，峰值内存是原文 + 明文两份，且失败时已经吃满了。
+                b64 = _re.sub(r'\s+', '', m.group(1))
+                if len(b64) * 3 // 4 > self.media_max_bytes:
+                    logger.warning(
+                        'kook base64 媒体超过 %s 字节上限，拒绝解码',
+                        self.media_max_bytes)
+                    return b'', name, mime
+                raw = base64.b64decode(b64)
+                return raw, name or 'file', mime
+            if ref.startswith(('http://', 'https://')):
+                # 必须 with：requests 的流式响应不关闭会漏连接，重连几次后
+                # 连接池就满了，后面的请求全卡在等待上。
+                with self._http.get(ref, timeout=30, stream=True) as resp:
+                    if resp.status_code >= 400:
+                        logger.warning('kook 下载媒体失败 HTTP %s: %s',
+                                       resp.status_code, ref[:100])
+                        return b'', name, mime
+                    buf = bytearray()
+                    for chunk in resp.iter_content(64 * 1024):
+                        buf.extend(chunk)
+                        if len(buf) > self.media_max_bytes:
+                            logger.warning(
+                                'kook 媒体超过 %s 字节上限，放弃代下: %s',
+                                self.media_max_bytes, ref[:100])
+                            return b'', name, mime
+                    if not mime:
+                        mime = str(resp.headers.get('Content-Type') or '')
+                return bytes(buf), name or os.path.basename(
+                    ref.split('?')[0]) or 'file', mime
+            path = ref[7:] if ref.startswith('file://') else ref
+            if os.path.isfile(path):
+                if os.path.getsize(path) > self.media_max_bytes:
+                    logger.warning('kook 本地媒体超过上限，放弃上传: %s', path)
+                    return b'', name, mime
+                with open(path, 'rb') as f:
+                    raw = f.read()
+                return raw, name or os.path.basename(path) or 'file', mime
+        except Exception as e:  # noqa: BLE001
+            logger.warning('kook 读取媒体失败: %s', e)
+        return b'', name, mime
+
+    def send_media(self, channel_id: str, seg: dict,
+                   quote: str = None) -> dict:
+        """上传并发送一个媒体段（image / video / voice / file）。
+
+        KOOK 一条消息只能有一种 type，所以媒体各自成条。
+        语音没有对外发送的类型（type 8 只有入站语义），降级为文件发送。
+        已经是 KOOK 自家 CDN 的地址不再重复上传（消息里引用的就是这种 url）。
+        """
+        from framework.messaging.segments import canonical_type, media_ref
+        stype = canonical_type(seg.get('type'))
+        msg_type = {'image': _MSG_IMAGE, 'video': _MSG_VIDEO,
+                    'file': _MSG_FILE, 'voice': _MSG_FILE}.get(stype)
+        if msg_type is None:
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': f'KOOK 不支持发送 {stype}'}
+        ref = media_ref(seg)
+        if not ref:
+            return {'status': 'failed', 'retcode': -1, 'msg': '媒体段缺少引用'}
+        if _is_kook_cdn(ref):
+            return self._send_media_url(channel_id, msg_type, ref, quote)
+        raw, name, mime = self._read_media_ref(ref, seg)
+        if not raw:
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': f'KOOK 无法读取媒体引用（本地路径/base64/'
+                           f'可下载的 http 地址）：{ref[:120]}'}
+        up = self.upload_asset(raw, name, mime)
+        if up.get('status') != 'ok':
+            return up
+        url = ((up.get('data') or {}) if isinstance(up.get('data'), dict)
+               else {}).get('url')
+        if not url:
+            return {'status': 'failed', 'retcode': -1,
+                    'msg': f'KOOK 上传成功但响应里没有 url: {up}'}
+        return self._send_media_url(channel_id, msg_type, url, quote)
+
+    def _send_media_url(self, channel_id: str, msg_type: int, url: str,
+                        quote: str = None) -> dict:
+        """用已就绪的资源 url 发一条媒体消息。"""
+        body = {'type': msg_type, 'target_id': str(channel_id),
+                'content': str(url)}
+        if quote:
+            body['quote'] = str(quote)
+        return self._api('POST', '/api/v3/message/create', json_body=body)
+
 
     # ── WebSocket ───────────────────────────────────────────────
 
@@ -463,13 +630,15 @@ class KookAdapter(ProtocolAdapter):
 
     def capabilities(self):
         from framework.messaging.contract import (
-            CAP_FILE, CAP_IMAGE, CAP_TEXT, CAP_VIDEO, Capabilities,
+            CAP_FILE, CAP_IMAGE, CAP_TEXT, CAP_VIDEO, CAP_VOICE, Capabilities,
         )
         return Capabilities(
-            inbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_FILE],
-            # KOOK 的图片/视频必须由本机器人上传后引用，外部 URL 会被拒；
-            # 出站这里只声明文本，避免插件以为能直接发链接图。
-            outbound=[CAP_TEXT],
+            inbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_VOICE, CAP_FILE],
+            # 出站：图片/视频都必须先 POST /api/v3/asset/create 上传再引用 url
+            # （官方原文：发送的图片必须由你的机器人上传，否则提示找不到资源），
+            # 因此 send_media 会读本地/base64，并把 http 地址代下后重传。
+            # 语音没有对外发送类型，按文件发。
+            outbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_FILE],
         )
 
     def normalize_incoming(self, raw_message) -> list:
@@ -487,17 +656,41 @@ class KookAdapter(ProtocolAdapter):
         action = (action or '').strip()
         if action in ('send_msg', 'send_group_msg', 'send_text'):
             channel_id = (params.get('channel_id') or params.get('group_id'))
-            text = params.get('message', params.get('text', ''))
             if not channel_id:
                 return {'status': 'failed', 'retcode': -1,
                         'msg': 'KOOK 发送需要 group_id/channel_id（频道 id）'}
-            body = {'type': _MSG_KMARKDOWN, 'target_id': str(channel_id),
-                    'content': str(text)}
+            from framework.messaging.segments import (
+                canonical_type, normalize_message as _canon,
+            )
+            segs = _canon(params.get('message', params.get('text', '')))
+            text = ''.join(str((s.get('data') or {}).get('text') or '')
+                           for s in segs
+                           if canonical_type(s.get('type')) == 'text')
+            medias = [s for s in segs
+                      if canonical_type(s.get('type')) in
+                      ('image', 'video', 'voice', 'file')]
             quote = params.get('reply_to') or params.get('quote')
-            if quote:
-                body['quote'] = str(quote)
-            return await asyncio.to_thread(
-                self._api, 'POST', '/api/v3/message/create', json_body=body)
+            last = None
+            if not text and not medias:
+                return {'status': 'failed', 'retcode': -1,
+                        'msg': 'KOOK 发送内容为空'}
+            # 一条 KOOK 消息只有一种 type：文本先发，媒体随后各自成条
+            if text:
+                body = {'type': _MSG_KMARKDOWN, 'target_id': str(channel_id),
+                        'content': text}
+                if quote:
+                    body['quote'] = str(quote)
+                last = await asyncio.to_thread(
+                    self._api, 'POST', '/api/v3/message/create',
+                    json_body=body)
+                if last.get('status') != 'ok':
+                    return last
+            for seg in medias:
+                last = await asyncio.to_thread(
+                    self.send_media, str(channel_id), seg, None)
+                if last.get('status') != 'ok':
+                    return last
+            return last or {'status': 'ok', 'retcode': 0, 'data': None}
 
         if action == 'send_private_msg':
             # KOOK 私聊（direct-message）需要 chat_code，只能从私聊事件里拿；
@@ -579,6 +772,7 @@ def register(ctx):
         bot_name=cfg.get('bot_name') or 'kook',
         api_base=cfg.get('api_base') or _API_BASE,
         reconnect_interval=cfg.get('reconnect_interval') or 5,
+        media_max_bytes=cfg.get('media_max_bytes') or _DEFAULT_MEDIA_MAX,
     )
     fw.services.register('protocol_adapter', _adapter_instance)
     fw.services.register('api_caller', _adapter_instance)
