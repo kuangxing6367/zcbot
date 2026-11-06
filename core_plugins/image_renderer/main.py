@@ -3,12 +3,14 @@
 提供可复用的图片绘制工具，供其他插件调用生成图片消息。
 同时提供 /render_card 命令用于测试渲染效果。
 
-渲染引擎自动选择（按平台）：
+渲染引擎：
   1. 原生扩展 zcbot_render（Rust + pyo3，放在 native/bin/<平台>/）
      平台目录：win64 / win32 / linux-x86_64 / linux-aarch64 /
               linux-i686(x32) / linux-armv7 / linux-loongarch64(龙芯)
-     → 内存增量 <5MB，无子进程开销
-  2. 找不到原生扩展时回退 PIL（Pillow），功能一致
+     实测（win64 / Py3.13，300 次渲染）：常驻内存增量约 +20.6MB，
+     低于 PIL 的 +25.2MB（约省 18%），且 300 次内无增长。
+  2. 默认后端是 PIL（Pillow）。原生扩展需要用户在配置里显式切到 rust，
+     不能默认启用：它要额外下载约 9MB 资源，且绘制比 PIL 慢（见 README）。
 
 命令：
   /render_card [标题] [内容]  生成一张信息卡片图片
@@ -37,18 +39,9 @@ __plugin_meta__ = {
 }
 
 _FONT_DIR = os.path.dirname(os.path.abspath(__file__))
-# 多级子集字体（按渲染文本字符集按需加载，避免 fontdue 全量解析完整字体的内存开销）：
-#   common = 通用规范汉字表一级 3500 字 + ASCII + 常用标点（2.6MB，首渲约 +20MB）
-#   ext    = 一级+二级 6500 字 + ASCII + 常用标点（5.5MB）
-#   full   = 完整字体（插件自带 / 系统字体回退），仅当子集层级覆盖不全时加载
-_FONT_TIERS = [
-    ('common',
-     os.path.join(_FONT_DIR, 'msyh_subset_common.ttf'),
-     os.path.join(_FONT_DIR, 'charset_common.txt')),
-    ('ext',
-     os.path.join(_FONT_DIR, 'msyh_subset_ext.ttf'),
-     os.path.join(_FONT_DIR, 'charset_ext.txt')),
-]
+# 字体分层与完整字体候选的路径**不在这里写死**：字体可能来自插件目录，也可能是
+# 首次启用时下载到 data 目录的 assets（见 assets.py）。实际路径由
+# _font_tiers() / _FULL_FONT_CANDIDATES 在运行时按 _FONTS_DIR 解析。
 # 完整字体候选：插件目录 / help 插件自带字体
 _FULL_FONT_CANDIDATES = [
     os.path.join(_FONT_DIR, 'HarmonyOS_Sans_SC_Medium.ttf'),
@@ -97,12 +90,12 @@ def _linux_native_subdirs(arch: str) -> list:
     return ordered
 
 
-def _load_native_renderer():
-    """按平台自动加载原生渲染扩展；找不到返回 None（回退 PIL）
+def _load_native_renderer(extra_candidates=None):
+    """按平台加载原生渲染扩展；找不到返回 None。
 
-    支持目录（native/bin/ 下）：win64 / win32 / linux-x86_64 /
-    linux-aarch64 / linux-i686(x32) / linux-armv7 / linux-loongarch64
+    候选顺序：显式传入的路径（下载到 data 目录的产物）→ 插件目录 native/bin/。
     """
+    candidates = list(extra_candidates or [])
     native_dir = os.path.join(_FONT_DIR, 'native', 'bin')
     if sys.platform.startswith('win'):
         # 32 位 Python（sys.maxsize 仅 2**31-1）走 win32，64 位走 win64
@@ -112,37 +105,321 @@ def _load_native_renderer():
         subdirs = _linux_native_subdirs((platform.machine() or '').lower())
         names = ['zcbot_render.so', 'zcbot_render.abi3.so']
     else:
-        return None
-    tried = []
+        subdirs = []
+        names = []
     for sub in subdirs:
         for name in names:
-            path = os.path.join(native_dir, sub, name)
-            if not os.path.isfile(path):
-                continue
+            candidates.append(os.path.join(native_dir, sub, name))
+
+    tried = []
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            # PyO3 扩展每进程仅可初始化一次：先在 sys.modules 占位，
+            # 自愈/热重载二次调用直接复用首载实例（重跑 exec_module 必炸）
+            if 'zcbot_render' in sys.modules:
+                return sys.modules['zcbot_render']
+            spec = importlib.util.spec_from_file_location('zcbot_render', path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules['zcbot_render'] = mod
             try:
-                # PyO3 扩展每进程仅可初始化一次：先在 sys.modules 占位，
-                # 自愈/热重载二次调用直接复用首载实例（重跑 exec_module 必炸）
-                if 'zcbot_render' in sys.modules:
-                    return sys.modules['zcbot_render']
-                spec = importlib.util.spec_from_file_location('zcbot_render', path)
-                mod = importlib.util.module_from_spec(spec)
-                sys.modules['zcbot_render'] = mod
-                try:
-                    spec.loader.exec_module(mod)
-                except Exception:
-                    sys.modules.pop('zcbot_render', None)   # 允许尝试下一个候选
-                    raise
-                logger.info(f"[image_renderer] 原生渲染扩展已加载: {path}")
-                return mod
-            except Exception as e:
-                # 架构不匹配等单次尝试失败属正常，仅记录 DEBUG，避免误导性 WARNING
-                tried.append(f"{path} ({e})")
-                logger.debug(f"[image_renderer] 原生扩展尝试失败: {path} - {e}")
-    logger.warning(f"[image_renderer] 原生扩展加载失败，回退 PIL: {'; '.join(tried) if tried else '未找到任何候选扩展文件'}")
+                spec.loader.exec_module(mod)
+            except Exception:
+                sys.modules.pop('zcbot_render', None)   # 允许尝试下一个候选
+                raise
+            logger.info(f"[image_renderer] 原生渲染扩展已加载: {path}")
+            return mod
+        except Exception as e:
+            # 架构不匹配等单次尝试失败属正常，仅记录 DEBUG，避免误导性 WARNING
+            tried.append(f"{path} ({e})")
+            logger.debug(f"[image_renderer] 原生扩展尝试失败: {path} - {e}")
+    logger.warning(f"[image_renderer] 原生扩展加载失败: {'; '.join(tried) if tried else '未找到任何候选扩展文件'}")
     return None
 
 
-_NATIVE = _load_native_renderer()
+# ---------------------------------------------------------------- 后端选择
+#
+# 默认 PIL。用户在配置面板（core_plugins.yaml 的 image_renderer.backend）改成
+# rust 才启用原生扩展。原生扩展与字体子集体积大，不进源码仓库，首次使用时按
+# asset_url 下载到 data 目录（见 assets.py）。
+#
+# 关键语义：backend=rust 但资源不可用时**不回退 PIL**，而是明确报错。
+# 理由：这是用户在面板里的显式选择，静默降级会让人以为"选了 rust 但其实是 PIL
+# 在跑"，性能与内存表现都对不上，问题会藏到最后才暴露。
+
+_CTX = None
+_ASSETS = None
+_NATIVE = None
+_FONTS_DIR = _FONT_DIR
+_BACKEND = 'pil'
+_BACKEND_ERROR = None
+_BACKEND_READY = False
+
+_BACKEND_VALUES = ('pil', 'rust')
+_CONSENT = 'ask'   # ask / auto / manual
+
+
+def _assets_module():
+    """按文件路径加载同目录的 assets.py。
+
+    插件以文件形式被加载，同目录模块不一定在 sys.path 上，所以不能直接 import。
+    """
+    path = os.path.join(_FONT_DIR, 'assets.py')
+    spec = importlib.util.spec_from_file_location('zcbot_image_renderer_assets', path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.set_logger(logger)
+    return mod
+
+
+def _read_cfg(key, default=None):
+    if _CTX is None:
+        return default
+    try:
+        v = _CTX.get_config(key, default)
+        return default if v is None else v
+    except Exception:
+        return default
+
+
+# 资源提示文案：必须把「干什么用」和「做不到什么」一起说清。
+# 只报体积和路径，用户没法判断值不值得花这 9MB / 值不值得切后端。
+_ASSET_PURPOSE = (
+    'Pillow 之外的第二种渲染实现（Rust：fontdue 光栅化 + image 编码），'
+    '对外是同一套 Canvas API。适用场景是【没装 Pillow、或该平台没有 Pillow wheel '
+    '只能源码编译】的环境——这类环境下它是唯一可用的渲染后端。'
+)
+
+_ASSET_LIMITS = (
+    '  · 绘制比 PIL 慢：同样 3 行中文文本，纯渲染 3.1ms vs PIL 1.3ms（约 2.4 倍）；\n'
+    '    卡片端到端 8.7ms vs 6.9ms（约慢 25%）。PNG 编码更快，所以纯文本场景基本打平。\n'
+    '  · 只有 12 个绘图原语：rect/line/circle/ellipse/gradient_rect/text/text_metrics/\n'
+    '    paste/blur/alpha_overlay/to_png/get_size；没有 resize/crop/rotate/arc/polygon/save。\n'
+    '  · 不减少依赖：Pillow 仍在 requirements 里（它是默认后端）。\n'
+    '  · 生僻字要落到系统字体（如 msyh.ttc）才能渲染，子集字体覆盖不到。'
+)
+
+
+def _log_asset_notice(st, consent):
+    """缺资源时的提示：目的 + 局限 + 怎么获取，一次说全。"""
+    url = _read_cfg('asset_url', '') or '（未配置 asset_url）'
+    plat = _assets_module().platform_key() or 'unsupported'
+    head = ('[image_renderer] 渲染资源缺失（字体子集 + 原生扩展，下载包约 9MB，'
+            '当前平台 {}）。').format(plat)
+
+    # 落盘能力优先报：这类失败跟网络无关，混在「要不要下载」的文案里
+    # 只会让用户跑去查网络、换镜像。
+    if st.writable is False:
+        logger.error(
+            "%s\n  但是：**目标目录写不进去**，改 asset_consent 也没用。\n"
+            "  原因：%s\n"
+            "  可选的出路：\n"
+            "    · 把 data 目录指向可写位置（容器 / systemd 下常见为挂载点只读）\n"
+            "    · 手动放置：%s\n"
+            "    · 直接用 PIL 后端：不需要这个包，缺字集时回退系统字体",
+            head, st.error or '目录不可写', st.manual_hint or _ASSETS.version_dir)
+        return
+
+    if consent == 'auto':
+        return      # auto 会直接下载，无需提示
+    if consent == 'ask':
+        logger.warning(
+            "%s当前 asset_consent=ask，**不会自动下载**（避免消耗你的流量）。\n"
+            "\n  这个后端是干什么的：%s\n"
+            "\n  它做不到什么（实测，win64 / Python 3.13）：\n%s\n"
+            "\n  想自动获取：把 asset_consent 改成 auto 后重启（来源 %s）\n"
+            "  想手动放置：%s\n"
+            "  想继续用 PIL：把 backend 改回 pil（默认，无需任何下载）",
+            head, _ASSET_PURPOSE, _ASSET_LIMITS, url,
+            st.manual_hint or _ASSETS.version_dir)
+    else:       # manual
+        logger.info(
+            "%s当前 asset_consent=manual，跳过下载。\n"
+            "  用途：%s\n"
+            "  局限：见 README《适用与局限》一节（绘制比 PIL 慢约 2.4 倍、只有 12 个绘图原语）。\n"
+            "  手动放置：%s",
+            head, _ASSET_PURPOSE, st.manual_hint or _ASSETS.version_dir)
+
+
+def _manual_placement_hint(assets_mgr):
+    """手动放置资源时需要的确切目录与文件名（写进日志/报错，可直接照做）。"""
+    # 文案统一由 assets 层给：它才知道自己实际用的 version_dir 与平台键，
+    # main 里再拼一份只会两边慢慢漂移。
+    try:
+        return assets_mgr.manual_hint_text()
+    except Exception:
+        pass
+    base = getattr(assets_mgr, 'version_dir', '<data>/image_renderer/assets')
+    return '把 fonts/ 与 native/<平台>/ 放到 {base}/ 下'.format(base=base)
+
+
+def _resolve_backend(force_download=False):
+    """决定后端并准备资源。幂等，可重复调用。"""
+    global _ASSETS, _NATIVE, _FONTS_DIR, _BACKEND, _BACKEND_ERROR, _BACKEND_READY, _CONSENT
+
+    raw = str(_read_cfg('backend', 'pil') or 'pil').strip().lower()
+    if raw not in _BACKEND_VALUES:
+        logger.warning(
+            f"[image_renderer] backend 配置值 {raw!r} 非法（可选 {'/'.join(_BACKEND_VALUES)}），"
+            f"按 pil 处理")
+        raw = 'pil'
+    _BACKEND = raw
+
+    # 资源管理（PIL 也要字体，所以一律初始化）
+    if _ASSETS is None:
+        try:
+            data_dir = _CTX.get_data_dir() if _CTX is not None else None
+        except Exception as e:
+            data_dir = None
+            logger.warning(
+                f"[image_renderer] 获取 data 目录失败（{type(e).__name__}: {e}），"
+                f"资源将尝试落在插件目录下（该目录通常只读，失败是预期结果）")
+        if not data_dir:
+            logger.warning(
+                "[image_renderer] 未拿到可写的 data 目录，渲染资源只能手动放置；"
+                "PIL 后端不受影响（缺字体字集会回退系统字体）")
+        _ASSETS = _assets_module().AssetManager(
+            _FONT_DIR, data_dir,
+            asset_url=_read_cfg('asset_url', ''),
+            timeout=_read_cfg('asset_timeout', 30))
+
+    st = _ASSETS.refresh_state()
+
+    # 资源获取策略。默认 ask：**不下载**，只把「需要多少流量 / 放哪里」讲清楚，
+    # 由用户改 asset_consent 决定。切到 rust 要拉约 9MB，静默下载在按流量计费或
+    # 内网环境会被当成事故。
+    consent = str(_read_cfg('asset_consent', 'ask') or 'ask').strip().lower()
+    if consent not in ('ask', 'auto', 'manual'):
+        logger.warning(
+            f"[image_renderer] asset_consent 配置值 {consent!r} 非法"
+            f"（可选 ask/auto/manual），按 ask 处理（不会自动下载）")
+        consent = 'ask'
+    _CONSENT = consent
+
+    if not st.ok:
+        if consent == 'auto':
+            try:
+                st = _ASSETS.download(force=force_download)
+            except Exception as e:
+                # download() 自己承诺不抛异常，这里是纵深防御：资源层的任何意外
+                # 都不该让插件加载失败——PIL 后端本来能跑，凭什么被一次下载拖死。
+                logger.error(
+                    f"[image_renderer] 资源获取出现未预期异常（已忽略，继续使用可用后端）: "
+                    f"{type(e).__name__}: {e}")
+                st.error = f'{type(e).__name__}: {e}'
+            if st.writable is False:
+                # 写不了盘：这跟「要不要下载」是两个问题，别让用户去查网络
+                logger.error(
+                    "[image_renderer] 渲染资源无法落盘：%s\n"
+                    "  这不是网络问题，是目标目录不可写。三条出路：\n"
+                    "    · 把 data 目录指到可写位置（容器里常见：挂载点只读）\n"
+                    "    · 手动放置：%s\n"
+                    "    · 只用 PIL 后端（不需要这个包）",
+                    st.error, st.manual_hint or _manual_placement_hint(_ASSETS))
+            elif st.stale:
+                logger.warning(
+                    "[image_renderer] 渲染资源更新失败，但**已有可用资源仍在使用**"
+                    "（版本 %s）。本次失败原因：%s",
+                    st.version or '未知', st.error)
+        else:
+            # 不下载：把待确认信息挂到状态上，供日志与面板读取
+            st.pending_consent = (consent == 'ask')
+            st.manual_hint = _manual_placement_hint(_ASSETS)
+            st.download_size_mb = 9       # assets.zip 实测约 8.99MB
+            # ask 阶段也探一次落盘能力（不发请求，只写一个探针文件）：
+            # 免得用户改了 auto、等 9MB 下完、最后才发现目录只读。
+            try:
+                w_ok, w_reason, w_free = _ASSETS.probe_writable()
+                st.writable, st.free_mb = w_ok, w_free
+                if not w_ok:
+                    st.error = w_reason
+            except Exception as e:
+                logger.debug(f"[image_renderer] 落盘探测失败（不影响后续）：{e}")
+            _log_asset_notice(st, consent)
+
+    if st.fonts_ok:
+        _FONTS_DIR = st.fonts_dir
+
+    if _BACKEND == 'rust':
+        if not st.native_ok:
+            _NATIVE = None
+            if st.pending_consent:
+                _BACKEND_ERROR = (
+                    '原生渲染资源尚未获取（下载包约 9MB，当前 asset_consent=ask 不自动下载）。\n'
+                    '  想自动获取：把 asset_consent 改成 auto 后重启\n'
+                    '  想手动放置：{}').format(st.manual_hint or _ASSETS.version_dir)
+            else:
+                _BACKEND_ERROR = st.error or (
+                    '原生渲染资源不可用（缺当前平台 {} 的产物），且未回退 PIL。\n'
+                    '  手动放置：{}').format(
+                        _assets_module().platform_key() or 'unsupported',
+                        st.manual_hint or _ASSETS.version_dir)
+            logger.error(
+                "[image_renderer] backend=rust 但原生扩展不可用：%s。"
+                "请在 WebUI 配置页把 backend 改回 pil，或按上面提示补齐资源。",
+                _BACKEND_ERROR)
+        else:
+            _NATIVE = _load_native_renderer([st.native_path])
+            if _NATIVE is None:
+                _BACKEND_ERROR = '原生扩展文件存在但加载失败（见上方日志）'
+                logger.error("[image_renderer] backend=rust 但原生扩展加载失败，未回退 PIL")
+            else:
+                _BACKEND_ERROR = None
+    else:
+        # PIL 后端：不使用原生扩展（即使文件存在）
+        _NATIVE = None
+        _BACKEND_ERROR = None
+
+    _BACKEND_READY = True
+    return _BACKEND
+
+
+def _require_backend():
+    """渲染入口统一前置检查。
+
+    backend=rust 且资源不可用时抛错——不回退 PIL（见上面的设计说明）。
+    """
+    if not _BACKEND_READY:
+        _resolve_backend()
+    if _BACKEND == 'rust' and _NATIVE is None:
+        raise RuntimeError(
+            '图片渲染后端为 rust，但原生扩展不可用：{}。'
+            '可在 WebUI 配置页将 image_renderer.backend 改回 pil。'.format(
+                _BACKEND_ERROR or '原因未知'))
+
+
+def backend_status():
+    """供 /api 与日志查看的当前状态（不触发下载）。"""
+    if _ASSETS is not None:
+        st = _ASSETS.state.as_dict()
+    else:
+        # 字段必须与 AssetState.as_dict() 完全一致：面板按固定键取值，
+        # 这里少一个键就是前端一次 TypeError。
+        st = {'ok': False, 'source': 'none', 'fonts_ok': False,
+              'native_ok': False, 'fonts_dir': None, 'native_path': None,
+              'error': None, 'version': None, 'pending_consent': False,
+              'download_size_mb': None, 'manual_hint': None,
+              'writable': None, 'free_mb': None, 'stale': False}
+    return {
+        'backend': _BACKEND,
+        'asset_consent': _CONSENT,
+        'native_loaded': _NATIVE is not None,
+        'error': _BACKEND_ERROR,
+        'assets': st,
+    }
+
+
+def _font_tiers():
+    """按当前字体目录生成子集层级（字体可能来自插件目录，也可能是下载的 assets）。"""
+    return [
+        ('common',
+         os.path.join(_FONTS_DIR, 'msyh_subset_common.ttf'),
+         os.path.join(_FONTS_DIR, 'charset_common.txt')),
+        ('ext',
+         os.path.join(_FONTS_DIR, 'msyh_subset_ext.ttf'),
+         os.path.join(_FONTS_DIR, 'charset_ext.txt')),
+    ]
 
 
 def _iter_text_parts(*texts):
@@ -186,7 +463,7 @@ def _find_font_path(*texts):
     for part in _iter_text_parts(*texts):
         need.update(part)
     # 常见/更多 子集层级（按需加载字符集判断覆盖）
-    for _name, fp, cs_path in _FONT_TIERS:
+    for _name, fp, cs_path in _font_tiers():
         if not os.path.isfile(fp):
             continue
         cs = _font_tier_charset(cs_path)
@@ -223,30 +500,76 @@ def _find_font_path(*texts):
 
 
 def _get_font(size, bold=False):
-    """加载字体（带缓存），找不到则用默认（PIL 回退用）"""
+    """加载 PIL 字体（带缓存）。
+
+    候选顺序：字体选择器（子集分层 → 插件完整字体 → 系统字体）优先，再退到插件目录
+    里的具名字体。
+
+    历史 bug：这里只试 4 个固定文件名（HarmonyOS/DouyinSansBold/NotoSansCJK），
+    而它们**一个都不存在**，于是直接落到 `ImageFont.load_default()` —— 那是 Pillow
+    内置的拉丁字体，所有汉字都被渲染成同一个豆腐块（□）。实测「中/文/测/试」四个字
+    取到完全相同的 5×7 位图，整张卡片只有阿拉伯数字正常。
+    改用 _find_font_path() 之后，PIL 回退与原生后端走同一套字体判定，不会再分叉。
+    """
     key = (size, bold)
     if key in _FONT_CACHE:
         return _FONT_CACHE[key]
     from PIL import ImageFont
-    font_names = ["HarmonyOS_Sans_SC_Medium.ttf", "HarmonyOS_Sans_SC_Regular.ttf", "DouyinSansBold.otf", "NotoSansCJK-Regular.ttc"]
-    for fn in font_names:
-        fp = os.path.join(_FONT_DIR, fn)
-        if os.path.isfile(fp):
-            try:
-                f = ImageFont.truetype(fp, size)
-                _font_cache_put(key, f)
-                return f
-            except Exception:
-                continue
+
+    candidates = []
+    picked = _find_font_path()
+    if picked:
+        candidates.append(picked)
+    for fn in ("HarmonyOS_Sans_SC_Medium.ttf", "HarmonyOS_Sans_SC_Regular.ttf",
+               "DouyinSansBold.otf", "NotoSansCJK-Regular.ttc"):
+        candidates.append(os.path.join(_FONT_DIR, fn))
+
+    for fp in candidates:
+        if not fp or not os.path.isfile(fp):
+            continue
+        try:
+            f = ImageFont.truetype(fp, size)
+            _font_cache_put(key, f)
+            return f
+        except Exception:
+            continue
+
+    # 一个中文字体都没找到：明确告警（否则整站卡片静默变豆腐块，很难被发现）
+    logger.error(
+        "未找到任何可用的中文字体，PIL 回退将把汉字渲染成方框。"
+        "请安装中文字体（如 Noto Sans CJK / 微软雅黑）或补充插件内置字体。")
     try:
-        f = ImageFont.load_default()
+        try:
+            f = ImageFont.load_default(size=size)   # Pillow>=10.1
+        except TypeError:
+            f = ImageFont.load_default()
         _font_cache_put(key, f)
         return f
     except Exception:
         return None
 
 
+def _init_context(ctx):
+    """绑定上下文并解析后端（register 时调用一次）。"""
+    global _CTX
+    _CTX = ctx
+    try:
+        _resolve_backend()
+    except Exception as e:
+        logger.error(f"[image_renderer] 后端初始化失败: {e}")
+    st = backend_status()
+    if not st['assets']['fonts_ok']:
+        logger.error(
+            "[image_renderer] 未找到中文字体（插件目录与下载缓存都没有），"
+            "PIL 渲染会退化为系统字体；若系统也无中文字体则汉字显示为方框。")
+    if st['backend'] == 'rust' and not st['native_loaded']:
+        logger.error(
+            "[image_renderer] backend=rust 但原生扩展未加载（%s）。"
+            "渲染会直接报错，不会回退 PIL。", st['error'])
+
+
 def register(ctx):
+    _init_context(ctx)
     ctx.command(
         "/render_card",
         handle_render_card,
@@ -320,6 +643,7 @@ def _gradient_row(top, bottom, y, height):
 
 def _render_card_image(title, content, width=600, padding=30, options=None):
     """渲染信息卡片。原生可用返回 PNG bytes，否则返回 PIL Image"""
+    _require_backend()
     if _NATIVE is not None:
         font = _find_font_path(title, content)
         if font:
@@ -333,6 +657,7 @@ def _render_card_image(title, content, width=600, padding=30, options=None):
 
 def _render_text_image(text, width=500, padding=20, options=None):
     """将文字渲染为图片。原生可用返回 PNG bytes，否则返回 PIL Image"""
+    _require_backend()
     if _NATIVE is not None:
         font = _find_font_path(text)
         if font:
@@ -345,6 +670,7 @@ def _render_text_image(text, width=500, padding=20, options=None):
 
 def _render_list_image(title, items, width=600, padding=30, options=None):
     """渲染榜单/列表图片。原生可用返回 PNG bytes，否则返回 PIL Image"""
+    _require_backend()
     if _NATIVE is not None:
         font = _find_font_path()
         if font:
@@ -888,6 +1214,7 @@ class _CanvasPIL:
 
 def _get_native_or_pil_canvas(width, height, bg_color=None, font_path=None):
     """返回原生 Canvas（顶部语义包装）或 PIL 回退 Canvas"""
+    _require_backend()
     if _NATIVE is not None and hasattr(_NATIVE, "Canvas"):
         try:
             nc = _NATIVE.Canvas(int(width), int(height), bg_color, font_path)
@@ -897,8 +1224,51 @@ def _get_native_or_pil_canvas(width, height, bg_color=None, font_path=None):
     return _CanvasPIL(width, height, bg_color, font_path)
 
 
+# ---------------------------------------------------------------- 解码前的像素预算
+#
+# 为什么必须在 Python 层做，而不能只靠后端：
+#   1. 原生后端（image crate）默认有 512MB 单次分配上限，实测 11000²(462MB) 通过、
+#      12000²(549MB) 报 "Memory limit exceeded"。但代码在原生失败后会**回退 PIL**，
+#      而 PIL 的阈值完全不是一回事 —— 默认 89478485 像素只 warn，要到 1.79 亿才 raise，
+#      实测 12000²(1.44 亿像素) 只打一条 DecompressionBombWarning 就照常分配。
+#      也就是说原生那道闸门被回退逻辑绕过了。
+#   2. PIL 的 Image.MAX_IMAGE_PIXELS 是**模块级全局变量**，同进程任何插件都能改掉
+#      （甚至设为 None 直接关死）。在多插件共进程的宿主里不能当作安全边界。
+# 所以在解码之前、与后端无关地做一次尺寸预算检查，超限直接拒绝。
+_MAX_DECODE_BYTES = 512 * 1024 * 1024      # 与原生后端上限对齐
+_MAX_PIXELS = _MAX_DECODE_BYTES // 4       # RGBA：4 字节/像素 → 约 1.34 亿像素
+
+
+def _guard_image_bytes(blob):
+    """按文件头尺寸做像素预算检查；超限抛 ValueError，不进入任何解码器。
+
+    只读头信息（Pillow 的 open 是惰性的），不做像素解码，所以这一步本身开销可忽略。
+    """
+    try:
+        import warnings
+        from PIL import Image as _PILImage
+        from io import BytesIO as _BytesIO
+        # 只读文件头时 Pillow 会按它自己的阈值（89478485 像素）打 DecompressionBombWarning。
+        # 这里我们自己有一套明确预算，且此时并未解码，噪音没有意义——抑制掉，
+        # 避免「明明放行了也刷一条警告」。
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            with _PILImage.open(_BytesIO(bytes(blob))) as probe:
+                w, h = probe.size
+    except Exception:
+        return      # 连尺寸都读不出来（损坏/非图片），交给后端报更具体的错
+    if w * h > _MAX_PIXELS:
+        raise ValueError(
+            "图片尺寸过大已拒绝解码：{}×{} = {:.1f} 百万像素，上限 {:.1f} 百万像素"
+            "（约 {}MB 位图）。请先缩小后再处理。".format(
+                w, h, w * h / 1e6, _MAX_PIXELS / 1e6,
+                _MAX_DECODE_BYTES // (1024 * 1024)))
+
+
 def image_resize(img_bytes, width, height, keep_ratio=True):
     """等比缩放图片，返回 PNG bytes（原生优先，PIL 回退）"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_resize"):
         try:
             return _NATIVE.image_resize(bytes(img_bytes), int(width), int(height), bool(keep_ratio))
@@ -920,6 +1290,8 @@ def image_resize(img_bytes, width, height, keep_ratio=True):
 
 def image_crop_16_9(img_bytes):
     """16:9 居中裁剪，返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_crop_16_9"):
         try:
             return _NATIVE.image_crop_16_9(bytes(img_bytes))
@@ -942,6 +1314,8 @@ def image_crop_16_9(img_bytes):
 
 def image_circle_crop(img_bytes, size=256):
     """圆形裁剪（头像），返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_circle_crop"):
         try:
             return _NATIVE.image_circle_crop(bytes(img_bytes), int(size))
@@ -962,6 +1336,8 @@ def image_circle_crop(img_bytes, size=256):
 
 def image_round_corners(img_bytes, radius=16):
     """圆角裁剪，返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_round_corners"):
         try:
             return _NATIVE.image_round_corners(bytes(img_bytes), int(radius))
@@ -982,6 +1358,8 @@ def image_round_corners(img_bytes, radius=16):
 
 def image_blur(img_bytes, radius=4.0):
     """高斯模糊，返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_blur"):
         try:
             return _NATIVE.image_blur(bytes(img_bytes), float(radius))
@@ -998,6 +1376,8 @@ def image_blur(img_bytes, radius=4.0):
 
 def image_flip(img_bytes, direction="horizontal"):
     """翻转图片，返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_flip"):
         try:
             return _NATIVE.image_flip(bytes(img_bytes), direction)
@@ -1014,6 +1394,8 @@ def image_flip(img_bytes, direction="horizontal"):
 
 def image_rotate(img_bytes, angle=90):
     """旋转图片，返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_rotate"):
         try:
             return _NATIVE.image_rotate(bytes(img_bytes), int(angle))
@@ -1030,6 +1412,8 @@ def image_rotate(img_bytes, angle=90):
 
 def image_gray(img_bytes):
     """灰度化，返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_gray"):
         try:
             return _NATIVE.image_gray(bytes(img_bytes))
@@ -1045,6 +1429,8 @@ def image_gray(img_bytes):
 
 def image_contrast(img_bytes, factor=1.5):
     """对比度调整，返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(img_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_contrast"):
         try:
             return _NATIVE.image_contrast(bytes(img_bytes), float(factor))
@@ -1061,6 +1447,9 @@ def image_contrast(img_bytes, factor=1.5):
 
 def image_overlay(bg_bytes, fg_bytes, x=0, y=0):
     """将前景图合成到背景图 (x,y)，返回 PNG bytes"""
+    _require_backend()
+    _guard_image_bytes(bg_bytes)
+    _guard_image_bytes(fg_bytes)
     if _NATIVE is not None and hasattr(_NATIVE, "image_overlay"):
         try:
             return _NATIVE.image_overlay(bytes(bg_bytes), bytes(fg_bytes), int(x), int(y))

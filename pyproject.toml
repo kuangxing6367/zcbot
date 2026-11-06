@@ -83,10 +83,14 @@ exclude = ["*.__pycache__", "*.native.target*"]
 
 # 非 package 目录下的原生二进制（image_renderer 按插件目录相对定位 native/bin/<平台>/）
 # + sql 建表脚本（init_db._find_sql_file 运行时读取）
+#
+# 注意：image_renderer 的原生扩展（7 平台约 7MB）与字体子集（约 8MB）**刻意不入包**。
+# 它们由 `image_renderer` 在首次启用时按 asset_url 下载到 data 目录（见 assets.py）；
+# 发布侧用 scripts/build_render_assets.py 打包，推到独立仓库
+# kuangxing6367/zcbot-render-assets 的 Release。放进 wheel 会让每次 pip 安装多下载
+# 15MB，且多平台二进制里只有一个能被用到。
 [tool.setuptools.package-data]
 "core_plugins.image_renderer" = [
-    "native/bin/*/zcbot_render.pyd",
-    "native/bin/*/zcbot_render.so",
     "native/bin/*/.gitkeep",
 ]
 "sql" = ["*.sql"]

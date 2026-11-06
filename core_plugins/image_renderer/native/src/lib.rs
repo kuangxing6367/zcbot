@@ -281,14 +281,54 @@ pub(crate) fn load_font(path: &str) -> Result<Arc<Font>, String> {
 }
 
 /// 按字符度量宽度换行（CJK 友好），保持与 PIL 版行为一致
+// ---------------------------------------------------------------- 字形缓存
+//
+// fontdue 的 rasterize() 每次都做一遍轮廓→位图的光栅化，没有内部缓存。
+// 而测量宽度、折行只需要 advance_width —— 用 metrics() 就够，不必生成位图。
+// 绘制阶段同一字符（尤其中文常用字）会在一次渲染里反复出现，按
+// (字体, 字号, 字符) 缓存位图可以省掉绝大部分重复光栅化。
+//
+// 实测背景：未加缓存时，渲染 3 行中文文本比 PIL 慢 2.8 倍、卡片慢 5.6 倍，
+// 原因是同一字符在一次渲染中被光栅化了 3 遍（wrap_lines → measure_text → draw_text）。
+
+type GlyphKey = (usize, u32, char);
+
+fn glyph_cache() -> &'static Mutex<HashMap<GlyphKey, Arc<(fontdue::Metrics, Vec<u8>)>>> {
+    static CACHE: OnceLock<Mutex<HashMap<GlyphKey, Arc<(fontdue::Metrics, Vec<u8>)>>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 字形缓存上限。中文常用字 3500 + 符号，再加上多字号组合，8192 足够覆盖
+/// 典型使用；超限直接清空（粗粒度但无需 LRU 记账，且不会随渲染次数无限增长）。
+const GLYPH_CACHE_MAX: usize = 8192;
+
+fn glyph_for(font: &Font, size: f32, ch: char) -> Arc<(fontdue::Metrics, Vec<u8>)> {
+    let key: GlyphKey = (font as *const Font as usize, size.to_bits(), ch);
+    if let Ok(cache) = glyph_cache().lock() {
+        if let Some(g) = cache.get(&key) {
+            return Arc::clone(g);
+        }
+    }
+    let (m, bmp) = font.rasterize(ch, size);
+    let g = Arc::new((m, bmp));
+    if let Ok(mut cache) = glyph_cache().lock() {
+        if cache.len() >= GLYPH_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(key, Arc::clone(&g));
+    }
+    g
+}
+
 pub(crate) fn wrap_lines(font: &Font, text: &str, size: f32, max_w: f32) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for para in text.split('\n') {
         let mut line = String::new();
         let mut w: f32 = 0.0;
         for ch in para.chars() {
-            let (m, _) = font.rasterize(ch, size);
-            let cw = m.advance_width;
+            // metrics() 只算度量，不生成位图（rasterize 在这里纯属浪费）
+            let cw = font.metrics(ch, size).advance_width;
             if w + cw > max_w && !line.is_empty() {
                 lines.push(std::mem::take(&mut line));
                 w = 0.0;
@@ -307,8 +347,7 @@ pub(crate) fn wrap_lines(font: &Font, text: &str, size: f32, max_w: f32) -> Vec<
 pub(crate) fn measure_text(font: &Font, text: &str, size: f32) -> f32 {
     let mut w = 0.0f32;
     for ch in text.chars() {
-        let (m, _) = font.rasterize(ch, size);
-        w += m.advance_width;
+        w += font.metrics(ch, size).advance_width;
     }
     w
 }
@@ -341,7 +380,9 @@ pub(crate) fn draw_text(
     let [r, g, b, a] = color;
     let mut cx = base_x;
     for ch in text.chars() {
-        let (m, bitmap) = font.rasterize(ch, size);
+        // 走字形缓存：同一字符在整段文本、以及后续帧里都只需光栅化一次
+        let glyph = glyph_for(font, size, ch);
+        let (m, bitmap) = (&glyph.0, &glyph.1);
         for py in 0..m.height as i32 {
             for px in 0..m.width as i32 {
                 let cov = bitmap[(py * m.width as i32 + px) as usize] as u32;

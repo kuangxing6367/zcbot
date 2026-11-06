@@ -901,7 +901,27 @@ _CORE_PLUGIN_SCHEMA = {
                    'stats_interval_secs': 5, 'ipc_strip_raw': False,
                    'inherit_onebot': False, 'binary_path': '',
                    'auto_build': False},
-    'image_renderer': {'enabled': False},
+    # 图片渲染：字体子集与原生扩展不进源码仓库（约 15MB，下载包约 9MB），
+    # 首次启用时按 asset_url 获取到 data 目录。
+    #
+    #   backend        pil（默认，零依赖）/ rust（用原生扩展）
+    #   asset_consent  ask（默认：**不下载**，只提示；确认后再改）/
+    #                  auto（自动下载）/ manual（只用手动放置的文件）
+    #
+    # 为什么默认 ask 而不是 auto：切到 rust 需要拉约 9MB。按流量计费或内网环境
+    # 下静默下载会被当成事故，所以必须先让用户知道并自己决定。
+    #
+    # asset_url 指向独立的资源仓库 zcbot-render-assets，不是主仓：二进制与字体
+    # 的更新节奏和代码发版无关（补个字形、重编一个平台的 .so 不该逼着框架 bump
+    # 版本），混在一个仓库里只会让 clone / CI / wheel 一起变胖。该仓库的 latest
+    # 是固定链接，资源重发时覆盖同名 Release，这里永远不用改。
+    'image_renderer': {'enabled': False,
+                       'backend': 'pil',
+                       'asset_consent': 'ask',
+                       'asset_url': 'https://github.com/kuangxing6367/'
+                                    'zcbot-render-assets/releases/latest/'
+                                    'download/assets.zip',
+                       'asset_timeout': 30},
 }
 
 # 官方插件的「默认开启」名单：新克隆 / 首次启动生成 core_plugins.yaml 时，

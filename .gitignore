@@ -215,3 +215,13 @@ tests/iipc_linux_amd64.zip
 
 # 前端源码为闭源资产, 不进仓库; 仅发布 core_plugins/webui/web 构建产物
 /webui/
+
+# ── image_renderer 产物：不入源码，运行时按 asset_url 下载 ──
+# 字体子集（约 8MB）+ 7 平台原生扩展（约 7MB）合计 15MB，
+# 进仓库会拖慢 clone 并让每次打包体积翻倍；实际每个部署只用到其中一个平台。
+core_plugins/image_renderer/*.ttf
+core_plugins/image_renderer/native/bin/*/zcbot_render.pyd
+core_plugins/image_renderer/native/bin/*/zcbot_render.so
+core_plugins/image_renderer/native/bin/*/*.bak*
+core_plugins/image_renderer/native/target/
+core_plugins/image_renderer/.assets/
