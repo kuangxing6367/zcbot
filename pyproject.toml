@@ -15,7 +15,7 @@
 
 [project]
 name = "zcbot"
-version = "1.20.2"
+version = "1.21.0"
 description = "ZCBOT 事件驱动 IM 平台：内核 + 扩展点契约 + 协议无关的接入端（以插件形式提供多平台接入）"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -26,6 +26,115 @@
 
 ---
 
+## [1.21.0] - 2026-11-07
+
+> 主题：**把「以为能用」变成「真的能用」**。
+> 这一版修的多数问题都不报错：路由表静静空着、索引静静没建、配置写了静静不生效、
+> 媒体静静发不出去。它们共同的特征是**看起来一切正常**，所以不能靠加功能解决，
+> 只能一处一处把「看似成功、实际没发生」找出来。
+
+### 接入端：出站媒体从「写了但发不出去」补齐
+
+改之前 `kook` / `matrix` 的 `capabilities()` 写死 `outbound=[CAP_TEXT]`，注释分别是
+「外部 URL 会被拒」和「本端暂未实现」——入站能收图、出站发不了图，插件以为能发，
+实际发一条失败一条。
+
+- **KOOK**：按官方要求先 `POST /api/v3/asset/create` 上传再引用 url；外部地址先代下再
+  重传，已是 kookapp.cn / kaiheila.cn 的地址直接发。入站补 `type=8` 语音。
+- **Matrix**：先 `/_matrix/media/v3/upload` 再发 `m.image` / `m.file`；入站把 `mxc://`
+  本地化到 `data/matrix_media/`。原因是 spec 已把 `/_matrix/media/v3/download` 标为
+  deprecated，替代端点必须带 `Authorization` 头、token 不许拼 URL——旧写法在服务器
+  冻结匿名访问后拿到的是 401 的空 URL，整条消息只是「没图」，不报错。
+- **Telegram**：`parse_mode`、4096/1024 切分、编辑/删除/表情回应、论坛话题 `thread_id`、
+  `callback_query` 订阅。
+- **Discord**：2000 上限按 UTF-16 码元切分；空消息本地拦截；心跳未 ACK 用 4000 关闭
+  （zombied 连接不会自己断）。附件超过 10 个、或全部读取失败时留下明确日志——原先
+  静默截断，调用方只看到「发送成功」。
+- **QQ 官方**：`msg_type=8` 图文卡片，按官方 MessageCard 约束做本地预检（tuwen 必须含
+  `title` 1-50 / `description` 1-200 / `url` 与 `pic_url` 为 https 且 ≤1024）。官方超限
+  只回 `304061 消息内容无效`，不说是哪个字段，本地拦才能报出具体字段和当前长度。
+  另补 @全体、提示键盘、分片上传。
+
+顺带修掉会让请求白跑或把内存打穿的地方：`kook` / `matrix` 的 base64 分支不设上限就直接
+`b64decode`（峰值是原文加明文两份）；`kook` 流式下载没有 `with`，连接泄漏；`telegram`
+的 caption 从来不读 `parse_mode`（用户开了 HTML，正文是 HTML、媒体 caption 仍是纯文本，
+解析失败还会让整条消息 400），现在跟随配置并在失败时与正文一样降级重发一次。
+
+### 图片渲染：产物移出源码，改为运行时获取
+
+字体子集（约 8MB）与 7 个平台的原生扩展（约 7MB）不再进仓库，也不进 wheel——多平台
+二进制里任何一台机器只会用到其中一个。产物托管在独立仓库
+`kuangxing6367/zcbot-render-assets`，插件按 `asset_url` 取到 `data/` 下。
+
+默认 `backend: pil`，**不需要这份资源**；只有切到 `rust` 才需要。`asset_consent` 默认
+`ask`：只打日志说清楚「多少流量、放哪里」，一个字节都不下。
+
+资源层同时修掉四个会让渲染整体失效的问题：
+
+- `os.makedirs` 在 `try` 之外：目录不可创建时 `PermissionError` 直冒到插件初始化，
+  连带本来能跑的 PIL 一起挂掉。改为先探测，全部转成状态字段。
+- sha256 校验不存在：注释与 README 都写「校验后落盘」，实际只读了 manifest 里的
+  `version`。补 `_verify_extracted()`，逐条比对 size 与 sha256。
+- 正式目录只读被报成「下载失败」：`rmtree(ignore_errors=True)` 吞掉删除失败，接着
+  `os.replace` 必抛。改为 rename / 删后 rename / 就地覆盖三态。
+- 就地覆盖留下混合态：`manifest.json` 先写成功、字体写失败，出现「版本号 2.0、
+  内容是 1.0」，字表与 ttf 还可能对不上。改为其余文件全部成功才写 manifest。
+
+### WebUI：官方插件配置终于能在面板里改
+
+`/api/config/yaml` 读的是 `config.yaml` 原始文件，而官方插件配置在 `core_plugins.yaml`，
+启动时才合并进主配置的同名段；`/api/config/yaml/<section>` 又有一份写死的段白名单。
+两者叠加的结果是：面板上看不到 `image_renderer` 这类段，只能去手改 yaml。
+
+- 读：把合并后的官方插件段补进返回（`enabled` 除外——它的唯一权威是
+  `core_plugins.yaml`，混进 `config.yaml` 就是第二处真相）。
+- 写：白名单动态加入各官方插件的配置段；白名单外的段仍然拒绝。
+- 设置页新增「图片渲染」分组，可行内改 `backend` / `asset_consent` / `asset_url` /
+  `asset_timeout`，保存后提示需重启。
+- 新增 `GET /api/plugins/image_renderer/status`。打开后台时顶部横幅按它决定是否提示
+  资源缺失；横幅**纯读**，不会因为「打开了管理页」就花掉用户 9MB 流量。
+
+顺带修掉一个静默 bug：`image_renderer` 原先用 `ctx.get_config()` 读配置，而那个接口
+查的是 `plugin_configs` 表——只服务 userspace 插件（值由 WebUI 写表），核心插件从没
+往表里写过任何行。于是 `backend` 永远读成默认值 `pil`，`core_plugins.yaml` 里写什么
+都不生效，且不报错。改为读合并后的主配置段。
+
+### 数据库：方言翻译丢索引、丢函数、占位符被误改
+
+- **索引丢失**：SQLite 的索引名是库内全局唯一，`init.sql` 里跨表重名——37 个索引只建出
+  21 个，其余静默失败。改为索引名加表名前缀，并拆出 `extract_plain_indexes()` /
+  `build_sqlite_index_ddl()` 供两个初始化入口复用。实测 20 万行：`is_blacklist` 过滤
+  99.34 → 0.74ms（135×），`last_active_at` 134.49 → 9.71ms（13.9×）。
+- **函数翻译只覆盖 DDL/DML 分支**：`SELECT` 里的 `NOW()` / `IFNULL()` 原样发给 SQLite
+  直接语法错。改为先预判再进分支。
+- **嵌套 IF 只翻译一层**：改成迭代到稳定。
+- **占位符转换不认引号**：`strftime('%s','now')` 被翻成 `strftime('?','now')`。
+- **MySQL 5.5**：补 767 字节前缀索引上限（支持 `UNIQUE KEY`、按累计字节预算、排除 ENUM）。
+- **连接池 ping 改为按需**：`DBUtils` 的 `ping(reconnect=True)` 与 `pymysql` 同名参数均已
+  弃用，且每次取连接都 ping 是白付一次往返。改为按 `ping_interval` 判空闲，事务路径强制
+  探活。实测 195.0 → 238.9 ops/s（+22.5%）。
+
+新增 `tests/db_conformance/`：requirements 驱动的一致性套件，`--db` 选择
+`sqlite` / `mysql`，同一组用例跑两个后端。
+
+### 路由器：两个能让整批命令消失的输入
+
+- 路由签名改为 `(DB 签名, 已加载插件名元组)`。原先在「只装了核心插件」的部署里签名恒等
+  不变，路由表构建被跳过——命令列表永久为空，且没有任何报错。
+- 新增 `_norm_priority()`：字符串 `priority` 会让 `sorted()` 抛 `TypeError` 打死整张表；
+  `priority=0` 会被 `or 50` 吞成 50。
+
+### CI：两条长期红的灯，互相盖着
+
+1. `test_smoke.py` 断言图片上传带的是 multipart `files`，而 `_upload_group_image` 早已改走
+   `file_data(base64)`（官方请求体只列 `file_data` / `url` / `upload_id`）。改断言。
+2. pytest 步骤只 `pip install pytest`，缺 `pytest-asyncio`，`pyproject.toml` 里的
+   `asyncio_mode=auto` 因此不生效，7 个裸 async 用例全部判失败。
+
+第 1 个先挂会让第 2 个整步被 skip，所以此前只看得到一个。
+
+---
+
 ## [1.20.2] - 2026-11-06
 
 > 主题：**许可证合规**。代码没动，只把协议文件按识别标准重新组织。
