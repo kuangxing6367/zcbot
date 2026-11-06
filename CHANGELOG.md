@@ -124,6 +124,16 @@
 - 新增 `_norm_priority()`：字符串 `priority` 会让 `sorted()` 抛 `TypeError` 打死整张表；
   `priority=0` 会被 `or 50` 吞成 50。
 
+### 打包：wheel 里塞着 10MB 用不上的二进制
+
+`MANIFEST.in` 的 `recursive-include core_plugins` 带了 `*.so` / `*.pyd` / `*.ttf` /
+`*.otf`，而 `include-package-data = true` 时 MANIFEST.in 直接决定 wheel 内容——
+`package-data` 里只写 `.gitkeep` 根本不管用。结果是资源已经移出源码，pip 安装却仍要
+多下 10MB，且 7 个平台里只有一个能用。同时 `recursive-include` 的 `*.json` / `*.txt`
+把 cargo 的 `.fingerprint` 与 `build` 中间产物一起捞了进来，比代码还大。
+
+wheel：10M → 1.8M，文件数 592 → 329。
+
 ### CI：两条长期红的灯，互相盖着
 
 1. `test_smoke.py` 断言图片上传带的是 multipart `files`，而 `_upload_group_image` 早已改走
