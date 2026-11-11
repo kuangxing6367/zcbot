@@ -59,11 +59,12 @@ def register(fw):
                     asyncio.run(fw.stop())
             except Exception:
                 pass
-            # os.execv 用当前解释器原地重载 main.py（与 /api/restart 一致）
+            # os.execv 用当前解释器原地重载唯一入口 startup.py（与 /api/restart 一致）
+            from framework.paths import code_root
             python = sys.executable
-            main_py = os.path.join(_ROOT, 'main.py')
-            os.chdir(os.path.dirname(main_py))
-            os.execv(python, [python, main_py] + sys.argv[1:])
+            entry = os.path.join(code_root(), 'startup.py')
+            os.chdir(os.path.dirname(entry))
+            os.execv(python, [python, entry] + sys.argv[1:])
 
         print("框架正在重启（1 秒后执行，当前会话将中断）...")
         threading.Thread(target=_do_restart, daemon=False, name="ops-restart").start()

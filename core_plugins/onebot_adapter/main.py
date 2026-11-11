@@ -23,6 +23,8 @@ import websockets
 
 from framework.core.event_buffer import EventBuffer
 from framework.messaging.protocol import ProtocolAdapter
+from framework.security.hardening import (
+    InputRejected, sanitize_adapter_event, strict_json_object, token_ok)
 
 logger = logging.getLogger('zcbot')
 
@@ -295,6 +297,11 @@ class BotConnection:
 
     def on_response(self, data: dict):
         echo = data.get("echo")
+        # echo 必须是可哈希标量；list/dict 会在这里抛 TypeError 并打掉整条连接
+        try:
+            hash(echo)
+        except TypeError:
+            return
         if echo and echo in self._pending:
             self._responses[echo] = data
             self._pending[echo].set()
@@ -412,7 +419,11 @@ class OneBotWebSocketServer:
 
     async def _serve(self):
         serve_kwargs = {'ping_interval': 30, 'ping_timeout': 10,
-                        'max_size': self.max_frame_size}
+                        'max_size': self.max_frame_size,
+                        # websockets 默认启用 permessage-deflate，高压缩比帧可造成
+                        # 解压炸弹（官方 Security 文档）；显式关闭。
+                        # max_queue 显式设为官方默认值 16，避免不同大版本默认值漂移。
+                        'compression': None, 'max_queue': 16}
         # 启用 SSL 时走 wss（websockets 原生支持 ssl= 参数）
         if self.ssl_context is not None:
             serve_kwargs['ssl'] = self.ssl_context
@@ -420,6 +431,16 @@ class OneBotWebSocketServer:
             serve_kwargs['process_request'] = self._process_request_v13
         elif _WS_MAJOR >= 10:
             serve_kwargs['process_request'] = self._process_request_v10
+        # 10.x / 13.x / 14+ 的关键字集合不同；只传当前实现真正支持的，
+        # 避免新增安全参数反而让服务在旧版本上启动失败。
+        try:
+            import inspect
+            params = inspect.signature(websockets.serve).parameters
+            if not any(p.kind is inspect.Parameter.VAR_KEYWORD
+                       for p in params.values()):
+                serve_kwargs = {k: v for k, v in serve_kwargs.items() if k in params}
+        except (TypeError, ValueError):
+            pass
 
         try:
             self._server = await websockets.serve(
@@ -438,7 +459,7 @@ class OneBotWebSocketServer:
     async def _process_request_v13(self, connection, request):
         if self.access_token:
             token = _extract_token(request.path, request.headers)
-            if token != self.access_token:
+            if not token_ok(token, self.access_token):
                 try:
                     return connection.respond(403, "access_token error\n")
                 except Exception:
@@ -448,7 +469,7 @@ class OneBotWebSocketServer:
     async def _process_request_v10(self, path, request_headers):
         if self.access_token:
             token = _extract_token(path, request_headers)
-            if token != self.access_token:
+            if not token_ok(token, self.access_token):
                 from http import HTTPStatus
                 return (HTTPStatus.FORBIDDEN, [], b"access_token error\n")
         return None
@@ -459,7 +480,7 @@ class OneBotWebSocketServer:
 
         if self.access_token:
             token = _extract_token(req_path, headers)
-            if token != self.access_token:
+            if not token_ok(token, self.access_token):
                 try:
                     await ws.close(code=4001, reason="access_token error")
                 except Exception:
@@ -485,17 +506,35 @@ class OneBotWebSocketServer:
             async for raw_message in ws:
                 logger.debug(f"[{bot_name}] 收到原始数据 {len(raw_message)} 字节: {str(raw_message)[:300]}")
                 try:
-                    data = json.loads(raw_message)
-                except (json.JSONDecodeError, TypeError) as e:
-                    logger.warning(f"[{bot_name}] JSON 解析失败: {e}")
+                    # 旧实现 json.loads 后直接 `"echo" in data` / `data.get(...)`：
+                    # 顶层 int/null/bool/str/list 会抛 TypeError/AttributeError，
+                    # 被外层 except Exception 吞掉并直接断开整条 WS 连接。
+                    # 这里统一拒绝非对象帧、NaN/Infinity、重复键与孤立代理项，
+                    # 且只跳过这一帧，不影响后续事件。
+                    data = strict_json_object(raw_message, self.max_frame_size)
+                except (json.JSONDecodeError, TypeError, ValueError, InputRejected) as e:
+                    logger.warning(f"[{bot_name}] JSON 解析失败，跳过本帧: {e}")
+                    continue
+
+                if not isinstance(data, dict):
+                    logger.warning(f"[{bot_name}] 非对象事件帧，跳过")
                     continue
 
                 if "echo" in data:
-                    conn.on_response(data)
+                    try:
+                        conn.on_response(data)
+                    except (TypeError, ValueError, AttributeError) as e:
+                        logger.warning(f"[{bot_name}] 非法 echo 响应，跳过: {e}")
                     continue
 
                 post_type = data.get("post_type")
                 if post_type:
+                    # WS 事件与 http_inject 一样必须先净化再进事件总线。
+                    # 修复前这里直接把外部帧整包派发：实测可注入
+                    # role=super / permissions=['*'] / admin / bot_name=spoofed，
+                    # 还能用 _msg_text 伪造命令文本（Event 会优先采用该字段）。
+                    # 用适配器专用净化：剥顶层控制字段，但保留合法的 sender.role。
+                    data = sanitize_adapter_event(data, bot_name)
                     logger.debug(f"[{bot_name}] 收到事件 post_type={post_type} sub_type={data.get(f'{post_type}_type','')}")
                     accepted, ev_size = self._try_enqueue_dispatch(bot_name, data)
                     if not accepted:
@@ -705,6 +744,9 @@ class OneBotAdapter(ProtocolAdapter):
         event = normalize_event(data, bot_name)
         if event is None:
             return
+        # 第 5 轮只收口了 WS 帧（_handle_connection）；这条 HTTP/回调式
+        # 原始事件入口当时遗漏，同样必须净化后再进事件总线。
+        event = sanitize_adapter_event(event, bot_name)
         await self.framework.dispatch_event(event)
 
     def _on_message_sent(self, bot_name, action, params, resp):

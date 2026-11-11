@@ -12,6 +12,12 @@ import time
 from collections import deque
 from typing import Optional
 
+# 第 6 轮：所有进入日志缓存 / SSE 推送的文本先做输出净化。
+# CWE-117 / CWE-93 / OWASP Logging Cheat Sheet：不可信文本里的 CR/LF
+# 能伪造整行日志，ESC 能操控终端，bidi/零宽能欺骗审计者。
+# 只改日志字符串，事件原文与业务语义完全不动。
+from framework.security.hardening import sanitize_log_text, sanitize_log_detail
+
 MAX_CACHE = 2000  # 最大缓存条数
 MAX_ERROR_CACHE = 200  # ERROR/WARN 独立保留条数
 MAX_SSE_SUBSCRIBERS = 32  # SSE 订阅者上限（防资源耗尽）
@@ -40,6 +46,9 @@ class LogBroker:
         :param detail: 附加详情 dict
         :param source: 来源（文件名或插件名）
         """
+        safe_message = sanitize_log_text(message)
+        safe_detail, _flags = sanitize_log_detail(detail)
+        safe_source = sanitize_log_text(source or '')
         with self._lock:
             self._seq += 1
             entry = {
@@ -47,9 +56,9 @@ class LogBroker:
                 'time': time.time(),
                 'category': category,
                 'level': level.upper(),
-                'message': message,
-                'detail': detail or {},
-                'source': source or '',
+                'message': safe_message,
+                'detail': safe_detail,
+                'source': safe_source,
             }
             self._cache.append(entry)
             if entry['level'] in _RETAINED_LEVELS:

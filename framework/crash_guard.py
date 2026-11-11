@@ -10,7 +10,7 @@
 - 启动成功后调用 clear_crash_markers() 复位计数（健康运行即清零，避免误杀）。
 - 可选：framework.crash.alert_command / alert_webhook 触发外部告警（邮件/Webhook）。
 
-注意：本模块只提供原语，由进程入口（main.py amain）在合适的生命周期调用，
+注意：本模块只提供原语，由进程入口（startup.py → framework/bootstrap/app.py 的 amain）在合适的生命周期调用，
 不侵入 Framework 类本身，因此单元测试直接构造 Framework 时不会触发。
 """
 import logging

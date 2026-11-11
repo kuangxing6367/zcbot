@@ -6,7 +6,7 @@
 `go_kernel/zcbot_kernel.exe` 与 `rust_adapter/target/release/zcbot_adapter.exe`。
 
 两种启动方式：
-    python main.py --iipc [选项]        # 框架主入口（推荐）
+    python startup.py --iipc [选项]        # 框架主入口（推荐）
     python -m framework.iipc [选项]     # 独立模块入口
 
 与原 asyncio 框架的关系：**并列的两条启动路径**，不是插件、也不互相加载。

@@ -10,7 +10,7 @@
 ## 启动
 
 ```bash
-python main.py --iipc                 # 框架主入口（推荐，仓库根目录执行）
+python startup.py --iipc                 # 框架主入口（推荐，仓库根目录执行）
 python -m framework.iipc              # 等价的独立模块入口
 ```
 
@@ -231,7 +231,7 @@ python framework/iipc/tools/stress_check.py   # 16 项：畸形输入/吞吐延�
 ## 架构与关键教训
 
 ```
-python main.py --iipc
+python startup.py --iipc
   └─ framework/iipc/launcher.py：日志总出口 + 终端 REPL（不承载业务）
        ├─ go_kernel/      Go 内核：事件总线 / SQLite / 插件进程编排
        ├─ rust_adapter/   Rust 协议端：OneBot 协议层（连入内核）

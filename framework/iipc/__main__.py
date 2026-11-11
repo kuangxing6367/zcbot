@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""`python -m framework.iipc` 入口（等价于 `python main.py --iipc`）。"""
+"""`python -m framework.iipc` 入口（等价于 `python startup.py --iipc`）。"""
 import sys
 
 from . import main

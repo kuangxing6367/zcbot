@@ -62,8 +62,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         self._ipc_client = ipc_client
         # 记录实际使用的配置文件路径（供 Web API 读写 config.yaml 使用）
         if config_path is None:
-            from framework.config import get_home
-            config_path = os.path.join(get_home(), 'config.yaml')
+            from framework.paths import resolve_config_path
+            config_path = resolve_config_path()
         self.config_path = os.path.abspath(config_path)
         self.config = load_config(config_path)
         # 语言必须在 __init__ 早期就定下来：framework.initializing / init_done 两条日志
@@ -421,29 +421,31 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         logging.getLogger('websocket').setLevel(logging.WARNING)
 
     def _get_plugins_dir(self) -> str:
-        """获取插件代码目录路径（优先使用配置；默认落在可写 home 下）"""
+        """用户插件代码目录：新布局 <home>/data/plugins，旧布局 <home>/plugins。"""
         from framework.config import get_home
+        from framework.paths import user_plugins_dir
         plugin_dir = self.config.get('plugin', {}).get('dir', '')
         if plugin_dir:
             if os.path.isabs(plugin_dir):
                 return plugin_dir
             return os.path.join(get_home(), plugin_dir)
-        return os.path.join(get_home(), 'plugins')
+        return user_plugins_dir()
 
     def _get_core_plugins_dir(self) -> str:
-        """获取官方插件目录路径（core_plugins/，与 framework 同级）"""
-        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                            'core_plugins')
+        """内核自带插件目录（代码资产，非可写状态），统一走 framework.paths。"""
+        from framework.paths import core_plugins_dir
+        return core_plugins_dir()
 
     def _get_plugins_dat_dir(self) -> str:
-        """获取插件数据/配置目录路径（与 plugins 同级，统一存放于 data/ 下）"""
+        """插件数据/配置目录（始终在 data/ 下），统一走 framework.paths。"""
         from framework.config import get_home
+        from framework.paths import plugins_dat_dir
         dat_dir = self.config.get('plugin', {}).get('dat_dir', '')
         if dat_dir:
             if os.path.isabs(dat_dir):
                 return dat_dir
             return os.path.join(get_home(), dat_dir)
-        return os.path.join(get_home(), 'data', 'plugins_dat')
+        return plugins_dat_dir()
 
     async def start(self, wait_ready: bool = True):
         """启动框架（异步）
@@ -643,7 +645,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
     def start_console_server(self):
         """启动本地调试控制台（端口 + 超长 token 自动生成并存入数据库）。
 
-        systemd 等无 TTY 场景下，本地执行 `python main.py attach` 即可接入，
+        systemd 等无 TTY 场景下，本地执行 `python startup.py attach` 即可接入，
         无需重启。由 config.yaml 的 console 段控制（默认开启、仅回环地址）。
         """
         cfg = self.config.get('console', {}) or {}
@@ -668,7 +670,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
     def build_ssl_context(self):
         """构建服务端 SSLContext（Web HTTPS 与 OneBot WSS 共用 config['ssl']）。
 
-        cert/key 支持绝对路径或相对项目根目录（config.yaml 所在目录）。
+        cert/key 支持绝对路径或相对基准目录（由 framework.paths 统一解析，
+        新布局下 config.yaml 位于 <ZCBOT_HOME>/data/）；生产建议用绝对路径。
         未启用 ssl 时返回 None；已启用但证书缺失会抛异常（调用方负责降级/报错）。
         """
         from framework.tls import build_server_ssl_context

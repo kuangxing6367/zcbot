@@ -21,7 +21,7 @@ webui:
   started: 'Ciallo～(∠・ω< )⌒☆ 管理后台开门啦～ {url}'
 
 console:
-  ready: 'Ciallo～(∠・ω< )⌒☆ 调试控制台就位～ {addr}（token {bits} 位，凭证在数据库 console_access；本地 `python main.py attach` 就能接入）'
+  ready: 'Ciallo～(∠・ω< )⌒☆ 调试控制台就位～ {addr}（token {bits} 位，凭证在数据库 console_access；本地 `python startup.py attach` 就能接入）'
 
 terminal:
   skipped: 'Ciallo～(∠・ω< )⌒☆ 这里不是交互终端，陪聊先跳过啦～（命令还能走 API/IPC 哦）'

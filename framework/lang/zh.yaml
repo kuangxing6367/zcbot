@@ -22,7 +22,7 @@ webui:
   started: 'Web UI 已启动: {url}'
 
 console:
-  ready: '调试控制台已就绪：{addr}（token {bits} 位，凭证存于数据库 console_access；本地执行 `python main.py attach` 接入）'
+  ready: '调试控制台已就绪：{addr}（token {bits} 位，凭证存于数据库 console_access；本地执行 `python startup.py attach` 接入）'
 
 terminal:
   skipped: '终端交互已跳过：stdin 非交互终端（CI/守护进程/重定向环境），终端命令仍可通过 API/IPC 触发'

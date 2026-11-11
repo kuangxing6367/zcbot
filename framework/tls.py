@@ -13,7 +13,9 @@ Web 管理后台（HTTPS）与 OneBot 反向 WebSocket（WSS）共用。
       key: ""      # 私钥路径：绝对路径 或 相对项目根目录
 
 证书路径支持**相对**与**绝对**两种写法：相对路径以 base_dir
-（通常是 config.yaml 所在的项目根目录）为基准。
+（调用方传入的基准目录，通常是 <ZCBOT_HOME>；新布局下 config.yaml 在
+<ZCBOT_HOME>/data/，路径解析统一见 framework/paths.py）为基准。
+建议生产环境直接写绝对路径，避免迁移状态目录后证书路径漂移。
 """
 import logging
 import os

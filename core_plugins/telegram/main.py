@@ -31,6 +31,7 @@ from typing import List, Optional
 import requests
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.security.hardening import sanitize_adapter_event
 from framework.messaging.backoff import Backoff
 
 logger = logging.getLogger('zcbot')
@@ -584,6 +585,8 @@ class TelegramAdapter(ProtocolAdapter):
                     event = normalize_event(upd, self.bot_name)
                     if event is None:
                         continue
+                    # 入站统一净化：剥顶层注入字段、强制归属为当前接入端。
+                    event = sanitize_adapter_event(event, self.bot_name)
                     try:
                         await self.framework.dispatch_event(event)
                     except Exception as e:

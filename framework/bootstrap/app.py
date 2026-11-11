@@ -47,7 +47,8 @@ async def amain():
     crash_cfg = {}
     try:
         import yaml
-        cp = config_path or os.path.join(root, 'config.yaml')
+        from framework.paths import resolve_config_path
+        cp = resolve_config_path(config_path)
         if os.path.isfile(cp):
             crash_cfg = yaml.safe_load(open(cp, encoding='utf-8')) or {}
     except Exception:

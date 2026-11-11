@@ -1,33 +1,39 @@
 """顶层参数解析与子命令相关的小工具：版本、帮助、语言参数。"""
 import os
 
-# framework/bootstrap/cli_dispatch.py 上溯三级即项目根
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from framework.paths import version_path
 
 
 def read_version():
     try:
-        with open(os.path.join(_PROJECT_ROOT, 'VERSION'), 'r', encoding='utf-8') as f:
+        with open(version_path(), 'r', encoding='utf-8') as f:
             return f.read().strip()
     except Exception:
         return 'unknown'
 
 
 def print_usage():
-    print("""ZCBOT 用法：
-  python main.py [config.yaml]   启动 bot（缺省用 config.yaml；文件不存在则自动生成默认配置）
-  python main.py code            打开 AI 智能体界面（不启动 bot，需要 textual）
-  python main.py attach          接入运行中的 bot 调试控制台（无需 TTY / 无需重启）
-  python main.py -a              同上（attach 的简写）
-  python main.py -a --agent       智能体对话模式（纯文本通道里跟 AI 对话）
-  python main.py code            全屏 AI 界面（需要真正的终端 / TTY）
-  python main.py --language LANG 提示文案语言：zh（默认）/ ciallo（活泼版）/ en
-  python main.py -l LANG         同上（简写）。也可用环境变量 ZCBOT_LANG=ciallo
-  python main.py config          配置控制台：显示当前配置摘要
-  python main.py config get K    查看配置项（如 language）
-  python main.py config set K V  修改配置项（写回 config.yaml，重启生效）
-  python main.py --iipc          走 IIPC 内核链路（Go 内核 + Rust 协议端，插件独立进程）
-  python main.py --help          显示本帮助
+    print("""ZCBOT 用法（启动入口统一为 startup.py，main.py 仅作兼容 shim）：
+  python startup.py [config.yaml] 启动 bot（缺省用 config.yaml；不存在则自动生成）
+  python startup.py code          打开 AI 智能体界面（不启动 bot，需要 textual）
+  python startup.py attach        接入运行中的 bot 调试控制台（无需 TTY / 无需重启）
+  python startup.py -a            同上（attach 的简写）
+  python startup.py -a --agent    智能体对话模式（纯文本通道里跟 AI 对话）
+  python startup.py --language LANG 提示文案语言：zh（默认）/ ciallo（活泼版）/ en
+  python startup.py -l LANG       同上（简写）。也可用环境变量 ZCBOT_LANG=ciallo
+  python startup.py config        配置控制台：显示当前配置摘要
+  python startup.py config get K  查看配置项（如 language）
+  python startup.py config set K V 修改配置项（写回 config.yaml，重启生效）
+  python startup.py --iipc        走 IIPC 内核链路（Go 内核 + Rust 协议端，插件独立进程）
+  python startup.py --help        显示本帮助
+
+  兼容：以上命令全部可用 `python main.py ...` 执行，行为一致；
+        新脚本 / systemd / 打包入口请统一使用 startup.py。
+  状态目录：启动时自动检测版本代际，并把旧版根目录布局收敛到
+            <ZCBOT_HOME>/data/（默认开启，绝不覆盖已有文件、绝不改写配置内容）。
+            关闭自动迁移：在 config.yaml 的 framework 段写 auto_migrate: false；
+            临时覆盖：ZCBOT_AUTO_MIGRATE=0。旧根目录布局始终兼容读取。
+            体检 / 预演：python -m framework.migration --inspect / --dry-run
 
 attach 常用参数：
   --config <path>   指定 config.yaml（据此定位数据库里的控制台凭证）

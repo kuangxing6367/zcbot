@@ -31,7 +31,7 @@ import sys
 from . import commands
 from .utils import PROG, read_version
 
-# 这些一级命令会被 main.py 的入口分发接管（python main.py <cmd> 等价 zb <cmd>）
+# 这些一级命令会被 main.py 的入口分发接管（python startup.py <cmd> 等价 zb <cmd>）
 CLI_GROUPS = ("create", "init", "run", "generate", "plugin",
               "adapter", "driver", "self", "clean", "config")
 
@@ -82,7 +82,8 @@ def build_parser():
 
     # ---- run ----
     p_run = sub.add_parser("run", help="运行机器人")
-    p_run.add_argument("-f", "--file", default="main.py", help="入口文件路径")
+    p_run.add_argument("-f", "--file", default="startup.py",
+                       help="入口文件路径（唯一入口 startup.py；旧 main.py 仍兼容）")
     p_run.add_argument("-r", "--reload", action="store_true",
                        help="文件变更时热重载")
     p_run.add_argument("--reload-dirs", default=None,
@@ -92,7 +93,8 @@ def build_parser():
 
     # ---- generate ----
     p_gen = sub.add_parser("generate", help="生成启动脚本")
-    p_gen.add_argument("-f", "--file", default="main.py", help="输出文件路径")
+    p_gen.add_argument("-f", "--file", default="run.py",
+                       help="输出文件路径（默认 run.py，不再覆盖入口文件）")
 
     # ---- plugin ----
     p_plugin = sub.add_parser("plugin", help="管理插件")

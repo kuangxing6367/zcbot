@@ -62,8 +62,10 @@ def _enable(plugin_id, working_dir, enabled):
     else:
         kind = "user"  # 位于 plugins_disabled/ 的禁用插件
     if kind == "core":
-        ok, detail = set_core_plugin_enabled(
-            os.path.join(working_dir, "core_plugins.yaml"), plugin_id, enabled)
+        _data_yaml = os.path.join(working_dir, "data", "core_plugins.yaml")
+        _yaml = _data_yaml if os.path.isfile(_data_yaml) \
+            else os.path.join(working_dir, "core_plugins.yaml")
+        ok, detail = set_core_plugin_enabled(_yaml, plugin_id, enabled)
     else:
         ok, detail = enable_user_plugin(working_dir, plugin_id, enabled)
     if not ok:

@@ -15,7 +15,7 @@
 - 优先级：50
 - 进程归属：**core**（bot 内 `code` 命令在核心进程）
 - 默认开关：**禁用**（`core_plugins.yaml` 中 `aiwriter.enabled` 置 `true` 后，bot 内才有 `code` 命令）
-- 独立 CLI：`python main.py code` **无需启用插件**即可使用（直接引导启动，不加载 bot）
+- 独立 CLI：`python startup.py code` **无需启用插件**即可使用（直接引导启动，不加载 bot）
 - 外部依赖：**`textual`**（见 `requirements.txt`；缺了会提示 `pip install textual`）
 
 ## 用法
@@ -24,13 +24,13 @@
 
 ```bash
 # ① 独立 CLI：命令行直接启动，不启动 bot
-python main.py code
+python startup.py code
 
 # ② bot 运行中：在运维终端里输入（会以独立进程拉起界面，退出后回到 bot 终端）
 code
 ```
 
-界面内直接描述需求即可（见下）。不带子命令时 `python main.py` 仍按原样启动 bot。
+界面内直接描述需求即可（见下）。不带子命令时 `python startup.py` 仍按原样启动 bot。
 
 > 界面在**独立进程**里跑（界面与后端分离），彻底避开在 bot 线程里
 > 跑全屏 TUI 的坑。
@@ -218,7 +218,7 @@ conhost 的 F3 = 重复上一条命令。）设置弹窗内 Enter 保存、Esc �
 ## 数据库
 
 - **bot 内**（`code` 命令 / 调试控制台）：用框架自身数据库，`db_query` 读、`db_execute` 写。
-- **独立 CLI**（`python main.py code`）：**只读**打开 `config.yaml` 里配置的库
+- **独立 CLI**（`python startup.py code`）：**只读**打开 `config.yaml` 里配置的库
   （SQLite `mode=ro`），所以 `db_query` 可用、`db_execute` 会被拒（避免与运行中的 bot 争锁）。
   插件管理在独立模式下只给指引，不代管。
 

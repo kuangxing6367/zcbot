@@ -35,6 +35,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.security.hardening import sanitize_adapter_event
 from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
@@ -618,6 +619,8 @@ class DiscordAdapter(ProtocolAdapter):
             event = normalize_event(d, self.bot_name, self._self_id)
             if event is None:
                 continue
+            # 入站统一净化：剥顶层注入字段、强制归属为当前接入端。
+            event = sanitize_adapter_event(event, self.bot_name)
             try:
                 await self.framework.dispatch_event(event)
             except Exception as e:

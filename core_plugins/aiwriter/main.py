@@ -759,7 +759,7 @@ def _cmd_code(args):
         from framework.terminal.context import is_remote_session
         if is_remote_session():
             _out("[code] 这是远程文本通道（调试控制台 / HTTP），没有 TTY，无法承载全屏界面。\n"
-                 "       本地终端直接跑：python main.py code\n"
+                 "       本地终端直接跑：python startup.py code（python main.py code 亦可）\n"
                  "       只想在文本通道里跟智能体对话：python main.py -a --agent")
             return
     except Exception:

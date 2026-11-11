@@ -11,8 +11,10 @@ import re
 import sys
 import tempfile
 
-# framework/bootstrap/X.py 上溯三级即项目根：bootstrap -> framework -> 根
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 统一走 paths（stdlib only，可在 yaml 未安装之前 import）
+from framework.paths import code_root, resolve_config_path
+
+_PROJECT_ROOT = code_root()
 
 
 def _norm(name: str) -> str:
@@ -24,7 +26,7 @@ def read_self_check_allow_missing(config_path=None):
 
     返回规范名集合（小写、连字符/下划线等价）。读取失败返回空集（不影响既有行为）。
     """
-    path = config_path or os.path.join(_PROJECT_ROOT, 'config.yaml')
+    path = resolve_config_path(config_path)
     try:
         import yaml
         with open(path, 'r', encoding='utf-8') as f:
@@ -71,7 +73,7 @@ def check_and_install_deps():
     # 一次扫描所有已安装发行版，建立规范名集合，避免对每个依赖各做一次 metadata 查找
     installed = {_norm(d.metadata['Name']) for d in _imd.distributions()}
 
-    req_file = os.path.join(_PROJECT_ROOT, 'requirements.txt')
+    req_file = os.path.join(code_root(), 'requirements.txt')
     if not os.path.isfile(req_file):
         return
 
@@ -145,7 +147,7 @@ def ensure_optional_driver(config_path=None):
     时才装，走与通用自检相同的镜像/回退管线；装不上只打印指引，不打断启动
     （运行期会给出清晰的 ImportError）。
     """
-    path = config_path or os.path.join(_PROJECT_ROOT, 'config.yaml')
+    path = resolve_config_path(config_path)
     try:
         import yaml
         with open(path, 'r', encoding='utf-8') as f:

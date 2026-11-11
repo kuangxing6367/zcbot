@@ -16,11 +16,13 @@
 provider 自己声明，不支持就干脆不带图。
 """
 import base64
+import ipaddress
 import logging
 import mimetypes
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 logger = logging.getLogger('zcbot.llm_core')
 
@@ -29,6 +31,65 @@ __all__ = ['MediaCache', 'extract_images', 'build_user_content', 'image_part']
 # 常见的图片段类型（不同接入端写法略有差异，统一按包含关系判定）
 _IMAGE_TYPES = ('image', 'picture', 'photo')
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# 第 5 轮：媒体引用此前完全不校验。实测内网元数据 URL、本地系统文件、
+# 10 万字符伪 base64、SVG 脚本都会原样变成 LLM 的 image_url 内容块。
+# 依据：CWE-918 SSRF、CWE-200 信息泄露、CWE-400 资源耗尽、
+# OWASP File Upload Cheat Sheet（magic bytes 白名单 + 大小上限）。
+_MAX_BASE64_CHARS = 4 * 1024 * 1024
+_MAX_IMAGE_SEGMENTS = 10
+_MAX_URL_CHARS = 2048
+_IMAGE_MAGIC = (
+    (b'\x89PNG\r\n\x1a\n', 'image/png'),
+    (b'\xff\xd8\xff', 'image/jpeg'),
+    (b'GIF87a', 'image/gif'),
+    (b'GIF89a', 'image/gif'),
+    (b'BM', 'image/bmp'),
+)
+
+
+def _mime_of(raw: bytes) -> str:
+    """按真实 magic bytes 判定图片类型；不是白名单格式返回空串。"""
+    for sig, mime in _IMAGE_MAGIC:
+        if raw.startswith(sig):
+            return mime
+    if raw[:4] == b'RIFF' and raw[8:12] == b'WEBP':
+        return 'image/webp'
+    return ''
+
+
+def _is_image_bytes(raw: bytes) -> bool:
+    if not raw or len(raw) > _MAX_IMAGE_BYTES:
+        return False
+    low = raw[:4096].lower()
+    for bad in (b'<svg', b'<!doctype', b'<!entity', b'<script',
+                b'push graphic-context', b'%!ps'):
+        if bad in low:
+            return False
+    return bool(_mime_of(raw))
+
+
+def _url_allowed(url: str) -> bool:
+    """只允许公网 http(s)；拒绝回环/私网/链路本地/云元数据地址。"""
+    if not isinstance(url, str) or len(url) > _MAX_URL_CHARS:
+        return False
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False
+    if p.scheme not in ('http', 'https') or not p.hostname or p.username or p.password:
+        return False
+    host = p.hostname.lower().strip('[]')
+    if host in ('localhost', 'metadata', 'metadata.google.internal',
+                'instance-data', 'localhost.localdomain'):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    except ValueError:
+        pass
+    return True
 
 
 def _guess_mime(path: str, default: str = 'image/png') -> str:
@@ -45,8 +106,14 @@ def _read_as_data_uri(path: str) -> Optional[str]:
             logger.warning(f"[llm_core] 图片超过 {_MAX_IMAGE_BYTES // 1024 // 1024}MB，已跳过: {path}")
             return None
         with open(path, 'rb') as f:
-            raw = f.read()
-        return f"data:{_guess_mime(path)};base64," + base64.b64encode(raw).decode('ascii')
+            raw = f.read(_MAX_IMAGE_BYTES + 1)
+        # 本地路径若指向系统文件（如 file:///C:/Windows/win.ini），读出来不是图片，
+        # 必须拒绝，否则会把主机文件内容当图片 data URI 发给模型。
+        mime = _mime_of(raw)
+        if not mime or not _is_image_bytes(raw):
+            logger.warning(f"[llm_core] 本地文件不是白名单图片，已跳过: {path}")
+            return None
+        return f"data:{mime};base64," + base64.b64encode(raw).decode('ascii')
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[llm_core] 读取图片失败: {e}")
         return None
@@ -72,13 +139,13 @@ def _pick_source(data: Dict[str, Any]) -> Optional[Dict[str, str]]:
     if file_value.startswith('base64://'):
         return {'kind': 'base64', 'value': file_value[len('base64://'):]}
     if url.startswith(('http://', 'https://')):
-        return {'kind': 'url', 'value': url}
+        return {'kind': 'url', 'value': url} if _url_allowed(url) else None
     if file_value.startswith(('http://', 'https://')):
-        return {'kind': 'url', 'value': file_value}
+        return {'kind': 'url', 'value': file_value} if _url_allowed(file_value) else None
     if file_value:
-        return {'kind': 'file', 'value': _normalize_file(file_value)}
+        return {'kind': 'file', 'value': _normalize_file(file_value)[:_MAX_URL_CHARS]}
     if url:
-        return {'kind': 'file', 'value': _normalize_file(url)}
+        return {'kind': 'file', 'value': _normalize_file(url)[:_MAX_URL_CHARS]}
     return None
 
 
@@ -94,6 +161,9 @@ def extract_images(raw_event: dict) -> List[Dict[str, str]]:
     if not isinstance(segments, (list, tuple)):
         return found
     for seg in segments:
+        if len(found) >= _MAX_IMAGE_SEGMENTS:
+            logger.warning(f"[llm_core] 单条消息图片段超过 {_MAX_IMAGE_SEGMENTS} 个，已截断")
+            break
         if not isinstance(seg, dict):
             continue
         stype = str(seg.get('type') or '').lower()
@@ -113,7 +183,17 @@ def image_part(source: Dict[str, str]) -> Optional[dict]:
     if kind == 'url':
         return {'type': 'image_url', 'image_url': {'url': value}}
     if kind == 'base64':
-        mime = 'image/png'
+        # 修复前直接把整段字符串拼成 data URI：10.9MB 解压炸弹 → 14.5MB URI，
+        # 且 SVG 脚本 / EPS / 随机字节全部被当成 image/png 放行。
+        if not value or len(value) > _MAX_BASE64_CHARS:
+            return None
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except Exception:
+            return None
+        mime = _mime_of(raw) if _is_image_bytes(raw) else ''
+        if not mime:
+            return None
         return {'type': 'image_url',
                 'image_url': {'url': f"data:{mime};base64,{value}"}}
     if kind == 'file':
@@ -136,7 +216,7 @@ def build_user_content(text: str, images: List[Dict[str, str]] = None,
     parts: List[dict] = []
     if text:
         parts.append({'type': 'text', 'text': text})
-    for src in images:
+    for src in images[:_MAX_IMAGE_SEGMENTS]:
         part = image_part(src)
         if part:
             parts.append(part)

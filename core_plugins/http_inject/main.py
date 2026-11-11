@@ -24,6 +24,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.security.hardening import (
+    DEFAULT_MAX_BODY_BYTES, DEFAULT_READ_TIMEOUT, InputRejected,
+    apply_socket_timeout, read_request_body, sanitize_event,
+    strict_json_object, token_ok,
+)
 
 __plugin_meta__ = {
     "name": "http_inject",
@@ -41,29 +46,40 @@ class HttpInjectHandler(BaseHTTPRequestHandler):
     framework = None
     path_prefix = "/hook"
     token = ""
+    max_body_bytes = DEFAULT_MAX_BODY_BYTES
+    read_timeout = DEFAULT_READ_TIMEOUT
+
+    def setup(self):
+        super().setup()
+        # 无 socket 超时时，慢请求头 / 慢 body 会各占一个线程永不释放
+        apply_socket_timeout(self, self.read_timeout)
 
     # ---- 请求处理 ----
     def do_POST(self):
-        if not self.path.startswith(self.path_prefix):
+        # 精确匹配前缀，避免 /hookxyz 这类同前缀路径被当成合法注入端点
+        path_only = self.path.split('?', 1)[0]
+        if path_only != self.path_prefix and not path_only.startswith(
+                self.path_prefix.rstrip('/') + '/'):
             self._json(404, {"ok": False, "error": f"未知路径 {self.path}，期望 {self.path_prefix}"})
             return
 
-        # Token 校验（配置了才校验）
-        if self.token:
-            provided = self.headers.get("Authorization", "")
-            if provided != f"Bearer {self.token}" and provided != self.token:
-                self._json(401, {"ok": False, "error": "invalid token"})
-                return
-
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            data = json.loads(raw.decode("utf-8"))
-        except Exception:
-            self._json(400, {"ok": False, "error": "invalid JSON body"})
+        # Token 校验（配置了才校验），常量时间比较避免短路时序侧信道
+        if self.token and not token_ok(self.headers.get("Authorization", ""), self.token):
+            self._json(401, {"ok": False, "error": "invalid token"})
             return
-        if not isinstance(data, dict):
-            self._json(400, {"ok": False, "error": "body must be a JSON object"})
+
+        try:
+            # 旧实现 int(Content-Length) 未校验：非数字抛未捕获 ValueError、
+            # 负数/超大值让 rfile.read() 挂到客户端超时，且残留字节会被当成事件派发。
+            # 超限请求先排空 body 再回 413，否则客户端被 RST 拿不到响应。
+            raw = read_request_body(self, self.max_body_bytes) or b"{}"
+            # 拒绝 NaN/Infinity/重复键/顶层标量/非法 UTF-8/孤立代理
+            data = strict_json_object(raw, self.max_body_bytes)
+        except InputRejected as e:
+            self._json(e.code, {"ok": False, "error": str(e)})
+            return
+        except (OSError, TimeoutError, ValueError) as e:
+            self._json(400, {"ok": False, "error": "request read failed: %s" % type(e).__name__})
             return
 
         event = self._build_event(data)
@@ -86,23 +102,33 @@ class HttpInjectHandler(BaseHTTPRequestHandler):
         """把 HTTP 负载翻译成框架内部事件 dict（接入端无关）"""
         msg_type = data.get("type", "message")
         if msg_type == "message":
+            # ASVS 5.1.4 强类型：message 只允许字符串或 OneBot CQ 段数组，
+            # sender 只允许对象；外部塞 dict/int/list-of-anything 不该一路流到
+            # Event 构造与插件里再炸成未捕获异常。
+            message = data.get("message", "") or data.get("text", "")
+            if not isinstance(message, (str, list, tuple)):
+                message = ""
+            sender = data.get("sender")
+            if not isinstance(sender, dict):
+                sender = {
+                    "user_id": data.get("user_id", 0),
+                    "nickname": data.get("nickname", "http"),
+                }
             event = {
                 "type": "message",
                 "message_type": data.get("message_type", "private"),
                 "bot_name": data.get("bot_name", "http_inject"),
                 "user_id": data.get("user_id", 0),
                 "group_id": data.get("group_id"),
-                "message": data.get("message", "") or data.get("text", ""),
-                "sender": data.get("sender") or {
-                    "user_id": data.get("user_id", 0),
-                    "nickname": data.get("nickname", "http"),
-                },
+                "message": message,
+                "sender": sender,
             }
         else:
             # 完整事件透传（notice / request / meta_event / 自定义）
             event = dict(data)
-            event.setdefault("bot_name", "http_inject")
-        return event
+        # 外部输入不得携带 role/permissions/token 等内部控制字段，
+        # 也不得伪造 bot_name 冒充其它接入端；同时限制嵌套深度与超长字符串
+        return sanitize_event(event, "http_inject")
 
     def _json(self, code: int, obj: dict):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -122,12 +148,15 @@ class HttpInjectAdapter(ProtocolAdapter):
 
     adapter_id = 'http_inject'
 
-    def __init__(self, framework, host, port, path, token):
+    def __init__(self, framework, host, port, path, token,
+                 max_body_bytes=None, read_timeout=None):
         self.framework = framework
         self.host = host
         self.port = port
         self.path = path
         self.token = token
+        self.max_body_bytes = int(max_body_bytes or DEFAULT_MAX_BODY_BYTES)
+        self.read_timeout = float(read_timeout or DEFAULT_READ_TIMEOUT)
         self._server = None
 
     def get_connection_info(self) -> dict:
@@ -151,7 +180,10 @@ class HttpInjectAdapter(ProtocolAdapter):
         HttpInjectHandler.framework = self.framework
         HttpInjectHandler.path_prefix = self.path
         HttpInjectHandler.token = self.token
+        HttpInjectHandler.max_body_bytes = self.max_body_bytes
+        HttpInjectHandler.read_timeout = self.read_timeout
         self._server = ThreadingHTTPServer((self.host, self.port), HttpInjectHandler)
+        self._server.daemon_threads = True
         threading.Thread(target=self._server.serve_forever,
                          daemon=True, name="http-inject").start()
 
@@ -191,7 +223,10 @@ def register(ctx):
     path = cfg.get('path', '/hook')
     token = cfg.get('token', '')
 
-    _adapter_instance = HttpInjectAdapter(fw, host, port, path, token)
+    _adapter_instance = HttpInjectAdapter(
+        fw, host, port, path, token,
+        max_body_bytes=cfg.get('max_body_bytes', DEFAULT_MAX_BODY_BYTES),
+        read_timeout=cfg.get('read_timeout', DEFAULT_READ_TIMEOUT))
 
     # 注册为接入端（覆盖优先级按 core_plugins 加载顺序；通常只开一个接入端）
     fw.services.register('protocol_adapter', _adapter_instance)

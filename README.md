@@ -47,6 +47,26 @@ ZCBOT 是一个**不绑定任何聊天协议**的机器人框架。内核只负�
 14. **LLM 子系统（可选插件）** —— 提供商与工具双总线、工具调用闭环、会话窗口、多模态与 MCP；内置本地知识库（混合检索 RAG，向量 + 全文，单 SQLite 文件）与调用链追踪面板。不启用时内核毫无感知。
 15. **可观测性** —— `/healthz` 存活、`/readyz` 就绪（带逐项检查明细）、`/metrics`（Prometheus 文本格式）；插件元数据可用 `requires` 声明加载依赖，配置改完即时告诉你哪些要重启。
 
+## 启动入口与目录约定
+
+- **唯一入口 `startup.py`**：`python startup.py [config.yaml]`、`python startup.py code`、
+  `python startup.py attach`、`python startup.py --iipc` 等全部从这里进入；
+  `main.py` 只保留兼容转派，存量 systemd / NSSM / 旧脚本不用改。启动期细节统一在
+  `framework/bootstrap/`，状态路径统一在 `framework/paths.py`。
+- **状态统一在 `data/`**：`config.yaml`、`core_plugins.yaml`、`plugins/`、`plugins_dat/`、
+  `logs/` 全部落 `<ZCBOT_HOME>/data/`；旧根目录布局由路径解析层兼容回退。
+- **自动迁移（默认开启）**：内核 `framework/migration/` 在启动期先检测当前内核版本，
+  再探测当前目录**可能**是哪一代版本留下的布局；判定为旧根目录布局时自动把上述
+  状态资产收敛到 `data/`，已迁移过则零写盘。方向是**向后兼容**：新内核接住旧版目录，
+  绝不覆盖已有文件、绝不改写配置内容、失败不阻断启动。
+  关闭：在 `config.yaml` 的 `framework` 段写 `auto_migrate: false`；临时覆盖用
+  `ZCBOT_AUTO_MIGRATE=0`。体检 / 预演：`python -m framework.migration --inspect` / `--dry-run`
+  （旧脚本 `tools/migrate_state_to_data.py` 保留为兼容入口）。
+- **代码与状态分离**：`framework/` 与 `core_plugins/`（或未来的
+  `framework/core/plugins/`）是随包分发的内核代码，不写用户数据；
+  `ZCBOT_HOME` 决定可写状态根目录，`ZCBOT_CONFIG_PATH` / `ZCBOT_CORE_PLUGINS_YAML`
+  可单独覆盖，`ZCBOT_STATE_LAYOUT=data` 可强制新布局。
+
 ## 快速上手
 
 ### 前置：一定要用虚拟环境
@@ -75,8 +95,9 @@ pip install zcbot
 zcbot
 ```
 
-首次启动会在 **`~/.zcbot`** 自动生成配置与数据（可用环境变量 `ZCBOT_HOME` 指定其它目录）。
-看到 `框架启动完成，等待消息...` 即启动成功。
+首次启动会在 **`~/.zcbot/data`** 下自动生成配置 / 官方插件清单 / 用户插件 / 日志（可用环境变量 `ZCBOT_HOME` 指定其它根目录）。
+看到 `框架启动完成，等待消息...` 即启动成功。pip 安装态自动启用新布局；源码 checkout 的
+旧根目录布局会在启动时自动迁移（默认开启，可在配置里关闭），迁移前后都能正常启动。
 
 升级：`pip install -U zcbot`。
 
@@ -87,10 +108,13 @@ git clone https://gitee.com/liquanfeng123/zcbot.git   # 或 GitHub 镜像
 cd zcbot
 python3 -m venv .venv && source .venv/bin/activate    # Windows: py -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
-python main.py
+python startup.py
 ```
 
-配置与数据落在仓库目录下（行为同旧版）。`requirements.txt` 只装内核必需依赖；
+唯一启动入口是 `startup.py`（`main.py` 仅作兼容 shim，`python main.py` 行为一致）。
+配置与状态默认落在 `data/` 下，插件代码在 `core_plugins/`（内核自带）与 `data/plugins/`（用户插件）；
+源码 checkout 若仍是旧根目录布局，启动时会自动迁移到 `data/`（默认开启，无需手工执行命令；
+`framework.auto_migrate: false` 可关闭）。`requirements.txt` 只装内核必需依赖；
 **官方插件专属依赖在启用该插件后自动补装到当前环境**——`webui` 要 `flask`/`flask-cors`/`waitress`，
 `image_renderer` 要 `Pillow`，`llm_load` 要 `sqlite-vec`，`aiwriter` 要 `textual`。所以上一步的 venv 不是可选项。
 
@@ -99,8 +123,10 @@ python main.py
 > **官方插件默认关闭，但 `echo` / `help` / `scheduler` / `webui` 默认开启。** 需要哪种能力就启用哪个：把 `core_plugins.yaml` 里对应块的 `enabled`
 > 改成 `true`，或运行 `python tools/scan_core_plugins.py --enable <插件名>`，重启生效。
 > `webui` 默认监听 `127.0.0.1:8080`（默认账号 `admin` / `admin123`，**登录后后台会自动建议改密**，一键跳转设置）；
-> 端口与监听地址在 `config.yaml` 的 `web` 段改（`core_plugins.yaml` 里同名键已废弃）。
-> 要收发聊天消息要启用某个接入端（如 `onebot_adapter`），接入端凭证仍写在 `core_plugins.yaml`。
+> `core_plugins.yaml` 只负责官方插件的 `enabled` 开关与插件私有键；端口、监听地址、Token、AppSecret
+> 等运行参数一律写在 `config.yaml` 的对应段（如 `web` / `onebot` / `telegram`），且 `config.yaml` 优先。
+> 启动时会自动把 `core_plugins.yaml` 中与 `config.yaml` 重叠的键收敛掉，两处都写不会生效两次。
+> 要收发聊天消息需启用某个接入端（如 `onebot_adapter`），凭证写在 `config.yaml` 对应段。
 
 更多方式（Docker、反向代理、HTTPS、纯 API 部署）见
 [安装](https://gitee.com/liquanfeng123/zcbot/blob/main/docs/%E6%8C%87%E5%8D%97/%E5%AE%89%E8%A3%85.md) ·
@@ -110,11 +136,12 @@ python main.py
 
 | 接入端 | 说明 |
 | --- | --- |
-| OneBot 11 | 反向 WebSocket，默认接入端（QQ 生态） |
-| QQ 官方 | QQ 开放平台机器人 |
-| Telegram | Bot API |
-| Discord | Bot |
-| 出站 WS / HTTP 注入 / HTTP API | 自定义协议或外部系统对接 |
+| OneBot 11 | 反向 WebSocket（`onebot_adapter`），另有 Rust 加速实现（`rust_accel`，二选一） |
+| 正向 WS | `ws_client`，框架主动连协议端 |
+| QQ 官方 | `qq_official`，QQ 开放平台机器人 |
+| Telegram / Discord | `telegram` / `discord`，Bot API / Gateway |
+| KOOK / Matrix | `kook` / `matrix`，Gateway WS / Client-Server API v3 |
+| HTTP 注入 / HTTP API | `http_inject` 事件注入、`http_api` 对外 REST，可不接任何 IM |
 
 > 不接任何平台也可以：内核可直接跑定时任务、或接收 HTTP 事件。
 

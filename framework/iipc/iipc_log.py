@@ -33,7 +33,8 @@ def _load_log_config(project_root):
     cfg = {}
     try:
         import yaml
-        path = os.path.join(project_root, "config.yaml")
+        from framework.paths import resolve_config_path
+        path = resolve_config_path()
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}

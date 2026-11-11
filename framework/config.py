@@ -326,6 +326,15 @@ scheduler:
 # ── 框架基础约定与限制（framework 段） ────────────────────────
 # 集中管理此前散落或写死的基础约定，统一在此可调；WebUI 也通过本段编辑。
 framework:
+  # ── 状态目录自动迁移（默认开启）──
+  # 启动期探测当前目录是哪一代版本留下的布局；若是旧版根目录布局，自动把
+  # config.yaml / core_plugins.yaml / plugins/ 收敛到 data/。
+  # 约束：绝不覆盖 data/ 下已有文件，绝不改写配置内容，失败不阻断启动。
+  # 想自己管目录就改成 false —— 框架仍兼容读取旧布局，只是不再自动搬。
+  # 临时覆盖（CI / 排障）：环境变量 ZCBOT_AUTO_MIGRATE=0，无需改配置文件。
+  # 手动体检 / 预演：python -m framework.migration --inspect / --dry-run
+  auto_migrate: true
+
   # ── 事件循环卡顿看门狗（诊断）──
   # 阻塞调用会让整个机器人停摆（所有插件 + 所有接入端 + 定时任务），且日志里
   # 通常什么都没有。看门狗周期性测量循环延迟，卡顿超过 threshold 时打 warning
@@ -397,7 +406,7 @@ iipc:
 # ── 调试控制台（无 TTY 也能接进运行中的框架） ──────────────────
 # 启动时在 127.0.0.1 上监听一个本地端口，端口与超长随机 token 自动生成并
 # 存入数据库（console_access 表），无需重启、无需 TTY（systemd 托管场景）。
-# 本地执行 `python main.py attach` 即可接入，直接使用框架的终端命令
+# 本地执行 `python startup.py attach` 即可接入，直接使用框架的终端命令
 # （help / status / plugins / reload / ...）。
 console:
   enabled: true              # 是否启用本地调试控制台
@@ -463,38 +472,26 @@ def _env_replace(value):
 
 
 def get_code_root() -> str:
-    """代码根目录：包含 framework/ 的目录（源码模式=仓库根；pip 模式=site-packages）。"""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """代码根目录：统一委托 framework.paths，避免与 __file__ 上溯口径分叉。"""
+    from framework.paths import code_root
+    return code_root()
 
 
 def _in_site_packages(path: str) -> bool:
-    try:
-        import sysconfig
-        p = os.path.abspath(path)
-        for key in ('purelib', 'platlib'):
-            d = sysconfig.get_paths().get(key)
-            if d and p.startswith(os.path.abspath(d)):
-                return True
-    except Exception:
-        pass
-    return False
+    """向后兼容保留；判定逻辑已迁到 framework.paths。"""
+    from framework.paths import _in_site_packages as _impl
+    return _impl(path)
 
 
 def get_home() -> str:
-    """可写状态目录：config.yaml / core_plugins.yaml / data / logs 都落在这里。
+    """可写状态根目录：统一委托 framework.paths.home_dir()。
 
-    解析顺序：
-    1. 环境变量 ZCBOT_HOME（显式指定，最高优先）；
-    2. 代码在 site-packages 内（pip 安装）→ ~/.zcbot；
-    3. 否则（源码方式运行）→ 代码根，行为与旧版完全一致。
+    解析顺序仍是 ZCBOT_HOME > ~/.zcbot（pip 安装态）> 代码根（源码运行），
+    但只保留一处实现，且由 ``resolve_config_path()`` 决定配置/插件是否落在
+    ``<home>/data/``（新布局）还是 ``<home>/`` 根（旧布局兼容）。
     """
-    env = os.environ.get('ZCBOT_HOME')
-    if env:
-        return os.path.abspath(env)
-    root = get_code_root()
-    if _in_site_packages(root):
-        return os.path.join(os.path.expanduser('~'), '.zcbot')
-    return root
+    from framework.paths import home_dir
+    return home_dir()
 
 
 def _generate_default_config(config_path: str):
@@ -757,7 +754,8 @@ def load_config(config_path: str = None) -> dict:
     如果配置文件不存在，自动生成默认配置并加载
     """
     if config_path is None:
-        config_path = os.path.join(get_home(), 'config.yaml')
+        from framework.paths import resolve_config_path
+        config_path = resolve_config_path()
 
     if not os.path.isfile(config_path):
         _get_logger().warning(f"配置文件不存在，正在生成默认配置: {config_path}")
@@ -828,8 +826,8 @@ def get_config() -> dict:
 # 注：支持环境变量 ZCBOT_CORE_PLUGINS_YAML 覆盖路径（黑盒测试启动器
 # tests/webui_blackbox_launcher.py 借此把插件配置指向一份隔离副本，
 # 从而在不改动真实仓库的前提下自定义 webui 监听端口等）。
-CORE_PLUGINS_YAML = os.environ.get('ZCBOT_CORE_PLUGINS_YAML') or os.path.join(
-    get_home(), 'core_plugins.yaml')
+from framework.paths import core_plugins_yaml_path as _core_plugins_yaml_path  # noqa: E402
+CORE_PLUGINS_YAML = _core_plugins_yaml_path()
 
 
 # 官方插件 → 主 config 段名映射（仅列段名与插件名不同的）
@@ -931,9 +929,9 @@ DEFAULT_ENABLED_CORE_PLUGINS = {'echo', 'help', 'scheduler', 'webui'}
 
 
 def _scan_core_plugins() -> list:
-    """扫描 core_plugins/ 目录，返回已安装（含 main.py）的官方插件名列表"""
-    plugins_dir = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), 'core_plugins')
+    """扫描内核自带插件目录，返回已安装（含 main.py）的官方插件名列表。"""
+    from framework.paths import core_plugins_dir
+    plugins_dir = core_plugins_dir()
     names = []
     if os.path.isdir(plugins_dir):
         for name in os.listdir(plugins_dir):
@@ -1158,7 +1156,8 @@ def set_core_plugin_enabled(name: str, enabled: bool):
 def _core_plugin_desc(name: str):
     """从 core_plugins/<name>/main.py 的 __plugin_meta__ 读取 desc（AST 静态解析，不执行代码）。"""
     import ast as _ast
-    path = os.path.join(get_home(), 'core_plugins', name, 'main.py')
+    from framework.paths import core_plugins_dir
+    path = os.path.join(core_plugins_dir(), name, 'main.py')
     try:
         with open(path, 'r', encoding='utf-8') as f:
             txt = f.read()

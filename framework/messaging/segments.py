@@ -163,6 +163,17 @@ _CQ_UNESCAPE = (
     ('&#44;', ','), ('&#91;', '['), ('&#93;', ']'), ('&amp;', '&'),
 )
 
+# 第 5 轮：CQ 码解析与段归一化此前完全无上限。实测 5 万个 CQ 段会生成
+# 5 万个规范段（parse 475ms + normalize 723ms），单 CQ 码可挂 5000 个参数；
+# 文本里的 [CQ:...] 还会被解析成真实的 at/image 段（CWE-74 注入）。
+# 依据：CWE-400 资源耗尽、OWASP Input Validation（长度/数量上限）。
+_MAX_CQ_INPUT_CHARS = 64 * 1024
+_MAX_CQ_SEGMENTS = 1000
+_MAX_CQ_PARAMS = 100
+_MAX_CQ_VALUE_CHARS = 4096
+_MAX_MESSAGE_SEGMENTS = 1000
+_MAX_MESSAGE_TEXT_CHARS = 64 * 1024
+
 
 def canonical_type(type_name: Any) -> str:
     """把任意协议的段类型名映射到规范类型（无法识别时按原名小写返回）。"""
@@ -294,20 +305,28 @@ def parse_cq(raw: str) -> List[dict]:
     """
     if not isinstance(raw, str) or not raw:
         return []
+    if len(raw) > _MAX_CQ_INPUT_CHARS:
+        raw = raw[:_MAX_CQ_INPUT_CHARS]
     out: List[dict] = []
     last = 0
     for m in _CQ_RE.finditer(raw):
+        if len(out) >= _MAX_CQ_SEGMENTS:
+            break
         head = raw[last:m.start()]
         if head:
             out.append(text(head))
         last = m.end()
         cq_type = canonical_type(m.group(1))
         data: Dict[str, Any] = {}
+        params = 0
         for pair in (m.group(2) or '').split(','):
+            if params >= _MAX_CQ_PARAMS:
+                break
             if not pair or '=' not in pair:
                 continue
             k, _, v = pair.partition('=')
-            data[k.strip()] = _unescape_cq(v)
+            data[k.strip()] = _unescape_cq(v[:_MAX_CQ_VALUE_CHARS])
+            params += 1
         if cq_type == SEG_TEXT:
             out.append(text(data.get('text', '')))
         else:
@@ -359,12 +378,14 @@ def normalize_message(message: Any, parse_string_cq: bool = True) -> List[dict]:
         return [one] if one else []
     if isinstance(message, (list, tuple)):
         out = []
-        for item in message:
+        for item in message[:_MAX_MESSAGE_SEGMENTS]:
             one = normalize_segment(item)
             if one is not None:
                 out.append(one)
         return out
     if isinstance(message, str):
+        if len(message) > _MAX_MESSAGE_TEXT_CHARS:
+            message = message[:_MAX_MESSAGE_TEXT_CHARS]
         if parse_string_cq and '[CQ:' in message:
             return parse_cq(message)
         return [text(message)] if message else []

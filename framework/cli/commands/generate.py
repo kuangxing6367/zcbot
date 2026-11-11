@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""``zb generate`` —— 生成启动脚本。"""
+"""``zb generate`` —— 生成启动脚本（统一指向唯一入口 startup.py）。"""
 import os
 
 from ..utils import PROG
 
 LAUNCHER = '''# -*- coding: utf-8 -*-
-"""启动脚本（由 `{prog} generate` 生成）。"""
+"""启动脚本（由 `{prog} generate` 生成）；启动逻辑统一在 startup.py。"""
 import os
 import sys
 
@@ -13,7 +13,7 @@ _home = os.environ.get("ZCBOT_HOME")
 if _home:
     sys.path.insert(0, _home)
 
-from main import main
+from startup import main
 
 if __name__ == "__main__":
     main()

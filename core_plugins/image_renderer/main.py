@@ -1216,6 +1216,9 @@ class _CanvasPIL:
         return (int(w), int(len(lines) * line_h))
 
     def paste(self, image_bytes, x, y, width=None, height=None):
+        # 修复前这条链路是唯一没有 _guard_image_bytes 前置就直插 Pillow 解码的入口，
+        # 恶意图片可绕过 image_resize/crop 的预算闸门（实测 paste 接受同一批畸形包）。
+        _guard_image_bytes(image_bytes)
         from PIL import Image as PILImage
         from io import BytesIO
         img = PILImage.open(BytesIO(bytes(image_bytes))).convert("RGBA")
@@ -1269,34 +1272,99 @@ def _get_native_or_pil_canvas(width, height, bg_color=None, font_path=None):
 #   2. PIL 的 Image.MAX_IMAGE_PIXELS 是**模块级全局变量**，同进程任何插件都能改掉
 #      （甚至设为 None 直接关死）。在多插件共进程的宿主里不能当作安全边界。
 # 所以在解码之前、与后端无关地做一次尺寸预算检查，超限直接拒绝。
-_MAX_DECODE_BYTES = 512 * 1024 * 1024      # 与原生后端上限对齐
-_MAX_PIXELS = _MAX_DECODE_BYTES // 4       # RGBA：4 字节/像素 → 约 1.34 亿像素
+# 第 5 轮收口：原阈值 1.34 亿像素（512MB 位图）高于 Pillow 自己的
+# DecompressionBombWarning 阈值（89478485 像素），实测 10000²=1 亿像素的
+# 真实解压炸弹被旧 guard 放行、只打一条警告。Pillow 官方明确要求把
+# DecompressionBombWarning 当错误处理，因此预算下调到 4000 万像素。
+_MAX_IMAGE_FILE_BYTES = 20 * 1024 * 1024   # 压缩文件字节上限（解码前）
+_MAX_PIXELS = 40_000_000                   # RGBA 约 160 MB 位图
+_MAX_FRAMES = 200                          # 动画帧数上限（Pillow D-3）
+_ALLOWED_IMAGE_FORMATS = frozenset({'PNG', 'JPEG', 'GIF', 'WEBP', 'BMP'})
+_IMAGE_MAGIC = (b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff',
+                b'GIF87a', b'GIF89a', b'BM')
+# Pillow E-2：EPS 会经 subprocess 调用系统 Ghostscript；SVG/MVG/XXE 属于
+# 活动内容，必须在入口按字节拒绝，不能交给任何后端猜格式。
+_FORBIDDEN_HEAD_MARKERS = (
+    b'<svg', b'<!doctype', b'<!entity', b'<script',
+    b'push graphic-context', b'%!ps', b'xmlns=',
+)
+# 第 6 轮 polyglot 深校验：第 5 轮只扫前 4096 字节，实测仍有两张真实
+# PoC 被放行（EXIF 里的 onerror=、GIF/JS 无 trailer）。依据 Pillow Security
+# Handbook T-1/T-2（元数据传播与隐藏数据通道）、CWE-434 polyglot、
+# 以及「解码后重新编码」之外的轻量替代：整包活动标记 + 格式结束标记校验。
+# 刻意不含 `<%`（实测 8 张正常 fuzz 样本的二进制里会随机出现，会误伤）。
+_FORBIDDEN_CONTENT_MARKERS = (
+    b'<script', b'<svg', b'<?php', b'<!entity', b'onerror=', b'onload=',
+    b'javascript:', b'eval(', b'<html', b'<body',
+    b'push graphic-context', b'%!ps',
+)
 
 
 def _guard_image_bytes(blob):
-    """按文件头尺寸做像素预算检查；超限抛 ValueError，不进入任何解码器。
+    """解码前 fail-closed 校验：长度 / magic / 格式 / 尺寸 / 帧数 / 尾随数据。
 
-    只读头信息（Pillow 的 open 是惰性的），不做像素解码，所以这一步本身开销可忽略。
+    只读文件头（Pillow 的 open 是惰性的），不做像素解码。与旧实现的关键差别：
+    · 旧版 `except Exception: return` 把「读不出尺寸」一律当放行，实测 111 张
+      恶意图片（含 900 亿像素声明、EPS/PostScript、SVG 脚本、MVG、空文件）
+      全部 guard=pass；现在任何失败都拒绝。
+    · 只放行白名单格式；EPS 会触发 Ghostscript subprocess，SVG/MVG/XXE 是活动内容。
+    · DecompressionBombWarning 当错误处理（Pillow Security Handbook D-1）。
+    · 拒绝 PNG IEND 之后的尾随数据（CVE-2023-28303 aCropalypse / CWE-359）。
     """
+    data = blob if isinstance(blob, bytes) else bytes(blob)
+    if not data:
+        raise ValueError('图片为空，已拒绝解码')
+    if len(data) > _MAX_IMAGE_FILE_BYTES:
+        raise ValueError(f'图片文件超过 {_MAX_IMAGE_FILE_BYTES // 1024 // 1024}MB 上限，已拒绝解码')
+    is_webp = data[:4] == b'RIFF' and data[8:12] == b'WEBP'
+    if not (data.startswith(_IMAGE_MAGIC) or is_webp):
+        raise ValueError('不是允许的图片格式（仅 PNG/JPEG/GIF/WEBP/BMP），已拒绝解码')
+    head = data[:4096].lower()
+    for marker in _FORBIDDEN_HEAD_MARKERS:
+        if marker in head:
+            raise ValueError('图片内含脚本/外部实体/PostScript/MVG 内容，已拒绝解码')
     try:
         import warnings
         from PIL import Image as _PILImage
         from io import BytesIO as _BytesIO
-        # 只读文件头时 Pillow 会按它自己的阈值（89478485 像素）打 DecompressionBombWarning。
-        # 这里我们自己有一套明确预算，且此时并未解码，噪音没有意义——抑制掉，
-        # 避免「明明放行了也刷一条警告」。
         with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            with _PILImage.open(_BytesIO(bytes(blob))) as probe:
+            warnings.simplefilter('error', _PILImage.DecompressionBombWarning)
+            with _PILImage.open(_BytesIO(data)) as probe:
+                fmt = (probe.format or '').upper()
                 w, h = probe.size
-    except Exception:
-        return      # 连尺寸都读不出来（损坏/非图片），交给后端报更具体的错
+                frames = int(getattr(probe, 'n_frames', 1) or 1)
+    except Exception as e:
+        raise ValueError(
+            f'图片头解析失败或触发解压炸弹警告，已拒绝解码: {type(e).__name__}') from e
+    if fmt not in _ALLOWED_IMAGE_FORMATS:
+        raise ValueError(f'不允许的图片格式 {fmt!r}，已拒绝解码')
+    if w <= 0 or h <= 0:
+        raise ValueError('图片尺寸非法，已拒绝解码')
     if w * h > _MAX_PIXELS:
         raise ValueError(
-            "图片尺寸过大已拒绝解码：{}×{} = {:.1f} 百万像素，上限 {:.1f} 百万像素"
-            "（约 {}MB 位图）。请先缩小后再处理。".format(
+            '图片尺寸过大已拒绝解码：{}×{} = {:.1f} 百万像素，上限 {:.1f} 百万像素'
+            '（约 {}MB 位图）。请先缩小后再处理。'.format(
                 w, h, w * h / 1e6, _MAX_PIXELS / 1e6,
-                _MAX_DECODE_BYTES // (1024 * 1024)))
+                _MAX_PIXELS * 4 // (1024 * 1024)))
+    if frames > _MAX_FRAMES:
+        raise ValueError(f'动画帧数 {frames} 超过上限 {_MAX_FRAMES}，已拒绝解码')
+    # 全文活动内容扫描：EXIF/XMP/注释区或尾随数据里塞脚本的 polyglot，
+    # 光看前 4096 字节和 magic 是看不出来的（本机两张真实 PoC 实测放行）。
+    low_all = data.lower()
+    for marker in _FORBIDDEN_CONTENT_MARKERS:
+        if marker in low_all:
+            raise ValueError(
+                '图片内嵌脚本/外部实体/活动载荷标记 %r，已拒绝解码' % marker.decode('latin1'))
+    if fmt == 'PNG':
+        iend = data.rfind(b'IEND\xaeB`\x82')
+        if iend < 0 or len(data) - (iend + 8) != 0:
+            raise ValueError('PNG 缺 IEND 或 IEND 后有尾随数据（aCropalypse 残留），已拒绝解码')
+    if fmt == 'JPEG':
+        eoi = data.rfind(b'\xff\xd9')
+        if eoi < 0 or len(data) - (eoi + 2) != 0:
+            raise ValueError('JPEG 缺 EOI 或 EOI 后有尾随数据（polyglot 附加载荷），已拒绝解码')
+    if fmt == 'GIF' and not data.endswith(b'\x3b'):
+        raise ValueError('GIF 缺 trailer 或尾部附加数据（GIF/JS polyglot），已拒绝解码')
 
 
 def image_resize(img_bytes, width, height, keep_ratio=True):

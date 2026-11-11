@@ -62,9 +62,12 @@ def _iter_plugin_dirs(working_dir):
     但其启用态由 ``plugin_enabled_state`` 判定为 False）。
     """
     roots = [
+        (os.path.join(working_dir, "data", "plugins"), "user"),
+        (os.path.join(working_dir, "data", "plugins_disabled"), "user"),
         (os.path.join(working_dir, "plugins"), "user"),
         (os.path.join(working_dir, "plugins_disabled"), "user"),
         (os.path.join(working_dir, "core_plugins"), "core"),
+        (os.path.join(working_dir, "data", "core_plugins"), "core"),
     ]
     for root, kind in roots:
         if not os.path.isdir(root):
@@ -92,7 +95,10 @@ def discover_adapters(working_dir):
 def plugin_enabled_state(working_dir, plugin_id, kind):
     """尽力推断插件启用状态（不依赖运行中的框架）。"""
     if kind == "core":
-        yaml_path = os.path.join(working_dir, "core_plugins.yaml")
+        # 新布局的状态清单在 data/ 下；旧布局仍兼容
+        yaml_path = os.path.join(working_dir, "data", "core_plugins.yaml")
+        if not os.path.isfile(yaml_path):
+            yaml_path = os.path.join(working_dir, "core_plugins.yaml")
         return _yaml_get_enabled(yaml_path, "core_plugins", plugin_id, default=False)
     # 用户插件：默认启用；plugins_disabled/ 中的视为禁用
     if os.path.isdir(os.path.join(working_dir, "plugins_disabled", plugin_id)):

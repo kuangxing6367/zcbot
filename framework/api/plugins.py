@@ -15,6 +15,8 @@ import zipfile
 
 from flask import jsonify, request
 
+from framework.security.archive import SafeArchiveError, safe_extract_zip, validate_zip
+
 logger = logging.getLogger('zcbot')
 
 
@@ -120,6 +122,7 @@ def register(ctx):
 
         target_dir = os.path.join(plugins_dir, plugin_name)
 
+        backup_dir = None
         try:
             file_stream = io.BytesIO(file.read())
 
@@ -129,21 +132,24 @@ def register(ctx):
                 if not has_main:
                     return jsonify({'code': 400, 'msg': 'ZIP 包中未找到 main.py'}), 400
 
+                # 显式前置守卫（保留原有快速拒绝语义），与下方 validate_zip 的
+                # canonical containment / 配额 / 特殊位校验形成双保险。
+                # 共享模块负责更严格的部分：盘符、ADS、Windows 保留名、
+                # NFC+casefold 碰撞、条目数、总展开体积与压缩比。
                 for name in names:
                     if '..' in name or name.startswith('/') or '\\' in name:
                         return jsonify({'code': 400, 'msg': f'非法路径: {name}'}), 400
 
-                for name in names:
-                    try:
-                        info = zf.getinfo(name)
-                        if (info.external_attr >> 16) & 0xF000 == 0xA000:
-                            return jsonify(
-                                {'code': 400, 'msg': f'拒绝解压符号链接: {name}'}
-                            ), 400
-                    except KeyError:
-                        pass
+                # 统一安全校验：路径穿越、盘符/ADS/保留名、symlink/设备位、
+                # NFC+casefold 碰撞、条目数 / 总展开体积 / 压缩比（zip bomb）。
+                # 必须在移走旧目录之前完成，否则校验失败会把旧版插件一起弄丢。
+                try:
+                    archive_stats = validate_zip(zf)
+                except SafeArchiveError as e:
+                    return jsonify({'code': 400, 'msg': f'插件包校验失败: {e}'}), 400
+                logger.info(f"插件包 [{plugin_name}] 校验通过: {archive_stats}")
 
-                backup_dir = None
+                # backup_dir 已在函数开头初始化
                 if os.path.isdir(target_dir):
                     for old in os.listdir(plugins_dir):
                         if old.startswith(plugin_name + '.bak.'):
@@ -158,7 +164,8 @@ def register(ctx):
 
                 os.makedirs(target_dir, exist_ok=True)
 
-                zf.extractall(target_dir)
+                # 已完成 validate_zip；这里只做 canonical containment 复核 + 落盘
+                safe_extract_zip(zf, target_dir, prevalidated=True)
 
                 entries = os.listdir(target_dir)
                 if len(entries) == 1 and os.path.isdir(os.path.join(target_dir, entries[0])):
@@ -212,6 +219,16 @@ def register(ctx):
         except zipfile.BadZipFile:
             return jsonify({'code': 400, 'msg': '无效的 ZIP 文件'}), 400
         except Exception as e:
+            # 解包/加载阶段异常：旧版已移走而新版未落地时必须恢复，
+            # 否则一次畸形包会让插件目录彻底消失（旧实现缺这条回滚）。
+            if backup_dir and os.path.isdir(backup_dir):
+                try:
+                    if os.path.isdir(target_dir):
+                        shutil.rmtree(target_dir, ignore_errors=True)
+                    shutil.move(backup_dir, target_dir)
+                    logger.warning(f"插件 [{plugin_name}] 异常后已恢复旧版")
+                except Exception as restore_err:
+                    logger.error(f"插件 [{plugin_name}] 旧版恢复失败: {restore_err}")
             logger.error(f"上传插件失败: {e}", exc_info=True)
             audit_log(admin['id'], admin['username'], 'upload_plugin',
                       'plugin', plugin_name, None, 'failure', str(e))

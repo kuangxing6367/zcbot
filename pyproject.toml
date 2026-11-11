@@ -2,10 +2,10 @@
 # ZCBOT · pyproject.toml（PEP 621 项目元数据 + 工具配置）
 #
 # 说明：
-# - 本仓库以「源码方式」运行（python main.py）为主，同时支持打包为 wheel
+# - 本仓库以「源码方式」运行（python startup.py）为主，同时支持打包为 wheel
 #   分发（下方 [build-system] + [tool.setuptools] 已声明，可 pip install . 或构建上传 PyPI）。
 # - 依赖有两个入口，内容必须保持同步：
-#     1) requirements.txt —— 传统入口，main.py 启动自检读取的就是它（兼容保留）
+#     1) requirements.txt —— 传统入口，startup.py 启动自检读取的就是它（兼容保留）
 #     2) 本文件 [project.dependencies] / [project.optional-dependencies]
 #   修改依赖时请同时更新两处。
 # - flask/flask-cors/waitress 属于 Web 管理后台可选组（web），
@@ -75,7 +75,7 @@ zcbot = "framework.cli:main"
 
 [tool.setuptools]
 include-package-data = true
-py-modules = ["main", "zb"]
+py-modules = ["startup", "main", "zb"]
 
 [tool.setuptools.packages.find]
 include = ["framework*", "core_plugins*", "plugins*", "sql*"]

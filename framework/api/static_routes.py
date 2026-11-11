@@ -16,8 +16,9 @@ def register(ctx):
     _project_root = ctx._project_root
 
     def _web_root_dir():
-        """前端根目录（框架默认 core_plugins/webui/web/ 目录，由 webui 插件构建产出）"""
-        return os.path.join(_project_root(), 'core_plugins', 'webui', 'web')
+        """WebUI 构建产物目录：统一走 framework.paths（支持内核内嵌插件布局）"""
+        from framework.paths import webui_web_dir
+        return webui_web_dir()
 
     def _override_entry_url() -> str:
         """

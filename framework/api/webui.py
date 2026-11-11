@@ -13,7 +13,8 @@ logger = logging.getLogger('zcbot')
 
 def _read_web_section(framework, project_root) -> dict:
     """直读 config.yaml 的 web 段（保存后即时生效，无需重启）"""
-    path = getattr(framework, 'config_path', None) or os.path.join(project_root(), 'config.yaml')
+    from framework.paths import resolve_config_path
+    path = getattr(framework, 'config_path', None) or resolve_config_path()
     try:
         if os.path.isfile(path):
             with open(path, 'r', encoding='utf-8') as f:

@@ -68,11 +68,12 @@ def register(ctx):
                     asyncio.run(framework.stop())
             except Exception:
                 pass
-            # os.execv 用当前 Python 解释器重载 main.py，原地替换进程
+            # os.execv 用当前 Python 解释器重载唯一入口 startup.py，原地替换进程
+            from framework.paths import code_root
             python = sys.executable
-            main_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'main.py')
-            os.chdir(os.path.dirname(main_py))
-            os.execv(python, [python, main_py] + sys.argv[1:])
+            entry = os.path.join(code_root(), 'startup.py')
+            os.chdir(os.path.dirname(entry))
+            os.execv(python, [python, entry] + sys.argv[1:])
 
         threading.Thread(target=_do_restart, daemon=False).start()
         return jsonify({'code': 0, 'msg': '框架正在重启...'})

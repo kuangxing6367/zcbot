@@ -2,13 +2,14 @@
 import argparse
 import os
 
-# framework/bootstrap/console_attach.py 上溯三级即项目根
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from framework.paths import code_root, resolve_config_path
+
+_PROJECT_ROOT = code_root()
 
 
 def resolve_db_config(config_path=None):
     """从 config.yaml 解析 database 段（dict 或 sqlite 路径字符串）。"""
-    path = config_path or os.path.join(_PROJECT_ROOT, 'config.yaml')
+    path = resolve_config_path(config_path)
     db = None
     try:
         import yaml
@@ -44,7 +45,7 @@ def run_attach(argv):
     from framework.console_server import ConsoleClient
 
     ap = argparse.ArgumentParser(
-        prog='python main.py attach',
+        prog='python startup.py attach',
         description='接入运行中的 ZCBOT 调试控制台（无需 TTY / 无需重启）')
     ap.add_argument('--config', default=None, help='config.yaml 路径')
     ap.add_argument('--db', default=None, help='SQLite 库路径（覆盖配置）')

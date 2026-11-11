@@ -11,6 +11,12 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from framework.security.hardening import (
+    DEFAULT_MAX_BODY_BYTES, DEFAULT_READ_TIMEOUT, InputRejected,
+    apply_socket_timeout, coerce_int, coerce_sql_params, coerce_text,
+    read_request_body, strict_json_object, token_ok,
+)
+
 logger = logging.getLogger('zcbot')
 
 __plugin_meta__ = {
@@ -29,23 +35,34 @@ class ApiHandler(BaseHTTPRequestHandler):
     framework = None
     token = ""
     allow_db = False
+    max_body_bytes = DEFAULT_MAX_BODY_BYTES
+    read_timeout = DEFAULT_READ_TIMEOUT
+    # 默认不再向任意来源反射 CORS；需要跨域时由 register() 显式配置白名单
+    cors_origin = ""
+
+    def setup(self):
+        super().setup()
+        apply_socket_timeout(self, self.read_timeout)
 
     def log_message(self, format, *args):
         """禁用默认日志"""
         pass
 
     def _send_json(self, code, data):
+        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Content-Length', str(len(body)))
+        if self.cors_origin:
+            self.send_header('Access-Control-Allow-Origin', self.cors_origin)
         self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
+        self.wfile.write(body)
 
     def _check_token(self):
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
         token = params.get('token', [''])[0]
-        if not token or token != self.token:
+        if not token or not token_ok(token, self.token):
             self._send_json(401, {'ok': False, 'error': 'token 无效'})
             return False
         return True
@@ -57,35 +74,41 @@ class ApiHandler(BaseHTTPRequestHandler):
         return path, params
 
     def _read_body(self):
-        length = int(self.headers.get('Content-Length', 0))
-        if length == 0:
+        # 旧实现 int(Content-Length) 未校验：负数/超大值挂起线程，
+        # 非数字抛未捕获异常；且 json.loads 默认接受 NaN/Infinity 与重复键
+        # read_request_body 会在超限时先排空 body 再抛 413，保证客户端能收到响应
+        raw = read_request_body(self, self.max_body_bytes)
+        if not raw:
             return {}
-        body = self.rfile.read(length)
-        return json.loads(body.decode('utf-8'))
+        return strict_json_object(raw, self.max_body_bytes)
 
     def do_GET(self):
         path, params = self._parse_path()
-
-        if path == 'status':
-            if not self._check_token():
-                return
-            self._handle_status()
-        elif path == 'plugins':
-            if not self._check_token():
-                return
-            self._handle_plugins()
-        elif path == 'users':
-            if not self._check_token():
-                return
-            self._handle_users(params)
-        elif path == 'groups':
-            if not self._check_token():
-                return
-            self._handle_groups()
-        elif path == 'help':
-            self._handle_help()
-        else:
-            self._send_json(404, {'ok': False, 'error': f'未知路径: {path}'})
+        # 统一兜底：任何处理函数里的类型异常都不能冒泡到 socketserver
+        # （实测 `?limit=20;DROP` 会让 BaseHTTPRequestHandler 直接断连、零响应）。
+        try:
+            if path == 'status':
+                if not self._check_token():
+                    return
+                self._handle_status()
+            elif path == 'plugins':
+                if not self._check_token():
+                    return
+                self._handle_plugins()
+            elif path == 'users':
+                if not self._check_token():
+                    return
+                self._handle_users(params)
+            elif path == 'groups':
+                if not self._check_token():
+                    return
+                self._handle_groups()
+            elif path == 'help':
+                self._handle_help()
+            else:
+                self._send_json(404, {'ok': False, 'error': f'未知路径: {path}'})
+        except (ValueError, TypeError, OverflowError):
+            self._send_json(400, {'ok': False, 'error': '请求参数类型不合法'})
 
     def do_POST(self):
         path, params = self._parse_path()
@@ -95,42 +118,49 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         try:
             body = self._read_body()
-        except Exception:
-            self._send_json(400, {'ok': False, 'error': 'JSON 解析失败'})
+        except InputRejected as e:
+            self._send_json(e.code, {'ok': False, 'error': str(e)})
+            return
+        except (OSError, TimeoutError, ValueError) as e:
+            self._send_json(400, {'ok': False, 'error': 'JSON 解析失败: %s' % type(e).__name__})
             return
 
-        if path == 'sendmsg':
-            self._handle_sendmsg(body)
-        elif path == 'send_private_msg':
-            self._handle_send_private_msg(body)
-        elif path == 'send_group_msg':
-            self._handle_send_group_msg(body)
-        elif path == 'kick':
-            self._handle_kick(body)
-        elif path == 'ban':
-            self._handle_ban(body)
-        elif path == 'unban':
-            self._handle_unban(body)
-        elif path == 'broadcast':
-            self._handle_broadcast(body)
-        elif path == 'reload':
-            self._handle_reload()
-        elif path == 'db/query':
-            if not self.allow_db:
-                self._send_json(403, {'ok': False, 'error': '数据库网关未开启（http_api.allow_db 默认 false）'})
-                return
-            self._handle_db_query(body)
-        elif path == 'db/execute':
-            if not self.allow_db:
-                self._send_json(403, {'ok': False, 'error': '数据库网关未开启（http_api.allow_db 默认 false）'})
-                return
-            self._handle_db_execute(body)
-        else:
-            self._send_json(404, {'ok': False, 'error': f'未知路径: {path}'})
+        try:
+            if path == 'sendmsg':
+                self._handle_sendmsg(body)
+            elif path == 'send_private_msg':
+                self._handle_send_private_msg(body)
+            elif path == 'send_group_msg':
+                self._handle_send_group_msg(body)
+            elif path == 'kick':
+                self._handle_kick(body)
+            elif path == 'ban':
+                self._handle_ban(body)
+            elif path == 'unban':
+                self._handle_unban(body)
+            elif path == 'broadcast':
+                self._handle_broadcast(body)
+            elif path == 'reload':
+                self._handle_reload()
+            elif path == 'db/query':
+                if not self.allow_db:
+                    self._send_json(403, {'ok': False, 'error': '数据库网关未开启（http_api.allow_db 默认 false）'})
+                    return
+                self._handle_db_query(body)
+            elif path == 'db/execute':
+                if not self.allow_db:
+                    self._send_json(403, {'ok': False, 'error': '数据库网关未开启（http_api.allow_db 默认 false）'})
+                    return
+                self._handle_db_execute(body)
+            else:
+                self._send_json(404, {'ok': False, 'error': f'未知路径: {path}'})
+        except (ValueError, TypeError, OverflowError):
+            self._send_json(400, {'ok': False, 'error': '请求参数类型不合法'})
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        if self.cors_origin:
+            self.send_header('Access-Control-Allow-Origin', self.cors_origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
@@ -187,7 +217,15 @@ class ApiHandler(BaseHTTPRequestHandler):
         self._send_json(200, {'ok': True, 'data': result})
 
     def _handle_users(self, params):
-        limit = int(params.get('limit', ['20'])[0])
+        # ASVS 5.1.4 / API4:2023：limit 必须是有界正整数。旧实现直接 int()
+        # 再 f-string 拼进 SQL：畸形值抛未捕获 ValueError（连接直接断、零响应），
+        # -1 与 10^20 这类值虽被 int() 挡下注入字符，却完全没有上界。
+        raw = params.get('limit', ['20'])
+        limit = coerce_int(raw[0] if isinstance(raw, list) and raw else None,
+                           minimum=1, maximum=1000)
+        if limit is None:
+            self._send_json(400, {'ok': False, 'error': 'limit 必须是 1..1000 的整数'})
+            return
         rows = self.framework.db.query(
             f"SELECT user_id, nickname, last_active_at FROM users ORDER BY last_active_at DESC LIMIT {limit}"
         )
@@ -204,27 +242,31 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _handle_sendmsg(self, body):
         user_id = body.get('user_id')
         group_id = body.get('group_id')
-        message = body.get('message', '')
-        if not message:
-            self._send_json(400, {'ok': False, 'error': 'message 不能为空'})
+        if not coerce_text(body.get('message', '')):
+            self._send_json(400, {'ok': False, 'error': 'message 不能为空或超长'})
             return
-        self._do_send(user_id, group_id, message)
+        uid = coerce_int(user_id, minimum=0) if user_id not in (None, '') else None
+        gid = coerce_int(group_id, minimum=0) if group_id not in (None, '') else None
+        if (user_id not in (None, '') and uid is None) or (group_id not in (None, '') and gid is None):
+            self._send_json(400, {'ok': False, 'error': 'user_id / group_id 必须是非负整数'})
+            return
+        self._do_send(uid, gid, body['message'])
 
     def _handle_send_private_msg(self, body):
-        user_id = body.get('user_id')
-        message = body.get('message', '')
-        if not user_id or not message:
-            self._send_json(400, {'ok': False, 'error': 'user_id 和 message 不能为空'})
+        message = coerce_text(body.get('message', ''))
+        user_id = coerce_int(body.get('user_id'), minimum=0)
+        if not message or user_id is None:
+            self._send_json(400, {'ok': False, 'error': 'user_id 和 message 不能为空或不合法'})
             return
-        self._do_send(int(user_id), None, message)
+        self._do_send(user_id, None, message)
 
     def _handle_send_group_msg(self, body):
-        group_id = body.get('group_id')
-        message = body.get('message', '')
-        if not group_id or not message:
-            self._send_json(400, {'ok': False, 'error': 'group_id 和 message 不能为空'})
+        message = coerce_text(body.get('message', ''))
+        group_id = coerce_int(body.get('group_id'), minimum=0)
+        if not message or group_id is None:
+            self._send_json(400, {'ok': False, 'error': 'group_id 和 message 不能为空或不合法'})
             return
-        self._do_send(None, int(group_id), message)
+        self._do_send(None, group_id, message)
 
     def _do_send(self, user_id, group_id, message):
         # 优先中立 send_text（协议翻译在适配器内），无则回落通用 send_msg 动作
@@ -266,10 +308,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_kick(self, body):
-        group_id = body.get('group_id')
-        user_id = body.get('user_id')
-        if not group_id or not user_id:
-            self._send_json(400, {'ok': False, 'error': 'group_id 和 user_id 不能为空'})
+        group_id = coerce_int(body.get('group_id'), minimum=1)
+        user_id = coerce_int(body.get('user_id'), minimum=1)
+        if group_id is None or user_id is None:
+            self._send_json(400, {'ok': False, 'error': 'group_id 和 user_id 不能为空或不合法'})
             return
         api = self.framework.services.get('api_caller')
         if not api:
@@ -278,8 +320,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         async def _kick():
             result = await api.acall('set_group_kick',
-                                     group_id=int(group_id),
-                                     user_id=int(user_id))
+                                     group_id=group_id,
+                                     user_id=user_id)
             if isinstance(result, dict) and result.get('status') == 'failed':
                 raise RuntimeError(result.get('msg') or 'set_group_kick 失败')
             return result
@@ -292,11 +334,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_ban(self, body):
-        group_id = body.get('group_id')
-        user_id = body.get('user_id')
-        duration = body.get('duration', 600)
-        if not group_id or not user_id:
-            self._send_json(400, {'ok': False, 'error': 'group_id 和 user_id 不能为空'})
+        group_id = coerce_int(body.get('group_id'), minimum=1)
+        user_id = coerce_int(body.get('user_id'), minimum=1)
+        # 上限 30 天：旧实现 int(duration) 无上界，10^30 会一路传给协议端
+        duration = coerce_int(body.get('duration', 600), minimum=0, maximum=2592000)
+        if group_id is None or user_id is None or duration is None:
+            self._send_json(400, {'ok': False, 'error': 'group_id / user_id / duration 不合法'})
             return
         api = self.framework.services.get('api_caller')
         if not api:
@@ -305,9 +348,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         async def _ban():
             result = await api.acall('set_group_ban',
-                                     group_id=int(group_id),
-                                     user_id=int(user_id),
-                                     duration=int(duration))
+                                     group_id=group_id,
+                                     user_id=user_id,
+                                     duration=duration)
             if isinstance(result, dict) and result.get('status') == 'failed':
                 raise RuntimeError(result.get('msg') or 'set_group_ban 失败')
             return result
@@ -320,10 +363,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_unban(self, body):
-        group_id = body.get('group_id')
-        user_id = body.get('user_id')
-        if not group_id or not user_id:
-            self._send_json(400, {'ok': False, 'error': 'group_id 和 user_id 不能为空'})
+        group_id = coerce_int(body.get('group_id'), minimum=1)
+        user_id = coerce_int(body.get('user_id'), minimum=1)
+        if group_id is None or user_id is None:
+            self._send_json(400, {'ok': False, 'error': 'group_id 和 user_id 不能为空或不合法'})
             return
         api = self.framework.services.get('api_caller')
         if not api:
@@ -332,8 +375,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         async def _unban():
             result = await api.acall('set_group_ban',
-                                     group_id=int(group_id),
-                                     user_id=int(user_id),
+                                     group_id=group_id,
+                                     user_id=user_id,
                                      duration=0)
             if isinstance(result, dict) and result.get('status') == 'failed':
                 raise RuntimeError(result.get('msg') or 'set_group_ban 失败')
@@ -347,9 +390,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_broadcast(self, body):
-        message = body.get('message', '')
+        message = coerce_text(body.get('message', ''))
         if not message:
-            self._send_json(400, {'ok': False, 'error': 'message 不能为空'})
+            self._send_json(400, {'ok': False, 'error': 'message 不能为空或超长'})
             return
 
         api = self.framework.services.get('api_caller')
@@ -385,26 +428,26 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_db_query(self, body):
-        sql = body.get('sql', '')
-        params = body.get('params', [])
-        if not sql:
-            self._send_json(400, {'ok': False, 'error': 'sql 不能为空'})
+        sql = coerce_text(body.get('sql', ''), max_len=64 * 1024)
+        params = coerce_sql_params(body.get('params', []))
+        if not sql or params is None:
+            self._send_json(400, {'ok': False, 'error': 'sql / params 不合法（params 须为标量数组）'})
             return
         try:
-            rows = self.framework.db.query(sql, tuple(params))
+            rows = self.framework.db.query(sql, params)
             result = [dict(r) for r in rows]
             self._send_json(200, {'ok': True, 'data': result})
         except Exception as e:
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_db_execute(self, body):
-        sql = body.get('sql', '')
-        params = body.get('params', [])
-        if not sql:
-            self._send_json(400, {'ok': False, 'error': 'sql 不能为空'})
+        sql = coerce_text(body.get('sql', ''), max_len=64 * 1024)
+        params = coerce_sql_params(body.get('params', []))
+        if not sql or params is None:
+            self._send_json(400, {'ok': False, 'error': 'sql / params 不合法（params 须为标量数组）'})
             return
         try:
-            affected = self.framework.db.execute(sql, tuple(params))
+            affected = self.framework.db.execute(sql, params)
             self._send_json(200, {'ok': True, 'data': {'affected': affected}})
         except Exception as e:
             self._send_json(500, {'ok': False, 'error': str(e)})
@@ -438,12 +481,16 @@ class ApiHandler(BaseHTTPRequestHandler):
 class HttpApiServer:
     """HTTP API 服务"""
 
-    def __init__(self, framework, host, port, token, allow_db=False):
+    def __init__(self, framework, host, port, token, allow_db=False,
+                 max_body_bytes=None, read_timeout=None, cors_origin=''):
         self.framework = framework
         self.host = host
         self.port = port
         self.token = token
         self.allow_db = allow_db
+        self.max_body_bytes = int(max_body_bytes or DEFAULT_MAX_BODY_BYTES)
+        self.read_timeout = float(read_timeout or DEFAULT_READ_TIMEOUT)
+        self.cors_origin = str(cors_origin or '')
         self._server = None
         self._thread = None
 
@@ -451,7 +498,11 @@ class HttpApiServer:
         ApiHandler.framework = self.framework
         ApiHandler.token = self.token
         ApiHandler.allow_db = self.allow_db
+        ApiHandler.max_body_bytes = self.max_body_bytes
+        ApiHandler.read_timeout = self.read_timeout
+        ApiHandler.cors_origin = self.cors_origin
         self._server = ThreadingHTTPServer((self.host, self.port), ApiHandler)
+        self._server.daemon_threads = True
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True, name="http-api")
         self._thread.start()
 
@@ -485,7 +536,11 @@ def register(ctx):
         ctx.log(f"请在 config.yaml 中设置 http_api.token 以固定令牌")
 
     try:
-        _server = HttpApiServer(fw, host, port, token, allow_db)
+        _server = HttpApiServer(
+            fw, host, port, token, allow_db,
+            max_body_bytes=http_cfg.get('max_body_bytes', DEFAULT_MAX_BODY_BYTES),
+            read_timeout=http_cfg.get('read_timeout', DEFAULT_READ_TIMEOUT),
+            cors_origin=http_cfg.get('cors_origin', ''))
         _server.start()
         fw.services.register('http_api', _server)
         ctx.log(f"HTTP API 已启动: http://{host}:{port}")

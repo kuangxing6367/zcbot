@@ -1,0 +1,140 @@
+# 打 tag → 自动构建 → 发布 PyPI。
+#
+# 触发策略（对应「推送后打 tag 要不要自动触发」）：
+#   · 只有 `v*` tag 推送才自动发布；普通 push / PR 一律不发。
+#     PyPI 的版本一旦上传不可覆盖（SemVer 2.0.0 §3），把发布绑到「打 tag」
+#     这个明确的发布意图，比绑到任意 push 安全得多。
+#   · `workflow_dispatch` 可手动跑构建门禁（默认 dry_run=true，只构建不发布）。
+#   · 发布 job 挂在 GitHub Environment `pypi` 上，建议在该 Environment 开
+#     required reviewers，保留发布前最后一道人工批准。
+#
+# 凭证：**不使用任何长期 API token**。走 PyPI Trusted Publishing（OIDC），
+# 由 `id-token: write` + `pypa/gh-action-pypi-publish` 换取短期令牌。
+# 首次使用需在 PyPI 项目「Publishing → Add a new publisher」登记：
+#   Owner=kuangxing6367 / Repository=zcbot / Workflow=release-pypi.yml / Environment=pypi
+# 因此本文件不含、也永不写入 secrets 或明文凭证。
+name: Release to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只构建和门禁，不发布'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: 版本一致性与启动期门禁
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 版本一致性（tag / VERSION / pyproject.toml）
+        id: version
+        run: |
+          set -euo pipefail
+          V=$(tr -d '[:space:]' < VERSION)
+          P=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "VERSION=$V  pyproject=$P  ref=${GITHUB_REF_NAME:-}"
+          [ "$V" = "$P" ] || { echo "::error::VERSION 与 pyproject.toml 版本不一致"; exit 1; }
+          case "${GITHUB_REF_NAME:-}" in
+            v*)
+              T="${GITHUB_REF_NAME#v}"
+              [ "$T" = "$V" ] || { echo "::error::tag $T 与 VERSION $V 不一致，拒绝发布"; exit 1; }
+              ;;
+            *) echo "非 tag 触发（手动运行），跳过 tag 校验" ;;
+          esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: 编译检查
+        run: python -m compileall -q framework core_plugins tools startup.py main.py zcbot_cli.py
+
+      - name: 迁移子系统只读自检（版本检测 + 代际探测）
+        env:
+          EXPECT_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m framework.migration --inspect --json > /tmp/migration-inspect.json
+          python -c "import json,os; d=json.load(open('/tmp/migration-inspect.json')); v=d['kernel_version']['version']; assert v==os.environ['EXPECT_VERSION'], (v, os.environ['EXPECT_VERSION']); print('kernel', v, 'layout', d['layout']['layout'], 'policy', d['policy']['enabled'])"
+
+  build:
+    name: 构建 sdist / wheel
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build
+
+      - name: Build
+        run: python -m build
+
+      - name: 产物自检（内核迁移子包必须随包分发）
+        run: |
+          set -euo pipefail
+          ls -l dist/
+          W=$(ls dist/*.whl | head -1)
+          python - "$W" <<'PY'
+          import sys, zipfile
+          w = sys.argv[1]
+          names = zipfile.ZipFile(w).namelist()
+          need = ['framework/migration/__init__.py', 'framework/migration/version.py',
+                  'framework/migration/detector.py', 'framework/migration/policy.py',
+                  'framework/migration/migrator.py', 'framework/migration/__main__.py',
+                  'startup.py']
+          missing = [n for n in need if n not in names]
+          assert not missing, 'wheel 缺少: %s' % missing
+          print('wheel OK:', w, '| migration 模块', sum(n.startswith('framework/migration/') for n in names), '个')
+          PY
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: 发布到 PyPI（Trusted Publishing / OIDC）
+    needs: [gate, build]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/zcbot
+    permissions:
+      id-token: write      # OIDC 短期令牌，无需 PYPI_API_TOKEN
+    steps:
+      - name: Download dist
+        uses: actions/download-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: false   # 重复版本必须显式失败，绝不静默吞掉

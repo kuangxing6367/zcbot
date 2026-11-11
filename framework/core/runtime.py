@@ -26,8 +26,8 @@ class FrameworkRuntimeMixin:
         :param only: 只加载这些插件名（依赖自愈后重试单个插件用）；None = 全部。
                      已加载的插件一律跳过，保证可重复调用而不重复 register。
         """
-        core_plugins_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'core_plugins')
+        from framework.paths import core_plugins_dir as _core_plugins_dir
+        core_plugins_dir = _core_plugins_dir()
         if not os.path.isdir(core_plugins_dir):
             logger.warning(f"core_plugins 目录不存在: {core_plugins_dir}")
             return

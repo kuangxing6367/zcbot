@@ -64,7 +64,7 @@ features:
 git clone https://gitee.com/liquanfeng123/zcbot.git
 cd zcbot
 pip install -r requirements.txt
-python main.py
+python startup.py
 ```
 
 看到 `框架启动完成，等待消息...` 即启动成功。没装依赖也能跑：启动时会自动检测并补装缺失包。

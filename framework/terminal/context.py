@@ -2,7 +2,7 @@
 """终端命令的「执行上下文」标记。
 
 有些命令需要真正的交互式 TTY（全屏界面：`code`、内置 `tui` 面板）。当命令是
-经**远程通道**触发的——本地调试控制台（`python main.py attach`）或 HTTP
+经**远程通道**触发的——本地调试控制台（`python startup.py attach`）或 HTTP
 `/api/terminal/exec`——时，进程侧根本没有可用的终端，去启动全屏界面只会得到
 Windows 的 `0xC0000142 (STATUS_DLL_INIT_FAILED)` 之类的失败。
 

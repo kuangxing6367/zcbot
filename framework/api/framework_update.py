@@ -12,6 +12,8 @@ import zipfile
 import requests
 from flask import jsonify, request
 
+from framework.security.archive import FRAMEWORK_UPDATE_LIMITS, SafeArchiveError, safe_extract_zip
+
 logger = logging.getLogger('zcbot')
 
 
@@ -33,7 +35,8 @@ def register(ctx):
     # 不含根目录 'webui' —— 那是闭源前端源码（.gitignore: /webui/），
     # 发布包里本就不该有；线上前端只用 core_plugins/webui/web 构建产物。
     _FW_UPDATE_INCLUDE = {
-        'framework', 'core_plugins', 'core_plugins/webui/web', 'sql', 'main.py', 'requirements.txt',
+        'framework', 'core_plugins', 'core_plugins/webui/web', 'sql',
+        'startup.py', 'main.py', 'requirements.txt',
         'start.sh', '.gitignore', 'README.md', 'LICENSE', 'VERSION', 'CHANGELOG.md',
     }
 
@@ -176,7 +179,7 @@ def register(ctx):
     def update_framework():
         """
         从 GitHub 更新框架源码到指定版本（默认最新 Release）
-        只覆盖框架代码（framework/core_plugins/webui/web/sql/main.py 等），
+        只覆盖框架代码（framework / core_plugins / webui/web / sql / startup.py / main.py 等），
         保留用户数据（plugins/、data/、config.yaml、*.db 等），
         更新后需重启生效。
         请求体可选 version 指定目标版本号（如 1.0.0）。
@@ -213,16 +216,19 @@ def register(ctx):
             tmp_dir = tempfile.mkdtemp(prefix='zcbot_fw_')
             try:
                 with zipfile.ZipFile(tmp_zip, 'r') as zf:
-                    # 安全校验：拒绝路径穿越（../、绝对路径、反斜杠）与符号链接条目
+                    # 显式前置守卫（保留原有快速拒绝语义），与下方共享解包形成双保险。
+                    # safe_extract_zip 负责 canonical containment、盘符/ADS/保留名、
+                    # NFC+casefold 碰撞、条目数与总展开体积、压缩比（zip bomb）。
                     for name in zf.namelist():
-                        if name.endswith('/'):
-                            continue
                         if '..' in name or name.startswith('/') or '\\' in name:
                             raise RuntimeError(f'框架更新 ZIP 含非法路径条目: {name}')
                         info = zf.getinfo(name)
                         if (info.external_attr >> 16) & 0xF000 == 0xA000:
                             raise RuntimeError(f'框架更新 ZIP 拒绝符号链接条目: {name}')
-                    zf.extractall(tmp_dir)
+                    # GitHub archive 包条目远多于插件包，单独放宽配额。
+                    archive_stats = safe_extract_zip(
+                        zf, tmp_dir, limits=FRAMEWORK_UPDATE_LIMITS)
+                    logger.info(f"框架更新 ZIP 校验通过: {archive_stats}")
 
                 # GitHub ZIP 内含一层 repo-tag/ 目录
                 entries = [e for e in os.listdir(tmp_dir) if os.path.isdir(os.path.join(tmp_dir, e))]
@@ -283,6 +289,8 @@ def register(ctx):
                 except Exception:
                     pass
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+        except SafeArchiveError as e:
+            return jsonify({'code': 400, 'msg': f'更新包安全校验失败: {e}'}), 400
         except zipfile.BadZipFile:
             return jsonify({'code': 400, 'msg': '下载的 ZIP 文件无效'}), 400
         except Exception as e:

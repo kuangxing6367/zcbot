@@ -1,6 +1,6 @@
 # IIPC 内核链路（给 LLM）
 
-> 只在 `python main.py --iipc` 时生效。**不带该开关，主框架行为完全不变**——
+> 只在 `python startup.py --iipc` 时生效。**不带该开关，主框架行为完全不变**——
 > 它是与主框架（单进程 / `dual_process` 双进程）**并列的第三条启动路径**，不是替代品。
 
 ## 是什么
@@ -20,7 +20,7 @@
 ## 启动
 
 ```bash
-python main.py --iipc                  # 全栈 + 进入终端
+python startup.py --iipc                  # 全栈 + 进入终端
 python -m framework.iipc --iipc        # 等价
 python -c "from framework.iipc import build; build()"   # 只编译不启动
 ```

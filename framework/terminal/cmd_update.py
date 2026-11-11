@@ -4,6 +4,8 @@
 """
 import os
 
+from framework.security.archive import FRAMEWORK_UPDATE_LIMITS, safe_extract_zip
+
 from .command import terminal_commands
 
 
@@ -56,6 +58,10 @@ def register(fw):
             if resp.status_code != 200:
                 print(f"下载失败: HTTP {resp.status_code}")
                 return
+            # 下载体积上限（旧实现把 resp.content 全量读入内存且无上限）
+            if len(resp.content) > 200 * 1024 * 1024:
+                print("下载失败: 更新包超过 200 MiB 上限")
+                return
         except Exception as e:
             print(f"下载失败: {e}")
             return
@@ -67,13 +73,17 @@ def register(fw):
                 f.write(resp.content)
             tmp_dir = tempfile.mkdtemp(prefix='zcbot_upd_')
             try:
+                # 旧实现是裸 `zf.extractall(tmp_dir)`：无路径校验、无条目数/
+                # 展开体积/压缩比限制，且紧接着 `entries[0]` 在空包上会 IndexError。
+                # 统一走共享安全解包（框架源码包单独放宽配额）。
                 with zipfile.ZipFile(tmp_zip, 'r') as zf:
-                    zf.extractall(tmp_dir)
+                    stats = safe_extract_zip(zf, tmp_dir, limits=FRAMEWORK_UPDATE_LIMITS)
+                print(f"更新包安全校验通过: {stats}")
                 entries = [e for e in os.listdir(tmp_dir) if os.path.isdir(os.path.join(tmp_dir, e))]
-                src_root = os.path.join(tmp_dir, entries[0]) if entries[0] else tmp_dir
+                src_root = os.path.join(tmp_dir, entries[0]) if entries else tmp_dir
 
                 root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                include = {'framework', 'core_plugins', 'core_plugins/webui/web', 'webui', 'sql', 'main.py', 'requirements.txt', 'VERSION', 'CHANGELOG.md', 'README.md', 'start.sh'}
+                include = {'framework', 'core_plugins', 'core_plugins/webui/web', 'webui', 'sql', 'startup.py', 'main.py', 'requirements.txt', 'VERSION', 'CHANGELOG.md', 'README.md', 'start.sh'}
                 updated = []
                 for name in os.listdir(src_root):
                     if name not in include:
@@ -90,7 +100,7 @@ def register(fw):
                     updated.append(name)
 
                 print(f"更新完成！共更新 {len(updated)} 项: {', '.join(updated)}")
-                print("请重启框架生效: python main.py")
+                print("请重启框架生效: python startup.py")
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
         except Exception as e:

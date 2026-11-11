@@ -3,7 +3,7 @@
 """IIPC 启动器（zcbot_go/python_side/iipc/launcher.py）
 
 拓扑（对应用户定稿）：
-    python main.py -iipc
+    python startup.py -iipc
       └─ 本启动器：日志总出口 + 终端交互（不承载业务）
           ├─ Go 内核（iipc/go_kernel/zcbot_kernel[.exe]）：事件总线 / SQLite / 插件编排
           ├─ Rust 协议端（core_plugins/IIPC_onebot_adapter/）：OneBot 协议层，连入内核
@@ -73,7 +73,8 @@ def _load_iipc_config():
     }
     try:
         import yaml
-        path = os.path.join(ROOT, "config.yaml")
+        from framework.paths import resolve_config_path
+        path = resolve_config_path()
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
                 cfg = (yaml.safe_load(f) or {}).get("iipc") or {}
@@ -520,7 +521,7 @@ def main(argv=None):
     a = ap.parse_args(argv if argv is not None else sys.argv[1:])
 
     if not a.iipc:
-        log("launcher", "用法: python main.py -iipc")
+        log("launcher", "用法: python startup.py -iipc")
         return
 
     # 命令行未显式给出时，回落到 config.yaml / 环境变量 / 内置默认

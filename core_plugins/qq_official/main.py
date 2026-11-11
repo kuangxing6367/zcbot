@@ -44,6 +44,7 @@ import requests
 import websockets
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.security.hardening import sanitize_adapter_event
 from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
@@ -1088,6 +1089,8 @@ class QQOfficialAdapter(ProtocolAdapter):
             event = normalize_event(wrapped, self.bot_name)
             if event is None:
                 continue
+            # 入站统一净化：剥顶层注入字段、强制归属为当前接入端。
+            event = sanitize_adapter_event(event, self.bot_name)
             try:
                 await self.framework.dispatch_event(event)
             except Exception as e:
@@ -1119,6 +1122,8 @@ class QQOfficialAdapter(ProtocolAdapter):
         event = normalize_interaction({'d': d}, self.bot_name)
         if event is None:
             return
+        # 入站统一净化：互动事件同样来自不可信网关。
+        event = sanitize_adapter_event(event, self.bot_name)
         try:
             await self.framework.dispatch_event(event)
         except Exception as e:
@@ -1139,6 +1144,8 @@ class QQOfficialAdapter(ProtocolAdapter):
                                  _LIFECYCLE_EVENTS[event_t], event_t)
         if event is None:
             return
+        # 入站统一净化：生命周期事件同样来自不可信网关。
+        event = sanitize_adapter_event(event, self.bot_name)
         logger.info('qq_official 生命周期事件: %s (%s)',
                     event_t, event.get('group_id') or event.get('user_id'))
         try:

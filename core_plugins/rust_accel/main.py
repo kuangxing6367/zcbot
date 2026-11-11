@@ -31,7 +31,15 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+from framework.security.hardening import (
+    InputRejected, sanitize_adapter_event, strict_json_object,
+)
+
 logger = logging.getLogger('zcbot')
+
+# IPC 单行上限：读循环用 asyncio.StreamReader（默认 64 KiB 行限制）取行，
+# 桥接层再显式限一次，避免与 Rust 侧允许的帧长不一致时出现无界拼接。
+_MAX_IPC_LINE_BYTES = 1024 * 1024
 
 __plugin_meta__ = {
     "name": "Rust 加速层",
@@ -405,11 +413,16 @@ class RustAccelService:
                         pass
 
     def _handle_line(self, line: str):
-        """IPC 行分发（事件循环线程执行）"""
+        """IPC 行分发（事件循环线程执行）
+
+        IPC 端口只绑 127.0.0.1 且没有鉴权，同机任意进程都能投递一行 JSON；
+        因此按对待外部输入的标准解析：拒绝 NaN/Infinity、重复键、顶层标量、
+        非法 UTF-8、孤立代理与超长行（RFC 8259 / ASVS 5.1.3）。
+        """
         try:
-            msg = json.loads(line)
-        except ValueError:
-            logger.warning(f"[rust_accel] IPC 非 JSON 行: {line[:200]}")
+            msg = strict_json_object(line, max_bytes=_MAX_IPC_LINE_BYTES)
+        except InputRejected as e:
+            logger.warning('[rust_accel] IPC 行被拒绝 (%s): %s', e, line[:120])
             return
         t = msg.get('type')
         if t == 'event':
@@ -432,10 +445,28 @@ class RustAccelService:
             logger.warning(f"[rust_accel] {msg.get('reason', msg)}")
         # hello / conn_list 由启动与查询路径处理，此处忽略
 
+    def _trusted_bot_name(self, event: dict) -> str:
+        """归属只能来自 Rust 侧 `conn` 上报的已连接 bot 名，不接受事件自报。
+
+        Rust normalizer（rust_accel/src/normalize.rs:134）用服务端 self_id 写
+        bot_name，并经 `conn.state=up` 登记进 self._bots。事件里自带的同名字段
+        属于外部可控输入，不能当身份用（CWE-915 / OWASP API3:2023）。
+        """
+        declared = event.get('bot_name')
+        known = getattr(self, '_bots', None) or {}
+        if isinstance(declared, str) and declared in known:
+            return declared
+        return 'rust_accel'
+
     def _spawn_dispatch(self, event: Any):
         if not isinstance(event, dict):
             return
         fw = self.framework
+        # 与其余 8 个接入端同一净化口径：剥顶层内部控制字段、限制深度/长度、
+        # 重建 sender 白名单并强制 bot_name。此前本入口是唯一「零净化直投」的
+        # dispatch_event 调用点，实测 12 个伪造字段（role/permissions/token/
+        # bot_name…）可原样进入事件流。
+        event = sanitize_adapter_event(event, self._trusted_bot_name(event))
         try:
             task = asyncio.get_running_loop().create_task(fw.dispatch_event(event))
         except Exception as e:

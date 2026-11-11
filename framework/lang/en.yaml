@@ -21,7 +21,7 @@ webui:
   started: 'Web UI started: {url}'
 
 console:
-  ready: 'Debug console ready: {addr} (token {bits} bits, credentials stored in DB console_access; run `python main.py attach` locally)'
+  ready: 'Debug console ready: {addr} (token {bits} bits, credentials stored in DB console_access; run `python startup.py attach` locally)'
 
 terminal:
   skipped: 'Terminal interaction skipped: stdin is not an interactive terminal (CI/daemon/redirected); commands still available via API/IPC'

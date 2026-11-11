@@ -21,9 +21,9 @@ def apply_allocator_policy():
     alloc = 'auto'
     try:
         import yaml
-        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                '..', '..', 'config.yaml')
-        cfg_path = os.path.abspath(cfg_path)
+        # 与启动入口共用同一路径解析（支持 <home>/data/config.yaml 新布局）
+        from framework.paths import resolve_config_path
+        cfg_path = resolve_config_path()
         if os.path.isfile(cfg_path):
             with open(cfg_path, 'r', encoding='utf-8') as f:
                 cfg = yaml.safe_load(f) or {}

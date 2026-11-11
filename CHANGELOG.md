@@ -26,6 +26,111 @@
 
 ---
 
+## 开发中（未发布 · 打磨小修）
+
+> 主题：**入口、路径、面板口径三处收口，再按公认测试法把畸形输入跑遍全部接入端**。
+> 本节为在研变化，未打 Tag、未发版；版本号仍为 `VERSION` 里的 1.21.0。
+
+### 启动入口
+
+- 新增 `startup.py` 作为**唯一权威启动入口**；`main.py` 退化为兼容 shim，保留全部原有
+  再导出符号与 `python main.py` 的行为。CLI 帮助、`zb run/generate` 默认文件、`pyproject.toml`
+  的 `py-modules`、热重载 `os.execv`、文档与三语包文案统一指向 `startup.py`。
+
+### 状态目录
+
+- 新增 `framework/paths.py` 统一解析「代码根 / 可写 home / 状态目录」。新布局下
+  `config.yaml`、`core_plugins.yaml`、`plugins/`、`logs/` 统一落在 `data/`（pip 安装态
+  自动启用，即 `~/.zcbot/data`）；官方插件代码属于内核，固定由 `core_plugins/` 解析。
+- 全仓 20+ 处硬编码路径（bootstrap / api / cli / iipc / terminal / deps / 更新器）改走
+  统一解析层；旧根目录布局保留回退，源码 checkout 由内核迁移子系统自动收敛到 `data/`。
+- 旧脚本 `tools/migrate_state_to_data.py` 退为兼容入口，不再承载任何迁移逻辑。
+
+### 状态目录自动迁移（内核内置）
+
+迁移能力从 `tools/` 脚本上收为内核子系统 `framework/migration/`，按职责拆开：
+
+| 模块 | 职责 |
+| --- | --- |
+| `version.py` | 当前内核版本检测：VERSION → pyproject，SemVer 2.0.0 解析 / 优先层级比较、两处版本来源漂移检查 |
+| `detector.py` | 探测当前目录**可能**是哪一代版本留下的布局（root / data / mixed / empty / missing / unknown），输出磁盘证据、候选版本区间与置信度 |
+| `policy.py` | 自动迁移开关：**默认开启**，由 `config.yaml` 的 `framework.auto_migrate` 决定，只读绝不改写配置 |
+| `migrator.py` | 幂等执行 + 账本 + 并发锁 + 启动钩子 |
+| `__main__.py` | `python -m framework.migration --inspect` / `--dry-run` 命令行 |
+
+- **方向是向后兼容**：新内核接住旧版本留下的目录布局，不要求旧版本能读新布局。
+  候选版本区间取自本仓库 `CHANGELOG.md` 的真实记录（`1.8.9..1.20.2` 根目录布局、
+  `>=1.21.0` 新 `data/` 布局；`1.8.9` 之前没有逐版本目录记录，只给低置信度「早期版本」），
+  **不假装能精确报出版本号**。
+- **自动迁移默认开启**：启动链路在 `load_config()` 之前调用 `ensure_auto_migrated()`；
+  `--help` / `--version` / `config` / `attach` / `code` 等纯查询子命令不触发。
+  手动关闭：在 `config.yaml` 的 `framework` 段写 `auto_migrate: false`；
+  运维临时覆盖：`ZCBOT_AUTO_MIGRATE=0`。
+- **账本与幂等**：`data/.zcbot-state-migration.json` 记录内核版本、探测到的代际、
+  候选区间、逐项动作与 sha256 校验和；账本损坏不据此跳过迁移；已 `applied` 且无待办
+  动作时重复启动零写盘；中途失败写 `partial`，下次启动按账本判定已完成项继续，
+  不重复搬也不覆盖。`data/.zcbot-state-migration.lock` 防多进程并发，陈旧锁超时回收。
+  做法对齐 Flyway 的 `schema_history` / `baselineOnMigrate` / 开机自动迁移语义。
+- **三条硬约束**：只搬 `config.yaml` / `core_plugins.yaml` / `plugins/`，绝不碰代码资产；
+  绝不覆盖 `data/` 下已有文件（新旧并存时默认要求人工确认）；用 `shutil.move`
+  **绝不改写配置文件的任何字节**。迁移失败不阻断启动，旧布局仍由 `framework.paths` 兼容读取。
+
+### 接入端与 Web 后台
+
+- 配置面板 `_YAML_SECTIONS` 补齐 11 个此前「配置项存在、面板改不了」的顶层段
+  （`startup` / `language` / `iipc` / `memory` / `dual_process` / `event_queue` /
+  `multi_platform` / `github_proxy` / `terminal` / `console` / `dependencies`），
+  实测可写段 29 → 40、`config.yaml` 顶层段不可写数 11 → 0。
+- README 与 `docs/进阶/扩展清单.md` 补齐全部 10 个接入端
+  （OneBot / Rust 加速 / 正向 WS / QQ 官方 / Telegram / Discord / KOOK / Matrix /
+  HTTP 注入 / HTTP API），并纠正 `config.yaml` 与 `core_plugins.yaml` 的权威口径。
+
+### 畸形输入与漏洞修复
+
+按 OWASP WSTG 4.2 / ASVS 5.1 / OWASP API Top 10 2023 的输入验证与属性级授权方法，
+对全部接入端入口构造通配、类型混淆、越界数值与注入载荷逐条真跑，修复：
+
+- `http_api`：`?limit=` 直接 `int()` 再拼进 SQL，畸形值导致连接直接断开零响应、
+  `-1` / `10^20` 无上界；消息 / 群管 / 广播 / DB 网关接口的 `message`、`*_id`、`duration`、
+  `sql`、`params` 全部改为强类型 + 有界校验，处理函数统一异常兜底回 400。
+- `rust_accel` IPC 行与 `_spawn_dispatch` 补严格 JSON 对象校验与事件净化，
+  外部帧不能再携带 `role` / `permissions` / `trace_id` / `bot_name` 等控制字段。
+- `http_inject` 事件构造改走 `sanitize_adapter_event()`，补齐 `bot_name` 伪造缺口。
+- `framework/security/hardening.py` 新增 `coerce_int` / `coerce_text` /
+  `coerce_sql_params` 与递归拒绝键（含 `trace_id` 等因果域字段）；
+  `sanitize_adapter_event()` 追加字段类型归一化：外部帧把 `message` 写成 dict
+  时旧路径用 `str(dict)` 兜底变成消息文本（可伪造命令），`sender` 写成数组时
+  `Event.sender_role` 直接抛 AttributeError。现在保留 str / 段数组 / 数字或字符串
+  ID 等合法形态，其余容器收敛为中性值。
+
+### 验证
+
+- 自带测试：修复前 91/91、修复后 91/91，`STATUS_DIFF=[]`（项目测试是模块级
+  `sys.exit` 脚本，按 CI 方式逐个跑，未改动任何测试文件）。
+- 编译检查：framework / core_plugins / tools / 双入口全量 `compileall` 通过。
+- 对抗探针：240 条接入端用例 + 300 条 property-based 随机用例 + 20 条 http_api
+  用例 + 6 条 rust_accel 用例，前后对照修复了断连、类型伪造与字段残留。
+- 路径探针：15 个用例（dry-run / 真迁移 / 首次启动生成 / 双入口版本一致性）全通过。
+
+### 迁移子系统补测（第 8 轮）
+
+- **84 个用例全通过、0 失败、0 跳过**：内核版本检测（SemVer 解析 / 优先层级 /
+  VERSION↔pyproject 回落与漂移）、六种目录代际探测、自动迁移开关的 16 种配置形态
+  （含非法值、YAML 损坏、2 MiB 读炸弹、BOM、无 yaml 依赖的文本扫描、环境变量覆盖）、
+  dry-run 零写盘、配置字节 sha256 不变、账本校验和与损坏自愈、幂等二次零写盘、
+  mixed 不覆盖、partial 可重入、陈旧锁回收、3 进程并发、符号链接越界、
+  启动子命令不误触发、配置/环境变量关闭、迁移异常不阻断启动、双入口一致、旧 shim 兼容。
+- 自带测试：第 7 轮交付态 91/91 → 第 8 轮 91/91，`STATUS_DIFF=[]`；
+  全量 `compileall` 退出码 0；**未改动任何测试文件**。
+- 回归：第 7 轮对抗探针 240 条接入端用例重跑，崩溃 / 控制字段残留 /
+  `bot_name` 伪造 / 非字符串 message 全为 0；webUI 探针可写段 29 → 40、
+  不可写段 11 → 0；旧路径探针 15/15。
+- 新增 `.github/workflows/release-pypi.yml`：`v*` tag → 版本一致性门禁 → 构建
+  sdist/wheel（校验迁移子包随包分发）→ PyPI Trusted Publishing（OIDC，无需长期 token）。
+  该文件仅落地本地，GitHub 授权未连通，未提交、未推送、未发布。
+
+---
+
 ## [1.21.0] - 2026-11-07
 
 > 主题：**把「以为能用」变成「真的能用」**。

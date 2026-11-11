@@ -18,7 +18,10 @@ def do_config(args, working_dir):
     from framework.config import get_home, load_config
 
     action = args.action or "list"
-    path = os.path.join(working_dir, "config.yaml")
+    # 统一口径：优先 <home>/data/config.yaml，旧根目录布局兼容
+    _data_cfg = os.path.join(working_dir, "data", "config.yaml")
+    path = _data_cfg if os.path.isfile(_data_cfg) \
+        else os.path.join(working_dir, "config.yaml")
 
     try:
         cfg = load_config(path) or {}

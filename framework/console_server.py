@@ -5,7 +5,7 @@
 127.0.0.1 上监听一个**自动分配**的本地端口，端口与**超长随机 token** 在首次
 启动时生成并**存入数据库**（`console_access` 表），之后每次启动复用。本地执行
 
-    python main.py attach
+    python startup.py attach
 
 即可接入，直接使用框架的终端命令（help / status / plugins / reload / …），
 无需重启、无需 TTY。
@@ -466,7 +466,7 @@ def load_credentials_mysql(db_cfg):
 def load_credentials_any(db_cfg, project_root=None):
     """按 database 配置（dict 或 sqlite 路径字符串）读控制台凭证。
 
-    支持 sqlite 与 mysql 两种后端——`python main.py attach` 在两种部署下都能用。
+    支持 sqlite 与 mysql 两种后端——`python startup.py attach` 在两种部署下都能用。
     """
     if db_cfg is None:
         db_cfg = {'type': 'sqlite', 'path': 'data/zcbot.db'}

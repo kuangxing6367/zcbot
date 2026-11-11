@@ -175,8 +175,9 @@ def register(ctx):
 
 
     def _core_plugins_dir(plugins_dir: str) -> str:
-        """framework 根目录下的 core_plugins/（与 plugins/ 同级）"""
-        return os.path.join(os.path.dirname(os.path.abspath(plugins_dir.rstrip(os.sep))), 'core_plugins')
+        """内核自带插件目录：统一走 framework.paths（忽略传入的 plugins_dir）"""
+        from framework.paths import core_plugins_dir
+        return core_plugins_dir()
 
     def _framework_official_names() -> set:
         """框架自带官方插件名（config._CORE_PLUGIN_SCHEMA 的键），市场插件不得占用"""

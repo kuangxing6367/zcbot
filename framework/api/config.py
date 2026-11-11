@@ -317,9 +317,15 @@ def register(ctx):
 
     # ---- 系统配置（config.yaml 分组读写）----
 
-    _YAML_SECTIONS = ('database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system',
-                      'security', 'framework', 'observability',
-                      'reliability', 'outbound', 'scheduler')
+    # 与 config.yaml 默认模板的顶层段保持一致（第 7 轮补齐此前面板改不了的段）；
+    # 官方插件私有段由 _yaml_sections() 从 list_core_plugins_state() 动态补充。
+    _YAML_SECTIONS = (
+        'database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system',
+        'security', 'framework', 'observability', 'reliability', 'outbound',
+        'scheduler', 'startup', 'memory', 'iipc', 'dependencies',
+        'dual_process', 'language', 'terminal', 'console', 'event_queue',
+        'multi_platform', 'github_proxy', 'http_api', 'http_inject',
+    )
 
     def _yaml_sections():
         """面板允许读写的 config.yaml 段 = 固定部署段 + 各官方插件的配置段。

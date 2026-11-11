@@ -36,6 +36,7 @@ from urllib.parse import urlparse
 import websockets
 
 from framework.messaging.protocol import ProtocolAdapter
+from framework.security.hardening import sanitize_adapter_event
 from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
@@ -348,6 +349,9 @@ class WsClientAdapter(ProtocolAdapter):
             event = normalize_event(data, self.bot_name)
             if event is None:
                 continue
+            # 实测修复前：外部帧可直接把 bot_name 伪造成其它接入端；
+            # 统一净化强制归属，同时剥掉 role/permissions/_msg_text 等注入字段。
+            event = sanitize_adapter_event(event, self.bot_name)
             try:
                 await self.framework.dispatch_event(event)
             except Exception as e:

@@ -1,9 +1,9 @@
 """
-依赖管理模块（从 framework/loader/ 剥离，史山拆解）
+依赖管理模块（从 framework/loader/ 剥离）
 
 两层职责：
 1. 自由函数：pip 镜像安装（清华源 + 自动回退）、requirements.txt 解析、
-   版本说明符解析与兼容性判定 —— 供 main.py 启动自检、Web 后台、加载器共用；
+   版本说明符解析与兼容性判定 —— 供 startup.py 启动自检、Web 后台、加载器共用；
 2. PluginDepsMixin：插件依赖检查/自动安装/隔离 venv 的实现，
    以混入方式挂到 PluginLoader 上（self 即加载器实例）。
 
@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 
-# yaml 延迟导入：main.py 启动自检（装依赖前）会经 framework.deps.pip 走到本包，
+# yaml 延迟导入：startup.py 启动自检（装依赖前）会经 framework.deps.pip 走到本包，
 # 此时 pyyaml 尚未安装，顶层 import 会让自检安装器自身崩溃
 
 logger = logging.getLogger('zcbot')
@@ -51,9 +51,8 @@ class PluginDepsMixin:
         """
         req_file = os.path.join(self.plugins_dir, plugin_name, 'requirements.txt')
         if not os.path.isfile(req_file):
-            _root = os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))))
-            _core_req = os.path.join(_root, 'core_plugins', plugin_name, 'requirements.txt')
+            from framework.paths import core_plugins_dir
+            _core_req = os.path.join(core_plugins_dir(), plugin_name, 'requirements.txt')
             if os.path.isfile(_core_req):
                 req_file = _core_req
         return _parse_requirements_file(req_file)

@@ -58,8 +58,10 @@ def _enable(adapter_id, working_dir, enabled):
     if adapter_id not in adapters:
         print("错误：未找到适配器: %s（先用 `%s adapter list` 查看）" % (adapter_id, PROG))
         return 1
-    ok, detail = set_core_plugin_enabled(
-        os.path.join(working_dir, "core_plugins.yaml"), adapter_id, enabled)
+    _data_yaml = os.path.join(working_dir, "data", "core_plugins.yaml")
+    _yaml = _data_yaml if os.path.isfile(_data_yaml) \
+        else os.path.join(working_dir, "core_plugins.yaml")
+    ok, detail = set_core_plugin_enabled(_yaml, adapter_id, enabled)
     if not ok:
         print("失败：%s" % detail)
         return 1
