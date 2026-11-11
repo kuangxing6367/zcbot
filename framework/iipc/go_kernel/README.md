@@ -1,7 +1,7 @@
 # zcbot IIPC 内核（EV Kernel / 事件内核）
 
 Go 编写的内核进程，是 IIPC 的**事件驱动宿主**：事件总线 + DB + 插件进程编排 + 扩展面。
-由 `python main.py -iipc` 拉起（编译产物 `zcbot_kernel.exe`），Python 插件经 TCP 行分隔 JSON 接入。
+由 `python startup.py --iipc`（等价 `python -m framework.iipc`）拉起（编译产物 `zcbot_kernel.exe`），Python 插件经 TCP 行分隔 JSON 接入。
 
 ## 分层地图
 

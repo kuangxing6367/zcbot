@@ -111,7 +111,7 @@ pip install -r requirements.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web
 python startup.py
 ```
 
-唯一启动入口是 `startup.py`（`main.py` 仅作兼容 shim，`python main.py` 行为一致）。
+唯一启动入口是 `startup.py`；`main.py` 只为存量 systemd / NSSM / 旧脚本保留兼容转派，行为一致。
 配置与状态默认落在 `data/` 下，插件代码在 `core_plugins/`（内核自带）与 `data/plugins/`（用户插件）；
 源码 checkout 若仍是旧根目录布局，启动时会自动迁移到 `data/`（默认开启，无需手工执行命令；
 `framework.auto_migrate: false` 可关闭）。`requirements.txt` 只装内核必需依赖；

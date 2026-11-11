@@ -65,7 +65,7 @@ iipc:
 
 ```
 framework/iipc/
-├─ __init__.py        run(argv) / build() 入口（供 main.py 与 -m 调用）
+├─ __init__.py        run(argv) / build() 入口（供 startup.py 与 -m 调用）
 ├─ __main__.py        python -m framework.iipc
 ├─ launcher.py        编排：日志总出口 + 终端 REPL（不承载业务）
 ├─ iipc_log.py        日志格式（读 config.yaml 的 log: 段，与框架同一出口）

@@ -491,7 +491,7 @@ class _HostBridge:
     """把框架侧能力（数据库 / 插件管理）暴露给工具集。
 
     - **bot 内**（真实框架）：复用框架 db / 插件加载器，读写与插件管理都可用。
-    - **独立 CLI**（`python main.py code`）：用只读连接查库（db_query 可用、
+    - **独立 CLI**（`python startup.py code`）：用只读连接查库（db_query 可用、
       db_execute 拒绝并提示）；插件管理给指引（避免动到运行中实例的状态）。
     """
 
@@ -760,7 +760,7 @@ def _cmd_code(args):
         if is_remote_session():
             _out("[code] 这是远程文本通道（调试控制台 / HTTP），没有 TTY，无法承载全屏界面。\n"
                  "       本地终端直接跑：python startup.py code（python main.py code 亦可）\n"
-                 "       只想在文本通道里跟智能体对话：python main.py -a --agent")
+                 "       只想在文本通道里跟智能体对话：python startup.py -a --agent")
             return
     except Exception:
         pass

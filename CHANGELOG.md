@@ -26,10 +26,11 @@
 
 ---
 
-## 开发中（未发布 · 打磨小修）
+## 开发中（已提交 · 待发版）
 
 > 主题：**入口、路径、面板口径三处收口，再按公认测试法把畸形输入跑遍全部接入端**。
-> 本节为在研变化，未打 Tag、未发版；版本号仍为 `VERSION` 里的 1.21.0。
+> 本节变化已提交为 `6c8ea6c` 并推送到 `origin/main`，GitHub Actions `tests` / `CI` /
+> `Deploy Docs` 三个 workflow 全部 success；未打 Tag、未发版，版本号仍为 `VERSION` 里的 1.21.0。
 
 ### 启动入口
 
@@ -127,7 +128,20 @@
   不可写段 11 → 0；旧路径探针 15/15。
 - 新增 `.github/workflows/release-pypi.yml`：`v*` tag → 版本一致性门禁 → 构建
   sdist/wheel（校验迁移子包随包分发）→ PyPI Trusted Publishing（OIDC，无需长期 token）。
-  该文件仅落地本地，GitHub 授权未连通，未提交、未推送、未发布。
+  该文件已随 `6c8ea6c` 推送；只由 `v*` tag 触发，普通 push 不触发，因此尚未在 Actions 上
+  执行过。发版前需在 PyPI 后台登记 Trusted Publisher、确定版本号并同步 `VERSION` /
+  `pyproject.toml` / `CHANGELOG.md` 三处。
+
+### 交付收尾
+
+- 文档口径同步：`docs/进阶/部署上线.md`、`docs/进阶/双核心架构.md`、
+  `framework/iipc/README.md` 与 `framework/iipc/go_kernel/README.md` 中残留的
+  `python main.py` 启动命令统一改为 `python startup.py`；CHANGELOG 中「未提交、未推送」
+  的过期状态按实际推送结果更正。CHANGELOG 历史条目描述当时的事实，保持原样不改。
+- 清理本机工作区运行缓存：删除 53 个缓存目录（52 个 `__pycache__` + `.pytest_cache/`），
+  其中含 280 个 `*.pyc`；清理后以 `-B`（不写字节码）终检，双入口 `--version` 均输出
+  1.21.0 / rc=0，缓存残留为 0。这些文件均被 `.gitignore` 忽略，不属于源码，也不涉及
+  `config.yaml`、`data/*.db`、日志等有状态资产。
 
 ---
 
