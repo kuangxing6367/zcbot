@@ -505,12 +505,26 @@ def backup_snapshot(database, tag: str = '', keep: int = 5) -> dict:
 
     path = ''
     try:
-        path = str((getattr(database, 'config', {}) or {}).get('path') or '')
+        # 数据库**实际打开**的路径优先。配置里的 `data/zcbot.db` 是相对值，
+        # 连接层按 get_home() 解析成 <home>/data/zcbot.db；这里若对它做
+        # os.path.abspath()，会被解析成 <cwd>/data/zcbot.db —— 两者在
+        # 「工作目录 ≠ home」时（pip 安装态、systemd 的 WorkingDirectory、
+        # 容器挂载）根本不是同一个文件。原实现正是这样：备份按 cwd 找库，
+        # 找不到就打出「库文件不存在，跳过快照」然后**继续执行 destructive
+        # 迁移**——等于把「可回退承诺」静默降级成没有备份。
+        path = str(getattr(database, '_db_path', '') or '')
+        if not path:
+            path = str((getattr(database, 'config', {}) or {}).get('path') or '')
+            if path and not os.path.isabs(path):
+                # 与 framework/database/db_conn.py 的解析口径保持一致
+                try:
+                    from framework.config import get_home
+                    path = os.path.normpath(os.path.join(get_home(), path))
+                except Exception:
+                    path = os.path.abspath(path)
         if not path:
             return {'ok': False, 'kind': 'file', 'path': '',
                     'note': '数据库路径未知，无法快照'}
-        if not os.path.isabs(path):
-            path = os.path.abspath(path)
         if not os.path.exists(path):
             return {'ok': False, 'kind': 'file', 'path': '',
                     'note': f'库文件不存在，跳过快照: {path}'}

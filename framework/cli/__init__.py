@@ -82,8 +82,8 @@ def build_parser():
 
     # ---- run ----
     p_run = sub.add_parser("run", help="运行机器人")
-    p_run.add_argument("-f", "--file", default="startup.py",
-                       help="入口文件路径（唯一入口 startup.py；旧 main.py 仍兼容）")
+    p_run.add_argument("-f", "--file", default=None,
+                       help="入口文件路径（默认 startup.py；本目录没有时回退到已安装包的入口）")
     p_run.add_argument("-r", "--reload", action="store_true",
                        help="文件变更时热重载")
     p_run.add_argument("--reload-dirs", default=None,
@@ -93,8 +93,8 @@ def build_parser():
 
     # ---- generate ----
     p_gen = sub.add_parser("generate", help="生成启动脚本")
-    p_gen.add_argument("-f", "--file", default="run.py",
-                       help="输出文件路径（默认 run.py，不再覆盖入口文件）")
+    p_gen.add_argument("-f", "--file", default="startup.py",
+                       help="输出文件路径（默认 startup.py，与 run 的默认入口一致）")
 
     # ---- plugin ----
     p_plugin = sub.add_parser("plugin", help="管理插件")
@@ -163,6 +163,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.group:
         parser.print_help()
+        # 裸执行是最容易发生的误用：README 早期就写过「pip install 后直接 zcbot」，
+        # 实际只会打印这份帮助。给一行明确指引，别让人以为装坏了。
+        print("\n提示：启动机器人请用 `%s run`（本命令只打印帮助）"
+              % parser.prog.split()[0])
         return 0
     working_dir = os.path.abspath(args.working_dir)
     handler = getattr(commands, "do_" + args.group, None)

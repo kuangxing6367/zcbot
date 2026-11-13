@@ -85,9 +85,17 @@ def _prefer_data(name: str, explicit: str = None) -> str:
     legacy = os.path.join(home_dir(), name)
     if os.path.isfile(in_data):
         return in_data
+    if os.path.isfile(legacy):
+        # 存量旧布局继续沿用，由内核迁移子系统（启动期，默认开启）收敛到 data/
+        return legacy
     if os.environ.get('ZCBOT_STATE_LAYOUT', '').strip().lower() == 'data':
         return in_data
-    return legacy
+    # 全新安装直接落 data/ 布局。
+    # 原实现这里返回 legacy，于是全新装在 home 根生成 config.yaml，下次启动
+    # 内核迁移又把它搬进 data/ —— 一次安装要跨两次启动才收敛，期间
+    # 「新旧两处并存」会触发 manual-required，用户看到的是自己没做错什么
+    # 却被要求人工确认该信哪份配置。
+    return in_data
 
 
 def resolve_config_path(explicit: str = None) -> str:
@@ -124,11 +132,16 @@ def core_plugins_dir() -> str:
 
 
 def user_plugins_dir() -> str:
-    """用户插件代码目录：data/plugins 存在即用，否则旧的 <home>/plugins。"""
+    """用户插件代码目录：data/plugins 存在即用，旧的 <home>/plugins 仍兼容。"""
     in_data = os.path.join(state_dir(), 'plugins')
+    legacy = os.path.join(home_dir(), 'plugins')
     if os.path.isdir(in_data):
         return in_data
-    return os.path.join(home_dir(), 'plugins')
+    if os.path.isdir(legacy):
+        return legacy
+    # 两处都不存在（全新安装）时给新布局路径，与 _prefer_data 同一口径：
+    # 避免脚手架在旧位置建目录、运行时却只看 data/ 的错位。
+    return in_data
 
 
 def plugins_dat_dir() -> str:

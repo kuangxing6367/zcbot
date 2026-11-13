@@ -262,8 +262,25 @@ class EventBuffer:
         if self.l2_mode not in ('sqlite', 'file', 'off'):
             self.l2_mode = 'sqlite' if buf_cfg.get('sqlite_enabled', True) else 'file'
         self.sqlite_enabled = self.l2_mode == 'sqlite'
+        # L2 / L3 的落盘路径：配置里写的是相对值（默认 data/event_buffer.*），
+        # 必须按 get_home() 解析，不能直接交给 open() —— 那会相对**进程 cwd**，
+        # 于是 pip 安装态 / systemd(WorkingDirectory) / 容器下日志落到
+        # <cwd>/data/event_buffer.l2.log，而数据库与配置在 <home>/data，
+        # 同一份状态被劈成两处（也正是内核迁移子系统报「新旧两处并存」的成因之一）。
+        # 与本仓库其余相对路径（log.file、iipc log、db path）保持同一口径。
+        home = None
+        try:
+            from framework.config import get_home
+            home = get_home()
+        except Exception:
+            home = None
         self.sqlite_path = buf_cfg.get('sqlite_path') or os.path.join(data_dir, 'event_buffer.db')
         self.l2_path = buf_cfg.get('l2_path') or os.path.join(data_dir, 'event_buffer.l2.log')
+        if home:
+            if not os.path.isabs(self.sqlite_path):
+                self.sqlite_path = os.path.join(home, self.sqlite_path)
+            if not os.path.isabs(self.l2_path):
+                self.l2_path = os.path.join(home, self.l2_path)
         self.sqlite_write_timeout = float(buf_cfg.get('sqlite_write_timeout', 0.5))
         self.sqlite_batch = int(buf_cfg.get('sqlite_batch', 64))
         self.l3_max_bytes = int(buf_cfg.get('l3_max_bytes', 4 * 1024 * 1024))

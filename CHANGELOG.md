@@ -26,6 +26,95 @@
 
 ---
 
+## 开发中（未发版）
+
+> 主题：**按「装完就能用」的标准，把 pip 安装态的整条上手路径跑通**。
+> 起因是一份外部实测报告，逐条复现后确认 6 条成立、1 条一半成立（含一处
+> 比报告更严重的隐患）、1 条不成立。全部修复均以-wheel 装进干净 venv 真跑验证，
+> 不以「读代码觉得没问题」结案。
+
+### 默认安装与首次启动
+
+- `flask` / `flask-cors` / `waitress` 并入**核心依赖**（原只在 `web` 可选组）。
+  `core_plugins.yaml` 里 `webui` 默认 `enabled: true`，即默认安装就会加载 Web 后台，
+  这三个包对默认路径其实是必需的。原先 `pip install zcbot` 装完首次启动必然缺 flask，
+  只能靠运行时依赖自愈现场联网补装——离线 / 内网环境装完就是起不来。
+  `[web]` extra 保留（旧文档 `pip install "zcbot[web]"` 仍然有效）。
+- 官方插件「依赖未安装」不再记 `ERROR` 并打完整堆栈：依赖缺失是自愈流程的**预期输入**，
+  改为 `WARNING` + 可操作提示，堆栈降到 `DEBUG`。原实现让一次完全正常的首次启动
+  刷出一屏红色 traceback，最终结果却是自愈成功——把正常流程呈现成故障。
+  实测：首次启动 ERROR 行数 20 → **0**，启动耗时 20.27s → **1.94s**（无需自愈）。
+
+### 启动入口与脚手架一致
+
+- README 主推路径 `pip install zcbot` + `zcbot` **实际不会启动**（裸命令只打印帮助）。
+  文档改为 `zcbot run`，并在裸执行时补一行提示，避免误判成装坏了。
+- `zb run` 在本目录没有 `startup.py` 时回退到已安装包的入口（pip 安装态它就在
+  site-packages 根）；显式 `-f <缺失文件>` 仍按错误退出（rc=2），不静默换目标。
+  原实现只认 `cwd/startup.py`，而 `zb init` 又提示「zb run」——官方脚手架的第一条
+  上手路径必然报「入口文件不存在」。
+- `zb generate` 默认输出 `startup.py`（原 `run.py`），与 `run` 的默认入口统一；
+  `-f` 仍可自定义，已存在则不覆盖。
+- `zb init` / `zb create plugin` 的落点改为与内核同一套解析（`framework.paths`）：
+  配置进 `<home>/data`、用户插件进 `<home>/data/plugins`。原实现写死 `cwd/config.yaml`
+  与 `cwd/plugins`，pip 安装态造出的是一份运行时根本不读的旧布局，下次启动还被
+  内核迁移判成「新旧两处并存」。
+
+### 版本自报
+
+- `zb -v` / `zb --version` / `zcbot -v` 在 pip 安装态恒为 `0.0.0`：`read_version()`
+  只读 `REPO_ROOT/VERSION`，而该文件不属于任何包。改为复用
+  `framework.migration.version.current_version()`，优先级
+  `VERSION` → **已安装包元数据（`importlib.metadata`）** → `pyproject.toml` → `0.0.0+unknown`；
+  四处全缺时输出带 `+unknown` 后缀，不伪装成合法版本号。
+
+### CLI 视图与运行时一致
+
+- `zb plugin list` 只扫 cwd 的 `plugins/` 与 `core_plugins/`，pip 安装态两者都不在 cwd，
+  于是运行时已加载 19 个官方插件，CLI 却报「未找到任何插件」。改为优先扫内核解析出来的
+  目录（`paths.user_plugins_dir()` / `paths.core_plugins_dir()`），再补 cwd 下的历史布局，
+  同名去重；启用状态改读内核实际的 `core_plugins.yaml`。空列表时会打印实际扫描的根目录。
+
+### 状态路径与备份（数据安全）
+
+- **迁移前备份被静默跳过**：`backup_snapshot()` 拿配置里的相对值 `data/zcbot.db` 做
+  `os.path.abspath()`，解析到 **cwd**；而连接层按 `get_home()` 把库开在 `<home>/data`。
+  工作目录 ≠ home 时（pip 安装态、systemd `WorkingDirectory`、容器）两者不是同一个文件，
+  备份打一行「库文件不存在，跳过快照」后 **destructive 迁移照常执行**——「可回退」承诺
+  被静默降级成没有备份。改为优先用连接层实际打开的 `_db_path`，回落时按 `get_home()` 解析。
+  实测：`已备份到 <home>/data/backups/zcbot-schema-<stamp>-v2.db`。
+- L2 溢出日志同一处病：`event_buffer.l2_path` 取配置相对值后直接 `open()`，落到
+  `<cwd>/data/event_buffer.l2.log`，而库与配置在 `<home>/data`，同一份状态被劈成两处。
+  改为与仓库其余相对路径（`log.file`、iipc log、db path）同口径按 `get_home()` 解析。
+- 全新安装默认落 `data/` 布局（`paths._prefer_data` / `user_plugins_dir` 在“两处都不存在”
+  时返回新布局路径）。原实现返回旧的 home 根，于是全新装要跨两次启动才收敛，
+  期间「新旧两处并存」触发 `manual-required`，用户什么都没做错却被要求人工确认信哪份配置。
+  实测：连续两次启动 migration 无任何输出、cwd 零残留、`manual-required` 不再出现。
+
+### 发行包内容
+
+- wheel 不再包含 `framework/iipc/tools/` 下 14 个开发期工具（含 `iipc_hardening_test.py`）：
+  该目录无 `__init__.py`、运行时无任何 import，却被当成命名空间包整目录打包。
+  注意 `zcbot.egg-info/SOURCES.txt` 是陈旧清单，清掉 `egg-info/` 与 `build/` 后重建才生效。
+- README 的仓库主次写清楚：GitHub 为主仓库（CI / Release / PyPI 发布在此），Gitee 为国内镜像，
+  与 `pyproject.toml` 的 `Project-URL` 口径一致。
+
+### 未处理（需单独立项）
+
+- **顶层命名空间污染**（`framework` / `core_plugins` / `sql` 与 `startup.py` / `main.py` /
+  `zb.py` 直接落在 site-packages 根，`entry_point` 指向 `framework.cli:main`）。这是真问题，
+  但改名会让所有第三方插件的 `from framework ...` 失效，属破坏性变更，留待 v2.0 统一处理。
+
+### 验证
+
+- 全量 `py -m pytest tests -q`：**989 passed / 1 skipped / 0 failed**。
+- 干净 venv 装本地 wheel（无一预装依赖），逐条复跑外部报告：`zb -v` → 1.21.1；
+  `zb init` 落 `<home>/data` 且 cwd 干净；`zb run` 无本地入口可启动、0 ERROR；
+  `zb plugin list` 19 个与运行时一致；二次启动无 `manual-required`；`create plugin`
+  落 `<home>/data/plugins` 并出现在列表里；迁移前备份真实产出文件。
+
+---
+
 ## [1.21.1] - 2026-11-13
 
 > 主题：**入口、路径、面板口径三处收口，再按公认测试法把畸形输入跑遍全部接入端**；

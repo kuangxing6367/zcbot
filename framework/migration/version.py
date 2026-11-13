@@ -7,9 +7,10 @@
 编译元数据不参与比较。
 
 版本事实来源（按优先级，全部本地、不联网）：
-  1. ``VERSION`` 文件（发布与 ``--version`` 的权威口径）；
-  2. ``pyproject.toml`` 的 ``[project] version``（打包口径）；
-  3. 两者都缺失/非法时返回 ``0.0.0+unknown``，并把漂移情况暴露给调用方。
+  1. ``VERSION`` 文件（源码 checkout 的权威口径）；
+  2. 已安装发行包元数据（``importlib.metadata``，wheel / pip 安装态的唯一来源）；
+  3. ``pyproject.toml`` 的 ``[project] version``（打包口径）；
+  4. 全都缺失/非法时返回 ``0.0.0+unknown``，并把漂移情况暴露给调用方。
 
 本模块只用标准库，可在依赖自检之前安全 import。
 """
@@ -149,9 +150,28 @@ def _read_pyproject_version() -> tuple[str | None, str]:
         return None, 'pyproject.toml 不可读: %s' % type(e).__name__
 
 
+def _read_installed_metadata() -> tuple[str | None, str]:
+    """从已安装发行包的元数据取版本（wheel / pip 安装态唯一可靠的来源）。
+
+    wheel 里既没有 ``VERSION`` 也没有 ``pyproject.toml``（两者都不属于包）。
+    原实现只认这两个文件，于是 ``pip install zcbot`` 之后 ``zb -v`` 恒定输出
+    ``0.0.0`` —— 版本自报在本发行形态下永远是错的。改读 ``dist-info``，
+    这是 PEP 566 规定的metadata，pip 装出来的包必然带着。
+    """
+    try:
+        from importlib import metadata
+    except Exception:                       # pragma: no cover  py<3.8
+        return None, 'importlib.metadata 不可用'
+    try:
+        return metadata.version('zcbot'), 'installed metadata'
+    except Exception as e:                  # PackageNotFoundError 及各种坏元数据
+        return None, 'installed metadata 不可读: %s' % type(e).__name__
+
+
 def version_sources() -> dict:
     """返回全部版本来源及漂移情况（供探测报告与排障使用）。"""
     file_raw, file_note = _read_version_file()
+    meta_raw, meta_note = _read_installed_metadata()
     proj_raw, proj_note = _read_pyproject_version()
     fv, pv = parse_version(file_raw), parse_version(proj_raw)
     consistent = (fv is not None and pv is not None
@@ -159,6 +179,9 @@ def version_sources() -> dict:
     return {
         'version_file': {'raw': file_raw, 'parsed': fv.as_dict() if fv else None,
                          'note': file_note},
+        'installed_metadata': {'raw': meta_raw, 'parsed': (
+            parse_version(meta_raw).as_dict() if parse_version(meta_raw) else None),
+            'note': meta_note},
         'pyproject': {'raw': proj_raw, 'parsed': pv.as_dict() if pv else None,
                       'note': proj_note},
         'consistent': consistent,
@@ -167,9 +190,19 @@ def version_sources() -> dict:
 
 
 def current_version() -> Version:
-    """当前运行内核版本；缺失时退回 pyproject，再退回 ``0.0.0+unknown``。"""
+    """当前运行内核版本。
+
+    优先级：``VERSION`` 文件（源码 checkout，发布口径）→ 已安装包元数据
+    （wheel / pip 安装态）→ ``pyproject.toml`` → ``0.0.0+unknown``。
+    元数据排在 VERSION 之后：源码目录里两者同时存在时应以仓库里的
+    ``VERSION`` 为准，避免手上代码改了版本而环境里还是旧包时读到旧号。
+    """
     file_raw, _ = _read_version_file()
     v = parse_version(file_raw)
+    if v is not None:
+        return v
+    meta_raw, _ = _read_installed_metadata()
+    v = parse_version(meta_raw)
     if v is not None:
         return v
     proj_raw, _ = _read_pyproject_version()

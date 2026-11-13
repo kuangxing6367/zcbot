@@ -92,19 +92,24 @@ source .venv/bin/activate
 
 ```bash
 pip install zcbot
-zcbot
+zcbot run
 ```
 
 首次启动会在 **`~/.zcbot/data`** 下自动生成配置 / 官方插件清单 / 用户插件 / 日志（可用环境变量 `ZCBOT_HOME` 指定其它根目录）。
 看到 `框架启动完成，等待消息...` 即启动成功。pip 安装态自动启用新布局；源码 checkout 的
 旧根目录布局会在启动时自动迁移（默认开启，可在配置里关闭），迁移前后都能正常启动。
 
+> 必须带 `run` 子命令：裸 `zcbot` / `zb` 只打印命令列表，**不会**启动机器人。
+> Web 管理后台（`webui`）默认启用，其依赖 `flask` / `flask-cors` / `waitress`
+> 已并入核心依赖，`pip install zcbot` 会一并装好，无需再装 `zcbot[web]`。
+
 升级：`pip install -U zcbot`。
 
 ### 方式二 · 源码运行
 
 ```bash
-git clone https://gitee.com/liquanfeng123/zcbot.git   # 或 GitHub 镜像
+git clone https://github.com/kuangxing6367/zcbot.git          # 主仓库（CI / Release / PyPI 发布在此）
+# 国内镜像：git clone https://gitee.com/liquanfeng123/zcbot.git
 cd zcbot
 python3 -m venv .venv && source .venv/bin/activate    # Windows: py -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple

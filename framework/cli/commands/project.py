@@ -225,7 +225,7 @@ def _create_plugin(args, working_dir):
     if not re_fullmatch(name):
         print("错误：插件 id 只能含 [a-z0-9_]: %s" % name)
         return 2
-    target = os.path.join(working_dir, "plugins", name, "main.py")
+    target = os.path.join(_state_paths(working_dir)[1], name, "main.py")
     if os.path.exists(target):
         print("错误：插件已存在: %s" % target)
         return 1
@@ -253,26 +253,48 @@ def _create_adapter(args, working_dir):
     pretty = name.replace("_", " ").title()
     _write(target, ADAPTER_TEMPLATE.format(
         id=name, name=pretty, desc="%s 适配器" % pretty))
-    # 默认在 core_plugins.yaml 里登记为禁用
+    # 默认在 core_plugins.yaml 里登记为禁用；清单路径与运行时同一套解析
     from ..utils import set_core_plugin_enabled
-    yaml_path = os.path.join(working_dir, "core_plugins.yaml")
+    try:
+        from framework.paths import core_plugins_yaml_path
+        yaml_path = core_plugins_yaml_path()
+    except Exception:
+        yaml_path = os.path.join(working_dir, "core_plugins.yaml")
     set_core_plugin_enabled(yaml_path, name, False)
     print("已创建适配器: %s（默认 disabled，改 core_plugins.yaml 启用）" % target)
     return 0
 
 
-def do_init(args, working_dir):
-    """在当前目录初始化 ZCBOT 项目（config.yaml + plugins/）。"""
-    name = args.name or os.path.basename(working_dir)
+def _state_paths(working_dir):
+    """配置与用户插件目录：与内核运行时用同一套解析（framework.paths）。
+
+    原实现把两者都写死成 ``working_dir/config.yaml`` 与 ``working_dir/plugins``。
+    在 pip 安装态，运行时读的是 ``<home>/data``（home 默认 ``~/.zcbot``），
+    于是 ``zb init`` 在 cwd 造出一份运行时根本不读的**旧布局**配置，下次启动
+    被内核迁移识别成「新旧两处并存」，用户莫名其妙被要求人工确认信哪份。
+    """
     cfg = os.path.join(working_dir, "config.yaml")
+    plugins = os.path.join(working_dir, "plugins")
+    try:
+        from framework import paths
+        cfg = paths.resolve_config_path()
+        plugins = paths.user_plugins_dir()
+    except Exception:
+        pass
+    return cfg, plugins
+
+
+def do_init(args, working_dir):
+    """在状态目录初始化 ZCBOT 项目（config.yaml + 用户插件目录）。"""
+    name = args.name or os.path.basename(working_dir)
+    cfg, plug_root = _state_paths(working_dir)
     if not os.path.isfile(cfg):
         _write(cfg, PROJECT_CONFIG.format(prog=PROG))
-        print("已生成 config.yaml")
+        print("已生成 config.yaml: %s" % cfg)
     else:
-        print("config.yaml 已存在，跳过")
-    plug_root = os.path.join(working_dir, "plugins")
+        print("config.yaml 已存在，跳过: %s" % cfg)
     os.makedirs(plug_root, exist_ok=True)
-    print("已就绪：%s" % working_dir)
+    print("已就绪：%s" % os.path.dirname(cfg))
     print("  运行: %s run" % PROG)
     return 0
 

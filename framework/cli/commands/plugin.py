@@ -34,7 +34,8 @@ def do_plugin(args, working_dir):
 def _list(working_dir):
     plugins = discover_plugins(working_dir)
     if not plugins:
-        print("未找到任何插件（plugins/ 与 core_plugins/ 下均无 main.py）")
+        print("未找到任何插件（已检查内核目录 %s 与当前目录下的 plugins/ 、core_plugins/）"
+              % _plugin_roots_desc())
         return 0
     rows = []
     for pid, path, meta, kind in plugins:
@@ -49,6 +50,17 @@ def _list(working_dir):
     print("%s plugin list —— 共 %d 个" % (PROG, len(rows)))
     print(render_table(rows, ["ID", "VER", "STATE", "KIND", "DESC"]))
     return 0
+
+
+def _plugin_roots_desc():
+    """把实际扫描到的插件根目录列出来，别再让用户猜"为什么列表是空的"。"""
+    try:
+        from ..utils import _kernel_plugin_dirs
+        user_root, core_root = _kernel_plugin_dirs()
+        parts = [p for p in (user_root, core_root) if p]
+        return " 、".join(parts) if parts else "（未解析到）"
+    except Exception:
+        return "（未解析到）"
 
 
 def _enable(plugin_id, working_dir, enabled):

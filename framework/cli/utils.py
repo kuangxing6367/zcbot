@@ -14,16 +14,29 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 
 
 def read_version():
-    """读取 VERSION 文件；找不到回退 pyproject 的 version。"""
-    cand = os.path.join(REPO_ROOT, "VERSION")
+    """当前内核版本（源码读 VERSION，wheel 读包元数据）。
+
+    委托 ``framework.migration.version.current_version``，不再在这里重复一套
+    文件探测：原实现只认 ``REPO_ROOT/VERSION``，而 wheel 里没有这个文件
+    （它不属于任何包），于是 pip 安装态下 ``zb -v`` 永远输出版本 ``0.0.0``。
+    """
     try:
-        with open(cand, "r", encoding="utf-8") as f:
-            v = f.read().strip()
-            if v:
-                return v
+        from framework.migration.version import current_version
+        v = current_version().raw
+        # ``0.0.0+unknown`` 表示四处来源全都没读到，此时给调用方一个可读的
+        # 明确标记，而不是伪装成合法版本号 0.0.0。
+        return v.replace('+unknown', '') if v.startswith('0.0.0+') else v
     except Exception:
-        pass
-    return "0.0.0"
+        # CLI 是最后一道可用的救命入口，任何异常都不允许把 --version 弄崩。
+        cand = os.path.join(REPO_ROOT, "VERSION")
+        try:
+            with open(cand, "r", encoding="utf-8") as f:
+                v = f.read().strip()
+                if v:
+                    return v
+        except Exception:
+            pass
+        return "0.0.0+unknown"
 
 
 def read_file(path, default=""):
@@ -55,26 +68,51 @@ def _read_meta(main_py):
     return {}
 
 
+def _kernel_plugin_dirs():
+    """内核实际使用的（用户插件目录, 官方插件目录）。
+
+    pip 安装态下官方插件在 ``site-packages/core_plugins``、用户插件在
+    ``<home>/data/plugins``，两者都不在进程 cwd。CLI 若只看 cwd，就会在
+    运行时明明加载了官方插件的情况下报「未找到任何插件」。
+    """
+    try:
+        from framework import paths
+        return paths.user_plugins_dir(), paths.core_plugins_dir()
+    except Exception:
+        return None, None
+
+
 def _iter_plugin_dirs(working_dir):
     """yield (plugin_id, main_py_path, kind) —— kind: 'user' / 'core'。
 
     同时纳入 ``plugins_disabled/``（被卸载到禁用区的用户插件，标记仍为 user，
     但其启用态由 ``plugin_enabled_state`` 判定为 False）。
+
+    目录顺序按「运行时真正读的位置」优先，再补 cwd 下的历史布局；同名插件
+    以先出现的为准（``seen`` 去重），保证 CLI 视图与内核视图一致。
     """
-    roots = [
+    user_root, core_root = _kernel_plugin_dirs()
+    roots = []
+    if user_root:
+        roots.append((user_root, "user"))
+        roots.append((user_root.rstrip("/\\") + "_disabled", "user"))
+    if core_root:
+        roots.append((core_root, "core"))
+    roots += [
         (os.path.join(working_dir, "data", "plugins"), "user"),
         (os.path.join(working_dir, "data", "plugins_disabled"), "user"),
         (os.path.join(working_dir, "plugins"), "user"),
         (os.path.join(working_dir, "plugins_disabled"), "user"),
         (os.path.join(working_dir, "core_plugins"), "core"),
-        (os.path.join(working_dir, "data", "core_plugins"), "core"),
     ]
+    seen = set()
     for root, kind in roots:
         if not os.path.isdir(root):
             continue
         for name in sorted(os.listdir(root)):
             main_py = os.path.join(root, name, "main.py")
-            if os.path.isfile(main_py):
+            if os.path.isfile(main_py) and name not in seen:
+                seen.add(name)
                 yield name, main_py, kind
 
 
@@ -95,10 +133,16 @@ def discover_adapters(working_dir):
 def plugin_enabled_state(working_dir, plugin_id, kind):
     """尽力推断插件启用状态（不依赖运行中的框架）。"""
     if kind == "core":
-        # 新布局的状态清单在 data/ 下；旧布局仍兼容
+        # 与内核同一套解析：pip 安装态清单在 <home>/data/core_plugins.yaml
         yaml_path = os.path.join(working_dir, "data", "core_plugins.yaml")
-        if not os.path.isfile(yaml_path):
-            yaml_path = os.path.join(working_dir, "core_plugins.yaml")
+        try:
+            from framework import paths
+            resolved = paths.core_plugins_yaml_path()
+            if resolved and os.path.isfile(resolved):
+                yaml_path = resolved
+        except Exception:
+            if not os.path.isfile(yaml_path):
+                yaml_path = os.path.join(working_dir, "core_plugins.yaml")
         return _yaml_get_enabled(yaml_path, "core_plugins", plugin_id, default=False)
     # 用户插件：默认启用；plugins_disabled/ 中的视为禁用
     if os.path.isdir(os.path.join(working_dir, "plugins_disabled", plugin_id)):

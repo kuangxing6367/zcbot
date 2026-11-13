@@ -34,12 +34,37 @@ def _watch_files(working_dir, extra_dirs):
     return snap
 
 
+def _packaged_entry():
+    """已安装包自带的入口脚本（pip 安装态的 startup.py）。
+
+    pip 安装态本目录没有 startup.py，而它就在 site-packages 根上；
+    ``zb init`` 又提示用户「zb run」。原实现只认 ``cwd/startup.py``，
+    于是照着提示做必然报「入口文件不存在」——官方脚手架的第一条上手路径
+    是断的。这里回退到包内入口，cwd 仍作为工作目录（状态按 get_home() 解析）。
+    """
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec('startup')
+        origin = getattr(spec, 'origin', None) if spec else None
+        if origin and os.path.isfile(origin):
+            return origin
+    except Exception:
+        pass
+    return None
+
+
 def do_run(args, working_dir):
     """运行入口；--reload 时监听 *.py 变更并重启子进程。"""
-    file_path = args.file
+    explicit = getattr(args, 'file', None)
+    file_path = explicit or 'startup.py'
     if not os.path.isfile(os.path.join(working_dir, file_path)):
-        print("错误：入口文件不存在: %s（工作目录 %s）" % (file_path, working_dir))
-        return 2
+        fallback = None if explicit else _packaged_entry()
+        if fallback:
+            print("本目录无 %s，使用已安装包的入口: %s" % (file_path, fallback))
+            file_path = fallback
+        else:
+            print("错误：入口文件不存在: %s（工作目录 %s）" % (file_path, working_dir))
+            return 2
 
     python_path = args.python_path or sys.executable
     if not args.reload:

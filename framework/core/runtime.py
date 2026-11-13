@@ -179,16 +179,17 @@ class FrameworkRuntimeMixin:
                     logger.warning(f"官方插件 [{name}] 无 register 函数")
             except Exception as e:
                 info = classify_load_error(e)
-                if info['kind']:
-                    logger.error(
-                        f"官方插件 [{name}] 加载失败：{info['hint']}\n"
+                if info['kind'] == 'missing_module':
+                    # 依赖缺失是**预期内**的可恢复状态：登记后由启动自愈
+                    # （_auto_heal_plugin_deps）安装依赖再重试加载。
+                    # 原实现在这里打 ERROR + exc_info=True，于是 pip 安装态
+                    # 首次启动必刷一屏红色堆栈——而最终结果是自愈成功、插件
+                    # 正常加载。把正常流程呈现成故障，用户第一印象就是"装坏了"。
+                    logger.warning(
+                        f"官方插件 [{name}] 依赖未安装：{info['hint']}\n"
                         f"  原始错误：{str(e)}"
                     )
-                logger.error(f"官方插件 [{name}] 加载失败: {e}", exc_info=True)
-                # 登记缺失依赖，交给启动自愈（_auto_heal_plugin_deps）安装后重试。
-                # 不登记的话 core 插件缺依赖只会打一行日志，自愈永远看不到它——
-                # webui 缺 flask 时插件直接失效，而 requirements.txt 里明写着"自动安装"。
-                if info['kind'] == 'missing_module':
+                    logger.debug(f"官方插件 [{name}] 依赖缺失堆栈", exc_info=True)
                     try:
                         with self.plugin_loader._lock:
                             bucket = self.plugin_loader._missing_deps.setdefault(name, [])
@@ -197,6 +198,13 @@ class FrameworkRuntimeMixin:
                                 bucket.append(mod)
                     except Exception:
                         pass
+                else:
+                    if info['kind']:
+                        logger.error(
+                            f"官方插件 [{name}] 加载失败：{info['hint']}\n"
+                            f"  原始错误：{str(e)}"
+                        )
+                    logger.error(f"官方插件 [{name}] 加载失败: {e}", exc_info=True)
     @staticmethod
     def _read_plugin_process_tag(main_file: str):
         """不执行插件，静态解析 __plugin_meta__ 里的 process 进程归属标记。
