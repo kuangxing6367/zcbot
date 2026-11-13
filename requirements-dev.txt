@@ -1,0 +1,14 @@
+# ============================================================
+# 开发 / 测试依赖（仅本地开发与 CI 使用，生产部署不需要）
+#   安装：pip install -r requirements-dev.txt
+# 与 pyproject.toml 的 [project.optional-dependencies].dev 保持同步。
+# ============================================================
+
+pytest>=7.4
+# 必需：pyproject 里 asyncio_mode = "auto" 只有装上它才生效。
+# 缺它时 tests/ 下所有裸 async def 用例会被判 "async def functions are not
+# natively supported" 失败（实测 28 条），而不是跳过——看起来像功能回归。
+pytest-asyncio>=0.23
+
+# 静态检查（当前仓库无 lint 配置，先用 F 类规则兜底未定义名 / 未使用导入）
+ruff>=0.6

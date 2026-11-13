@@ -78,6 +78,30 @@ def _safe_priority(value, default: int = 50) -> int:
 
 class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, PluginGroupSettingsMixin, PluginConfigMixin, PluginRuntimeMixin, PluginLifecycleMixin, PluginGraphMixin):
     """插件加载器，管理插件生命周期"""
+    # 【踩坑保佑】v1.3.2 插件支持原生相对导入
+    # 坑：主模块充当合成包，多插件同名模块零冲突  →  PluginLoader
+    #                    _ooOoo_
+    #                   o8888888o
+    #                   88" . "88
+    #                   (| -_- |)
+    #                    O\ = /O
+    #                ____/`---'\____
+    #              .   ' \\| |// `.
+    #               / \\||| : |||// \
+    #             / _||||| -:- |||||- \
+    #               | | \\\ - /// | |
+    #             | \_| ''\---/'' | |
+    #              \ .-\__ `-` ___/-. /
+    #           ___`. .' /--.--\ `. . __
+    #        ."" '< `.___\_<|>_/___.' >'"".
+    #       | | : `- \`.;`\ _ /`;.`/ - ` : | |
+    #         \ \ `-. \_ __\ /__ _/ .-` / /
+    # ======`-.____`-.___\_____/___.-`____.-'======
+    #                    `=---='
+    #
+    # .............................................
+    #          佛祖保佑             永无BUG
+
 
     def __init__(self, plugins_dir: str, framework, plugins_dat_dir: str = None):
         self.plugins_dir = plugins_dir

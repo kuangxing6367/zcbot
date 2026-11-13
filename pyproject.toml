@@ -56,6 +56,16 @@ plugins = [
     "numpy>=1.24.0",
     "httpx>=0.27.0",
 ]
+# 开发 / 测试依赖：pytest-asyncio 是**必需**项，不是可选项。
+# 下方 [tool.pytest.ini_options] 的 asyncio_mode = "auto" 只有装了它才生效；
+# 缺它时 pytest 会警告 "Unknown config option: asyncio_mode"，并把 tests/ 下
+# 所有裸 async def 用例判为 "async def functions are not natively supported" 失败
+# ——实测 28 条用例因此长期红着，看起来像功能坏了，其实是环境没装插件。
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
 
 [project.urls]
 Homepage = "https://github.com/kuangxing6367/zcbot"
@@ -103,4 +113,8 @@ exclude = ["*.__pycache__", "*.native.target*"]
 # pytest-asyncio 默认 strict 模式不会执行它们，而是直接报
 # "async def functions are not natively supported" 判为失败
 # ——等于这些用例静默失去覆盖。开 auto 让它们真正跑起来。
+# 注意：本项只有装了 pytest-asyncio 才有效，见上方 dev 可选依赖组。
 asyncio_mode = "auto"
+# 不显式设置时 pytest-asyncio 会打 DeprecationWarning，且未来默认作用域会变；
+# 钉成 function 与现状一致，升级插件版本时不会静默改语义。
+asyncio_default_fixture_loop_scope = "function"

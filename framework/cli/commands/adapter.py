@@ -4,6 +4,7 @@
 ZCBOT 的适配器即 core_plugins 下带网络接入特征的条目，
 故适配器管理与插件管理共用同一份 ``core_plugins.yaml`` 启用开关。
 """
+import os
 import webbrowser
 
 from ..utils import (PROG, discover_adapters, plugin_enabled_state,

@@ -17,6 +17,30 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 async def amain():
     """异步主流程"""
+    # 【踩坑保佑】架构总览 启动时序
+    # 坑：保证只有一份核心在跑  →  amain
+    #                    _ooOoo_
+    #                   o8888888o
+    #                   88" . "88
+    #                   (| -_- |)
+    #                    O\ = /O
+    #                ____/`---'\____
+    #              .   ' \\| |// `.
+    #               / \\||| : |||// \
+    #             / _||||| -:- |||||- \
+    #               | | \\\ - /// | |
+    #             | \_| ''\---/'' | |
+    #              \ .-\__ `-` ___/-. /
+    #           ___`. .' /--.--\ `. . __
+    #        ."" '< `.___\_<|>_/___.' >'"".
+    #       | | : `- \`.;`\ _ /`;.`/ - ` : | |
+    #         \ \ `-. \_ __\ /__ _/ .-` / /
+    # ======`-.____`-.___\_____/___.-`____.-'======
+    #                    `=---='
+    #
+    # .............................................
+    #          佛祖保佑             永无BUG
+
     from framework.core import Framework
     from framework.crash_guard import (should_abort_boot, write_crash_log,
                                         clear_crash_markers, fire_alert)

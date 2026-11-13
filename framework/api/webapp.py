@@ -560,6 +560,30 @@ def create_web_app(framework) -> Flask:
     _trusted_proxies = set(framework.config.get('security', {}).get('trusted_proxies', []))
 
     def get_client_ip():
+        # 【踩坑保佑】部署上线 反向代理XFF
+        # 坑：让风控把攻击者识别成本机  →  get_client_ip
+        #                    _ooOoo_
+        #                   o8888888o
+        #                   88" . "88
+        #                   (| -_- |)
+        #                    O\ = /O
+        #                ____/`---'\____
+        #              .   ' \\| |// `.
+        #               / \\||| : |||// \
+        #             / _||||| -:- |||||- \
+        #               | | \\\ - /// | |
+        #             | \_| ''\---/'' | |
+        #              \ .-\__ `-` ___/-. /
+        #           ___`. .' /--.--\ `. . __
+        #        ."" '< `.___\_<|>_/___.' >'"".
+        #       | | : `- \`.;`\ _ /`;.`/ - ` : | |
+        #         \ \ `-. \_ __\ /__ _/ .-` / /
+        # ======`-.____`-.___\_____/___.-`____.-'======
+        #                    `=---='
+        #
+        # .............................................
+        #          佛祖保佑             永无BUG
+
         remote = request.remote_addr or 'unknown'
         if _trusted_proxies and remote in _trusted_proxies:
             xff = request.headers.get('X-Forwarded-For', '')

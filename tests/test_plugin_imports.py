@@ -217,4 +217,17 @@ else:
     print("  SKIP  未找到 plugins/help")
 
 print(f"\n结果: PASS={ok}  FAIL={fail}")
-sys.exit(1 if fail else 0)
+
+
+def test_plugin_imports_all_pass():
+    """把上面的脚本式检查包成一条 pytest 用例。
+
+    模块顶层绝不能再 sys.exit()：pytest 收集阶段会 import 本模块，SystemExit
+    会中断整个收集流程（INTERNALERROR），导致全套 960+ 用例一条都跑不起来。
+    脚本直跑（python tests/test_plugin_imports.py）仍保留退出码语义。
+    """
+    assert fail == 0, f"插件导入机制回归失败 {fail} 项"
+
+
+if __name__ == "__main__":
+    sys.exit(1 if fail else 0)

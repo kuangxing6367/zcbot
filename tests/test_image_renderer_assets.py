@@ -473,6 +473,19 @@ class _FakeCtx:
         return self._data_dir
 
 
+@pytest.fixture
+def isolated_core_plugin_config(monkeypatch):
+    """隔离 main._read_cfg() 的配置源，避免全量跑时被前面的用例污染。
+
+    _read_cfg() 读的是 ``framework.config.get_config()`` 全局单例，而下面两个用例
+    只注入了 ``main._CTX``（_read_cfg 根本不看它）。前面 config 系列用例一旦把
+    ``image_renderer.backend`` 留在全局配置里，这里就会拿到 rust 而不是期望的 pil，
+    表现为「单独跑全绿、全量跑挂两条」。把配置源钉成空 dict，让用例真正只测目标分支。
+    """
+    import framework.config as _fcfg
+    monkeypatch.setattr(_fcfg, 'get_config', lambda: {})
+
+
 def _load_main():
     spec = importlib.util.spec_from_file_location('zcbot_img_main_under_test', _MAIN_PY)
     mod = importlib.util.module_from_spec(spec)
@@ -480,7 +493,7 @@ def _load_main():
     return mod
 
 
-def test_resolve_backend_survives_unwritable_data_dir(tmp_path):
+def test_resolve_backend_survives_unwritable_data_dir(tmp_path, isolated_core_plugin_config):
     main = _load_main()
     blocker = tmp_path / 'not-a-dir'
     blocker.write_bytes(b'x')
@@ -506,7 +519,7 @@ def test_resolve_backend_survives_unwritable_data_dir(tmp_path):
     assert st['backend'] == 'pil', '拿不到资源时 PIL 后端必须仍然可用'
 
 
-def test_resolve_backend_handles_data_dir_exception(tmp_path):
+def test_resolve_backend_handles_data_dir_exception(tmp_path, isolated_core_plugin_config):
     """get_data_dir() 自己抛异常（宿主实现有问题）时也不能连累插件。"""
     main = _load_main()
 
