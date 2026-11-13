@@ -26,11 +26,12 @@
 
 ---
 
-## 开发中（已提交 · 待发版）
+## [1.21.1] - 2026-11-13
 
-> 主题：**入口、路径、面板口径三处收口，再按公认测试法把畸形输入跑遍全部接入端**。
-> 本节变化已提交为 `6c8ea6c` 并推送到 `origin/main`，GitHub Actions `tests` / `CI` /
-> `Deploy Docs` 三个 workflow 全部 success；未打 Tag、未发版，版本号仍为 `VERSION` 里的 1.21.0。
+> 主题：**入口、路径、面板口径三处收口，再按公认测试法把畸形输入跑遍全部接入端**；
+> 随后按文档记载的踩坑点给复杂逻辑补上祈福注释，并修掉一批既有缺陷与文档口径漂移。
+> 本节变化自 `6c8ea6c` 起陆续提交并推送到 `origin/main`，现随 `v1.21.1` 打 Tag 发版；
+> `VERSION` / `pyproject.toml` / `README.md` 三处版本口径已同步为 1.21.1。
 
 ### 启动入口
 
@@ -128,9 +129,10 @@
   不可写段 11 → 0；旧路径探针 15/15。
 - 新增 `.github/workflows/release-pypi.yml`：`v*` tag → 版本一致性门禁 → 构建
   sdist/wheel（校验迁移子包随包分发）→ PyPI Trusted Publishing（OIDC，无需长期 token）。
-  该文件已随 `6c8ea6c` 推送；只由 `v*` tag 触发，普通 push 不触发，因此尚未在 Actions 上
-  执行过。发版前需在 PyPI 后台登记 Trusted Publisher、确定版本号并同步 `VERSION` /
-  `pyproject.toml` / `CHANGELOG.md` 三处。
+  该文件已随 `6c8ea6c` 推送；只由 `v*` tag 触发，普通 push 不触发；`v1.21.1` 是它的首次
+  触发。发布 job 挂在 GitHub Environment `pypi` 上，需先在 PyPI 后台登记 Trusted
+  Publisher（OIDC），无需任何长期 token；版本号由发版流程同步 `VERSION` /
+  `pyproject.toml` / `CHANGELOG.md` 三处，tag 与 `VERSION` 不一致时门禁直接拒绝发布。
 
 ### 交付收尾
 
@@ -142,6 +144,60 @@
   其中含 280 个 `*.pyc`；清理后以 `-B`（不写字节码）终检，双入口 `--version` 均输出
   1.21.0 / rc=0，缓存残留为 0。这些文件均被 `.gitignore` 忽略，不属于源码，也不涉及
   `config.yaml`、`data/*.db`、日志等有状态资产。
+
+### 按文档踩坑点补祈福注释（纯注释，不改运行时行为）
+
+通读 `docs/` 全部 43 份 Markdown（通读时 `CHANGELOG.md` 为 2086 行）及
+README / LLM.md / 各插件 README，
+抽出 105 条「设计哲学 / 踩过的坑 / 根因」记录，逐条钉到源码符号，AST 核实通过
+94 个唯一符号、0 个臆造；在这些函数与类体内加完整祈福注释并标注文档出处与坑因。
+另在 12 个入口与模块头部各一处。Python 统一用 `#`，`docs/.vitepress/config.mjs`
+保留 `//`；全仓共 106 处「佛祖保佑」。
+
+- 密度最高的是 `framework/core/event_buffer.py`：设计哲学 §6 明写
+  `L1(512KB) → L4(4MB 攒批) → L2(sqlite) → L3(4MB 兜底)`、"绝不因为缓冲满而阻塞适配器"，
+  CHANGELOG 对这个文件记了多条正确性与性能坑，去重后落 10 处（全仓密度最高）。
+- 注释放在函数体首语句之后、`__doc__` 之后，避开装饰器与那些读源码文本做断言的安全测试；
+  `py_compile` / `compileall` / `node --check` 全过，12 处注释块逐行回比原文一致。
+
+### 体检顺带修掉的既有问题
+
+- `framework/cli/commands/adapter.py` 缺 `os` 导入：`zb adapter enable/disable` 直接 `NameError`。
+- `framework/blackbox.py` 帧体积记账漂移：trim 时按「淘汰后」的帧重新 `repr` 计算并扣减，
+  与 append 时记的字节数对不上，声称 256KB 上限实测常驻 3.45MB；改为 append 时一次估算、
+  帧内自带记账值，trim 只扣该值。热路径同时从 31µs/帧降到约 8µs/帧。
+- `pyproject.toml` / `requirements-dev.txt` 声明 `pytest-asyncio`：此前 28 条裸 `async`
+  用例因缺插件被判失败，等于静默失去覆盖。
+- `tests/test_plugin_imports.py` 顶层 `sys.exit()` 让 pytest 收集阶段直接 `INTERNALERROR`；
+  改为脚本直跑才退出。
+- `tests/test_image_renderer_assets.py` 两个用例只 mock 了 `main._CTX`，而 `_read_cfg()`
+  读的是 `framework.config.get_config()` 全局单例，前面的 config 测试把
+  `image_renderer.backend` 设成 `rust` 就漏进来，导致「单独跑 32 passed、全量跑挂 2 条」；
+  补隔离 fixture 后复现组合 310 passed。
+
+### 文档口径校准（10 处）
+
+发版前按站点规则重扫全部内部链接与文档↔源码符号，修掉 10 处漂移；**CHANGELOG 历史条目
+描述当时的事实，保持原样不改**。
+
+| 位置 | 问题 | 依据 |
+| --- | --- | --- |
+| `docs/速查/框架结构.md` | 指向不存在的 `docs/core-philosophy.md` | 现文档为 `docs/进阶/设计哲学.md` |
+| `docs/速查/框架结构.md` | 缓冲层数写成 `L1→sqlite→L4 兜底` | 设计哲学 §6 的四层与顺序 |
+| `docs/进阶/架构总览.md` | 启动入口仍写 `main.py` | `startup.py` 为唯一权威入口，`main.py` 退为 shim |
+| `docs/进阶/架构总览.md` | 心跳口径「仅重新 `register`，改函数体需手动完全重载」 | `plugin.hot_reload` 默认 `true`，`framework/loader/runtime.py` 走 `unload → load → register` |
+| `docs/进阶/双核心架构.md` | `_ipc_dispatch` 记在 `core_runtime.py` | 实际定义在 `framework/ipc/core_services.py` |
+| `docs/进阶/可靠性与限流.md` | 入队链路漏掉 L4 | 同上四层口径 |
+| `docs/速查/安全加固.md` | 引用已不存在的 `llm-framework.md` / `llm-iipc.md` | 改为 `框架结构.md` / `IIPC内核链路.md` |
+| `CHANGELOG.md` ×2 | `docs/llm-security.md`、`docs/dual-core.md` 两个真实断链 | 改为现文档路径 |
+
+校准后按 VitePress 规则复扫：真实断链 **0 条**。
+
+### 验证
+
+- 全量 `py -m pytest tests -q`：**989 passed / 1 skipped / 0 failed**（0:03:14）。
+- `compileall` 全过；双入口 `--version` 与 `python -m framework.migration --inspect`
+  读到的内核版本与 `VERSION` 一致。
 
 ---
 
@@ -1049,7 +1105,7 @@ vue-router 4.6.4，全是 MIT。但构建时 Terser `format.comments: false` 加
 
 ### Web 安全加固（用户实测复现后落地）
 
-> 四个问题均来自用户在真浏览器抓包 + 黑盒压测中的复现，已逐项源码核实并修复。详见 [docs/llm-security.md](docs/llm-security.md)。
+> 四个问题均来自用户在真浏览器抓包 + 黑盒压测中的复现，已逐项源码核实并修复。详见 [安全加固](docs/速查/安全加固.md)。
 
 - **全局限速闸门（`framework/api/ratelimit.py` + `webapp._global_rate_guard`）**：每 IP 滑动窗口 + 全局令牌桶（QPS）+ 路由分档，**覆盖全部 `/api/*`**（此前 138 个端点仅 2 个有限速，可秒刷）。超限返 `429` + `Retry-After`。配置 `security.rate_limit`，默认内网 / 回环豁免。
 - **PoW 票据计量化（`human_check`）**：ticket 绑定签发 IP（跨 IP 作废）、单次签发限速、用量计数超上限（默认 200）作废需重解——解决此前「一次验证无限复用」的买断制。
@@ -1723,7 +1779,7 @@ vue-router 4.6.4，全是 MIT。但构建时 Terser `format.comments: false` 加
 - **双进程终端交互修复（跨进程终端）**：核心进程此前不走 `fw.start()`，导致双核心下**终端从未启动**。
   现在核心进程显式注册并启动终端；终端命令按 `target`（`core` / `host` / `both`）路由，
   `plugins` / `enable` / `disable` / `reload` / `tasks` 经 IPC `terminal.exec` 转发到宿主进程执行，
-  `status` / `plugins` 两侧合并展示；单进程（`standard`）行为不变。见[双核心](docs/dual-core.md) 5.3 节。
+  `status` / `plugins` 两侧合并展示；单进程（`standard`）行为不变。见[双核心架构](docs/进阶/双核心架构.md) 5.3 节。
 
 ---
 

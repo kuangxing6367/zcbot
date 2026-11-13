@@ -4,7 +4,7 @@
 只依据**本地可观测的磁盘特征**推断，不联网、不读 .git、不假装能精确报出
 版本号。版本区间锚点全部取自本仓库 ``CHANGELOG.md`` 的真实记录：
 
-- ``CHANGELOG.md`` 「开发中」节：1.21.0 起新增 ``data/`` 状态布局
+- ``CHANGELOG.md`` [1.21.1] 节：1.21.0 起新增 ``data/`` 状态布局
   （``framework/paths.py`` 统一解析层），旧根目录布局保留兼容回退；
 - ``CHANGELOG.md`` 1.8.9 及其后各版：``data/`` 只承载运行产物
   （``data/zcbot.lock``、``data/plugins_dat/``、``data/zcbot.db``、
@@ -43,7 +43,7 @@ LAYOUT_ANCHORS = (
         'range': '>=1.21.0',
         'layout': LAYOUT_DATA,
         'label': 'data/ 状态布局（1.21.0 起）',
-        'basis': 'CHANGELOG「开发中」节 + framework/paths.py：配置、清单、用户插件统一落 data/',
+        'basis': 'CHANGELOG [1.21.1] 节 + framework/paths.py：配置、清单、用户插件统一落 data/',
     },
     {
         'range': '1.8.9..1.20.2',
