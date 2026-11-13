@@ -21,6 +21,7 @@ import logging
 import mimetypes
 import os
 import time
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -272,7 +273,6 @@ class MediaCache:
 
 
 def _new_ordered():
-    from collections import OrderedDict
     return OrderedDict()
 
 

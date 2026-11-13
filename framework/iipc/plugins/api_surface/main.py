@@ -18,6 +18,14 @@ Event 属性 37/方法 8），逐项记录 (name, ok, detail) 落库到 api_surf
 """
 import json
 import os
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from framework.iipc.py_sdk.sdk import PluginContext as PluginContext
+
+# 模块级 ctx 由 IIPC SDK 加载期注入（py_sdk/sdk.py 的 mod.ctx = ctx）。
+# 这里只声明名字与类型：静态检查不再报 F821、IDE 可补全；运行时值会被注入覆盖。
+ctx = cast("PluginContext", None)
 
 __plugin_meta__ = {
     "name": "API 全量面",

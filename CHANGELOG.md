@@ -99,15 +99,53 @@
 - README 的仓库主次写清楚：GitHub 为主仓库（CI / Release / PyPI 发布在此），Gitee 为国内镜像，
   与 `pyproject.toml` 的 `Project-URL` 口径一致。
 
+### 静态检查契约与回归测试（第二轮外部报告复核）
+
+外部报告指出「ruff 报 204 处 F821 `ctx` 未定义」并批评这是隐式框架魔法。逐条实测后：
+
+- 204 条 F821 属实，但 **202 条是裸 `ctx`、2 条是别的符号**：
+  `framework/api/app_helpers.py` 的 `_yaml_config_path()` 漏导入 `get_home`（读配置段
+  会真的 NameError）、`core_plugins/llm_load/src/llm_core/media.py` 的字符串注解漏
+  `OrderedDict`（静态红、`get_type_hints` 会炸）。两处均已补齐。
+- 注入点不是一处而是**四处**（`loader/base.py` / `core/runtime.py` /
+  `iipc/py_sdk/sdk.py` / `terminal/cmd_plugin.py`）；202 处里 171 处集中在 IIPC 的
+  `api_surface` 插件，走 SDK 那条路。运行时注入确实有效，报告「不是 bug」的判断成立；
+  但「没声明、没类型、IDE 补全不全、静态检查全红」也确实成立。
+- 六个裸用 `ctx` 的插件补上 `TYPE_CHECKING + cast("PluginContext", None)` 类型化占位：
+  **不改调用方式、不动 API、不加运行时依赖**，handler 仍在注入后才执行。
+  `ruff check --isolated --select F821 .` 由 204 条降到 **0 条**。
+- 新增 `tests/test_ctx_contract_and_install_regressions.py`（25 条用例），把
+  「四处注入点存在 / 六个模块有占位 / echo handler 注入后真能发消息」以及上一轮
+  pip 安装态修复（版本自报、迁移备份路径、事件缓冲路径、`zb init` 落 `data/`、
+  `zb run` 回退、核心依赖与 wheel 排除、CLI 插件视图）全部锁成回归测试——
+  上一轮改了 15 个文件却零测试，这轮补上。
+- CI 新增 `static-contract` 作业跑 F821 门禁；`docs/指南/编写插件.md` 补
+  「模块级 ctx：给静态检查一个交代」一节（含模板与三条边界）。
+- 顺手修 `pyproject.toml` 开头注释与核心依赖的口径漂移（还写着 flask 三件套
+  属于可选组）。
+
 ### 未处理（需单独立项）
 
 - **顶层命名空间污染**（`framework` / `core_plugins` / `sql` 与 `startup.py` / `main.py` /
   `zb.py` 直接落在 site-packages 根，`entry_point` 指向 `framework.cli:main`）。这是真问题，
   但改名会让所有第三方插件的 `from framework ...` 失效，属破坏性变更，留待 v2.0 统一处理。
+- **历史 lint 告警 / 类型覆盖 / 超大函数 / 静默吞异常**（第二轮报告复核确认成立）：
+  ruff 0.17.5 默认规则集全仓约 4.2k 条告警；`framework + core_plugins` 的参数注解
+  25.3%、返回注解 32.3%；`create_web_app` 738 行、`make_app_helpers` 511 行、
+  11 个文件超 1000 行、最大 `core_plugins/qq_official/main.py` 2107 行；
+  351 处 `except` 里纯 `pass`。都是真实债，但属大范围重构，本轮只把会直接导致
+  运行时错误的 F821 纳入门禁，其余待单独立项。
+- **发行包不带测试配置**：`pytest.ini` / `pyproject.toml` / `docs` / `CHANGELOG`
+  都不进 wheel（社区惯例；仓库有 107 个测试文件、CI 有全量回归），
+  「装了包就能复现验证」做不到；若要做需单独设计 sdist / 验证包形态。
 
 ### 验证
 
-- 全量 `py -m pytest tests -q`：**989 passed / 1 skipped / 0 failed**。
+- 全量 `py -m pytest tests -q`：**1014 passed / 1 skipped / 0 failed**
+  （上一轮 989 条 + 本轮新增 25 条契约回归）。
+- `ruff check --isolated --select F821 .`：**0 条**（修复前 204 条）；`python -m
+  compileall` 通过；干净重建 wheel 1,796,433 字节 / 309 项，0 个测试文件、
+  0 个 `iipc/tools` 条目，`startup.py` 与 `framework/iipc/plugins/*` 均在包内。
 - 干净 venv 装本地 wheel（无一预装依赖），逐条复跑外部报告：`zb -v` → 1.21.1；
   `zb init` 落 `<home>/data` 且 cwd 干净；`zb run` 无本地入口可启动、0 ERROR；
   `zb plugin list` 19 个与运行时一致；二次启动无 `manual-required`；`create plugin`

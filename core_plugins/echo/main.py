@@ -40,6 +40,15 @@ Discord / WS 总线 / HTTP 注入……）接进来后，对机器人发 ``/echo
     - 仅提供无副作用的回显命令，不干扰任何业务插件。
     - handler 直接用模块级 ctx（由加载器注入，与 image_renderer 等核心插件一致）。
 """
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from framework.ctx import PluginContext as PluginContext
+
+# 模块级 ctx 由框架加载期注入（module.ctx = ctx，见 docs/指南/编写插件.md）。
+# 这里只声明名字与类型：静态检查不再报 F821、IDE 可补全；运行时值会被注入覆盖。
+ctx = cast("PluginContext", None)
+
 __plugin_meta__ = {
     "name": "echo",
     "version": "1.0.0",

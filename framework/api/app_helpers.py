@@ -150,6 +150,10 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
 
     def _yaml_config_path() -> str:
         """返回框架实际加载的配置文件路径（支持自定义 config 启动）"""
+        # 与 _data_dir() 一样局部导入：framework.config 不进本模块顶层依赖，
+        # 避免 Web 层在框架初始化早期被导入时形成循环。原来这里裸用
+        # get_home() 却没有导入，读配置段会直接 NameError（ruff F821）。
+        from framework.config import get_home
         return getattr(framework, 'config_path', None) or os.path.join(get_home(), 'config.yaml')
 
     def _read_yaml_section(section: str) -> dict:

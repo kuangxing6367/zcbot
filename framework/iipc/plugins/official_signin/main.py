@@ -2,12 +2,22 @@
 """
 官方示例插件（逐字照抄 docs/指南/编写插件.md「完整的签到插件」一节）
 
-本文件不修改官方示例的一行代码，用于验证 IIPC SDK 对官方文档承诺能力的 1:1 覆盖：
+本文件的示例正文逐字照抄 docs/指南/编写插件.md「完整的签到插件」一节，
+用于验证 IIPC SDK 对官方文档承诺能力的 1:1 覆盖；唯一额外改动是补上
+模块级 ctx 的类型声明（不改任何逻辑），让静态检查与 IDE 能认出注入的 ctx：
   ctx.create_table / ctx.command(alias=) / ctx.task(cron) / ctx.on(event)
   ctx.db_query_one(%s) / ctx.db_execute(%s) / ctx.send_msg
 且 handler 内直接使用裸 ctx（依赖框架把 ctx 注入插件模块全局的既有行为）。
 """
 import time, random
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from framework.iipc.py_sdk.sdk import PluginContext as PluginContext
+
+# 模块级 ctx 由 IIPC SDK 加载期注入（py_sdk/sdk.py 的 mod.ctx = ctx）。
+# 这里只声明名字与类型：静态检查不再报 F821、IDE 可补全；运行时值会被注入覆盖。
+ctx = cast("PluginContext", None)
 
 __plugin_meta__ = {
     "name": "每日签到",

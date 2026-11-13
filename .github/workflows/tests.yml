@@ -107,7 +107,8 @@ jobs:
             tests/test_main_selfcheck_config.py tests/test_message_classified_hook.py \
             tests/test_plugin_api_unmount.py tests/test_plugin_route_hotmount.py \
             tests/test_scheduler_reliability.py tests/test_session_tokens.py \
-            tests/test_telegram_offset.py -q
+            tests/test_telegram_offset.py \
+            tests/test_ctx_contract_and_install_regressions.py -q
       # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────
       # 本作业 pytest 未加 -p no:cacheprovider，会正常产生 .pytest_cache/ 与
       # __pycache__/——已被 .gitignore 覆盖，git status 不可见，天然放行；
@@ -120,6 +121,23 @@ jobs:
   # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布产物。
   # v1.20.0 曾漏推 >1MB 的 element-plus chunk 导致新 clone 白屏；
   # 现在校验 index.html / chunk 内所有 hash 引用真实存在（见 tools/check_webui_artifact.py）。
+  # ── 静态契约门禁 ────────────────────────────────────────────────────
+  # 插件模块级 ctx 是加载期注入的（module.ctx = ctx），静态检查天生看不见。
+  # 官方插件现在用「TYPE_CHECKING + cast 占位」显式声明名字与类型；这里把
+  # 未定义名锁死在 0 条，防止新增插件又写出裸 ctx 或漏导入（历史上一次 204 条）。
+  # 只跑 F821：其余 4000+ 条历史 lint 告警属于独立的技术债，不在本门禁范围。
+  static-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: python -m pip install "ruff>=0.6"
+      - name: No undefined names (F821)
+        run: python -m ruff check --isolated --select F821 .
+
   webui-build:
     runs-on: ubuntu-latest
     steps:

@@ -6,12 +6,21 @@
     ctx._framework.services.get('llm_core')
 —— IIPC 插件运行在独立进程，没有 `_framework`。此处按插件自身的 try/except
 语义等效降级（挂不上闸门静默跳过），其余代码（建表 SQL、正则命令、
-require_superuser、async handler、裸 ctx、users 表超管兜底）一字未改。
+require_superuser、async handler、裸 ctx、users 表超管兜底）一字未改；
+仅额外补一行模块级 ctx 的类型声明（不改任何逻辑，见文件下方）。
 
 验证点：MySQL 风格 DDL（VARCHAR/TEXT 无 DEFAULT）在 SQLite 侧的兼容、
 正则命令 + require_superuser 权限链路、async handler、ctx.get_config。
 """
 import time
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from framework.iipc.py_sdk.sdk import PluginContext as PluginContext
+
+# 模块级 ctx 由 IIPC SDK 加载期注入（py_sdk/sdk.py 的 mod.ctx = ctx）。
+# 这里只声明名字与类型：静态检查不再报 F821、IDE 可补全；运行时值会被注入覆盖。
+ctx = cast("PluginContext", None)
 
 __plugin_meta__ = {
     "name": "LLM黑名单",

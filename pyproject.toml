@@ -8,9 +8,9 @@
 #     1) requirements.txt —— 传统入口，startup.py 启动自检读取的就是它（兼容保留）
 #     2) 本文件 [project.dependencies] / [project.optional-dependencies]
 #   修改依赖时请同时更新两处。
-# - flask/flask-cors/waitress 属于 Web 管理后台可选组（web），
-#   仅当启用 core_plugins/webui 时由插件加载器自动安装；
-#   未启用时框架 API 层只注册假节点，不加载 Flask。
+# - flask / flask-cors / waitress 是**核心依赖**（core_plugins.yaml 里 webui
+#   默认 enabled: true，默认安装路径就会加载 Web 后台）；`[web]` extra 仅为
+#   兼容旧文档 `pip install "zcbot[web]"` 保留，内容已与核心依赖一致。
 # ============================================================
 
 [project]
