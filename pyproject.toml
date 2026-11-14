@@ -73,10 +73,14 @@ plugins = [
 # ——实测 28 条用例因此长期红着，看起来像功能坏了，其实是环境没装插件。
 dev = [
     "pytest>=7.4",
-    "pytest-asyncio>=0.23",
+    # 锁 <1.0：1.0 改了 asyncio 默认模式，与 .github/workflows/*.yml 的
+    # `pytest-asyncio>=0.21,<1.0` 保持同一口径，避免本地与 CI 语义不一致。
+    "pytest-asyncio>=0.23,<1.0",
     # CI 用 `pytest --timeout=120` 防挂死；不装它这条命令会直接报
     # "unrecognized arguments: --timeout"，本地按文档装 dev 组也必须能复现 CI。
     "pytest-timeout>=2.2",
+    # CI 归档覆盖率用；本地不装则 `--cov` 直接报 unrecognized arguments。
+    "pytest-cov>=5.0",
     "ruff>=0.6",
 ]
 

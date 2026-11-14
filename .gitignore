@@ -183,6 +183,7 @@ tests/_perm_test_*.db-*
 # 覆盖率等构建产物
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 
 # 发布二进制保护性例外（有意跟踪，防止后续宽泛规则误伤；

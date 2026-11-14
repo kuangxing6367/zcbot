@@ -26,6 +26,51 @@
 
 ---
 
+## 开发中
+
+> 主题：**把测试口径从「两份手写清单」收敛为「一处自动发现」**。
+> 起因是 v1.22.0 的技术债审计：`ci.yml` 与 `tests.yml` 各自维护一份手写测试文件清单，
+> 两份内容互相错位，导致 26 个测试文件、342 个用例不在任何 CI 里执行；
+> 另有 14 个文件的用例函数体零 `assert`，被 pytest 收集到却永远 PASS。
+> 本节改动全部以真跑结案（本地全量 + 干净树序列 + CI 实跑）。
+
+### 修复：26 个测试文件、342 个用例从未在 CI 执行
+
+`tests/` 下有 98 个 `test_*.py`，两份手写清单加起来只覆盖 72 个。漏跑的包括三个安全套件
+（`test_api_security.py` / `test_p0_security_regressions.py` / `test_security_hardening.py`），
+以及上一轮刚修完恒真断言的 `test_buffer_l2_file.py` / `test_scheduler_graceful.py`——等于修了也没人验证。
+漏加文件是静默失败：YAML 里没有它，评审也看不出来。
+
+- 新增 `tools/run_script_tests.py`：用 AST 静态分析判定「必须脚本执行」的文件——
+  没有 `def test_*`（pytest 收集 0 例，整个文件不执行），或全部用例零断言
+  （收集到了但永远 PASS）。判定结果 20 个文件，逐个 `python` 执行，清单不再手写。
+- 新增 `--check` 模式：断言 pytest 收集数不低于基线（当前 1000），
+  防止 `--ignore` / `-k` / `--deselect` 把用例悄悄丢掉。
+- `tests.yml` 的 pytest 步骤改为 `pytest tests --ignore=tests/db_conformance` 全量收集，
+  不再列文件名。
+
+### 变更：CI 分层
+
+- `ci.yml` 收敛为快速闸门：多版本 `compileall`（3.10–3.14）+ 启动冒烟 + WebUI 产物校验。
+  两份手写测试清单删除——测试口径统一到 `tests.yml`，同一件事不再有两份真相。
+- `tests.yml` 成为权威测试流：矩阵 3.10–3.13 正式 + 3.14 观察（`continue-on-error`，
+  跑绿一轮后转正）；脚本式回归、全量 pytest、DB 一致性套件、覆盖率 XML 归档。
+- 新增 `windows-smoke` 作业：此前 CI 全部跑在 `ubuntu-latest`，而本项目的主要使用与
+  开发平台是 Windows。首轮观察，稳定后转硬门禁。
+
+### 新增：覆盖率采集（只观测，不设阈值）
+
+CI 开始归档 `coverage.xml`（仅 3.12 版本）。当前语句覆盖率约 50%（38,652 行 / 233 个文件，
+11 个模块零覆盖）。先沉淀历史曲线，水位稳定后再上 ratchet（只许升不许降）。
+
+### 其他
+
+- `pyproject.toml` dev 组补 `pytest-cov`，并把 `pytest-asyncio` 锁到 `<1.0`，
+  与 workflow 里的口径一致（此前 dev 组只写 `>=0.23`，本地可能装到 1.x 改变默认模式）。
+- `.gitignore` 补 `coverage.xml`。
+
+---
+
 ## [1.22.0] - 2026-11-14
 
 > 主题：**把「装完就能用」和「装了能验」两条路都跑通**——先是 pip 安装态的整条

@@ -1,3 +1,15 @@
+# 快速闸门：多版本语法兼容 + 启动冒烟 + WebUI 产物校验（秒级反馈）
+#
+# 分层约定（2026-11-14 起）：
+#   ci.yml    —— 本文件。多版本 compileall + 启动冒烟 + 前端产物校验，快速失败
+#   tests.yml —— 权威测试流。矩阵全量 pytest + 脚本式回归 + DB 一致性 + 覆盖率
+#
+# 为什么这里不再跑测试
+# ====================
+# 本文件原先维护着一份手写测试文件清单，tests.yml 里还有另一份，两份互相错位
+# ——26 个测试文件、342 个用例不在任何 CI 里执行（含三个安全套件）。
+# 测试口径现在收敛到 tests.yml 单一入口（`pytest tests` 全量），本文件只保留
+# 与「能不能装上、能不能起来、语法在各版本是否合法」相关的快速检查。
 name: CI
 
 on:
@@ -6,12 +18,12 @@ on:
   pull_request:
 
 jobs:
-  test:
+  compile:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: [ "3.10", "3.12", "3.13", "3.14" ]
+        python-version: [ "3.10", "3.11", "3.12", "3.13", "3.14" ]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,134 +37,26 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # 核心依赖已含 flask / flask-cors / waitress（webui 默认启用），这里只补
-          # 测试运行器。pytest-asyncio 锁 <1.0：1.0 改了默认模式，可能破坏
-          # asyncio_mode=auto 行为（tests.yml 用同一口径）。
-          pip install pytest "pytest-asyncio>=0.21,<1.0" pytest-timeout
-          # 官方插件依赖（aiwriter 的 textual 等）未在 requirements.txt 声明，跑全量测试需装齐
+          # 官方插件依赖（aiwriter 的 textual 等）未在 requirements.txt 声明，
+          # 启动冒烟会加载插件，需装齐。
           for f in core_plugins/*/requirements.txt; do
             [ -f "$f" ] && pip install -r "$f"
           done
 
+      # 语法兼容性：matrix 里每个版本都要能 import 整个包树。
       - name: Compile check
         run: python -m compileall -q framework core_plugins
 
-      # 显式 pytest 文件列表：仓库内部分为「脚本式自测」（模块顶层 sys.exit，
-      # 如 test_perm.py / test_plugin_imports.py，须用 `python tests/xxx.py` 单独跑）
-      # 与「纯 pytest 用例」两类。盲跑 `pytest tests/` 会因脚本式文件的顶层 sys.exit
-      # 中断收集，故这里只收编带 def test_ 的纯 pytest 用例。
-      # 脚本式自测（check() 只记录不抛、sys.exit 在 main() 里）必须用
-      # `python tests/xxx.py` 跑。旧版把它们塞进 pytest，pytest 收集 test_*
-      # 后函数体内零 assert，失败也一律 PASS —— CI 全绿是假的。
-      - name: Run script-style regressions
-        run: |
-          set -e
-          for f in \
-            tests/test_json_logging.py \
-            tests/test_config_hotapply.py \
-            tests/test_message_contract.py \
-            tests/test_observability.py \
-            tests/test_plugin_requires.py \
-            tests/test_db_migrations.py \
-            tests/test_buffer_refill.py \
-            tests/test_security_hardening.py \
-            tests/test_self_heal.py \
-            tests/test_config_validation.py \
-            tests/test_scheduler_graceful.py \
-            tests/test_blackbox_extreme.py \
-            tests/test_blackbox_integration.py \
-            tests/test_disable_vs_selfheal_bug.py \
-            tests/test_multi_platform.py; do
-            echo "== $f =="
-            python "$f"
-          done
-
-      # asyncio_mode=auto 让带 async def 的缓冲层用例也能被原生驱动。
-      - name: Run tests
-        run: |
-          python -m pytest -q --timeout=120 -o asyncio_mode=auto -p no:cacheprovider \
-            tests/test_aiwriter.py \
-            tests/test_api_security.py \
-            tests/test_buffer_l2_file.py \
-            tests/test_core_plugin_switch.py \
-            tests/test_config_defaults.py \
-            tests/test_console_server.py \
-            tests/test_db_regression.py \
-            tests/test_dual_core.py \
-            tests/test_event_buffer.py \
-            tests/test_file_store_fallback.py \
-            tests/test_html_assembler.py \
-            tests/test_inbound_guard.py \
-            tests/test_outbound_guard.py \
-            tests/test_backoff.py \
-            tests/test_ipc_perf.py \
-            tests/test_llm_core.py \
-            tests/test_llm_load.py \
-            tests/test_loop_fix_regression.py \
-            tests/test_plugin_decorators.py \
-            tests/test_qq_official.py \
-            tests/test_qq_official_extra.py \
-            tests/test_scheduler.py \
-            tests/test_smoke.py \
-            tests/test_sql_sim_debug.py \
-            tests/test_task2_arch_split.py \
-            tests/test_terminal_panel.py \
-            tests/test_orphan_selfcheck.py \
-            tests/test_coalesce_summary.py \
-            tests/test_watchdog_stack.py \
-            tests/test_log_correlation.py \
-            tests/test_command_conflict.py \
-            tests/test_config_authority.py \
-            tests/test_mysql_config_guard.py \
-            tests/test_adapter_error_handling.py \
-            tests/test_db_resilience.py \
-            tests/test_new_adapters.py \
-            tests/test_p0_regressions.py \
-            tests/test_p0_security_regressions.py \
-            tests/test_p1_deploy_regressions.py \
-            tests/test_adapter_retcodes.py \
-            tests/test_adapter_outbound.py \
-            tests/test_concurrency_regressions.py \
-            tests/test_iipc_auth.py tests/test_iipc_launcher_stale.py \
-            tests/test_perf_regressions.py \
-            tests/test_perm_cache_invalidation.py \
-            tests/test_plugin_cache_regressions.py \
-            tests/test_token_security_regressions.py \
-            tests/test_runtime_hardening_regressions.py \
-            tests/test_blackbox.py \
-            tests/test_blackbox_trace.py \
-            tests/test_core_plugin_deps.py \
-            tests/test_crash_guard.py \
-            tests/test_dispatch_drop_visibility.py \
-            tests/test_event_classify.py \
-            tests/test_extreme_conditions.py \
-            tests/test_hook_serial_parallel.py \
-            tests/test_iipc_client_dispatch.py \
-            tests/test_iipc_silent_drop.py \
-            tests/test_image_rect_normalization.py \
-            tests/test_image_renderer_assets.py \
-            tests/test_core_plugin_config_api.py \
-            tests/test_loop_watchdog.py \
-            tests/test_main_selfcheck_config.py \
-            tests/test_message_classified_hook.py \
-            tests/test_plugin_api_unmount.py \
-            tests/test_plugin_route_hotmount.py \
-            tests/test_scheduler_reliability.py \
-            tests/test_session_tokens.py \
-            tests/test_telegram_offset.py
-
-      # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────────
-      # 允许工作流正常产生且已被 .gitignore 覆盖的文件（不出现在 git status）；
-      # 例外放行项目有意跟踪的 native/bin 发布二进制。细则见脚本内注释。
-      - name: Workspace guard (pollution + test residue)
-        run: bash .github/scripts/guard_workspace.sh
+      # 启动冒烟：走脚本入口（tests/test_smoke.py 同时兼容脚本与 pytest 两种方式，
+      # 全量用例在 tests.yml 跑，这里只验证「能起、能派发一轮」）。
+      - name: Startup smoke
+        run: python tests/test_smoke.py
 
   # ── WebUI：构建产物存在性检查 ──────────────────────────────
   # 前端源码为闭源资产（不进仓库），仅发布 core_plugins/webui/web 构建产物。
   # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布产物。
-  # v1.20.0 曾漏推 >1MB 的 element-plus chunk，index.html 与全部 chunk 静态
-  # import 它但仓库没有 → 新 clone 白屏，而旧门禁只查「js 数量>0」查不出来。
-  # 现在校验 index.html / chunk 内所有 hash 引用真实存在，并拒绝无引用的旧版大文件。
+  # v1.20.0 曾漏推 >1MB 的 element-plus chunk 导致新 clone 白屏；
+  # 现在校验 index.html / chunk 内所有 hash 引用真实存在（见 tools/check_webui_artifact.py）。
   webui-build:
     runs-on: ubuntu-latest
     steps:

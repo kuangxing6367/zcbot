@@ -1,4 +1,21 @@
-# 运行 Python 回归 + 冒烟（不编译原生扩展、不部署文档）
+# 权威测试流：Python 全量回归 + 冒烟（不编译原生扩展、不部署文档）
+#
+# 分层约定（2026-11-14 起）：
+#   ci.yml    —— 快速闸门：多版本 compileall + WebUI 产物校验，秒级返回
+#   tests.yml —— 权威测试：矩阵全量 pytest + 脚本式回归 + DB 一致性 + 覆盖率归档
+#
+# 为什么不再手写文件清单
+# ====================
+# v1.22.0 审计发现：ci.yml 与 tests.yml 各自维护一份手写测试文件清单，两份内容
+# 互相错位——26 个测试文件、342 个用例不在任何 CI 里执行，其中包含
+# test_api_security / test_p0_security_regressions / test_security_hardening
+# 三个安全套件。还有 14 个文件的用例函数体零 assert，被 pytest 收集到却永远 PASS。
+#
+# 手写清单的失效模式是静默的：新增文件忘了加进 YAML 不报错，评审也看不出来。
+# 现在改为：
+#   1. 脚本式文件由 tools/run_script_tests.py 静态分析自动发现并逐个执行；
+#   2. 其余全部交给 `pytest tests`，不列文件名；
+#   3. tools/run_script_tests.py --check 断言用例数不低于基线，防止 --ignore 悄悄丢用例。
 name: tests
 
 on:
@@ -12,7 +29,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        experimental: [false]
+        include:
+          # 3.14 观察一轮：requires-python 无上界，等于对外声明支持，但此前
+          # 全量测试从未在 3.13/3.14 上跑过（ci.yml 只在 3.13/3.14 跑 compileall）。
+          # 跑绿一轮后把 experimental 去掉，转为正式矩阵成员。
+          - python-version: "3.14"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python ${{ matrix.python-version }}
@@ -30,98 +55,85 @@ jobs:
           for f in core_plugins/*/requirements.txt; do
             [ -f "$f" ] && pip install -r "$f"
           done
-      - name: Plugin import regression
-        run: python tests/test_plugin_imports.py
-      - name: Dual-core regression
-        run: python tests/test_dual_core.py
-      - name: Permission engine regression
-        run: python tests/test_perm.py
-      - name: Startup + dispatch smoke
-        run: python tests/test_smoke.py
-      - name: Hot reload regression
-        run: python tests/test_hot_reload.py
-      - name: i18n lang files regression
-        run: python tests/test_i18n_lang.py
-      - name: LLM trace regression
-        run: python tests/test_llm_trace.py
-      - name: LLM RAG regression
-        run: python tests/test_llm_rag.py
-      - name: Observability endpoints regression
-        run: python tests/test_observability.py
-      - name: Plugin requires regression
-        run: python tests/test_plugin_requires.py
-      - name: Config hot-apply regression
-        run: python tests/test_config_hotapply.py
-      - name: Structured (JSON) logging regression
-        run: python tests/test_json_logging.py
-      - name: DB migration ledger regression
-        run: python tests/test_db_migrations.py
-      - name: Inbound reliability (dedup + rate limit) regression
-        run: python tests/test_inbound_guard.py
-      - name: Outbound gate (throttle + retry) regression
-        run: python tests/test_outbound_guard.py
-      - name: Reconnect backoff regression
-        run: python tests/test_backoff.py
-      - name: Config missing-section fill regression
-        run: python tests/test_config_defaults.py
-      # 脚本式回归（模块顶层 sys.exit，pytest 收集会 INTERNALERROR / 零断言假绿）
-      - name: Extreme script-style regressions
+      - name: Install test runners
         run: |
-          set -e
-          for f in \
-            tests/test_blackbox_extreme.py \
-            tests/test_blackbox_integration.py \
-            tests/test_disable_vs_selfheal_bug.py \
-            tests/test_multi_platform.py; do
-            echo "== $f =="
-            python "$f"
-          done
-      # pytest 用例与脚本式回归并存：显式列文件（模块级 sys.exit 的脚本走上面的
-      # 脚本式步骤，不能塞进 pytest），test_smoke.py 本身两种方式兼容
-      - name: Pytest suite (all collectible regressions)
+          # pytest-asyncio 锁 <1.0：1.0 改了默认模式，与 ci.yml 保持同一口径。
+          # pytest-cov 只采集不设阈值——当前语句覆盖率约 50%，先在 CI 里沉淀
+          # 历史曲线，等水位稳定再上 ratchet（只许升不许降）。
+          pip install pytest "pytest-asyncio>=0.21,<1.0" pytest-timeout pytest-cov
+
+      # ── 脚本式回归 ────────────────────────────────────────────────
+      # 断言写在 check() 里、失败时 sys.exit 的文件：pytest 要么收集 0 个用例
+      # （整个文件不执行），要么收集到但函数体零 assert（永远 PASS）。
+      # 清单由 AST 静态分析生成，新增文件自动纳入。
+      - name: Script-style regressions (auto-discovered)
+        run: python tools/run_script_tests.py
+
+      # ── 全量 pytest ───────────────────────────────────────────────
+      # 不列文件名。db_conformance 单独跑（自带 conftest 参数化，未来接 MySQL 后端）。
+      - name: Pytest suite (full)
         run: |
-          # pytest-asyncio 必须显式装：pyproject.toml 里 asyncio_mode=auto 只在
-          # 插件存在时才有意义，缺插件的表现是 7 个裸 async 用例直接判失败
-          # （"async def functions are not natively supported"），而不是跳过。
-          # 版本锁 <1.0 与 ci.yml 保持一致：1.0 改了默认模式。
-          pip install pytest "pytest-asyncio>=0.21,<1.0"
-          python -m pytest \
-            tests/test_aiwriter.py tests/test_console_server.py tests/test_smoke.py \
-            tests/test_html_assembler.py tests/test_event_buffer.py \
-            tests/test_qq_official.py tests/test_qq_official_extra.py \
-            tests/test_scheduler.py tests/test_db_regression.py \
-            tests/test_loop_fix_regression.py tests/test_file_store_fallback.py \
-            tests/test_sql_sim_debug.py tests/test_terminal_panel.py \
-            tests/test_llm_load.py tests/test_llm_core.py \
-            tests/test_message_contract.py tests/test_task2_arch_split.py \
-            tests/test_adapter_retcodes.py tests/test_concurrency_regressions.py \
-            tests/test_iipc_auth.py tests/test_iipc_launcher_stale.py \
-            tests/test_perf_regressions.py tests/test_perm_cache_invalidation.py \
-            tests/test_plugin_cache_regressions.py tests/test_token_security_regressions.py \
-            tests/test_runtime_hardening_regressions.py \
-            tests/test_blackbox.py tests/test_blackbox_trace.py \
-            tests/test_core_plugin_deps.py tests/test_crash_guard.py \
-            tests/test_dispatch_drop_visibility.py tests/test_event_classify.py \
-            tests/test_extreme_conditions.py tests/test_hook_serial_parallel.py \
-            tests/test_iipc_client_dispatch.py tests/test_iipc_silent_drop.py \
-            tests/test_image_rect_normalization.py tests/test_loop_watchdog.py \
-            tests/test_main_selfcheck_config.py tests/test_message_classified_hook.py \
-            tests/test_plugin_api_unmount.py tests/test_plugin_route_hotmount.py \
-            tests/test_scheduler_reliability.py tests/test_session_tokens.py \
-            tests/test_telegram_offset.py \
-            tests/test_ctx_contract_and_install_regressions.py \
-            tests/test_decorator_only_plugin.py -q
+          python -m pytest tests --ignore=tests/db_conformance -q --timeout=180 \
+            --cov=framework --cov=core_plugins \
+            --cov-report=xml:coverage.xml --cov-report=term:skip-covered
+
+      # ── 用例数护栏 ────────────────────────────────────────────────
+      # 收集数低于基线通常意味着 pytest 调用被加了 --ignore/-k/--deselect，
+      # 或者测试文件被误删。确认是有意变更后上调 tools/run_script_tests.py。
+      - name: Assert collected case count
+        run: python tools/run_script_tests.py --check
+
+      - name: Upload coverage xml
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-3.12
+          path: coverage.xml
+          retention-days: 14
+          if-no-files-found: warn
+
       # ── 多后端一致性套件（默认 sqlite，无需 MySQL）────────────────
       # tests/db_conformance 自带 conftest 参数化，--db 默认 sqlite；
       # 覆盖 schema 对齐、事务、类型映射、方言翻译与并发，共 51 例。
       - name: DB conformance suite (sqlite)
         run: python -m pytest tests/db_conformance -q
+
       # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────
       # 本作业 pytest 未加 -p no:cacheprovider，会正常产生 .pytest_cache/ 与
       # __pycache__/——已被 .gitignore 覆盖，git status 不可见，天然放行；
       # 例外放行项目有意跟踪的 native/bin 发布二进制。细则见脚本内注释。
       - name: Workspace guard (pollution + test residue)
         run: bash .github/scripts/guard_workspace.sh
+
+  # ── Windows 冒烟 ────────────────────────────────────────────────────
+  # 此前 CI 全部跑在 ubuntu-latest，而本项目的主要使用与开发平台是 Windows
+  # （宝塔外的裸机部署、桌面托盘、.pyd 原生扩展）。先在 Windows 上跑一轮全量
+  # 观察，失败不阻塞主干；稳定后转为硬门禁。
+  windows-smoke:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # 部分插件的可选依赖在 Windows 上需预编译轮子（如 rust_accel），
+          # 缺失时跳过该插件即可，不让安装失败中断冒烟。
+          for f in core_plugins/*/requirements.txt; do
+            [ -f "$f" ] && pip install -r "$f" || echo "skip: $f"
+          done
+          pip install pytest "pytest-asyncio>=0.21,<1.0" pytest-timeout
+      - name: Startup smoke (script-style)
+        shell: bash
+        run: python tests/test_smoke.py
+      - name: Full pytest suite
+        shell: bash
+        run: python -m pytest tests --ignore=tests/db_conformance -q --timeout=240
 
   # ── 静态契约门禁 ────────────────────────────────────────────────────
   # 插件模块级 ctx 是加载期注入的（module.ctx = ctx），静态检查天生看不见。
@@ -139,18 +151,3 @@ jobs:
         run: python -m pip install "ruff>=0.6"
       - name: No undefined names (F821)
         run: python -m ruff check --isolated --select F821 .
-
-  # ── WebUI：构建产物存在性检查 ──────────────────────────
-  # 前端源码为闭源资产（不进仓库），仅发布 core_plugins/webui/web 构建产物。
-  # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布产物。
-  # v1.20.0 曾漏推 >1MB 的 element-plus chunk 导致新 clone 白屏；
-  # 现在校验 index.html / chunk 内所有 hash 引用真实存在（见 tools/check_webui_artifact.py）。
-  webui-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verify WebUI artifact present
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tools/check_webui_artifact.py --root core_plugins/webui/web
