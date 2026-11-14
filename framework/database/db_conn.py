@@ -6,7 +6,9 @@
 import logging
 import os
 import sqlite3
+import threading
 import time
+from contextlib import suppress
 
 # MySQL 连接断开类错误码（触发自动重连）——定义在此避免 db↔db_conn 循环
 _MYSQL_RECONNECT_ERRORS = {2006, 2013, 2055, 1927, 1040}
@@ -20,6 +22,25 @@ _MYSQL_RECONNECT_KEYWORDS = (
 )
 
 logger = logging.getLogger('zcbot')
+
+
+def _safe_close_conn(conn) -> None:
+    """尽力关闭 SQLite 连接。GC / 解释器退出阶段没有可上报的调用方，只记 debug。"""
+    try:
+        conn.close()
+    except Exception as _exc:  # 已关闭或连接已损坏
+        # finalizer 可能在解释器退出时跑，此时 logging 已拆掉，不能再往外抛
+        with suppress(Exception):
+            logger.debug('[db] 关闭 SQLite 连接失败: %s', _exc)
+
+
+def _close_conns_at_collect(conns, lock) -> None:
+    """weakref.finalize 回调：Database 被回收时关掉它名下所有 SQLite 连接。"""
+    with lock:
+        pending = list(conns)
+        conns.clear()
+    for _ident, conn in pending:
+        _safe_close_conn(conn)
 
 
 class DatabaseConnMixin:
@@ -195,7 +216,36 @@ class DatabaseConnMixin:
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA wal_autocheckpoint=2000")  # 调大 checkpoint 间隔，降低写放大
             self._local.conn = conn
+            self._track_sqlite_conn(conn)
         return conn
+
+    # ── SQLite 连接生命周期 ────────────────────────────────────
+    # 线程本地连接由创建它的线程持有，线程结束时没人负责关。进程退出或
+    # Database 被回收时若不显式 close，sqlite3 会在 dealloc 时抛
+    # ResourceWarning: unclosed database；Windows 上更实际——句柄还挂着，
+    # 临时库删不掉（测试与一次性 Database 实例是重灾区）。
+
+    def _track_sqlite_conn(self, conn):
+        """登记新建的 SQLite 连接（附创建线程 ident），交给 finalizer 兜底关闭。"""
+        entries = getattr(self, '_sqlite_conns', None)
+        lock = getattr(self, '_conns_lock', None)
+        if entries is None or lock is None:
+            # 兼容未走 Database.__init__ 的子类/测试替身：不登记，行为退回原样
+            return
+        with lock:
+            entries.append((threading.get_ident(), conn))
+
+    def _untrack_sqlite_conn(self, conn):
+        """连接已主动关闭时从登记表摘掉，避免 finalizer 二次 close。"""
+        entries = getattr(self, '_sqlite_conns', None)
+        lock = getattr(self, '_conns_lock', None)
+        if entries is None or lock is None:
+            return
+        with lock:
+            for i, (_ident, tracked) in enumerate(entries):
+                if tracked is conn:
+                    del entries[i]
+                    return
 
     @staticmethod
     def _is_pool_waitable(exc: Exception) -> bool:
@@ -323,10 +373,32 @@ class DatabaseConnMixin:
                     conn.close()
                 except Exception as e:
                     logger.warning(f"关闭 SQLite 线程连接失败: {e}")
+                self._untrack_sqlite_conn(conn)
                 try:
                     del self._local.conn
                 except Exception as _exc:
                     logger.debug('[_close_thread_conn] 捕获异常后按降级路径继续: %s', _exc)
+
+    def _close_tracked_conns(self, dead_only: bool = True):
+        """关闭登记表里的 SQLite 连接。
+
+        :param dead_only: True（默认）只关已结束线程遗留的连接——仍在跑的线程
+                          手里那条不能被别的线程 close，否则它下一次查询直接
+                          ProgrammingError。shutdown/GC 时才允许全关。
+        """
+        entries = getattr(self, '_sqlite_conns', None)
+        lock = getattr(self, '_conns_lock', None)
+        if entries is None or lock is None:
+            return
+        alive = {t.ident for t in threading.enumerate()} if dead_only else set()
+        with lock:
+            pending = []
+            remaining = []
+            for ident, conn in entries:
+                (remaining if dead_only and ident in alive else pending).append((ident, conn))
+            entries[:] = remaining
+        for _ident, conn in pending:
+            _safe_close_conn(conn)
 
     def _mark_conn_used(self):
         """记录连接最近使用时间（避免频繁 ping）"""
@@ -412,7 +484,7 @@ class DatabaseConnMixin:
         }
 
     def close(self):
-        """关闭连接：MySQL 关闭整个连接池，SQLite 关闭当前线程连接"""
+        """关闭连接：MySQL 关闭整个连接池；SQLite 关当前线程 + 已结束线程遗留的连接。"""
         if self.db_type == 'mysql':
             if self._pool is not None:
                 try:
@@ -421,3 +493,4 @@ class DatabaseConnMixin:
                     logger.warning(f"关闭 MySQL 连接池失败: {e}")
         else:
             self._close_thread_conn()
+            self._close_tracked_conns()

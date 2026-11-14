@@ -23,6 +23,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import suppress
 
 logger = logging.getLogger('zcbot')
 
@@ -223,6 +224,19 @@ class _FileL2Backend:
                 self._fh = None
         except Exception as _exc:
             logger.debug('关闭事件缓冲文件句柄失败: %s', _exc)
+
+    def __del__(self):
+        """兜底关闭文件句柄：正常路径必须显式 close()。
+
+        调用方（测试 / 组件重建）忘了 close 时，句柄会挂到 GC 才关；Windows 上
+        期间文件删不掉、改不了名，进程里也白占一个 fd。解释器退出阶段 logging
+        可能已拆掉，这里不写日志，失败就算了——再抛异常只会污染 stderr。
+        """
+        fh = getattr(self, '_fh', None)
+        self._fh = None
+        if fh is not None:
+            with suppress(Exception):
+                fh.close()
 
 
 class EventBuffer:
@@ -1154,6 +1168,23 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
         if self._l2_file is not None:
             self._l2_file.close()
             self._l2_file = None
+
+    def __del__(self):
+        """兜底释放 L2 后端（文件句柄 / sqlite 连接）。
+
+        只做关闭，不做 close() 里的 VACUUM 与 L4 落盘——那些属于停机流程，
+        __del__ 里跑等于在一个不确定的线程上做重活。调用方仍应显式 close()。
+        """
+        l2 = getattr(self, '_l2_file', None)
+        self._l2_file = None
+        if l2 is not None:
+            with suppress(Exception):
+                l2.close()
+        conn = getattr(self, '_sqlite_conn', None)
+        self._sqlite_conn = None
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
 
     def stats(self) -> dict:
         # 【踩坑保佑】v1.7.0 事件三层缓冲

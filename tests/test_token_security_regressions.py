@@ -66,6 +66,12 @@ def _teardown(env):
         env['fw']._db_executor.shutdown(wait=False)
     except Exception:
         pass
+    # 先关库再删文件：SQLite 连接没关时 Windows 上 os.remove 会 PermissionError，
+    # 临时目录也删不干净（旧实现靠 GC 兜底，等于随机失败）。
+    try:
+        env['fw'].db.close()
+    except Exception:
+        pass
     for p in (env['db_path'], env['db_path'] + '-wal', env['db_path'] + '-shm'):
         try:
             os.remove(p)

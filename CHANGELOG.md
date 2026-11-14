@@ -34,6 +34,29 @@
 > 另有 14 个文件的用例函数体零 `assert`，被 pytest 收集到却永远 PASS。
 > 本节改动全部以真跑结案（本地全量 + 干净树序列 + CI 实跑）。
 
+### 修复：数据库连接与事件缓冲句柄的确定性关闭
+
+以 `-W always::ResourceWarning` 跑测试暴露两类真句柄泄漏，都用「显式 close + finalizer 兜底」
+收口，不靠 GC 时机：
+
+- **SQLite 线程本地连接**：`_get_conn_sqlite` 建的连接由创建线程持有，线程结束、`Database`
+  被回收、进程退出三条路径都没人关。表现是 `ResourceWarning: unclosed database`，
+  在 Windows 上是真故障——句柄不还，临时库/日志库删不掉。现在连接创建即登记
+  （附线程 ident），`close()` 关当前线程 + 已结束线程遗留的连接（仍在跑的线程手里那条不碰，
+  跨线程 close 会让它下一次查询直接 `ProgrammingError`），`Database` 侧挂 `weakref.finalize`
+  做最后兜底。
+- **L2 文件后端句柄**：`_FileL2Backend` 的 `a+` 句柄、`EventBuffer` 的 L2 sqlite 连接，
+  调用方忘了 `close()` 时要挂到 GC 才关。补 `__del__` 只做关闭，不做正常 `close()` 里的
+  VACUUM / L4 落盘——那些属于停机流程，不该跑在不确定的线程上。
+- 测试侧一并收拾：`_teardown` 先关库再删临时库文件（旧写法靠 GC，Windows 上删不干净）；
+  5 处 `open().read()` 换成 `Path.read_text()`；静态文件响应显式 `close()`。
+
+验证（`-W always::ResourceWarning`，Windows 本机）：三个数据库测试文件 3 warnings → 0；
+数据库 + 事件缓冲 + 令牌 + 加固四组 96 passed，只剩 3 条 `unclosed event loop`
+（`ProactorEventLoop`，来源未定位，已单列待办）；`-W error::ResourceWarning` 下
+「建库 → 查询 → 丢弃 → gc」探针通过。
+
+
 ### 修复：26 个测试文件、342 个用例从未在 CI 执行
 
 `tests/` 下有 98 个 `test_*.py`，两份手写清单加起来只覆盖 72 个。漏跑的包括三个安全套件

@@ -17,6 +17,7 @@ import types
 import zipfile
 from contextlib import contextmanager
 from functools import wraps
+from pathlib import Path
 from types import SimpleNamespace
 
 import bcrypt
@@ -269,7 +270,9 @@ def test_static_route_never_serves_debug_credentials():
     others = [n for n in os.listdir(js_dir)
               if n.endswith('.js') and n != 'local.debug.js']
     assert others, '发布产物目录应有构建后的 js'
-    assert c.get('/js/' + others[0]).status_code == 200
+    resp = c.get('/js/' + others[0])
+    assert resp.status_code == 200
+    resp.close()   # 静态响应持着文件句柄，不关会漏 fd（Windows 上还会锁文件）
 
 
 # ------------------------------------------------------- 真实 Web 路由鉴权
@@ -363,12 +366,12 @@ def test_put_mask_placeholder_does_not_overwrite_config(web_env):
     """前端把脱敏表单整页回传时，不能把 '***' 写成真实配置。"""
     c = web_env['client']
     token = _login(c)
-    before = open(web_env['cfg'], encoding='utf-8').read()
+    before = Path(web_env['cfg']).read_text(encoding='utf-8')
     r = c.put('/api/config/yaml/onebot', json={'data': {'access_token': '***'}},
               headers={'Authorization': f'Bearer {token}'})
     assert r.status_code == 200, r.get_json()
     assert '已忽略' in r.get_json()['msg']
-    after = open(web_env['cfg'], encoding='utf-8').read()
+    after = Path(web_env['cfg']).read_text(encoding='utf-8')
     assert after == before
     assert 'atk-real-value' in after
 
@@ -617,11 +620,10 @@ def test_l2_single_write_waits_for_slow_success():
 # ------------------------------------------------ 部署 / 依赖前移
 
 def test_deploy_and_update_exclude_closed_source_webui():
-    deploy = open(os.path.join(ROOT, 'tools', 'deploy_remote.sh'), encoding='utf-8').read()
+    deploy = Path(ROOT, 'tools', 'deploy_remote.sh').read_text(encoding='utf-8')
     assert "--exclude='./webui'" in deploy
     assert "grep -q '^\\./webui/'" in deploy
-    upd = open(os.path.join(ROOT, 'framework', 'api', 'framework_update.py'),
-               encoding='utf-8').read()
+    upd = Path(ROOT, 'framework', 'api', 'framework_update.py').read_text(encoding='utf-8')
     whitelist = upd.split('_FW_UPDATE_INCLUDE')[1].split('}')[0]
     assert "'webui'" not in whitelist, '根目录闭源源码不能被更新包覆盖'
     assert 'core_plugins/webui/web' in whitelist, '构建产物必须仍可更新'
@@ -640,8 +642,7 @@ def test_optional_driver_install_moved_out_of_event_loop(tmp_path, monkeypatch):
     assert not called, 'sqlite 配置不应触发 pip'
     # 用 AST 判断「实际调用」，注释里提到旧实现的字样不算数
     import ast
-    src = open(os.path.join(ROOT, 'framework', 'database', 'db_conn.py'),
-               encoding='utf-8').read()
+    src = Path(ROOT, 'framework', 'database', 'db_conn.py').read_text(encoding='utf-8')
     calls = [n for n in ast.walk(ast.parse(src))
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
              and n.func.attr == 'run'

@@ -42,6 +42,7 @@ import os
 import re
 import threading
 import time
+import weakref
 from contextlib import contextmanager
 from threading import local
 
@@ -61,7 +62,7 @@ from framework.database.db_conn import (
 )
 
 # ── 数据库引擎 ──────────────────────────────────────────────────────
-from .db_conn import DatabaseConnMixin
+from .db_conn import DatabaseConnMixin, _close_conns_at_collect
 from .storage import create_storage
 
 
@@ -88,6 +89,13 @@ class Database(DatabaseConnMixin):
         self.config = config
         self.db_type = config.get('type', 'sqlite').lower()
         self._local = local()
+        # SQLite 连接登记表：线程本地连接在 Database 被回收 / 进程退出时统一关闭，
+        # 否则 sqlite3 在 dealloc 时抛 ResourceWarning: unclosed database，
+        # Windows 上文件句柄还会挂着导致库文件删不掉。
+        self._sqlite_conns = []
+        self._conns_lock = threading.Lock()
+        self._finalizer = weakref.finalize(
+            self, _close_conns_at_collect, self._sqlite_conns, self._conns_lock)
         # MySQL 连接保活/重连配置
         self._ping_interval = float(config.get('ping_interval', 5.0))   # 空闲多久 ping 一次检测连接是否存活
         self._connect_timeout = float(config.get('connect_timeout', 10))  # 建立连接超时（秒）
