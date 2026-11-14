@@ -71,6 +71,27 @@ def _boom(db):
     raise RuntimeError('模拟迁移失败')
 
 
+# 校验和只认结构：下面两个函数语句完全一致，只有注释 / 空行 / 文档措辞不同
+def _cmt_a(db):
+    """文档措辞 A"""
+    # 注释 A
+    _CALLS.append('c')
+
+
+def _cmt_b(db):
+    """文档措辞 B（改过一遍）"""
+
+    # 注释 B，还多了一个空行
+    _CALLS.append('c')
+
+
+def _cmt_logic(db):
+    """文档措辞 A"""
+    # 注释 A
+    _CALLS.append('c')
+    _CALLS.append('extra')
+
+
 def _registry():
     return [
         M.Migration(1, 'demo.create', _m1, '建演示表'),
@@ -159,6 +180,53 @@ def test_checksum_drift_detected_and_not_rerun():
     st = M.status(db, drifted)
     check(st['ok'] is False, '漂移：status.ok=False 供监控告警')
     check(len(st['drift']) == 1, '漂移：status 暴露 1 处')
+
+
+def test_checksum_ignores_comments_and_docstrings():
+    """校验和只认结构：改注释 / 空行 / docstring 不算「迁移被改动」"""
+    a = M.checksum_of(M.Migration(1, 'demo.same', _cmt_a))
+    b = M.checksum_of(M.Migration(1, 'demo.same', _cmt_b))
+    changed = M.checksum_of(M.Migration(1, 'demo.same', _cmt_logic))
+    check(a and a == b, '校验和：注释 / 空行 / docstring 不参与哈希')
+    check(a != changed, '校验和：改语句会改变哈希')
+
+
+def test_legacy_checksum_upgraded_without_drift():
+    """老账本（源码文本算法）→ 自动升到 AST 算法，不报 drift、不重跑"""
+    db = _new_db()
+    M.run_pending(db, _registry())
+    legacy = M.legacy_checksum_of(M.Migration(1, 'demo.create', _m1))
+    db.execute("UPDATE schema_migrations SET checksum = %s, checksum_algo = '' "
+               "WHERE version = 1", (legacy,))
+    _CALLS.clear()
+    report = M.run_pending(db, _registry())
+    check(not report['drift'], '旧账本：旧算法对得上 → 不报 drift')
+    check(_CALLS == [], '旧账本：升级过程不重跑迁移')
+    row = db.query_one("SELECT checksum, checksum_algo FROM schema_migrations "
+                       "WHERE version = 1")
+    check(row['checksum'] == M.checksum_of(M.Migration(1, 'demo.create', _m1)), '旧账本：校验和已换成 AST 值')
+    check(row['checksum_algo'] == M.CHECKSUM_ALGO, '旧账本：算法代际已标记')
+
+
+def test_legacy_checksum_reaccepted_once_then_strict():
+    """旧算法残值（源码早已被清注释）→ 一次性重新认定，之后按新算法严格比对"""
+    db = _new_db()
+    M.run_pending(db, _registry())
+    db.execute("UPDATE schema_migrations SET checksum = %s, checksum_algo = '' "
+               "WHERE version = 1", ('0' * 64,))
+    report = M.run_pending(db, _registry())
+    check(not report['drift'], '旧算法残值：首次按当前源码重新认定，不报 drift')
+    row = db.query_one("SELECT checksum, checksum_algo FROM schema_migrations "
+                       "WHERE version = 1")
+    check(row['checksum_algo'] == M.CHECKSUM_ALGO, '旧算法残值：认定后标记新代际')
+    check(row['checksum'] == M.checksum_of(M.Migration(1, 'demo.create', _m1)), '旧算法残值：账本写入新算法值')
+
+    bad = [M.Migration(1, 'demo.create', _m1_changed),
+           M.Migration(2, 'demo.add_b', _m2),
+           M.Migration(3, 'demo.noop', _m3)]
+    report2 = M.run_pending(db, bad)
+    check([d['version'] for d in report2['drift']] == [1],
+          '认定后严格：真改内容仍然报 drift')
 
 
 def test_baseline_stamps_without_running():

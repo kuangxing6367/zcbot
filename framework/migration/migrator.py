@@ -95,6 +95,14 @@ def read_ledger(home=None):
         return None, '账本不可解析 (%s)，视为损坏' % type(e).__name__
 
 
+def _is_empty_dir(path: str) -> bool:
+    """目录存在且为空（空壳目录没有可搬内容）"""
+    try:
+        return os.path.isdir(path) and not os.listdir(path)
+    except OSError:
+        return False
+
+
 def _outside(path: str, home: str) -> bool:
     try:
         return os.path.commonpath([os.path.realpath(path),
@@ -124,6 +132,11 @@ def _build_plan(home: str, report: dict, ledger: dict | None) -> list:
             continue
         if os.path.islink(src) and _outside(src, home):
             actions.append({'key': key, 'kind': 'unsafe-link', 'src': src, 'dst': dst})
+            continue
+        if kind == 'dir' and _is_empty_dir(src):
+            # 空壳目录：没有内容可搬，但 move 到已存在的 dst 会被判 conflict，
+            # 迁移就永久停在「需人工处理」。目录里确实没东西，跳过即可。
+            actions.append({'key': key, 'kind': 'skip-empty', 'src': src, 'dst': dst})
             continue
         if os.path.exists(dst):
             if dst in done:

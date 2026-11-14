@@ -34,6 +34,7 @@ schema_migrations 同理），不属于业务 schema。写进 init.sql 会让
 ``missing_required_tables`` 把它当成核心表，一旦缺失就触发整轮「建表 +
 种子数据」流程，语义错位。
 """
+import ast
 import hashlib
 import inspect
 import logging
@@ -50,6 +51,9 @@ logger = logging.getLogger('zcbot')
 
 LEDGER_TABLE = 'schema_migrations'
 RUNS_TABLE = 'schema_migration_runs'
+
+# 校验和算法代际：空 = v1.22.0 及以前的「函数源码文本」；ast-v1 = 结构哈希
+CHECKSUM_ALGO = 'ast-v1'
 
 # 账本里 origin 的取值：
 #   run      —— 引擎实际执行过
@@ -72,6 +76,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
     name        VARCHAR(128) NOT NULL,
     checksum    VARCHAR(64)  DEFAULT '',
+    checksum_algo VARCHAR(16) DEFAULT '',
     applied_at  VARCHAR(32)  DEFAULT NULL,
     duration_ms INTEGER      DEFAULT 0,
     success     INTEGER      DEFAULT 1,
@@ -90,6 +95,7 @@ CREATE TABLE IF NOT EXISTS `schema_migrations` (
     `version`     INT          NOT NULL PRIMARY KEY,
     `name`        VARCHAR(128) NOT NULL,
     `checksum`    VARCHAR(64)  DEFAULT '',
+    `checksum_algo` VARCHAR(16) DEFAULT '',
     `applied_at`  VARCHAR(32)  DEFAULT NULL,
     `duration_ms` INT          DEFAULT 0,
     `success`     TINYINT      DEFAULT 1,
@@ -149,6 +155,7 @@ _LEDGER_EXTRA_COLUMNS = (
     ('operator', "VARCHAR(64) DEFAULT ''"),
     ('ticket', "VARCHAR(64) DEFAULT ''"),
     ('reason', "VARCHAR(255) DEFAULT ''"),
+    ('checksum_algo', "VARCHAR(16) DEFAULT ''"),
 )
 
 # 执行流水表后续加的列：老库 CREATE TABLE 早于这些列，若不补列，
@@ -247,14 +254,22 @@ class MigrationContext:
 # ── 校验和 ────────────────────────────────────────────────────
 
 _checksum_cache: dict[int, str] = {}
+_legacy_checksum_cache: dict[int, str] = {}
 
 
 def checksum_of(migration: Migration) -> str:
-    """迁移体源码的 sha256（去掉公共缩进与行尾空白后计算）
+    """迁移体 **AST** 的 sha256（注释 / 空白 / docstring 不参与计算）
 
-    取源码而不是手工声明的字符串：手工声明等于「改代码忘了改校验和」，
+    取源码算校验和而不是手工声明字符串：手工声明等于「改代码忘了改校验和」，
     失效点正好在它要防的那件事上。SQL/文件型迁移（Flyway）哈希文件内容，
-    这里等价地哈希函数体。
+    这里等价地哈希函数的结构。
+
+    为什么是 AST 而不是文本：文本哈希会把注释、空行、格式化、以及 lint 批量的
+    注释清理都算成「迁移内容变了」。v1.23.0 的 RUF100 清理删掉一处 ``# noqa``，
+    已应用的 v9 就被判成 drift，此后每次启动都报「已应用的迁移被改动」——
+    真正想防的「改逻辑」没变，噪音却常年留着。AST 只描述结构：改逻辑会变，
+    改注释/排版/docstring 不会变。老账本由 :func:`resolve_recorded_checksum`
+    平滑升级，见 :func:`legacy_checksum_of`。
     """
     # 【踩坑保佑】v1.13.0 迁移校验和
     # 坑：取迁移体源码sha256，已应用被改动报drift不重跑  →  checksum_of
@@ -284,17 +299,122 @@ def checksum_of(migration: Migration) -> str:
     cached = _checksum_cache.get(key)
     if cached is not None:
         return cached
-    try:
-        src = inspect.getsource(migration.apply)
-    except (OSError, TypeError):
+    src = _dedented_source(migration.apply)
+    if not src:
         # 冻结分发（.pyc-only / 动态生成）取不到源码：不做校验，不误报
         _checksum_cache[key] = ''
         return ''
-    norm = '\n'.join(
-        line.rstrip() for line in textwrap.dedent(src).strip().splitlines())
+    try:
+        tree = _normalize_def_names(_strip_docstrings(ast.parse(src)))
+        norm = ast.dump(tree, annotate_fields=True, include_attributes=False)
+    except SyntaxError:
+        norm = '\n'.join(line.rstrip() for line in src.splitlines())
     digest = hashlib.sha256(norm.encode('utf-8')).hexdigest()
     _checksum_cache[key] = digest
     return digest
+
+
+def _dedented_source(func) -> str:
+    """取函数源码并去掉公共缩进；冻结分发取不到源码时返回空串"""
+    try:
+        return textwrap.dedent(inspect.getsource(func)).strip()
+    except (OSError, TypeError):
+        return ''
+
+
+def _strip_docstrings(tree):
+    """就地删掉 module / class / 函数体首项的字符串常量（docstring）
+
+    递归处理：嵌套函数、内部类的 docstring 一并去掉。只删常量表达式，
+    不动任何逻辑节点——目的是让「改文档措辞」不触发迁移 drift。
+    """
+    for node in ast.walk(tree):
+        body = getattr(node, 'body', None)
+        if not isinstance(body, list) or not body:
+            continue
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            body.pop(0)
+    return tree
+
+
+def _normalize_def_names(tree):
+    """把 def / class 的名字归一化（``_``）
+
+    函数名不承载迁移语义：把 ``_migrate_perm_tables`` 改成更清楚的名字，
+    迁移体一字未变。但名字属于 AST 字段，不归一化会让重命名误报 drift。
+    局部变量名**不**归一化——那是真在描述逻辑，保留才有区分度。
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            node.name = '_'
+    return tree
+
+
+def legacy_checksum_of(migration: Migration) -> str:
+    """v1.22.0 及以前的算法：函数源码文本 sha256（含注释与 docstring）
+
+    只用于把老账本平滑升到 AST 算法：账本记的是旧值、旧算法又能对上当前源码时，
+    说明迁移**内容**没变（只是被格式化/清注释碰到过），不该报 drift。
+    """
+    key = id(migration.apply)
+    cached = _legacy_checksum_cache.get(key)
+    if cached is not None:
+        return cached
+    src = _dedented_source(migration.apply)
+    if not src:
+        _legacy_checksum_cache[key] = ''
+        return ''
+    norm = '\n'.join(line.rstrip() for line in src.splitlines())
+    digest = hashlib.sha256(norm.encode('utf-8')).hexdigest()
+    _legacy_checksum_cache[key] = digest
+    return digest
+
+
+def resolve_recorded_checksum(recorded: str, migration: Migration,
+                              algo: str = '') -> tuple[str, str]:
+    """判定账本校验和与当前迁移是否一致，返回 ``(状态, 需回写的校验和)``
+
+    状态：
+
+    * ``ok``          一致（或本来就没有校验和可比）
+    * ``upgraded``    账本按旧算法记、旧算法能对上当前源码 —— 内容逐字未变，只换算法
+    * ``reaccepted``  账本按旧算法记、旧算法对不上 —— 旧算法把注释/格式也算进哈希，
+                      又无法反推当时的源码，只能一次性重新认定；之后按新算法严格比对
+    * ``drift``       账本已按新算法记、内容确实变了（真正的「改已应用的迁移」）
+
+    第二个返回值为空串表示无需回写。
+    """
+    actual = checksum_of(migration)
+    if not recorded or not actual:
+        return 'ok', ''
+    if recorded == actual:
+        # 值对得上，但 algo 还空着（老账本）→ 补个标记，以后走严格分支
+        return ('ok', '') if algo == CHECKSUM_ALGO else ('ok', actual)
+    if algo == CHECKSUM_ALGO:
+        return 'drift', ''
+    if recorded == legacy_checksum_of(migration):
+        return 'upgraded', actual
+    return 'reaccepted', actual
+
+
+def _upgrade_checksum(database, migration: Migration, checksum: str,
+                      reaccepted: list | None = None) -> None:
+    """把账本里的校验和与算法代际一起换成新值（失败不阻断本轮迁移）"""
+    try:
+        with database.transaction():
+            database.execute(
+                f"UPDATE {LEDGER_TABLE} SET checksum = %s, checksum_algo = %s "
+                "WHERE version = %s",
+                (checksum, CHECKSUM_ALGO, int(migration.version)))
+        if reaccepted is not None:
+            reaccepted.append(f"v{migration.version} {migration.name}")
+        else:
+            logger.info("数据库迁移: v%d %s 的账本校验和已升级为 %s（迁移内容未变）",
+                        migration.version, migration.name, CHECKSUM_ALGO)
+    except Exception as e:
+        logger.debug("数据库迁移: 升级账本校验和失败（下次启动重试）: %s", e)
 
 
 # ── 账本 / 流水表 ─────────────────────────────────────────────
@@ -363,6 +483,7 @@ def _ledger_rows(database) -> dict[int, dict]:
                 'version': int(r['version']),
                 'name': r.get('name') or '',
                 'checksum': r.get('checksum') or '',
+                'checksum_algo': r.get('checksum_algo') or '',
                 'applied_at': r.get('applied_at') or '',
                 'duration_ms': int(r.get('duration_ms') or 0),
                 'success': bool(int(r.get('success') or 0)),
@@ -384,8 +505,8 @@ def _write_record(database, migration: Migration, checksum: str, duration_ms: in
     """写/覆盖账本里的「当前状态」（同版本重试时覆盖上一次的失败记录）"""
     ctx = context or MigrationContext()
     now = str(int(time.time()))
-    vals = (migration.name, checksum, now, int(duration_ms), 1 if success else 0,
-            origin, (note or '')[:255], migration.level,
+    vals = (migration.name, checksum, CHECKSUM_ALGO, now, int(duration_ms),
+            1 if success else 0, origin, (note or '')[:255], migration.level,
             (ctx.operator or '')[:64], (ctx.ticket or '')[:64],
             (ctx.reason or '')[:255])
     existing = database.query_one(
@@ -393,16 +514,16 @@ def _write_record(database, migration: Migration, checksum: str, duration_ms: in
         (migration.version,))
     if existing:
         database.execute(
-            "UPDATE schema_migrations SET name = %s, checksum = %s, applied_at = %s, "
-            "duration_ms = %s, success = %s, origin = %s, note = %s, level = %s, "
-            "operator = %s, ticket = %s, reason = %s WHERE version = %s",
+            "UPDATE schema_migrations SET name = %s, checksum = %s, checksum_algo = %s, "
+            "applied_at = %s, duration_ms = %s, success = %s, origin = %s, note = %s, "
+            "level = %s, operator = %s, ticket = %s, reason = %s WHERE version = %s",
             vals + (migration.version,))
     else:
         database.execute(
             "INSERT INTO schema_migrations "
-            "(name, checksum, applied_at, duration_ms, success, origin, note, level, "
-            "operator, ticket, reason, version) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "(name, checksum, checksum_algo, applied_at, duration_ms, success, origin, "
+            "note, level, operator, ticket, reason, version) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             vals + (migration.version,))
 
 
@@ -870,21 +991,33 @@ def run_pending(database, registry: Sequence[Migration],
                           if m.level == LEVEL_DESTRUCTIVE))
 
     # 校验和漂移：已应用的迁移被改动 —— 报错、不重跑（不可变原则）
+    reaccepted = []
     for m in reg:
         row = rows.get(m.version)
         if not row or not row['success'] or row['origin'] == ORIGIN_BASELINE:
             continue
-        recorded = row['checksum']
-        actual = checksum_of(m)
-        if recorded and actual and recorded != actual:
+        recorded, algo = row['checksum'], row.get('checksum_algo') or ''
+        verdict, upgrade = resolve_recorded_checksum(recorded, m, algo)
+        if upgrade:
+            # 老账本按旧算法记的：换成新算法值，只转换一次
+            _upgrade_checksum(database, m, upgrade,
+                              reaccepted if verdict == 'reaccepted' else None)
+        if verdict == 'drift':
             report['drift'].append({
                 'version': m.version, 'name': m.name,
-                'recorded': recorded[:12], 'actual': actual[:12],
+                'recorded': recorded[:12], 'actual': checksum_of(m)[:12],
             })
             logger.error(
                 "数据库迁移: v%d %s 的内容与账本校验和不一致（已应用 %s / 当前 %s）。"
                 "已应用的迁移必须不可变：若确需调整，请新增一版迁移，不要改旧版。",
-                m.version, m.name, recorded[:12], actual[:12])
+                m.version, m.name, recorded[:12], checksum_of(m)[:12])
+
+    if reaccepted:
+        logger.warning(
+            "数据库迁移: 校验和算法升级（函数源码文本 → AST 结构哈希），%d 条已应用迁移"
+            "按当前源码重新认定：%s。旧算法把注释/空行也算进哈希，又无法反推当时源码，"
+            "只能一次性重新基线；此后按新算法严格比对，改注释/排版不再误报 drift。",
+            len(reaccepted), ', '.join(reaccepted))
 
     # 上次执行在 apply 中途被杀：账本停在 running（success=0），DDL 可能已
     # 部分生效。迁移体要求幂等，本轮重跑是安全的，但不能静默当「从未执行」。
@@ -1081,10 +1214,11 @@ def status(database, registry: Sequence[Migration],
         row = rows.get(m.version)
         if not row or not row['success'] or row['origin'] == ORIGIN_BASELINE:
             continue
-        recorded, actual = row['checksum'], checksum_of(m)
-        if recorded and actual and recorded != actual:
+        recorded, algo = row['checksum'], row.get('checksum_algo') or ''
+        verdict, _ = resolve_recorded_checksum(recorded, m, algo)
+        if verdict == 'drift':
             drift.append({'version': m.version, 'name': m.name,
-                          'recorded': recorded[:12], 'actual': actual[:12]})
+                          'recorded': recorded[:12], 'actual': checksum_of(m)[:12]})
 
     pending = []
     for m in reg:

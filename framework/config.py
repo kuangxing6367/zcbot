@@ -200,8 +200,13 @@ http_inject:
 
 # ── 插件配置 ────────────────────────────────────────────────
 plugin:
-  dir: plugins               # 插件代码目录（.py 文件）
-  # dat_dir: data/plugins_dat # 插件数据/配置目录（默认统一存放于 data/plugins_dat）
+  # 插件代码目录。留空 = 状态目录下的 plugins（推荐，即 data/plugins）。
+  # 相对路径一律以**状态目录 data/ 为基准**：写 plugins 也等于 data/plugins；
+  # 旧版留在仓库根的 plugins/ 会被自动兼容回退，启动迁移搬到 data/ 后自动切换。
+  # 别写死成仓库根目录：往插件目录释放文件的组件（如 llm_load）每轮重启都会把
+  # 根目录 plugins/ 重新建出来，布局探测永久停在「新旧并存」，迁移收不了尾。
+  dir: ""
+  # dat_dir: data/plugins_dat # 插件数据/配置目录（相对路径以项目根为基准，默认 data/plugins_dat）
   heartbeat_interval: 60     # 插件注册心跳间隔（秒）
   auto_install_deps_on_startup: true  # 启动时自动安装缺失依赖到全局环境（移机自愈，版本冲突自动跳过）
   max_memory_mb: 64          # 单插件内存上限（MB），超限自动卸载
@@ -335,6 +340,20 @@ framework:
   # 临时覆盖（CI / 排障）：环境变量 ZCBOT_AUTO_MIGRATE=0，无需改配置文件。
   # 手动体检 / 预演：python -m framework.migration --inspect / --dry-run
   auto_migrate: true
+
+  # ── 操作审计（audit_logs 表）──
+  # 回答「谁、在什么时候、对什么、做了什么、结果如何」，供追责与合规查；
+  # 与运行日志分开：审计必须落库、可查询、不随日志轮转丢失。
+  # Web 管理面操作（登录/改配置/加管理员/封 IP）一直有记录，这里补的是消息侧。
+  # 写库是旁路：record() 只进内存队列，后台批量 INSERT，队列满直接丢弃并计数，
+  # 写库失败只告警，绝不拖慢消息路由。
+  audit:
+    enabled: true             # 总开关
+    command_events: true      # 命令执行 / 权限拒绝 / 黑名单拦截
+    unmatched_events: false   # 未命中任何命令或关键词的消息（噪音大，查「为什么不回」时再开）
+    record_message_text: true # 消息正文是否写进 detail（统一截断 200 字；审计表不是聊天记录表）
+    flush_interval: 5.0       # 批量落库间隔（秒）
+    max_queue: 5000           # 内存队列上限，满了丢弃并计数
 
   # ── 事件循环卡顿看门狗（诊断）──
   # 阻塞调用会让整个机器人停摆（所有插件 + 所有接入端 + 定时任务），且日志里

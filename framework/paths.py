@@ -38,6 +38,7 @@ __all__ = [
     'migration_state_path',
     'plugins_dat_dir',
     'resolve_config_path',
+    'resolve_user_plugins_dir',
     'state_dir',
     'user_plugins_dir',
     'version_path',
@@ -140,13 +141,28 @@ def core_plugins_dir() -> str:
     return os.path.join(code_root(), 'core_plugins')
 
 
+def _dir_has_entries(path: str) -> bool:
+    """目录存在且有内容
+
+    空目录不算「旧布局还在用」：源码仓库自带一个空 ``plugins/``、或迁移刚搬完
+    留下空壳，都会让旧布局回退永远命中，插件目录被钉在代码目录里。
+    """
+    try:
+        return os.path.isdir(path) and bool(os.listdir(path))
+    except OSError:
+        return False
+
+
 def user_plugins_dir() -> str:
-    """用户插件代码目录：data/plugins 存在即用，旧的 <home>/plugins 仍兼容。"""
+    """用户插件代码目录：data/plugins 存在即用，旧的 <home>/plugins 仍兼容。
+
+    旧位置只在**确有内容**时才接管——空目录是空壳，不是证据。
+    """
     in_data = os.path.join(state_dir(), 'plugins')
     legacy = os.path.join(home_dir(), 'plugins')
     if os.path.isdir(in_data):
         return in_data
-    if os.path.isdir(legacy):
+    if _dir_has_entries(legacy):
         return legacy
     # 两处都不存在（全新安装）时给新布局路径，与 _prefer_data 同一口径：
     # 避免脚手架在旧位置建目录、运行时却只看 data/ 的错位。
@@ -156,6 +172,31 @@ def user_plugins_dir() -> str:
 def plugins_dat_dir() -> str:
     """插件用户数据目录（始终在 data 下）。"""
     return os.path.join(state_dir(), 'plugins_dat')
+
+
+def resolve_user_plugins_dir(configured: str = '') -> str:
+    """按 ``plugin.dir`` 解析用户插件代码目录（空值走默认解析）。
+
+    相对路径**以状态目录为基准**：新布局下 ``plugins`` 就是 ``data/plugins``。
+    旧实现直接拼 ``home_dir()``，于是模板里的 ``dir: plugins`` 把插件目录钉死在
+    仓库根目录——像 llm_load 这种会往插件目录写文件的组件，每轮启动都往根目录
+    释放一遍，启动迁移刚把 ``plugins/`` 搬进 ``data/``，下一轮又被重建出来，
+    布局探测永久停在 root/mixed，自动迁移永远收不了尾。
+
+    存量部署兼容：状态目录下没有、而旧根目录有同名目录时回退旧位置；
+    启动迁移把它搬进 ``data/`` 之后，下一轮自动切到新位置（收敛，不来回跳）。
+    """
+    if not configured:
+        return user_plugins_dir()
+    if os.path.isabs(configured):
+        return configured
+    in_state = os.path.join(state_dir(), configured)
+    legacy = os.path.join(home_dir(), configured)
+    if os.path.isdir(in_state):
+        return in_state
+    if _dir_has_entries(legacy):
+        return legacy
+    return in_state
 
 
 def webui_web_dir() -> str:

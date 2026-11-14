@@ -28,11 +28,105 @@
 
 ## 开发中
 
-> 主题：**把测试口径从「两份手写清单」收敛为「一处自动发现」**。
-> 起因是 v1.22.0 的技术债审计：`ci.yml` 与 `tests.yml` 各自维护一份手写测试文件清单，
-> 两份内容互相错位，导致 26 个测试文件、342 个用例不在任何 CI 里执行；
-> 另有 14 个文件的用例函数体零 `assert`，被 pytest 收集到却永远 PASS。
-> 本节改动全部以真跑结案（本地全量 + 干净树序列 + CI 实跑）。
+> 暂无未发布的在研变化。
+
+---
+
+## [1.23.0] - 2026-11-14
+
+> 主题：**修掉两个「看起来随机」的线上故障，补上消息侧操作审计，并把测试口径收成一处**。
+>
+> 1. **WebUI 卡白屏**：首屏 9 个资源 1.71 MB 全量重下（不压缩、无缓存头），同时管理后台
+>    自发的两个探测请求落到蜜罐兜底，被自家服务器按扫描器拉黑一小时（`blacklist_ttl` 默认 3600）。
+>    两件事叠在一起，表现成「随机刷新转圈」。现在首屏 **-71.4%**、二次访问全 304，
+>    探测路径由真实端点承接，蜜罐对良性请求单独计数、不拉黑不写审计。
+> 2. **命令整条静默失配**：部分适配器在消息首尾多带一个空白（半角/全角/NBSP/零宽），
+>    同一条 `/help` 客户端看着正常，机器人就是不回。现在匹配前统一规范化，
+>    原始 `segments` / `raw_message` 不受影响。
+> 3. **消息侧操作审计**：新增 `audit_logs` 写入通道，命令执行、权限拒绝、黑名单拦截、
+>    未匹配消息（默认关）四类事件入库，热路径零阻塞。
+> 4. **测试口径**：`ci.yml` 与 `tests.yml` 此前各维护一份手写测试清单，两份错位，
+>    导致 26 个测试文件、342 个用例从未在任何 CI 执行；另有 14 个文件用例体零 `assert`，
+>    收集到却永远 PASS。现在清单由静态分析自动发现，CI 分层为「快速闸门 + 权威测试流」。
+> 5. **自动迁移收不了尾**：`plugin.dir` 的相对路径被钉在代码目录、空的 `plugins/` 被当成
+>    旧布局证据、迁移校验和把注释也算进哈希（清一次 `# noqa` 就永久 drift）。
+>    三处一起修，`--inspect` 从「永远有待办」变成一次收敛。
+>
+> 本版变化为 `5a632f0`（v1.22.0）之后的 20 余个提交，全部以真跑结案
+> （本地全量 + 干净树序列 + CI 实跑）。`VERSION` / `pyproject.toml` / `README.md`
+> 三处版本口径已同步为 1.23.0；文档同步范围见本节末尾「文档」。
+
+### 用户可感知变化速查
+
+| 变化 | 影响面 | 需要做什么 |
+|---|---|---|
+| 静态资源 gzip + 分层缓存 + ETag | Web 后台加载 | 无需操作，重启即生效 |
+| 蜜罐良性分支、探测端点常驻 | 后台不再莫名被 403/超时 | 已被误封的看下方「已经中招的部署」 |
+| 消息空白规范化 | 命令/关键词匹配 | 无需操作 |
+| 操作审计 `framework.audit` | 新增配置段，缺省即生效 | 需要留痕可调 `record_message_text` |
+| `GET /api/plugins/<名>/status` | 新端点（带鉴权） | 无需操作 |
+| 测试/CI 口径 | 仓库维护 | 本地跑法见「调试与测试」 |
+| `plugin.dir` 解析口径 | 插件目录落 `data/plugins` | 模板已置空；旧配置 `dir: plugins` 自动按新口径解释 |
+| 迁移校验和算法 | 不再因改注释报 drift | 老账本首次启动自动升级，无需人工干预 |
+
+### 修复：`plugin.dir` 的相对路径钉在代码目录，插件被写回仓库根（自动迁移永不收敛）
+
+线上现象：llm_load 每次自检都往**仓库根**的 `plugins/llm_core` 释放 16 个文件
+（manifest 全量）。启动迁移刚把 `plugins/` 搬进 `data/`，下一轮启动又被建出来，
+`python -m framework.migration --inspect` 永远有待办；一旦 `data/` 下也有状态文件，
+布局判定直接落到 `mixed` → `manual_required`，自动迁移从此拒绝执行。
+
+根因不在 llm_load，在解析链：
+
+- 模板 `config.yaml` 写着 `plugin.dir: plugins`；
+- `_get_plugins_dir()` 把相对路径拼在 `home_dir()` 上 → `<repo>/plugins`；
+- 这条路**绕过了** `framework.paths` 的 `data/` 布局解析，插件目录被钉在代码目录；
+- detector 只看「根目录有没有 `plugins/` 目录」，于是每一轮都判旧布局。
+
+四处一起改：
+
+- `framework/paths.py`：新增 `resolve_user_plugins_dir()`——相对路径**以状态目录为基准**
+  （`plugins` = `data/plugins`）；存量部署（`data/` 下没有、根目录**有内容**）回退旧位置，
+  迁移搬完后自动切新位置，只收敛一次。
+- `framework/paths.py`：`user_plugins_dir()` 的旧位置回退要求**目录非空**。源码仓库自带的
+  空 `plugins/`、迁移留下的空壳，都不该被当成「旧布局还在用」。
+- `framework/migration/detector.py`：`root_plugins` / `data_plugins` 改用「非空目录」作证据；
+  畸形特征检查同时放宽——空目录是合法状态，不算「存在但不是目录」。
+- `framework/migration/migrator.py`：空壳目录记为 `skip-empty`，不参与 move。
+  否则它会和已存在的 `data/plugins` 撞成 `conflict`，把迁移永久卡在「需人工处理」。
+- `framework/config.py` 的 `_DEFAULT_CONFIG`（新装用户拿到的模板）：`plugin.dir` 置空
+  （默认即 `data/plugins`），并写清相对路径基准与踩坑；同时补上 `framework.audit` 段。
+
+实测（本机仓库根）：`--inspect` 待办从 3 个 move 变成 2 个 move + 1 个 `skip-empty`；
+`resolve_user_plugins_dir('')` 与 `('plugins')` 都解析到 `data/plugins`。
+
+### 修复：迁移校验和把注释也算进哈希（清一次 noqa 就永久 drift）
+
+每次启动都报「已应用的迁移被改动」，而实际逻辑一字未改：
+
+```
+数据库迁移: v9 perm.indexes_default_group 的内容与账本校验和不一致
+（已应用 6e1bee06b5cd / 当前 136d4185b651）
+```
+
+根因是 `checksum_of()` 取 `inspect.getsource()` 的**源码全文**做 sha256——注释、
+空行、docstring 全在哈希里。本版前面那批 RUF100 清理删掉 370 条失效 `# noqa`，
+其中一处正好在 `_migrate_perm_tables`（迁移 v9）函数体内，于是一条纯注释改动
+把这个已应用迁移永久判成漂移。校验想防的是「改逻辑」，被注释噪音顶掉了。
+
+- 校验和改为**AST 结构哈希**：`ast.parse` → 剥 docstring → def/class 名归一 → `ast.dump`。
+  改逻辑会变；改注释、空行、排版、文档措辞、函数重命名都不会变。
+- 账本新增 `checksum_algo` 列记录算法代际（`ast-v1`；空 = 旧文本算法）。
+  老库由 `_ensure_columns` 自动补列。
+- 老账本平滑升级：旧算法能对上当前源码 → 静默换成新值（`upgraded`）；
+  对不上（源码早已被清注释，无法反推）→ **一次性重新认定**（`reaccepted`），
+  打一条 warning 列出被认定的版本；此后该账本按新算法**严格**比对。
+  真正的「改已应用迁移」仍然报 drift，用例里锁住了这条。
+- `status()` 与 `run_pending()` 用同一个判定函数，避免两边口径漂移。
+
+实测（本机 `data/zcbot.db`，11 条迁移）：修复前 `status.ok=False`、v9 报 drift；
+修复后首次 `run_pending` 只输出一条「重新认定 v9」的 warning，
+`status.ok=True`、`drift=[]`、11 条全部 `checksum_algo=ast-v1`，迁移体一次都没重跑。
 
 ### 修复：消息首尾「看不见的空白」导致命令全部失配（机器人静默不回复）
 
@@ -336,6 +430,24 @@ ruff 默认规则下全仓 4072 条违规中，1490 条属于工具自己标注�
 - `pyproject.toml` dev 组补 `pytest-cov`，并把 `pytest-asyncio` 锁到 `<1.0`，
   与 workflow 里的口径一致（此前 dev 组只写 `>=0.23`，本地可能装到 1.x 改变默认模式）。
 - `.gitignore` 补 `coverage.xml`。
+
+### 文档
+
+本版改动全部落到文档，不只是 CHANGELOG：
+
+| 文件 | 变化 |
+|---|---|
+| `docs/指南/配置系统.md` | 新增「操作审计（config.yaml）」段：六个键的默认值、旁路语义、`unmatched_events` 什么时候开 |
+| `docs/进阶/可观测性与运维.md` | 新增「操作审计（audit_logs）」：与运行日志的分工对照、四类 action、字段落点（`admin_name` 记操作者）、丢弃/降级语义、查询 SQL |
+| `docs/接口/基础/事件对象.md` | 新增「七、消息匹配与文本规范化」：空白字符表、`event.message` 已规范化而 `raw_message` / `segments` 不动、插件侧如何复用 `normalize_match_text()` |
+| `docs/速查/安全加固.md` | 新增「良性请求：别把自己的后台当扫描器」：误封的成因、良性分支行为、已中招部署的解除方式 |
+| `docs/速查/调试排错.md` | 症状表补两条（消息静默不回复 / 后台转圈白屏）；日志段增加审计入口与 `dropped` 口径 |
+| `docs/接口/基础/核心框架.md`、`docs/进阶/项目结构.md`、`docs/速查/框架结构.md` | 补 `fw.audit` / `audit_writer.py` 的入口说明 |
+| `docs/index.md`、`LLM.md` | 文档导航补「可观测性与运维」入口 |
+| `README.md` | 版本徽章、特性 9（良性请求白名单）、特性 15（操作审计） |
+| `config.yaml`（本地运行配置）与 `framework/config.py` 的 `_DEFAULT_CONFIG` | `framework.audit` 带注释的默认模板（不配也生效）；`plugin.dir` 置空并写清相对路径基准（新装模板同步） |
+| `docs/指南/配置系统.md`、`docs/进阶/数据库迁移.md` | `plugin.dir` 的基准与踩坑（别写死在仓库根）；迁移校验和改为「结构哈希」的口径、`checksum_algo` 代际与老账本升级方式 |
+| `docs/速查/调试排错.md` | 症状表再补一条「每次启动都在迁移 / --inspect 永远有待办」 |
 
 ---
 

@@ -449,15 +449,14 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         logging.getLogger('websocket').setLevel(logging.WARNING)
 
     def _get_plugins_dir(self) -> str:
-        """用户插件代码目录：新布局 <home>/data/plugins，旧布局 <home>/plugins。"""
-        from framework.config import get_home
-        from framework.paths import user_plugins_dir
+        """用户插件代码目录：新布局 <home>/data/plugins，旧布局 <home>/plugins。
+
+        ``plugin.dir`` 的相对路径以**状态目录**为基准（``plugins`` = ``data/plugins``），
+        旧根目录存在同名目录时回退兼容；解析细节见 ``framework.paths``。
+        """
+        from framework.paths import resolve_user_plugins_dir
         plugin_dir = self.config.get('plugin', {}).get('dir', '')
-        if plugin_dir:
-            if os.path.isabs(plugin_dir):
-                return plugin_dir
-            return os.path.join(get_home(), plugin_dir)
-        return user_plugins_dir()
+        return resolve_user_plugins_dir(plugin_dir)
 
     def _get_core_plugins_dir(self) -> str:
         """内核自带插件目录（代码资产，非可写状态），统一走 framework.paths。"""

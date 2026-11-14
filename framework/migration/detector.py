@@ -78,6 +78,14 @@ def _is_dir(path: str) -> bool:
     return os.path.isdir(path)
 
 
+def _dir_has_entries(path: str) -> bool:
+    """目录存在且有内容——空目录不算「旧布局还在用」的证据"""
+    try:
+        return os.path.isdir(path) and bool(os.listdir(path))
+    except OSError:
+        return False
+
+
 def _escapes_home(path: str, home: str) -> bool:
     """符号链接 / 联接点是否把路径指到 home 之外（防误搬外部目录）。"""
     try:
@@ -96,7 +104,15 @@ def probe(home=None) -> dict:
     exists = _is_dir(home)
 
     def _feature(name: str, path: str, kind: str) -> bool:
-        present = _is_dir(path) if kind == 'dir' else _is_file(path)
+        if kind == 'dir_nonempty':
+            # 空目录不算状态证据：源码仓库自带空 plugins/、迁移后留下的空壳、
+            # 或组件建目录失败留下的壳，都会把布局误判成「旧布局还在用」，
+            # 进而让自动迁移每轮都"待办"却永远收不了尾。
+            present = _dir_has_entries(path)
+        elif kind == 'dir':
+            present = _is_dir(path)
+        else:
+            present = _is_file(path)
         if present and os.path.islink(path) and _escapes_home(path, home):
             warnings.append('%s 是指向 home 之外的符号链接，自动迁移将跳过此项' % name)
         return present
@@ -106,11 +122,13 @@ def probe(home=None) -> dict:
         'root_config': _feature('root_config', os.path.join(home, STATE_CONFIG), 'file'),
         'root_core_plugins_yaml': _feature('root_core_plugins_yaml',
                                            os.path.join(home, STATE_CORE_YAML), 'file'),
-        'root_plugins': _feature('root_plugins', os.path.join(home, STATE_PLUGINS), 'dir'),
+        'root_plugins': _feature('root_plugins', os.path.join(home, STATE_PLUGINS),
+                                 'dir_nonempty'),
         'data_config': _feature('data_config', os.path.join(state, STATE_CONFIG), 'file'),
         'data_core_plugins_yaml': _feature('data_core_plugins_yaml',
                                            os.path.join(state, STATE_CORE_YAML), 'file'),
-        'data_plugins': _feature('data_plugins', os.path.join(state, STATE_PLUGINS), 'dir'),
+        'data_plugins': _feature('data_plugins', os.path.join(state, STATE_PLUGINS),
+                                 'dir_nonempty'),
         'data_dir': _feature('data_dir', state, 'dir'),
         'migration_ledger': _feature('migration_ledger',
                                      os.path.join(state, paths.MIGRATION_STATE_NAME), 'file'),
@@ -118,12 +136,12 @@ def probe(home=None) -> dict:
     evidence['data_runtime_markers'] = sorted(
         m for m in _RUNTIME_MARKERS if os.path.exists(os.path.join(state, m)))
 
-    # 畸形特征：本该是目录/文件的位置类型不对
+    # 畸形特征：本该是目录/文件的位置类型不对（空目录是合法状态，不算畸形）
     for key, path, want in (
         ('root_plugins', os.path.join(home, STATE_PLUGINS), 'dir'),
         ('data_plugins', os.path.join(state, STATE_PLUGINS), 'dir'),
     ):
-        if os.path.exists(path) and not evidence[key]:
+        if os.path.exists(path) and not os.path.isdir(path):
             warnings.append('%s 存在但不是目录，已按缺失处理' % key)
 
     root_state = any(evidence[k] for k in
