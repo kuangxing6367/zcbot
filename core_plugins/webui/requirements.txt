@@ -1,7 +1,11 @@
 # ============================================================
 # core_plugins/webui 插件专属依赖
-# 启用 webui（web.enabled != false）时由插件加载器自动安装；
-# 未启用时框架本体不安装 flask 相关依赖（API 层仅注册假节点）。
+#
+# 注意：flask / flask-cors / waitress 自 v1.21.1 起已是**核心依赖**
+# （见仓库根 requirements.txt 与 pyproject [project.dependencies]），
+# `pip install zcbot` 就会装好；这里保留是为了让插件单独安装时也能自洽。
+# core_plugins.yaml 中 webui 默认 enabled: true。
+#
 # 与 pyproject.toml [project.optional-dependencies].web 组保持一致。
 # ============================================================
 flask>=2.3.0

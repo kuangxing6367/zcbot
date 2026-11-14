@@ -10,5 +10,9 @@ pytest>=7.4
 # natively supported" 失败（实测 28 条），而不是跳过——看起来像功能回归。
 pytest-asyncio>=0.23
 
-# 静态检查（当前仓库无 lint 配置，先用 F 类规则兜底未定义名 / 未使用导入）
+# CI 用 `pytest --timeout=120` 防挂死，缺它该参数直接报错。
+pytest-timeout>=2.2
+
+# 静态检查：CI 的 static-contract 作业只跑 F821（未定义名）门禁；
+# 其余 lint 规则属历史技术债，不在门禁范围。
 ruff>=0.6

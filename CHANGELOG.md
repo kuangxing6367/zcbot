@@ -124,6 +124,46 @@
 - 顺手修 `pyproject.toml` 开头注释与核心依赖的口径漂移（还写着 flask 三件套
   属于可选组）。
 
+### 全仓审查：装饰器-only 插件契约与 CI 缺口
+
+> 起因：外部指出「文档写明可以省略 `register`，但无 register 时 `@command` 不落账、
+> `_PENDING` 残留」。复现确认成立，且后果比报告更重——残留项会在下次加载时被
+> 重复 flush，同一命令注册两次。
+
+- **无 `register` 的装饰器插件现在能正常加载**。`load_plugin()` 原先在
+  `hasattr(module, 'register')` 为假时直接判失败，而文档承诺「用了装饰器可以省略
+  `def register(ctx)`」。现在改为：`register` 缺失但导入期有装饰器登记项
+  （`framework.plugin.has_pending()`）→ 照常加载并 flush；两者都没有的空插件
+  仍拒绝加载。`register_commands()` 同步放开，返回 `True`。
+- **`_PENDING` 泄漏与重复注册**（数据正确性）：`clear_module()` 此前是死代码，
+  全仓无人调用；`_purge_plugin_modules()` 只清 `sys.modules`。于是一个「导入期已
+  登记、register 没跑到」的插件，登记项永久驻留，修好后重载会被 flush 两遍。
+  现在 purge 会连带清掉待登记项。实测：失败后 `_PENDING` 残留 0，重载只注册 1 条。
+- 新增 `tests/test_decorator_only_plugin.py`（3 条）：装饰器-only 可加载、
+  空插件被拒、失败重载不重复注册。
+- **CI 补齐与纠偏**：
+  - `tests/db_conformance`（schema 对齐 / 事务 / 类型映射 / 方言翻译 / 并发，
+    51 条，默认 sqlite 后端）此前两个 workflow 都没跑，现已纳入 `tests.yml`；
+  - `ci.yml` 里「flask 未在 requirements.txt 中声明」的注释已过期（上一轮已并入
+    核心依赖），同步删掉重复安装；
+  - `tests.yml` 的 `pytest-asyncio` 未锁版本、`ci.yml` 锁 `<1.0`，统一为后者；
+  - `pytest-timeout` 进了 `[dev]` 与 `requirements-dev.txt`：CI 用
+    `--timeout=120`，但按文档装 dev 组不含它，本地复现 CI 会直接参数报错；
+  - `tests.yml` 里 WebUI 作业注释串位到 `static-contract` 上方，已归位。
+- **文档与依赖注释纠偏**：`requirements.txt` 头部仍写「main.py 启动自检读取本文件」
+  （实际读它的是 `framework/bootstrap/deps_check.py`，由 `startup.py` 调用）；
+  `core_plugins/webui/requirements.txt` 仍写「未启用时框架本体不安装 flask」
+  （flask 已是核心依赖）；`image_renderer/requirements.txt` 缺行尾换行。
+- **测试自身**：`test_buffer_l2_file.py` 与 `test_scheduler_graceful.py` 各有
+  一处 `check(..., True)` 恒真占位，改为真实断言（前者删掉冗余行、由后续
+  `source` 断言覆盖；后者改为测量两次 `stop()` 的实际耗时）。
+- **退出期崩溃**（`Fatal Python error: _enter_buffered_busy`）：日志合并器的
+  flush 线程是 daemon，`stop()` 只在 `Framework.shutdown()` 里调用；测试或异常
+  退出时不走 shutdown，线程活到解释器 finalizing 阶段还往 stderr 写汇总，CPython
+  直接终止进程。全量 pytest 结束时偶发，表现为「测试都过了但进程 fatal」。
+  改为弱引用登记 + `atexit` 统一 `stop()`，并在 `_flush_loop` / `_emit_summary`
+  上加 `sys.is_finalizing()` 守卫。修复后连跑全量 + 5 次裸退出复现，0 次 fatal。
+
 ### 未处理（需单独立项）
 
 - **顶层命名空间污染**（`framework` / `core_plugins` / `sql` 与 `startup.py` / `main.py` /
@@ -141,11 +181,17 @@
 
 ### 验证
 
-- 全量 `py -m pytest tests -q`：**1014 passed / 1 skipped / 0 failed**
-  （上一轮 989 条 + 本轮新增 25 条契约回归）。
-- `ruff check --isolated --select F821 .`：**0 条**（修复前 204 条）；`python -m
-  compileall` 通过；干净重建 wheel 1,796,433 字节 / 309 项，0 个测试文件、
-  0 个 `iipc/tools` 条目，`startup.py` 与 `framework/iipc/plugins/*` 均在包内。
+- 全量 `py -m pytest tests -q`：**1017 passed / 1 skipped / 0 failed**
+  （上一轮 1014 条 + 本轮新增 3 条装饰器契约回归），耗时 3m09s；
+  日志中 `Fatal Python error` 计数 **0**（修复前偶发）。
+- `tests/db_conformance` 单独真跑：**51 passed / 3.8s**（`--db sqlite` 默认后端）。
+- `ruff check --isolated --select F821 .`：**0 条**；`compileall` 通过；
+  `tools/check_webui_artifact.py` 本地校验通过。
+- 装饰器-only 三场景端到端复现：无 register 可加载并落账 1 条命令；导入抛异常后
+  `_PENDING` 残留 0；补好 register 重载只注册 1 条（修复前为 2 条）。
+- 上一轮（安装态修复）的 wheel 复验仍有效：干净重建 1,796,433 字节 / 309 项，
+  0 个测试文件、0 个 `iipc/tools` 条目，`startup.py` 与 `framework/iipc/plugins/*`
+  均在包内；本轮未改动打包配置，未重建。
 - 干净 venv 装本地 wheel（无一预装依赖），逐条复跑外部报告：`zb -v` → 1.21.1；
   `zb init` 落 `<home>/data` 且 cwd 干净；`zb run` 无本地入口可启动、0 ERROR；
   `zb plugin list` 19 个与运行时一致；二次启动无 `manual-required`；`create plugin`

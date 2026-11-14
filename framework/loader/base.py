@@ -287,21 +287,33 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
 
         # register_func 可能缺失（核心插件经 _load_core_plugins 入库时未存该函数引用、
         # 或心跳/重载重建 info 时丢键）。缺失时回退到模块上的 register 属性，避免
-        # KeyError 让重载直接失败；都没有则视为无 register，安全跳过。
+        # KeyError 让重载直接失败。
         register_func = info.get('register_func')
         if register_func is None and module is not None:
             register_func = getattr(module, 'register', None)
-        if not callable(register_func):
-            logger.error(f"[{plugin_name}] 无可用 register 函数，跳过注册")
-            return False
 
-        try:
-            register_func(ctx)
-        except Exception as e:
-            logger.error(f"[{plugin_name}] register(ctx) 执行异常: {e}", exc_info=True)
-            # 自修复：记录失败时刻的文件快照，供心跳检测到文件修复后自动重试
-            self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
-            return False
+        # 装饰器-only 插件：导入期用 @command / @on / @hook 等登记过，但没有
+        # `def register(ctx)`。文档承诺「用了装饰器可以省略 register」，这里让
+        # 承诺成立——待注册表非空就跳过「调用 register」直接 flush；两者都没有
+        # 才判失败（否则就是空插件，注册一个什么都不做的上下文没有意义）。
+        decorator_only = False
+        if not callable(register_func):
+            from framework.plugin import has_pending as _has_pending
+            if module is not None and _has_pending(module.__name__):
+                decorator_only = True
+                logger.info(f"[{plugin_name}] 未定义 register，按装饰器登记项注册")
+            else:
+                logger.error(f"[{plugin_name}] 无可用 register 函数，跳过注册")
+                return False
+
+        if not decorator_only:
+            try:
+                register_func(ctx)
+            except Exception as e:
+                logger.error(f"[{plugin_name}] register(ctx) 执行异常: {e}", exc_info=True)
+                # 自修复：记录失败时刻的文件快照，供心跳检测到文件修复后自动重试
+                self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
+                return False
 
         # 应用模块级装饰器登记的注册项（@command/@on/@hook/@task/@api/@dashboard_card
         # 等在导入期收集，此处统一落到 ctx；等价于在 register 体内调用 ctx.xxx(...)）。

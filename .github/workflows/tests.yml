@@ -83,7 +83,8 @@ jobs:
           # pytest-asyncio 必须显式装：pyproject.toml 里 asyncio_mode=auto 只在
           # 插件存在时才有意义，缺插件的表现是 7 个裸 async 用例直接判失败
           # （"async def functions are not natively supported"），而不是跳过。
-          pip install pytest pytest-asyncio
+          # 版本锁 <1.0 与 ci.yml 保持一致：1.0 改了默认模式。
+          pip install pytest "pytest-asyncio>=0.21,<1.0"
           python -m pytest \
             tests/test_aiwriter.py tests/test_console_server.py tests/test_smoke.py \
             tests/test_html_assembler.py tests/test_event_buffer.py \
@@ -109,6 +110,11 @@ jobs:
             tests/test_scheduler_reliability.py tests/test_session_tokens.py \
             tests/test_telegram_offset.py \
             tests/test_ctx_contract_and_install_regressions.py -q
+      # ── 多后端一致性套件（默认 sqlite，无需 MySQL）────────────────
+      # tests/db_conformance 自带 conftest 参数化，--db 默认 sqlite；
+      # 覆盖 schema 对齐、事务、类型映射、方言翻译与并发，共 51 例。
+      - name: DB conformance suite (sqlite)
+        run: python -m pytest tests/db_conformance -q
       # ── 工作区护栏：污染守卫 + 测试残留守卫 ──────────────────
       # 本作业 pytest 未加 -p no:cacheprovider，会正常产生 .pytest_cache/ 与
       # __pycache__/——已被 .gitignore 覆盖，git status 不可见，天然放行；
@@ -116,11 +122,6 @@ jobs:
       - name: Workspace guard (pollution + test residue)
         run: bash .github/scripts/guard_workspace.sh
 
-  # ── WebUI：构建产物存在性检查 ──────────────────────────
-  # 前端源码为闭源资产（不进仓库），仅发布 core_plugins/webui/web 构建产物。
-  # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布产物。
-  # v1.20.0 曾漏推 >1MB 的 element-plus chunk 导致新 clone 白屏；
-  # 现在校验 index.html / chunk 内所有 hash 引用真实存在（见 tools/check_webui_artifact.py）。
   # ── 静态契约门禁 ────────────────────────────────────────────────────
   # 插件模块级 ctx 是加载期注入的（module.ctx = ctx），静态检查天生看不见。
   # 官方插件现在用「TYPE_CHECKING + cast 占位」显式声明名字与类型；这里把
@@ -138,6 +139,11 @@ jobs:
       - name: No undefined names (F821)
         run: python -m ruff check --isolated --select F821 .
 
+  # ── WebUI：构建产物存在性检查 ──────────────────────────
+  # 前端源码为闭源资产（不进仓库），仅发布 core_plugins/webui/web 构建产物。
+  # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布产物。
+  # v1.20.0 曾漏推 >1MB 的 element-plus chunk 导致新 clone 白屏；
+  # 现在校验 index.html / chunk 内所有 hash 引用真实存在（见 tools/check_webui_artifact.py）。
   webui-build:
     runs-on: ubuntu-latest
     steps:

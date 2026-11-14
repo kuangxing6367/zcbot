@@ -105,8 +105,25 @@ def flush(module_name, ctx):
             _apply(kind, kwargs, handler, ctx)
 
 
+def has_pending(module_name) -> bool:
+    """该模块（含子模块）是否还有未应用的装饰器登记项（内部 API）。
+
+    加载器用它判断「没有 ``def register`` 的插件是否值得加载」：导入期用过
+    ``@command`` / ``@on`` 之类的插件，即使省略了 register 也有登记项可落账。
+    """
+    if not module_name:
+        return False
+    with _PENDING_LOCK:
+        return any(k == module_name or k.startswith(module_name + '.')
+                   for k in _PENDING)
+
+
 def clear_module(module_name):
-    """清除某模块的待应用注册项（插件卸载/重载清理用，内部 API）"""
+    """清除某模块的待应用注册项（插件卸载/重载清理用，内部 API）。
+
+    加载失败、卸载、完全重载都会清空对应的登记项，避免「导入期已登记、register
+    却没跑到」的插件把脏数据留到下一次加载，flush 时重复注册同一批命令。
+    """
     with _PENDING_LOCK:
         for k in list(_PENDING.keys()):
             if k == module_name or k.startswith(module_name + '.'):

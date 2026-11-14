@@ -140,9 +140,12 @@ def test_stop_idempotent_and_no_inflight():
     loop, lt = _make_loop()
     try:
         s = TaskScheduler(_FakeFW(loop, {}))
+        t0 = time.monotonic()
         s.stop()
         s.stop(graceful=True, drain_timeout=2)  # 二次调用不卡
-        check('无在途时 stop 幂等不卡', True)
+        elapsed = time.monotonic() - t0
+        check('无在途时两次 stop 在 1s 内返回（不阻塞、不空等 drain）',
+              elapsed < 1.0, f'elapsed={elapsed:.2f}s')
     finally:
         loop.call_soon_threadsafe(loop.stop)
         lt.join(timeout=2)

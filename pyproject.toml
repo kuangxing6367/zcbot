@@ -74,6 +74,9 @@ plugins = [
 dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
+    # CI 用 `pytest --timeout=120` 防挂死；不装它这条命令会直接报
+    # "unrecognized arguments: --timeout"，本地按文档装 dev 组也必须能复现 CI。
+    "pytest-timeout>=2.2",
     "ruff>=0.6",
 ]
 

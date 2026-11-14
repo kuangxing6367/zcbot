@@ -84,7 +84,7 @@ async def test_auto_file_when_sqlite_off():
     st = buf.stats()
     check("第 2 个 1MB L3 满回落 L2（不丢弃）", ok2 and st['l2_pending'] == 1,
           f"ok={ok2} l2_pending={st['l2_pending']} dropped={st['dropped']}")
-    check("消费顺序：L3 先出（热数据优先）", True)
+    # 消费顺序由下面两条 source 断言验证（L3 先出、再吃 L2）
     e1, _, s1 = await buf.get_async()
     check("第 1 条消费 source='l3'", s1 == 'l3', f"s1={s1}")
     e2, _, s2 = await buf.get_async()

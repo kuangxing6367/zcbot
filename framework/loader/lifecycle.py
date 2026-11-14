@@ -326,12 +326,22 @@ class PluginLifecycleMixin:
         plugin_path = plugin_path or os.path.join(self.plugins_dir, plugin_name)
         try:
             abs_plugin = os.path.abspath(plugin_path)
+            removed = []
             for mod_name in list(sys.modules):
                 mod = sys.modules.get(mod_name)
                 mod_file = getattr(mod, '__file__', '') or ''
                 if mod_file and os.path.abspath(mod_file).startswith(abs_plugin + os.sep):
                     sys.modules.pop(mod_name, None)
+                    removed.append(mod_name)
             sys.modules.pop(f"plugin_{plugin_name}", None)
+            # 导入期登记的装饰器项必须一起清：只清 sys.modules 的话，加载失败
+            # 留下的 _PENDING 会在下次加载时被 flush 再应用一遍，同一命令注册两次。
+            if removed:
+                from framework.plugin import clear_module as _clear_pending
+                for mod_name in removed:
+                    _clear_pending(mod_name)
+                _clear_pending(f"plugin_{plugin_name}")
+                _clear_pending(plugin_name)
         except Exception as e:
             logger.debug(f"[{plugin_name}] 清理 sys.modules 异常: {e}")
 
@@ -438,22 +448,31 @@ class PluginLifecycleMixin:
                 spec.loader.exec_module(module)
 
                 # 检查 register 函数
+                # 文档承诺「用了装饰器可以省略 def register(ctx)」：导入期已经
+                # 用 @command/@on 等登记过的插件，即使没有 register 也允许加载，
+                # 由 register_commands 的 flush 落账。两者都没有才是空插件，拒绝。
                 if not hasattr(module, 'register'):
-                    logger.error(f"[{plugin_name}] 缺少 register(ctx) 函数")
-                    self._purge_plugin_modules(plugin_name, plugin_path)
-                    # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
-                    self._release_plugin_api_routes(plugin_name)
-                    self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
-                    return False
-
-                register_func = getattr(module, 'register')
-                if not callable(register_func):
-                    logger.error(f"[{plugin_name}] register 不可调用")
-                    self._purge_plugin_modules(plugin_name, plugin_path)
-                    # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
-                    self._release_plugin_api_routes(plugin_name)
-                    self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
-                    return False
+                    from framework.plugin import has_pending as _has_pending
+                    if _has_pending(module.__name__):
+                        register_func = None
+                        logger.info(
+                            f"[{plugin_name}] 未定义 register，使用装饰器登记项加载")
+                    else:
+                        logger.error(f"[{plugin_name}] 缺少 register(ctx) 函数")
+                        self._purge_plugin_modules(plugin_name, plugin_path)
+                        # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
+                        self._release_plugin_api_routes(plugin_name)
+                        self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
+                        return False
+                else:
+                    register_func = getattr(module, 'register')
+                    if not callable(register_func):
+                        logger.error(f"[{plugin_name}] register 不可调用")
+                        self._purge_plugin_modules(plugin_name, plugin_path)
+                        # 半初始化可能已登记 API 路由：失败终态一并回收，避免旧闭包驻留
+                        self._release_plugin_api_routes(plugin_name)
+                        self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
+                        return False
 
                 # 读取元数据
                 meta = getattr(module, '__plugin_meta__', {})

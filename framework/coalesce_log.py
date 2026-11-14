@@ -13,13 +13,36 @@ WARNING+ 日志在滑动窗口内合并计数：只发首条，窗口到期再�
 - 滑动窗口由后台 daemon 线程定期 flush 过期桶，汇总不会无限延迟；
 - flush 在锁外调用 root.handle，避免持锁触发下游 handler 引发重入 / 阻塞。
 """
+import atexit
 import logging
 import re
+import sys
 import threading
 import time
+import weakref
 from collections import OrderedDict
 
 _NUM_RE = re.compile(r'\d+')
+
+# 存活的合并器（弱引用）：解释器退出时统一停掉后台线程。
+# 用 WeakSet 而不是 atexit.register(self.stop)：后者每建一个实例就永久多一条
+# 回调，测试里会累积成内存泄漏。
+_LIVE_COALESCERS = weakref.WeakSet()
+
+
+@atexit.register
+def _stop_all_coalescers():
+    """退出前停掉所有 flush 线程。
+
+    daemon 线程若在解释器 finalizing 阶段还在往 stderr 写日志，CPython 会直接
+    抛 `Fatal Python error: _enter_buffered_busy ... at interpreter shutdown`
+    并终止进程（实测全量 pytest 结束时偶发）。这里先让线程退出，再让解释器收尾。
+    """
+    for c in list(_LIVE_COALESCERS):
+        try:
+            c.stop(timeout=1.0)
+        except Exception:
+            pass
 
 
 class LogCoalescer(logging.Filter):
@@ -41,6 +64,7 @@ class LogCoalescer(logging.Filter):
         self._timer = threading.Thread(
             target=self._flush_loop, daemon=True, name='log-coalesce-flush')
         self._timer.start()
+        _LIVE_COALESCERS.add(self)
 
     # ---- 工具 ----
     @staticmethod
@@ -105,6 +129,10 @@ class LogCoalescer(logging.Filter):
     # ---- 汇总发送 ----
     def _emit_summary(self, key: str, b: dict):
         try:
+            # 解释器正在收尾：此时写任何流都可能撞上已关闭/加锁的缓冲区，
+            # 结果是整个进程 fatal error，而不是丢一条汇总日志。
+            if sys.is_finalizing():
+                return
             # count == 1 表示窗口内只出现过一次：首发已经原样打过了，
             # 再补一条「重复 1 次」纯属重复且措辞失真
             # （线上就出现过 webui 依赖已自愈成功、几秒后又补一条加载失败）。
@@ -127,7 +155,7 @@ class LogCoalescer(logging.Filter):
 
     # ---- 后台 flush ----
     def _flush_loop(self):
-        while not self._stop:
+        while not self._stop and not sys.is_finalizing():
             # 等窗口到期或 stop() 唤醒（替代裸 sleep：停止时可立即退出，不再滞留一个窗口周期）
             self._wake.wait(self.window)
             if self._stop:
