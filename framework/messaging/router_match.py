@@ -179,10 +179,17 @@ class RouterMatchMixin:
                 return SimpleMatch(message, '')
             if len(msg) > len(pattern) and msg.startswith(pattern):
                 sep = msg[len(pattern)]
-                if sep == ' ' or sep == '\t':
+                # 命令与参数之间允许任意空白（全角空格 / NBSP 也会被适配器带进来），
+                # 只认 ' ' 和 '\t' 的话 "/help　参数" 这种就直接不回复了
+                if sep.isspace():
                     args = msg[len(pattern) + 1:].strip()
                     return SimpleMatch(message, args)
             return None
+
+        # 兜底：调用方绕过 Event 构造（脚本 / 测试 / 自定义路由）时消息可能带前导空白，
+        # 这里补一次左侧清理——否则首字符对不上，整条命令静默失配。
+        if message and message[0].isspace():
+            message = message.lstrip()
 
         # 1. 先试原始消息
         result = _try(message)
@@ -254,6 +261,8 @@ class RouterMatchMixin:
                         'group_id': ev.group_id,
                         'message': message[:80],
                     })
+                    self._audit_command(ev, plugin_name, cmd, matched_by, message,
+                                        kind='blocked')
                     return True  # 拦截并终止传播，命令不执行
 
                 # ── 权限检查 ──
@@ -266,6 +275,9 @@ class RouterMatchMixin:
                         'role': ev.role,
                         'message': message[:80],
                     })
+                    self._audit_command(ev, plugin_name, cmd, matched_by, message,
+                                        kind='denied', require='admin',
+                                        error='权限不足（需要 admin）')
                     await self.framework.reply_text(
                         ev, f'权限不足（需要 {require} 权限，当前身份: {ev.role}）')
                     return True
@@ -276,6 +288,9 @@ class RouterMatchMixin:
                         'user_id': ev.user_id,
                         'role': ev.role,
                     })
+                    self._audit_command(ev, plugin_name, cmd, matched_by, message,
+                                        kind='denied', require='super',
+                                        error='权限不足（需要超级管理员）')
                     await self.framework.reply_text(ev, '权限不足（需要超级管理员权限）')
                     return True
 
@@ -284,6 +299,9 @@ class RouterMatchMixin:
                 perm_node = cmd.require_perm
                 if perm_node and not ev.has_perm(perm_node):
                     self._stats_hit(cmd.id)
+                    self._audit_command(ev, plugin_name, cmd, matched_by, message,
+                                        kind='denied', require=perm_node,
+                                        error=f'权限不足（需要权限节点 {perm_node}）')
                     log_broker.log_plugin(plugin_name, '权限不足', {
                         'handler': cmd.handler_name,
                         'user_id': ev.user_id,
@@ -385,6 +403,8 @@ class RouterMatchMixin:
                         except Exception as he:
                             logger.error(f"[{plugin_name}] on_error 钩子异常: {he}")
                         _handler_failed = True
+                        self._audit_command(ev, plugin_name, cmd, matched_by, message,
+                                            result='failure', error=f'handler 异常: {e}'[:200])
                         return True  # 视为已处理，避免半处理消息继续传播
                     finally:
                         current_bot_var.reset(_bot_token)
@@ -397,6 +417,9 @@ class RouterMatchMixin:
                                          if _handler_failed else "handler 执行完毕")))
                     if _handler_timed_out:
                         # 超时熔断：视为已处理（不继续传播、不重试），直接结束本插件匹配
+                        self._audit_command(ev, plugin_name, cmd, matched_by, message,
+                                            result='failure',
+                                            error=f'handler 执行超时（>{_hto}s）已熔断')
                         return True
                     # 命令执行后扩展点（通知，不短路）
                     try:
@@ -415,9 +438,36 @@ class RouterMatchMixin:
                         'handler': cmd.handler_name
                     })
                     continue
+                # 操作审计：命令确实被执行了（谁、在哪、哪个插件/命令、结果）
+                self._audit_command(ev, plugin_name, cmd, matched_by, message)
                 return True  # 匹配成功，由 route() 检查 is_stopped()
 
         return False
+
+    def _audit_command(self, ev, plugin_name, cmd, matched_by, message,
+                       kind='exec', result='success', error=None, require=''):
+        """写一条命令审计（操作留痕，不影响路由）。
+
+        kind: exec（执行）/ denied（权限不足）/ blocked（黑名单拦截）。
+        审计器缺失或写失败都只记 debug —— 审计是旁路，不能反过来把消息路由搞挂。
+        """
+        audit = getattr(self.framework, 'audit', None)
+        if audit is None:
+            return
+        try:
+            if kind == 'blocked':
+                audit.command_blocked(ev, plugin_name, cmd.handler_name,
+                                      cmd.pattern, message[:200])
+            elif kind == 'denied':
+                audit.command_denied(ev, plugin_name, cmd.handler_name, cmd.pattern,
+                                     reason=error or '权限不足', require=require,
+                                     message=message[:200])
+            else:
+                audit.command_executed(ev, plugin_name, cmd.handler_name, cmd.pattern,
+                                       matched_by=matched_by, message=message[:200],
+                                       result=result, error=error)
+        except Exception as _exc:
+            logger.debug('[audit] 记录命令审计失败: %s', _exc)
 
     def _stats_hit(self, cmd_id: int):
         """记录命令命中（交给 stats_writer 批量落库）"""

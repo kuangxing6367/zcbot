@@ -6,7 +6,10 @@
 `/api/<path>` 兜底诱饵，走的是默认分支：**拉黑 IP + tarpit 600ms + 写审计**。
 用户体感就是刷新几次后随机转圈/白屏，日志里刷满「命中诱饵」。
 
-这组用例锁住：前端探测路径走良性分支，真正的未知路径仍然按攻击处理。
+这组用例锁住两件事：
+1. 前端探测路径由**真实端点**接住（握手端点常驻、插件状态端点带鉴权），
+   完全不再触碰蜜罐——连良性计数都不该增长；
+2. 真正的未知路径仍然按攻击处理，兜底诱饵没被顺手废掉。
 """
 from __future__ import annotations
 
@@ -71,37 +74,32 @@ def _stats(hp):
 
 
 def test_session_handshake_is_not_an_attack(web_env):
-    """会话令牌关闭时，前端仍会 POST 握手；这不该被当成探测。"""
+    """会话令牌关闭时，握手端点仍存在并明确回 enabled=false。"""
     c, hp = web_env['client'], web_env['hp']
     before = _stats(hp)
     r = c.post('/api/session/handshake', json={'did': 'x' * 32})
     after = _stats(hp)
 
-    assert r.status_code == 404, '未启用功能应返回明确 404，而非诱饵假数据'
+    assert r.status_code == 200, '握手端点缺失会落进蜜罐兜底并拉黑自己'
     body = r.get_json()
-    assert body and body.get('code') == 404
+    assert body and body.get('code') == 0
+    assert body['data']['enabled'] is False
     # 诱饵响应是 body_generic_decoy()，带伪造的业务字段，这里必须区分开
-    assert 'data' not in body or not isinstance(body.get('data'), dict) or \
-        'token' not in (body.get('data') or {})
+    assert 'token' not in (body.get('data') or {})
 
-    assert after['benign_hits'] == before['benign_hits'] + 1
-    assert after['total_hits'] == before['total_hits'], '良性探测被计入攻击命中'
-    assert after['blacklisted'] == before['blacklisted'], '良性探测触发了拉黑'
+    assert after == before, f'真实端点不该触碰蜜罐计数器: {before} -> {after}'
 
 
 def test_plugin_status_probe_is_not_an_attack(web_env):
-    """插件没启用时前端仍会拉一次状态；旧实现把 admin 自己拉黑了。"""
+    """插件状态端点存在且带鉴权：未登录返回 401/444，不会掉进诱饵。"""
     c, hp = web_env['client'], web_env['hp']
     before = _stats(hp)
     r = c.get('/api/plugins/image_renderer/status')
     after = _stats(hp)
 
-    assert r.status_code == 404
-    assert r.get_json().get('code') == 404
-
-    assert after['benign_hits'] == before['benign_hits'] + 1
-    assert after['total_hits'] == before['total_hits']
-    assert after['blacklisted'] == before['blacklisted']
+    assert r.status_code in (401, 444), \
+        '端点不存在时才由诱饵接管（200 + 伪数据），401/444 说明真实路由已挂上'
+    assert after == before, f'真实端点不该触碰蜜罐计数器: {before} -> {after}'
 
 
 def test_unknown_api_still_treated_as_probe(web_env):
@@ -128,7 +126,7 @@ def test_frontend_probe_does_not_pollute_threat_ranking(web_env):
         c.get('/api/plugins/image_renderer/status')
 
     s = hp.get_stats()
-    assert s['benign_hits'] == 10
-    assert s['total_hits'] == 0
+    assert s['total_hits'] == 0, '前端探测被记成攻击命中'
+    assert s['benign_hits'] == 0, '前端探测根本不该走到蜜罐'
     assert s['top_ips'] == []
     assert s['unique_ips'] == 0

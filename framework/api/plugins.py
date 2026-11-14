@@ -102,6 +102,39 @@ def register(ctx):
             logger.error(f"获取插件列表失败: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
+    @app.route('/api/plugins/<plugin_name>/status', methods=['GET'])
+    @require_auth
+    def plugin_status(plugin_name):
+        """单个插件的运行状态（WebUI 页面加载时会无条件探测）。
+
+        旧版本没有这个路由：请求落到蜜罐 `/api/<path>` 兜底 → 被判「未知路径探测」
+        → 拉黑来源 IP + tarpit 600ms。表现就是正常用户打开后台，被自己的服务器
+        封一小时，页面随机转圈/白屏。这里给出稳定契约，前端不必再猜。
+
+        未安装的插件返回 installed=false（仍然 200），前端据此隐藏状态灯即可。
+        """
+        try:
+            row = db.query_one(
+                "SELECT plugin_name, status, is_active FROM plugins WHERE plugin_name = %s",
+                (plugin_name,))
+            module = None
+            loader = getattr(framework, 'plugin_loader', None)
+            if loader is not None:
+                module = loader.get_plugin_module(plugin_name)
+            status = (row or {}).get('status') or ''
+            if not status:
+                status = 'running' if module is not None else 'not_installed'
+            return jsonify({'code': 0, 'data': {
+                'name': plugin_name,
+                'installed': bool(row),
+                'loaded': module is not None,
+                'enabled': bool(row and row.get('is_active')),
+                'status': status,
+            }})
+        except Exception as e:
+            logger.error(f"查询插件状态失败 [{plugin_name}]: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
     @app.route('/api/plugins/upload', methods=['POST'])
     @require_super
     def upload_plugin():

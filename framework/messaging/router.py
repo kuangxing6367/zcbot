@@ -44,7 +44,7 @@ from typing import Optional
 
 from framework.hooks import HookPoints
 from framework.log_broker import log_broker
-from framework.messaging.event import _has_text_segment
+from framework.messaging.event import _has_text_segment, normalize_match_text
 from framework.messaging.router_keywords import KeywordReplyMixin, _KeywordRule
 
 logger = logging.getLogger('zcbot')
@@ -411,6 +411,11 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             is_active = c.get('is_active', 1)
             rx = None
             simple = None
+            # 配置/后台里粘贴进来的命令常带不可见字符或首尾空白（" /help"、"签到 "），
+            # 存进 DB 就永远匹配不上消息。非正则 pattern 统一规范化；正则保留原样，
+            # 空白在其中可能有语义（如 "^/echo +(.+)$"）。
+            if pattern and not self._is_regex(pattern):
+                pattern = normalize_match_text(pattern)
             if is_active:
                 if self._is_regex(pattern):
                     try:
@@ -738,6 +743,17 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
                         return
                 except Exception as e:
                     logger.error(f"router.message_unmatched 扩展点异常: {e}")
+
+            # 操作审计：消息最终没人接管（谁发的、在哪个群、内容片段）。
+            # 默认关闭——闲聊消息每条都落一行会把审计表灌满；排查「机器人为什么不回复」
+            # 时打开 framework.audit.unmatched_events 即可拿到完整未命中的时间线。
+            if not matched_any and handled_plugin is None:
+                _audit = getattr(self.framework, 'audit', None)
+                if _audit is not None:
+                    try:
+                        _audit.message_unmatched(ev, message[:200])
+                    except Exception as _exc:
+                        logger.debug('[audit] 记录未匹配审计失败: %s', _exc)
 
             # 热路径：闲聊消息每条都会走到这里，日志级别未开启时不做字符串格式化
             if logger.isEnabledFor(logging.DEBUG):

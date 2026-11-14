@@ -153,6 +153,19 @@ def register(ctx):
 
     if not cfg.get('enabled'):
         logger.info('[会话令牌] 已禁用（security.session_tokens.enabled 未开启）')
+        # 即使关闭也要占住这两个路径：WebUI 会无条件发起握手探测（它不知道服务端
+        # 配了什么）。路径不存在时请求掉进蜜罐 /api/<path> 兜底 → 被判「未知路径探测」
+        # → 拉黑 IP + tarpit 600ms，表现得像「随机转圈/白屏」；前端还会不停重试。
+        # 这里给出明确的 enabled=false，前端据此走普通 token 登录，不再反复请求。
+        @app.route('/api/session/handshake', methods=['POST'])
+        def _session_handshake_disabled():
+            return jsonify({'code': 0, 'msg': 'ok',
+                            'data': {'enabled': False, 'master': None}})
+
+        @app.route('/api/session/confirm', methods=['POST'])
+        def _session_confirm_disabled():
+            return jsonify({'code': 0, 'msg': 'ok', 'data': {'enabled': False}})
+
         return
 
     ttl = int(cfg.get('ttl', _DEFAULT_TTL) or _DEFAULT_TTL)

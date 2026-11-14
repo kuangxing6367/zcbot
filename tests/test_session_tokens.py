@@ -41,11 +41,21 @@ def _build(enabled=True, ttl=1800):
 
 
 def test_disabled_keeps_behaviour_unchanged():
-    """关闭时不注册端点、闸门不生效 —— 现有行为完全不变"""
+    """关闭时闸门不生效、业务请求照常；握手端点仍在，但明确回 enabled=false。
+
+    端点必须常驻：WebUI 不知道服务端配了什么，页面加载时总会探测握手。
+    路径不存在时请求会落进蜜罐 /api/<path> 兜底（拉黑 + tarpit），
+    表现为「正常用户打开后台被自己封一小时」。
+    """
     _reset()
     c = _build(enabled=False).test_client()
     assert c.get('/api/ping').status_code == 200
-    assert c.post('/api/session/handshake').status_code == 404
+    r = c.post('/api/session/handshake')
+    assert r.status_code == 200
+    assert r.get_json()['data'] == {'enabled': False, 'master': None}
+    r2 = c.post('/api/session/confirm', json={'tokens': []})
+    assert r2.status_code == 200
+    assert r2.get_json()['data'] == {'enabled': False}
 
 
 def test_handshake_issues_2048bit_master():

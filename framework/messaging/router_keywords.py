@@ -15,6 +15,7 @@ import re
 from typing import Optional
 
 from framework.log_broker import log_broker
+from framework.messaging.event import normalize_match_text
 
 logger = logging.getLogger('zcbot')
 
@@ -66,11 +67,16 @@ class KeywordReplyMixin:
                 if mt not in ('exact', 'prefix', 'contains', 'regex'):
                     mt = 'exact'
                 rx = None
+                keyword = r.get('keyword') or ''
                 if mt == 'regex':
-                    rx = re.compile(r.get('keyword') or '')
+                    rx = re.compile(keyword)
+                else:
+                    # 关键词一样会被「看不见的空白」废掉：库里存 "签到 "、消息是 "签到"
+                    # 就永远对不上。非正则类型统一规范化，正则保留原样。
+                    keyword = normalize_match_text(keyword)
                 rules.append(_KeywordRule(
                     id=r['id'],
-                    keyword=r.get('keyword') or '',
+                    keyword=keyword,
                     response=r.get('response') or '',
                     match_type=mt,
                     rx=rx,

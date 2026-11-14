@@ -23,6 +23,39 @@ import time
 logger = logging.getLogger('zcbot')
 
 
+_INVISIBLE_TABLE = {ord(c): None for c in '\u200b\u200c\u200d\u2060\ufeff'}
+_SPACE_LIKE_RE = re.compile('[\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+')
+
+
+def normalize_match_text(text):
+    """规范化用于命令匹配的文本（对齐框架 event.normalize_match_text）。"""
+    if not text:
+        return text
+    if text.isascii():
+        return text.strip()
+    text = text.translate(_INVISIBLE_TABLE)
+    text = _SPACE_LIKE_RE.sub(' ', text)
+    return text.strip()
+
+
+def _strip_bot_at_prefix(text, self_id):
+    """剥掉文本开头的 `[@self_id]` / `[CQ:at,qq=self_id]` 前缀（对齐框架实现）。"""
+    if not text or not self_id:
+        return text
+    prefixes = ('[@%s]' % self_id, '[CQ:at,qq=%s]' % self_id)
+    while True:
+        for prefix in prefixes:
+            if not text.startswith(prefix):
+                continue
+            rest = text[len(prefix):]
+            if not rest.strip():
+                return text          # 纯 @，无实际内容
+            text = rest.lstrip()
+            break
+        else:
+            return text
+
+
 def _extract_text(message):
     """从 OneBot 11 消息中提取纯文本（对齐框架 _extract_text）。"""
     if isinstance(message, str):
@@ -89,14 +122,10 @@ class Event:
             _msg_text = self._raw['_msg_text']
         else:
             _msg_text = _extract_text(_raw_msg)
-        self.message = _msg_text
-        # @机器人 前缀剥离（与框架一致）：命令前缀匹配不被 [@self_id] 污染
-        if isinstance(_raw_msg, list) and _raw_msg and \
-                _raw_msg[0].get('type') == 'at' and \
-                str(_raw_msg[0].get('data', {}).get('qq', '')) == str(self.self_id):
-            _bot_at_prefix = '[@%s]' % self.self_id
-            if self.message.startswith(_bot_at_prefix):
-                self.message = self.message[len(_bot_at_prefix):].lstrip()
+        # 与框架一致：先规范化隐形空白与首尾空白，再剥 @机器人 前缀。
+        # 平台常多吐一个空格（或被输入法塞进全角空格/零宽字符），不规范化的话
+        # 命令前缀匹配直接失效，表现成机器人静默不回复。
+        self.message = _strip_bot_at_prefix(normalize_match_text(_msg_text), self.self_id)
         self.message_id = self._raw.get('message_id', 0)
         _orig_raw = self._raw.get('raw_message')
         self.raw_message = _msg_text if _orig_raw is None else _extract_text(_orig_raw)

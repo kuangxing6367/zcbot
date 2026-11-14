@@ -34,6 +34,89 @@
 > 另有 14 个文件的用例函数体零 `assert`，被 pytest 收集到却永远 PASS。
 > 本节改动全部以真跑结案（本地全量 + 干净树序列 + CI 实跑）。
 
+### 修复：消息首尾「看不见的空白」导致命令全部失配（机器人静默不回复）
+
+线上反馈：某些适配器/平台会在消息前后多带一个空格，同一条 `/help` 客户端看着
+完全正常，机器人就是不回。实测确认范围比反馈更大：
+
+| 消息实际内容 | 旧行为 |
+|---|---|
+| `" /help"` / `"\t/help"` / `"   /help"` | 失配 |
+| `"\u3000/help"`（中文输入法全角空格） | 失配 |
+| `"\u00a0/help"`（不间断空格） | 失配 |
+| `"\u200b/help"`（零宽空格） | 失配 |
+| `"/help\u3000"` / `"/help\u200b"` | 失配（只把 ' '、'\t' 当分隔符） |
+| `"[@bot] /help"`，但 @ 段前有 `reply` 段 | 失配（旧逻辑只看第 0 段是不是 at） |
+
+失配后整条命令静默丢弃，连"未匹配"日志都不显眼——这也是这类问题最难查的地方。
+
+- `framework/messaging/event.py`：新增 `normalize_match_text()`——删零宽字符
+  （U+200B/200C/200D/2060/FEFF）、把全角空格 / NBSP / 各类 Unicode 空白归一为
+  半角空格、去首尾空白；ASCII 消息走 `str.strip()` 快路径。**只动首尾与非常规空白**，
+  正文内部普通空格保留（`/echo a  b` 的参数仍是 `a  b`）。
+- 新增 `_strip_bot_at_prefix()`：剥离开头连续的 `[@self_id]` / `[CQ:at,qq=self_id]`，
+  不再要求 @ 必须在第 0 段——群里「先回复再 @机器人」、adapter 直接给 CQ 字符串
+  两种场景都能命中；纯 @ 消息保留原文，@ 别人则不动（不把 `@某人 /help` 当本机命令）。
+  原始 `segments` / `raw_message` 完全不变，插件要原文照样拿得到。
+- `framework/messaging/router_match.py`：命令与参数之间的分隔符改用 `str.isspace()`
+  判定（全角空格也能当分隔符）；对绕过 Event 的调用方补一次左侧清理兜底。
+- `framework/messaging/router.py`：非正则命令 pattern 在预编译时规范化——后台/配置里
+  粘贴进来的 `" /help"`、`"签到 "` 不会变成永远命中不了的死命令。
+- `framework/messaging/router_keywords.py`：非正则关键词同样规范化。
+- `framework/iipc/py_sdk/event.py` + `sdk.py`：插件进程侧是独立的 1:1 实现，
+  同步了同一套规范化与 `isspace()` 判定，否则 IIPC 插件仍会漏匹配。
+
+新增 `tests/test_message_whitespace.py`（18 用例）：六类空白 × 命令/参数/关键词 ×
+Event 构造（含 reply 在前、CQ 字符串）逐一断言，并锁定"参数内部空格不被吞"、
+"`/helper` 不能被 `/help` 命中"。
+
+### 变更：前端探测端点常驻，不再靠蜜罐兜底放行
+
+上一版给 `/api/session/handshake`、`/api/plugins/<名>/status` 开了"良性命中"分支，
+但正常用户仍每次都在探测两个不存在的路径——良性记录照样刷日志。
+
+- `framework/api/session_tokens.py`：会话令牌**关闭时也注册**握手端点，返回
+  `{"code":0,"data":{"enabled":false,"master":null}}`，前端据此走普通 token 登录、
+  不再重试。
+- `framework/api/plugins.py`：新增 `GET /api/plugins/<plugin_name>/status`（带鉴权），
+  返回 `{installed, loaded, enabled, status}`；未安装的插件也返回稳定结构。
+- 蜜罐的良性分支保留为双保险（其它未注册路径不再误拉黑），但这两个路径已不走它了。
+
+### 新增：操作审计（audit_logs）覆盖消息侧命令
+
+此前 `audit_logs` 只有 Web 管理面的操作（登录、改配置、加管理员、封 IP），
+消息侧「谁在哪个群执行了什么命令、被谁拒绝了」完全没有留痕，出问题只能翻运行日志。
+
+- 新增 `framework/core/audit_writer.py`：`AuditWriter` 由 Framework 持有，
+  生命周期与 `stats_writer` 一致（start / stop 时 flush 收尾）。
+  * 事件：`command_exec`（执行，含成功/失败）、`command_denied`（权限不足）、
+    `command_blocked`（黑名单拦截）、`message_unmatched`（无人接管，默认关闭）。
+  * **热路径零阻塞**：`record()` 只做一次 `deque.append` + 截断，落库由后台任务
+    按 `flush_interval` 批量 `execute_many`；队列满直接丢弃并计数，写失败只告警，
+    绝不向调用方抛——审计是旁路，不能反过来拖垮消息路由。
+  * **脱敏**：detail 里正文统一截断 200 字；`record_message_text: false` 时正文
+    完全不入库（审计表不是聊天记录表）。
+  * 整批写入失败时逐行隔离，坏行不拖垮整批。
+- `framework/messaging/router_match.py`：在执行成功 / handler 异常 / 超时熔断 /
+  权限不足（admin、super、权限节点）/ 黑名单拦截共 6 个分支写入审计，操作者记
+  `group:<gid>/user:<uid>`（私聊 `user:<uid>`）。
+- `framework/messaging/router.py`：消息最终无人接管时写 `message_unmatched`。
+
+配置（全部有默认值，不配也生效）：
+
+```yaml
+framework:
+  audit:
+    enabled: true            # 总开关
+    command_events: true     # 命令执行/拒绝
+    unmatched_events: false  # 未匹配消息（噪音大，排查「为什么不回复」时打开）
+    record_message_text: true
+    flush_interval: 5.0
+    max_queue: 5000
+```
+
+查看看板同一入口：`GET /api/audit_logs`（WebUI 审计页）。
+
 ### 修复：WebUI 首屏 1.71 MB 全量重下 → 0.49 MB，二次访问 0 字节
 
 线上反馈「前端太大 + 随机刷新会命中诱饵」，查下来是两个独立问题叠在一起。

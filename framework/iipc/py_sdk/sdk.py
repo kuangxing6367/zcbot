@@ -301,7 +301,8 @@ def _match_simple(pattern, message):
             return SimpleMatch(message, '')
         if len(msg) > len(pattern) and msg.startswith(pattern):
             sep = msg[len(pattern)]
-            if sep == ' ' or sep == '\t':
+            # 与内核侧保持一致：命令与参数之间的分隔符允许任意空白字符
+            if sep.isspace():
                 return SimpleMatch(message, msg[len(pattern) + 1:].strip())
         return None
 

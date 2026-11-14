@@ -131,6 +131,59 @@ def _extract_text(message):
     return str(message)
 
 
+# 各适配器/平台会把「看不见的字符」塞进消息正文：中文输入法的全角空格（U+3000）、
+# 不间断空格（U+00A0）、零宽空格/BOM（U+200B/200C/200D/2060/FEFF）。
+# 一旦它们落在命令前后，前缀匹配就整体失效——现象是机器人「完全不回复」，
+# 而消息在客户端看起来和正常消息一模一样（这也是这类问题最难查的地方）。
+_INVISIBLE_CHARS = '\u200b\u200c\u200d\u2060\ufeff'
+_INVISIBLE_TABLE = {ord(c): None for c in _INVISIBLE_CHARS}
+_SPACE_LIKE_RE = re.compile('[\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+')
+
+
+def normalize_match_text(text: str) -> str:
+    """规范化「用于命令匹配」的文本：删隐形字符、类空白→半角空格、去首尾空白。
+
+    只处理首尾与「非常规空白」，不动正文内部的普通空格，因此不会破坏命令参数
+    （`/echo a  b` 的参数仍然是 `a  b`）。原始文本仍可从 `ev.raw_message` 取。
+    """
+    if not text:
+        return text
+    if text.isascii():
+        # 热路径：纯 ASCII 消息只需 strip（str.strip 已覆盖 \t\n\r\f\v 与空格）
+        return text.strip()
+    text = text.translate(_INVISIBLE_TABLE)
+    text = _SPACE_LIKE_RE.sub(' ', text)
+    return text.strip()
+
+
+def _strip_bot_at_prefix(text: str, self_id) -> str:
+    """剥掉文本开头指向本机器人的 at 标记（`[@10001]` / `[CQ:at,qq=10001]`）。
+
+    旧实现只检查「第 0 个段是不是 at」，两种情况会漏：
+      * 群里先「回复」再 @机器人 —— reply 段排在第 0 位，@ 落在后面；
+      * adapter 直接给 CQ 字符串（`/` 之前的 at 是文本形式）。
+
+    漏掉时匹配文本带 `[@10001]` 前缀，命令首字符对不上，静默不回复。
+    纯 @ 消息（@ 后面没内容）保留原文，避免把消息清成空串。
+    """
+    if not text or not self_id:
+        return text
+    if not text.startswith('['):
+        return text          # 绝大多数消息不含 at 标记，一次判断直接返回
+    prefixes = (f'[@{self_id}]', f'[CQ:at,qq={self_id}]')
+    while True:
+        for prefix in prefixes:
+            if not text.startswith(prefix):
+                continue
+            rest = text[len(prefix):]
+            if not rest.strip():
+                return text          # 纯 @，无实际内容
+            text = rest.lstrip()
+            break
+        else:
+            return text
+
+
 def _has_text_segment(message) -> bool:
     """
     判断消息是否包含纯文本段（区别于从卡片/图片提取出的链接文本）
@@ -171,15 +224,9 @@ class Event:
         self.message = _msg_text
         # 群内被 @机器人 触发时，OneBot 会把 @ 段编码为 [@self_id] 前缀拼进文本，
         # 导致命令前缀匹配（如 "@bot 查订单"）被污染成 "[@bot]查订单" 而失效。
-        # 此处仅从【匹配文本】剥离 leading [@self_id]，原始 segments 不动，
-        # 插件仍可通过 ev.has_at_bot / ev.at_list 读取艾特信息。
-        if isinstance(_raw_msg, list) and _raw_msg and \
-                _raw_msg[0].get('type') == 'at' and \
-                str(_raw_msg[0].get('data', {}).get('qq', '')) == str(self.self_id):
-            _bot_at_prefix = f'[@{self.self_id}]'
-            if self.message.startswith(_bot_at_prefix):
-                # 同时清掉 @ 后常见的尾随空格，避免 "查订单" 被前导空格挡住前缀匹配
-                self.message = self.message[len(_bot_at_prefix):].lstrip()
+        # 此处仅从【匹配文本】剥离 at 前缀并规范化隐性空白，原始 segments 不动，
+        # 插件仍可通过 ev.has_at_bot / ev.at_list 读取艾特信息，raw_message 也保留原文。
+        self.message = _strip_bot_at_prefix(normalize_match_text(self.message), self.self_id)
         self.message_id = raw.get('message_id', 0)
         # raw_message 缺省时复用 message 提取结果（避免同一消息段重复遍历提取）
         _orig_raw = raw.get('raw_message')

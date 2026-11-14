@@ -68,6 +68,7 @@ class _EventIdFilter(logging.Filter):
         return True
 
 
+from framework.core.audit_writer import AuditWriter
 from framework.core.dispatch import FrameworkDispatchMixin
 from framework.core.event_buffer import EventBuffer
 from framework.core.runtime import FrameworkRuntimeMixin
@@ -178,6 +179,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 统计批量写库器
         self.stats_writer = AsyncStatsWriter(self)
+        # 操作审计批量写库器（audit_logs 表；消息侧命令执行/拒绝的留痕）
+        self.audit = AuditWriter(self)
 
         # 原始消息处理器注册表
         self._raw_message_handlers = []
@@ -515,8 +518,12 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         except Exception as e:
             logger.warning(f"L4 写缓冲 flush 任务启动失败（事件溢出将直写 L2）: {e}")
 
-        # 3. 启动统计批量写库器
+        # 3. 启动统计批量写库器 + 操作审计写库器
         self.stats_writer.start()
+        try:
+            self.audit.start()
+        except Exception as e:
+            logger.warning(f"操作审计写库器启动失败（审计记录将不入库）: {e}")
 
         # 4. 启动群成员同步批量写库任务
         self._member_sync_task = asyncio.create_task(
@@ -772,6 +779,12 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             await self.stats_writer.stop()
         except Exception as e:
             logger.warning(f"统计写库器停止异常: {e}")
+
+        # 停止操作审计写库器（先 flush 再退，停机前的操作不能丢）
+        try:
+            await self.audit.stop()
+        except Exception as e:
+            logger.warning(f"审计写库器停止异常: {e}")
 
         # 停止群成员同步批量写库任务（最后一次 flush 收尾）
         if self._member_sync_task:
