@@ -33,14 +33,12 @@ def test_core_plugin_requirements_readable():
     assert deps, 'core 插件的 requirements.txt 读不到'
     names = [d.split('>')[0].split('=')[0].strip().lower() for d in deps]
     assert 'flask' in names, f'未解析出 flask: {deps}'
-    return f'读到 {len(deps)} 条: {deps}'
 
 
 def test_user_plugin_requirements_unchanged():
     """用户插件路径行为不变：不存在则返回空列表"""
     o = types.SimpleNamespace(plugins_dir=os.path.join(_ROOT, 'plugins'))
     assert PluginDepsMixin._read_requirements_txt(o, 'no_such_plugin_xyz') == []
-    return '不存在的插件返回 []'
 
 
 def test_missing_dep_registered_on_load_failure():
@@ -65,7 +63,7 @@ def test_missing_dep_registered_on_load_failure():
         assert bucket, '缺依赖的 core 插件没有登记到 _missing_deps'
         assert 'zzz_not_installed_xyz' in bucket, f'登记内容不对: {bucket}'
         assert _TMP_PLUGIN not in fake.plugin_loader._loaded_plugins
-        return f'已登记: {bucket}'
+        return
     finally:
         shutil.rmtree(plugin_dir, ignore_errors=True)
 
@@ -93,7 +91,7 @@ def test_loaded_plugin_skipped_on_retry():
         )
         CoreRuntime._load_core_plugins(fake, only={_TMP_PLUGIN})
         assert not os.path.isfile(calls), '已加载的插件被重复执行了模块代码'
-        return '已加载插件被跳过'
+        return
     finally:
         shutil.rmtree(plugin_dir, ignore_errors=True)
 

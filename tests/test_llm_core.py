@@ -81,7 +81,6 @@ def test_schema_derivation():
 
     assert set(schema_from_callable(kick)['properties']) == {'user_id'}, \
         "event 不该进入参数表"
-    return "注解推导类型/必填正确，event 被排除"
 
 
 def test_validate_errors():
@@ -112,7 +111,6 @@ def test_validate_errors():
             raise AssertionError(f"{why} 这组参数没有被拦住: {bad}")
 
     ToolRegistry.validate(tool, {'sku': 'a', 'price': 9.9})  # 合法的不该抛
-    return "缺参/未知参数/类型错误均被拦截"
 
 
 def test_execute_semantics():
@@ -167,7 +165,6 @@ def test_execute_semantics():
     registry.set_enabled('note', False)
     assert 'note' not in [t['function']['name']
                           for t in registry.to_openai_tools()], "停用工具仍被导出"
-    return "字符串回灌 / None 不回灌 / 异常降级为文本"
 
 
 # ── 2. 提供商总线 ─────────────────────────────────────────────
@@ -188,7 +185,6 @@ def test_provider_registry():
     assert reg.resolve('qwen2.5') is not None, "按模型名解析失败"
     assert reg.get('local').supports_tools is False, "supports_tools 覆盖未生效"
     assert reg.unregister('local') and len(reg.list_providers()) == 1
-    return "多提供商构造 / 默认 / 按模型解析正常"
 
 
 def test_openai_provider_tool_parsing():
@@ -234,7 +230,6 @@ def test_openai_provider_tool_parsing():
             sys.modules['requests'] = real
         else:
             sys.modules.pop('requests', None)
-    return "OpenAI 兼容层正确解析 tool_calls"
 
 
 # ── 3. 会话窗口 ───────────────────────────────────────────────
@@ -259,7 +254,6 @@ def test_conversation_trim():
     assert not any(x.get('role') == 'assistant' and x.get('tool_calls')
                    for x in exported), "孤儿 tool_calls 没有被清理"
     assert exported[0]['role'] == 'system', "system 必须在最前"
-    return "轮数裁剪与孤儿工具消息清理正常"
 
 
 # ── 4. 工具调用闭环 ───────────────────────────────────────────
@@ -325,7 +319,6 @@ def test_tool_loop():
     # 第二轮请求里必须带上工具结果，否则模型不知道发生了什么
     assert provider.calls[1]['messages'][-1]['role'] == 'tool', \
         "第二轮请求没有携带工具结果"
-    return "工具调用闭环走通，中间状态正确入历史"
 
 
 def test_loop_forced_convergence():
@@ -357,7 +350,6 @@ def test_loop_forced_convergence():
     assert len(result.tool_calls) <= 4, f"调了太多轮: {len(result.tool_calls)}"
     if provider.calls:
         assert provider.calls[-1]['tools'] is None, "收口请求应当不带工具"
-    return f"超轮数自动收口（执行 {len(result.tool_calls)} 次工具）"
 
 
 # ── 5. 插件注册与端到端调用 ───────────────────────────────────
@@ -458,7 +450,6 @@ def test_register_and_service():
     assert 'upper' in [t.name for t in svc.list_tools()], "装饰器注册失败"
     assert svc.unregister_tool('upper'), "注销失败"
     assert 'upper' not in [t.name for t in svc.list_tools()]
-    return f"register 正常：{len(patterns)} 条命令 / {len(names)} 个内置工具"
 
 
 def test_end_to_end_chat():
@@ -500,7 +491,6 @@ def test_end_to_end_chat():
     # handle_chat 要是再补写一遍最终回答，历史里就会出现重复助手消息
     roles = [x.get('role') for x in conv.messages]
     assert roles.count('assistant') == 2, f"助手消息被重复写入历史: {roles}"
-    return "端到端对话 + 工具调用成功（历史无重复助手消息）"
 
 
 def test_handle_chat_no_provider():
@@ -524,7 +514,6 @@ def test_handle_chat_no_provider():
     sent = ctx.msgs[-1].get('message', '')
     assert 'LLM 未就绪' in sent, f"提示不对: {sent}"
     assert '没有可用的模型提供商' in sent, f"应引导去配置提供商: {sent}"
-    return "无可用提供商回可读提示，不静默"
 
 
 # ── 6. 多模态内容构造 ─────────────────────────────────────────
@@ -534,7 +523,7 @@ def test_panel_api_payload():
     try:
         from flask import Flask
     except ImportError:
-        return "未安装 Flask，跳过"
+        return
     m = mods()
     main_mod = m['main']
     ctx = _StubCtx()
@@ -561,7 +550,6 @@ def test_panel_api_payload():
 
     r2 = client.post('/api/llm_core/sessions/clear')
     assert r2.get_json()['code'] == 0, "清空会话接口失败"
-    return "面板 overview / clear 接口返回结构正确"
 
 
 def test_media_content():
@@ -582,7 +570,6 @@ def test_media_content():
     assert isinstance(multi, list), "支持视觉时应产出内容块数组"
     assert any(p.get('type') == 'image_url' for p in multi), "内容块里没有图片"
     assert multi[0]['type'] == 'text', "文本块应在最前"
-    return "图片提取与内容块构造正确"
 
 
 def test_mcp_failure_isolated():
@@ -598,7 +585,6 @@ def test_mcp_failure_isolated():
     assert summary.get('broken') == 0, f"坏 server 应当返回 0: {summary}"
     assert 'disabled' not in summary, "禁用的 server 不该被拉起"
     assert registry.list_tools() == [], "失败时不该留下工具"
-    return "MCP 接入失败被隔离，不影响其它部分"
 
 
 def test_session_persistence():
@@ -624,7 +610,6 @@ def test_session_persistence():
     assert store2.clear_all() >= 1
     fresh = hist.ConversationStore(persist=hist.SessionPersist(d))
     assert fresh.get(key).messages == []
-    return "会话重启后恢复，clear_all 连文件清理"
 
 
 def test_trigger_policy():
@@ -649,7 +634,6 @@ def test_trigger_policy():
     assert dec('普通消息', 111, '', [], 100)[0] is True
     # 空消息
     assert dec('  ', 111, '', [], 100) == (False, '')
-    return "触发策略三层判定符合预期"
 
 
 def test_split_text_sentences():
@@ -675,7 +659,6 @@ def test_split_text_sentences():
 
     # 默认 size 走配置路径（ctx=None 时取默认 1200）
     assert split('x' * 1300) == ['x' * 1200, 'x' * 100]
-    return "分段按句边界且内容无损"
 
 
 def test_chat_gates():
@@ -697,7 +680,6 @@ def test_chat_gates():
     finally:
         gates.clear()
     assert main_mod._check_chat_gates(123) is None
-    return "对话闸门拦截/放行/容错符合预期"
 
 
 def test_persona_override():
@@ -722,7 +704,6 @@ def test_persona_override():
     assert conv2.persona == '猫娘模式'
     conv2.persona = ''
     assert conv2.effective_prompt == '默认人格'
-    return "人格覆盖/恢复默认/落盘恢复符合预期"
 
 
 def test_session_admin_api():
@@ -730,7 +711,7 @@ def test_session_admin_api():
     try:
         from flask import Flask
     except ImportError:
-        return "未安装 Flask，跳过"
+        return
     m = mods()
     hist, main_mod = m['history'], m['main']
     d = os.path.join(_TMP, 'admin_test')
@@ -830,7 +811,6 @@ def test_session_admin_api():
             'X-Session-Count'] == '4'
     finally:
         main_mod._Svc = prev_svc
-    return "会话列表/过滤/分页/详情/删除/导出接口符合预期"
 
 
 def cleanup():
@@ -865,8 +845,9 @@ if __name__ == '__main__':
     try:
         for fn in cases:
             try:
-                note = fn()
-                print(f"PASS  {fn.__name__}: {note or ''}")
+                fn()
+                # 说明改取 docstring，用例不再用返回值传信息
+                print(f"PASS  {fn.__name__}: {(fn.__doc__ or '').strip()}")
             except AssertionError as e:
                 failed += 1
                 print(f"FAIL  {fn.__name__}: {e}")

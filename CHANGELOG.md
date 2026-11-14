@@ -34,6 +34,34 @@
 > 另有 14 个文件的用例函数体零 `assert`，被 pytest 收集到却永远 PASS。
 > 本节改动全部以真跑结案（本地全量 + 干净树序列 + CI 实跑）。
 
+### 工程：清理「用例返回值当汇报文字」（59 处）与死代码 ApiContext
+
+`tests/` 里有一批用例用 `return "xxx 正常"` 把成功信息交给脚本运行器 `print`。
+在 pytest 下这是另一条掩盖问题的通道：本机 pytest 9.2.0 跑出来只是
+`PytestReturnNotNoneWarning`，用例照样绿——返回值**永远不可能让用例失败**，
+真正的校验只靠前面那些 `assert`，而脚本运行器那边又把它当成「这条过了」的证据。
+
+- 59 处全部清掉：函数末尾的返回直接删除；分支内的（`except ImportError: return "未安装 Flask，跳过"`
+  这类）改成无值 `return`，控制流一字未变。
+- 5 个文件的 `__main__` 运行器不再 `print(fn())`，改为先调用再取 `fn.__doc__` 打说明——
+  人工跑脚本时仍然看得见每条用例在验什么。
+- `pyproject.toml` 的 `[tool.pytest.ini_options]` 加
+  `filterwarnings = ["error::pytest.PytestReturnNotNoneWarning"]`，防回涨。
+- 顺手删掉 `framework/api/context.py`（45 行 `ApiContext` 骨架）：`webapp.py` 的功能域注册
+  列表里没有它，全仓唯一的提及是 `framework/api/__init__.py` 的包说明，已同步删除。
+
+**更正上一轮的一处误判**：`framework/perm/tracks.py` 并非死代码。它由
+`framework/perm/__init__.py` 的惰性映射表按需导入（`list_tracks` / `promote` 等入口），
+`from framework.perm import list_tracks` 实测可用，不能删。
+
+> 遗留：仍有 14 个用例函数没有任何断言机制（`test_smoke.py` 的 9 个「不崩即过」启动冒烟
+> + 5 个零断言用例），属下一批。
+
+验证（Windows 本机 3.13）：全量 `pytest tests --ignore=tests/db_conformance` **967 passed /
+1 skipped / 0 failed**（3m11s，与改动前基线一致）；脚本式回归 20 个文件 / 50.0s / 0 失败；
+`--check` 收集 1019 例（下限 1000）；`framework.apis` / `framework.api` 导入正常；
+`filterwarnings` 生效后三组相关用例 55 passed 且 `PytestReturnNotNoneWarning` 归零。
+
 ### 修复：数据库连接与事件缓冲句柄的确定性关闭
 
 以 `-W always::ResourceWarning` 跑测试暴露两类真句柄泄漏，都用「显式 close + finalizer 兜底」

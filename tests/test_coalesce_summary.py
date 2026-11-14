@@ -49,7 +49,6 @@ def test_single_occurrence_no_summary():
                               'name': 'zcbot', 'sample': '只有一次'})
     msgs = _with_sink(run)
     assert msgs == [], f'count=1 不应发汇总，实际: {msgs}'
-    return 'count=1 不补汇总'
 
 
 def test_warning_label():
@@ -61,7 +60,6 @@ def test_warning_label():
     assert '该告警' in msgs[0], msgs[0]
     assert '该错误' not in msgs[0], msgs[0]
     assert '重复 3 次' in msgs[0], msgs[0]
-    return 'WARNING → 该告警'
 
 
 def test_error_label():
@@ -70,7 +68,6 @@ def test_error_label():
                               'name': 'zcbot', 'sample': '数据库不可用'})
     msgs = _with_sink(run)
     assert len(msgs) == 1 and '该错误' in msgs[0], msgs
-    return 'ERROR → 该错误'
 
 
 def test_info_not_coalesced():
@@ -80,7 +77,6 @@ def test_info_not_coalesced():
             rec = logging.LogRecord('zcbot', logging.INFO, '', 0, '普通信息', (), None)
             assert c.filter(rec) is True, 'INFO 被合并了'
     _with_sink(run)
-    return 'INFO 不合并'
 
 
 def test_repeat_emits_once_per_window():
@@ -94,7 +90,6 @@ def test_repeat_emits_once_per_window():
     msgs = _with_sink(run)
     assert len(msgs) == 1, msgs
     assert '重复 4 次' in msgs[0], msgs
-    return '重复计数与汇总正常'
 
 
 if __name__ == '__main__':

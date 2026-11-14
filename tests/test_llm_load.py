@@ -36,7 +36,6 @@ def test_manifest_readable():
     assert m.get('version'), "manifest 缺 version"
     assert 'llm_core/main.py' in [f'llm_core/{k}' for k in m['files']] or 'main.py' in m['files'], \
         "manifest 里应该有 main.py"
-    return f"v{m['version']} / {len(m['files'])} files"
 
 
 def test_verify_missing_and_release():
@@ -58,7 +57,7 @@ def test_verify_missing_and_release():
 
         after = verify(target, m)
         assert after['ok'], f"释放后仍不一致: 缺失{after['missing']} 不符{after['mismatch']}"
-        return f"释放 {len(outcome['written'])} 个文件后校验通过"
+        return
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -83,7 +82,7 @@ def test_tamper_then_heal():
         release(_ZIP, target, m)
         healed = verify(target, m)
         assert healed['ok'], f"自愈失败: {healed['mismatch']}"
-        return "篡改后重新释放可自愈"
+        return
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -103,7 +102,7 @@ def test_extra_files_untouched():
         release(_ZIP, target, m)
         assert os.path.isfile(mine), "未收录文件被误删了"
         assert verify(target, m)['ok']
-        return "释放不误伤未收录文件"
+        return
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -121,7 +120,7 @@ def test_release_idempotent():
         after = {rel: os.path.getsize(os.path.join(target, *rel.split('/')))
                  for rel in m['files']}
         assert before == after, "重复释放导致文件大小变化"
-        return "重复释放幂等"
+        return
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -154,7 +153,7 @@ def test_migratable_files_follow_framework():
                 os.remove(p)
         after = verify(target, m, dat)
         assert after['ok'], f"文件被迁到数据目录后不应判定缺失: {after['missing']}"
-        return "配置/文档文件按数据目录约定判定，不会误报缺失"
+        return
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -167,14 +166,12 @@ def test_live_target_synced():
     这里只做提示，避免本地/CI 因「还没重启」出现假红。
     """
     if not os.path.isdir(os.path.join(_REPO_ROOT, 'plugins', 'llm_core')):
-        return "尚未释放到 plugins/，跳过"
+        return
     m = read_manifest(_ZIP)
     dat = os.path.join(_REPO_ROOT, 'data', 'plugins_dat', 'llm_core')
     report = verify(os.path.join(_REPO_ROOT, 'plugins', 'llm_core'), m, dat)
     if not report['ok']:
-        return (f"提示：现网副本与载荷不一致（缺失{report['missing']} 不符{report['mismatch']}），"
-                f"重启框架后由装载器按 md5 覆盖释放")
-    return f"本机 plugins/llm_core 与载荷一致（{report['total']} 个文件）"
+        return
 
 
 if __name__ == '__main__':
@@ -190,8 +187,9 @@ if __name__ == '__main__':
     failed = 0
     for fn in cases:
         try:
-            note = fn()
-            print(f"PASS  {fn.__name__}: {note or ''}")
+            fn()
+            # 说明改取 docstring，用例不再用返回值传信息
+            print(f"PASS  {fn.__name__}: {(fn.__doc__ or '').strip()}")
         except AssertionError as e:
             failed += 1
             print(f"FAIL  {fn.__name__}: {e}")

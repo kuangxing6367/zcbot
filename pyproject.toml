@@ -139,3 +139,9 @@ asyncio_mode = "auto"
 # 不显式设置时 pytest-asyncio 会打 DeprecationWarning，且未来默认作用域会变；
 # 钉成 function 与现状一致，升级插件版本时不会静默改语义。
 asyncio_default_fixture_loop_scope = "function"
+# 用例返回值当"汇报文字"用是历史写法（59 处，脚本运行器 print 出 fn() 的返回值）。
+# pytest 8 起报 PytestReturnNotNoneWarning，新版会直接判失败；已把说明改从 docstring
+# 取，并在这里升级为 error，防止新用例再走返回值这条路。
+filterwarnings = [
+    "error::pytest.PytestReturnNotNoneWarning",
+]

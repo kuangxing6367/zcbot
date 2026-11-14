@@ -72,7 +72,6 @@ def test_core_plugins_not_deleted():
     obj = _loader(core, user, loaded=['echo', 'help'], rows=['echo', 'help'])
     PluginRuntimeMixin.self_check_orphans(obj)
     assert obj.db.deleted == [], f'官方插件命令被误删: {obj.db.deleted}'
-    return 'core 插件命令未被删'
 
 
 def test_loaded_plugin_not_deleted():
@@ -85,7 +84,6 @@ def test_loaded_plugin_not_deleted():
     obj = _loader(core, user, loaded=['weird'], rows=['weird'])
     PluginRuntimeMixin.self_check_orphans(obj)
     assert obj.db.deleted == [], f'在跑的插件命令被删: {obj.db.deleted}'
-    return '已加载插件受保护'
 
 
 def test_really_removed_plugin_still_cleaned():
@@ -99,7 +97,6 @@ def test_really_removed_plugin_still_cleaned():
     obj = _loader(core, user, loaded=['echo'], rows=['echo', 'gone_plugin'])
     PluginRuntimeMixin.self_check_orphans(obj)
     assert obj.db.deleted == ['gone_plugin'], f'应只删 gone_plugin，实际 {obj.db.deleted}'
-    return '真孤儿仍被清理'
 
 
 def test_no_core_dir_falls_back_safely():
@@ -110,7 +107,6 @@ def test_no_core_dir_falls_back_safely():
     obj = _loader(os.path.join(tmp, 'nope'), user, loaded=['echo'], rows=['echo'])
     PluginRuntimeMixin.self_check_orphans(obj)
     assert obj.db.deleted == [], f'异常路径下误删: {obj.db.deleted}'
-    return '目录缺失时安全'
 
 
 def _loader_with_scheduler(core_dir, user_dir, loaded, rows, plugin_tasks):
@@ -161,7 +157,6 @@ def test_builtin_task_not_removed_as_orphan():
         f'内置任务被误删: {obj._removed_jobs}'
     assert 'echo:cleanup' not in obj._removed_jobs, '已加载插件的任务被删'
     assert 'gone:tick' in obj._removed_jobs, '真孤儿任务应被清理'
-    return '内置任务受保护、真孤儿仍清理'
 
 
 if __name__ == '__main__':
@@ -171,8 +166,9 @@ if __name__ == '__main__':
     ok = fail = 0
     for t in tests:
         try:
-            msg = t()
-            print(f'PASS {t.__name__}: {msg}')
+            t()
+            # 说明改取 docstring：用例返回值当汇报文字会被 pytest 判为异常用法
+            print(f'PASS {t.__name__}: {(t.__doc__ or "").strip()}')
             ok += 1
         except AssertionError as e:
             print(f'FAIL {t.__name__}: {e}')

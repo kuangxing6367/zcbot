@@ -42,7 +42,7 @@ def test_capture_stack_while_blocked():
         assert '无法获取事件循环线程 id' not in stack, stack
         assert '事件循环线程已退出' not in stack, stack
         assert 'in_loop' in stack or 'wait' in stack, stack
-        return '卡死时仍抓到栈: ' + stack.strip().splitlines()[0][:60]
+        return
     finally:
         hold.set()
         t.join(2.0)
@@ -56,7 +56,6 @@ def test_id_recorded_at_start():
     wd._loop_thread_id = threading.get_ident()   # 模拟 start 内的赋值
     stack = wd._capture_stack()
     assert '栈不可用' not in stack
-    return '同线程可抓栈'
 
 
 if __name__ == '__main__':
@@ -64,7 +63,9 @@ if __name__ == '__main__':
     for name, fn in sorted(globals().items()):
         if name.startswith('test_') and callable(fn):
             try:
-                print(f'PASS {name}: {fn()}')
+                fn()
+                # 说明改取 docstring，避免用例返回值（pytest 9 会直接判失败）
+                print(f'PASS {name}: {(fn.__doc__ or "").strip()}')
                 ok += 1
             except Exception as e:
                 print(f'FAIL {name}: {type(e).__name__}: {e}')

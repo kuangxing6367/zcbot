@@ -39,7 +39,7 @@ def test_config_yaml_wins_for_web_port():
         assert config['web']['port'] == 8080, config['web']
         assert config['web']['host'] == '127.0.0.1', config['web']
         assert config['web']['session_timeout'] == 3600
-        return 'config.yaml 的 web.port 生效'
+        return
     finally:
         restore()
 
@@ -55,7 +55,7 @@ def test_duplicate_keys_removed_from_core_yaml():
         blk = data['core_plugins']['webui']
         assert 'host' not in blk and 'port' not in blk, blk
         assert blk.get('enabled') is True, blk
-        return 'yaml 中重复键已移除，enabled 保留'
+        return
     finally:
         restore()
 
@@ -75,7 +75,7 @@ def test_plugin_private_keys_still_work():
         assert ob['access_token'] == '', ob         # config.yaml 赢
         assert ob['listen_host'] == '0.0.0.0', ob   # 仅 yaml 有 → 保留
         assert ob['max_pending_events'] == 8192, ob  # 仅 yaml 有 → 保留
-        return '私有键保留、同名键以 config.yaml 为准'
+        return
     finally:
         restore()
 
@@ -89,7 +89,7 @@ def test_enabled_still_from_core_yaml():
         config = {'web': {'host': '127.0.0.1', 'port': 8080}}
         C._autoload_core_plugins(config)
         assert config['core_plugins']['webui'] is False
-        return 'enabled 仍以 core_plugins.yaml 为准'
+        return
     finally:
         restore()
 
@@ -104,7 +104,7 @@ def test_no_conflict_keys_untouched():
         C._autoload_core_plugins(config)
         assert config['web']['port'] == 9000, config['web']
         assert config['web']['host'] == '10.0.0.9', config['web']
-        return '无 config 段时 yaml 值完整生效'
+        return
     finally:
         restore()
 
@@ -114,7 +114,9 @@ if __name__ == '__main__':
     for name, fn in sorted(globals().items()):
         if name.startswith('test_') and callable(fn):
             try:
-                print(f'PASS {name}: {fn()}')
+                fn()
+                # 用例说明改从 docstring 取：返回值会让 pytest 报 PytestReturnNotNoneWarning
+                print(f'PASS {name}: {(fn.__doc__ or "").strip()}')
                 ok += 1
             except Exception as e:
                 print(f'FAIL {name}: {type(e).__name__}: {e}')

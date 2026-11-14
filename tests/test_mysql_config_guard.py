@@ -37,14 +37,12 @@ def test_normalize_ok():
     p = DatabaseConnMixin._normalize_mysql_params(o)
     assert p['password'] == '123456', '数字密码应被转成字符串'
     assert p['port'] == 3306 and isinstance(p['port'], int)
-    return '正常配置归一化正确'
 
 
 def test_normalize_defaults():
     p = DatabaseConnMixin._normalize_mysql_params(_obj({'type': 'mysql'}))
     assert p == {'host': '127.0.0.1', 'port': 3306, 'user': 'root',
                  'password': '', 'database': 'zcbot', 'charset': 'utf8mb4'}, p
-    return '缺省值正确'
 
 
 def test_nested_dict_rejected():
@@ -58,7 +56,7 @@ def test_nested_dict_rejected():
         assert 'database.host' in msg, msg
         assert 'database.database' in msg, msg
         assert '嵌套' in msg, msg
-        return '嵌套结构被拦下并指出键名'
+        return
     raise AssertionError('本应抛 ValueError')
 
 
@@ -68,7 +66,7 @@ def test_port_not_int():
             _obj({'type': 'mysql', 'port': 'abc'}))
     except ValueError as e:
         assert 'database.port' in str(e)
-        return 'port 非整数被拦下'
+        return
     raise AssertionError('本应抛 ValueError')
 
 
@@ -79,7 +77,6 @@ def test_pool_waitable_classification():
     assert not DatabaseConnMixin._is_pool_waitable(TypeError(
         "unsupported operand type(s) for +: 'dict' and 'bytes'"))
     assert not DatabaseConnMixin._is_pool_waitable(Exception('Access denied'))
-    return '异常分类正确'
 
 
 def test_fail_fast_no_retry():
@@ -100,7 +97,7 @@ def test_fail_fast_no_retry():
         elapsed = time.time() - t0
         assert len(calls) == 1, f'不应重试，实际尝试 {len(calls)} 次'
         assert elapsed < 1.0, f'应快速失败，实际耗时 {elapsed:.1f}s'
-        return f'立即失败（{len(calls)} 次尝试，{elapsed*1000:.0f}ms）'
+        return
     raise AssertionError('本应抛 TypeError')
 
 
@@ -119,7 +116,7 @@ def test_pool_full_still_retries_then_reports():
     except RuntimeError as e:
         assert '连接池繁忙' in str(e), str(e)
         assert len(calls) > 1, '池满时应重试'
-        return f'池满仍有界重试 {len(calls)} 次'
+        return
     raise AssertionError('本应抛 RuntimeError')
 
 
@@ -128,8 +125,9 @@ if __name__ == '__main__':
     for name, fn in sorted(globals().items()):
         if name.startswith('test_') and callable(fn):
             try:
-                detail = fn()
-                print(f'PASS {name}: {detail}')
+                fn()
+                # 说明改取 docstring，用例不再用返回值传信息
+                print(f'PASS {name}: {(fn.__doc__ or "").strip()}')
                 ok += 1
             except Exception as e:
                 print(f'FAIL {name}: {type(e).__name__}: {e}')
