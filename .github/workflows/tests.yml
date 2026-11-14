@@ -215,3 +215,11 @@ jobs:
         run: python -m pip install "ruff>=0.6"
       - name: No undefined names (F821)
         run: python -m ruff check --isolated --select F821 .
+      # 只锁已经清零的规则，不做全量 lint 门禁：仓库仍有约 3k 条历史违规
+      # （盲 except、超长函数等）需要分阶段治理，一次性开全量会让主干永远红。
+      # 新增规则进这里的前提是同一提交里先把它清零。
+      - name: Lint gate (已清零规则，禁止回涨)
+        run: >-
+          python -m ruff check
+          --select UP009,I001,UP032,F541,PIE790,RET501,PLR1711,RUF022,FURB167,UP006,UP045,RUF100
+          .
