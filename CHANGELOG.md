@@ -110,28 +110,36 @@ ruff 默认规则下全仓 4072 条违规中，1490 条属于工具自己标注�
   （3m23s）+ 脚本式 20/20；批次 B/C 366 + 32 + 110 个改动文件 `py_compile` 全通过、
   全量用例收集 968 例 0 错误、`F821` 门禁复跑仍为 0。
 
-### 工程：静默捕获治理（第一批，79 处）
+### 工程：静默捕获治理（708 → 48）
 
-全仓 708 处「捕获后既不记日志也不抛出」的宽泛 `except`（`framework` 517 / `core_plugins` 180）。
-第一批只动框架自己在跑的路径，原则是**先让它可见，不改控制流**——所有降级行为一字未动：
+全仓 708 处「捕获后既不记日志也不抛出」的宽泛 `except`（`framework` 517 / `core_plugins` 180 /
+脚本 11）。原则是**先让它可见，不改控制流**——所有降级行为一字未动：
 
-| 模块 | 处数 | 处理 |
-|---|---|---|
-| `core/event_buffer.py` | 10 | debug：行数统计、文件大小、句柄关闭、体积估算、L2 迁移单行失败 |
-| `core/base.py` | 9 | debug 8 + warning 1（控制台 stop 失败 → 线程可能未释放） |
-| `messaging/router.py` | 14 | debug 12 + warning 2（线程池解析权限失败、适配器判定 fail-open） |
-| `loader/runtime.py` | 13 | debug：内存估算、路由缓存失效、孤儿任务清理、状态回写 |
-| `console_server.py` | 18 | debug：acceptor 停止、连接关闭、只读打开回退读写 |
-| `bootstrap/instance_lock.py` | 15 | debug：锁目录/pid/fd/flock/残留锁清理 |
+| 批次 | 范围 | 处数 | 处理 |
+|---|---|---|---|
+| 1 | `core/event_buffer.py` | 10 | debug：行数统计、句柄关闭、体积估算、L2 迁移单行失败 |
+| 1 | `core/base.py` | 9 | debug 8 + warning 1（控制台 stop 失败 → 线程可能未释放） |
+| 1 | `messaging/router.py` | 14 | debug 12 + warning 2（线程池解析权限失败、适配器判定 fail-open） |
+| 1 | `loader/runtime.py` | 13 | debug：内存估算、路由缓存失效、孤儿任务清理、状态回写 |
+| 1 | `console_server.py` | 18 | debug：acceptor 停止、连接关闭、只读打开回退读写 |
+| 1 | `bootstrap/instance_lock.py` | 15 | debug：锁目录/pid/fd/flock/残留锁清理 |
+| 2 | 其余 137 个文件 | 581 | 按函数名判级别，18 处落在权限/鉴权/会话相关函数走 warning，其余 debug |
 
-两处例外刻意不处理，都写进了代码：
+第 2 批是脚本化处理的：AST 定位宽泛/bare 处理器、判定体内是否已有 raise/assert/日志调用，
+无 `as name` 的补 `as _exc`（用 `e` 会遮蔽外层变量），无模块级 logger 的自动补
+`import logging` + `getLogger('zcbot')`。补完日志后原 `pass` 成为多余占位，一并清掉（PIE790）。
 
-- `terminal/panel.py` 的 17 处保持静默。面板运行在 ANSI 备用屏 + raw 输入模式，
+剩下 48 处**刻意保持静默**，理由写在代码里：
+
+- `framework/terminal/` 下 TUI 面板与终端命令 34 处：运行在 ANSI 备用屏 + raw 输入模式，
   写 stderr 会打花画面；终端恢复路径本身就在 `except` 里，再写日志可能重入。
-  失败一律走安全降级返回值，已写进模块 docstring。
-- `core/base.py` 命令执行失败那处不动：异常信息已经作为回复返回给用户，属已观测路径。
+  失败一律走安全降级返回值（80x24 回落、保留原终端模式），约定写进 `panel.py` docstring。
+- `tools/` 与 `startup.py` 的一次性诊断脚本 14 处：进程即将退出，输出会污染被诊断者的标准流。
 
-`core_plugins` 的 180 处、`framework/api` 与 `framework/iipc` 的剩余部分留待后续批次。
+另有一处不算静默：`core/base.py` 命令执行失败，异常信息已作为回复返回给用户，属已观测路径。
+
+验证：137 + 6 个改动文件 `py_compile` 全通过；门禁规则 0 违规；全量用例收集 968 例 0 错误；
+脚本式回归 20/20 PASS；定向用例 31 + 17 + 16 passed；静默捕获复算 47 → 1（首批）、708 → 48（全量）。
 
 ### 其他
 
