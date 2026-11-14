@@ -30,8 +30,8 @@ def instance_lock_path(root):
         home = get_home()
         if home and os.access(home, os.W_OK):
             return os.path.join(home, 'data', 'zcbot.lock')
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('home/data 不可写，回落到系统临时目录: %s', _exc)
     return os.path.join(root, 'data', 'zcbot.lock')
 
 
@@ -94,15 +94,17 @@ def pid_is_our_instance(pid, root):
             if h:
                 kernel32.CloseHandle(h)
             return alive
-        except Exception:
+        except Exception as _exc:
+            logger.debug('查询进程存活失败，按不存活处理: %s', _exc)
             return False
     # POSIX：先确认进程存在，再比对 /proc/<pid>/cmdline 是否指向本 main.py
     try:
         os.kill(int(pid), 0)
     except ProcessLookupError:
         return False
-    except Exception:
+    except Exception as _exc:
         # 存在但无权限探活 -> 保守视为存活
+        logger.debug('查询进程存活时进程已消失: %s', _exc)
         return True
     try:
         with open('/proc/%d/cmdline' % int(pid), 'rb') as f:
@@ -124,7 +126,8 @@ def read_lock_pid(fd):
         data = os.read(fd, 64)
         txt = data.decode('utf-8', 'replace').strip()
         return int(txt) if txt.isdigit() else None
-    except Exception:
+    except Exception as _exc:
+        logger.debug('读取锁文件 pid 失败: %s', _exc)
         return None
 
 
@@ -133,8 +136,8 @@ def write_lock_pid(fd):
         os.lseek(fd, 0, os.SEEK_SET)
         os.ftruncate(fd, 0)
         os.write(fd, str(os.getpid()).encode('utf-8'))
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('写入锁文件 pid 失败: %s', _exc)
 
 
 def try_lock(fd):
@@ -159,12 +162,12 @@ def remove_stale_lock(lock_path, fd):
         if fd is not None:
             try:
                 os.close(fd)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('关闭锁文件描述符失败: %s', _exc)
         if os.path.exists(lock_path):
             os.remove(lock_path)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('删除残留锁文件失败: %s', _exc)
 
 
 def acquire_instance_lock(root):
@@ -210,8 +213,8 @@ def acquire_instance_lock(root):
     lock_dir = os.path.dirname(lock_path)
     try:
         os.makedirs(lock_dir, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('创建锁目录失败: %s', _exc)
 
     try:
         fd = open_lock_file(lock_path)
@@ -234,8 +237,8 @@ def acquire_instance_lock(root):
         # 确属本框架仍在运行的实例 -> 明确提示并拒绝
         try:
             os.close(fd)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('关闭锁文件描述符失败: %s', _exc)
         print("\n" + "=" * 60)
         print(f"[实例锁] 检测到另一个 ZCBOT 实例正在运行（PID {holder_pid}），")
         print("          本进程立即退出，避免多实例抢端口 / 抢 DB / 双写。")
@@ -248,8 +251,8 @@ def acquire_instance_lock(root):
         # 锁被占用但读不到 PID（极少见，如权限/共享拦截）-> 保守拒绝并提示
         try:
             os.close(fd)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('关闭锁文件描述符失败: %s', _exc)
         print("\n" + "=" * 60)
         print("[实例锁] 检测到实例锁已被占用（PID 未知），本进程立即退出，")
         print("          避免多实例抢端口 / 抢 DB / 双写。如需强制启动，")
@@ -277,8 +280,8 @@ def acquire_instance_lock(root):
     # 重建后仍失败（极少见，可能真有并发启动）-> 保守拒绝并提示
     try:
         os.close(fd)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('关闭锁文件描述符失败: %s', _exc)
     print("\n" + "=" * 60)
     print("[实例锁] 清理残留锁后仍无法获取实例锁，疑似并发启动，本进程退出。")
     print("=" * 60)
@@ -302,21 +305,21 @@ def cleanup_instance_lock():
                     import msvcrt
                     os.lseek(fd, LOCK_BYTE_OFFSET, os.SEEK_SET)
                     msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('释放文件锁失败（Windows 分支）: %s', _exc)
             else:
                 import fcntl
                 fcntl.flock(fd, fcntl.LOCK_UN)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('释放文件锁失败（fcntl 分支）: %s', _exc)
         try:
             os.close(fd)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('关闭锁文件描述符失败: %s', _exc)
     if path and os.path.exists(path):
         try:
             os.remove(path)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('删除锁文件失败: %s', _exc)
     _INSTANCE_LOCK['fd'] = None
     _INSTANCE_LOCK['path'] = None

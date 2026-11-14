@@ -96,8 +96,8 @@ class ConsoleServer:
                 self.token = str(row['token'])
                 self.token_bits = int(row['token_bits'] or self.token_bits)
                 return
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('读取终端配置行失败: %s', _exc)
         # 首次：生成超长 token 并落库
         self.token = secrets.token_hex(max(1, self.token_bits // 8))
         self._persist()
@@ -155,7 +155,8 @@ class ConsoleServer:
                     return False
                 obj = json.loads(line.decode('utf-8'))
                 return isinstance(obj, dict) and obj.get('banner') == 'ZCBOT console'
-        except Exception:
+        except Exception as _exc:
+            logger.debug('终端会话首行解析失败，按未认证处理: %s', _exc)
             return False
 
     def _bind(self):
@@ -182,8 +183,8 @@ class ConsoleServer:
                 last_err = e
                 try:
                     s.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('关闭控制台客户端连接失败: %s', _exc)
                 # 复用旧端口失败（可能是上一个进程还没释放）——稍等再试
                 if cand != 0:
                     time.sleep(0.4)
@@ -207,12 +208,12 @@ class ConsoleServer:
                 # 等满 5 秒才返回 —— 用户看到的就是「输入 exit 后卡五秒」。
                 # shutdown(SHUT_RDWR) 会让 accept() 立刻返回错误，线程立即退出。
                 self._sock.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('停止控制台 acceptor：shutdown socket 失败: %s', _exc)
             try:
                 self._sock.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('停止控制台 acceptor：关闭 socket 失败: %s', _exc)
             self._sock = None
         # 等 accept 线程真正退出，确保端口释放后再允许复用探测。
         # 否则 Linux 上 close 后线程仍在 accept，复用探测会误判「已有控制台在跑」
@@ -228,7 +229,8 @@ class ConsoleServer:
                 conn, _ = self._sock.accept()
             except OSError:
                 break
-            except Exception:
+            except Exception as _exc:
+                logger.debug('acceptor 收到 socket 关闭后的错误，退出监听线程: %s', _exc)
                 continue
             threading.Thread(target=self._serve, args=(conn,), daemon=True,
                              name='console-client').start()
@@ -276,8 +278,8 @@ class ConsoleServer:
         finally:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('关闭控制台连接失败: %s', _exc)
 
     # ── 命令执行 ───────────────────────────────────────────────────────
     @staticmethod
@@ -285,7 +287,8 @@ class ConsoleServer:
         try:
             from framework.terminal import terminal_commands
             return sorted(terminal_commands.list_commands().keys())
-        except Exception:
+        except Exception as _exc:
+            logger.debug('终端命令模块不可用，命令列表按空处理: %s', _exc)
             return []
 
     def run_command(self, command: str) -> str:
@@ -324,7 +327,8 @@ class ConsoleServer:
         svc = None
         try:
             svc = self.fw.services.get('aiwriter')
-        except Exception:
+        except Exception as _exc:
+            logger.debug('获取 aiwriter 服务失败，AI 终端功能不可用: %s', _exc)
             svc = None
         if svc is None or not hasattr(svc, 'run'):
             return ('[错误] 未启用 aiwriter 插件（或未提供 agent 服务）：'
@@ -401,12 +405,12 @@ class ConsoleClient:
     def close(self):
         try:
             self._send({'close': True})
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('关闭会话时发送 close 帧失败: %s', _exc)
         try:
             self._sock.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('关闭会话时关闭 socket 失败: %s', _exc)
 
 
 def load_credentials(db_path):
@@ -414,22 +418,25 @@ def load_credentials(db_path):
     import sqlite3
     try:
         con = sqlite3.connect('file:%s?mode=ro' % db_path.replace('\\', '/'), uri=True, timeout=5)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('只读方式打开数据库失败，回退到读写方式: %s', _exc)
         try:
             con = sqlite3.connect(db_path, timeout=5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('打开数据库读取戳失败: %s', _exc)
             return None, None
     try:
         cur = con.execute("SELECT port, token FROM console_access WHERE id=1")
         row = cur.fetchone()
         return (int(row[0]), str(row[1])) if row else (None, None)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('查询数据库戳失败: %s', _exc)
         return None, None
     finally:
         try:
             con.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('关闭数据库连接失败: %s', _exc)
 
 
 def load_credentials_mysql(db_cfg):
@@ -447,20 +454,22 @@ def load_credentials_mysql(db_cfg):
             password=str(db_cfg.get('password') or ''),
             database=str(db_cfg.get('database') or 'zcbot'),
             charset='utf8mb4', connect_timeout=5, read_timeout=6)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('连接 MySQL 读取戳失败: %s', _exc)
         return None, None
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT port, token FROM console_access WHERE id=1")
             row = cur.fetchone()
         return (int(row[0]), str(row[1])) if row else (None, None)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('查询 MySQL 戳失败: %s', _exc)
         return None, None
     finally:
         try:
             conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('关闭 MySQL 连接失败: %s', _exc)
 
 
 def load_credentials_any(db_cfg, project_root=None):
