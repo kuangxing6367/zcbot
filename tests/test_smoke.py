@@ -119,9 +119,14 @@ def test_paths_and_repo_layout():
         config = {}
     plugins_dir = b.Framework._get_plugins_dir(_Mini())
     dat_dir = b.Framework._get_plugins_dat_dir(_Mini())
-    chk("_get_plugins_dir = 仓库根/plugins",
-        os.path.normpath(plugins_dir) == os.path.normpath(os.path.join(ROOT, 'plugins')),
-        plugins_dir)
+    # 用户插件目录的新旧布局由 framework.paths._prefer_data 决定：两处都不存在时
+    # （全新 clone / pip 安装态）返回新布局 <home>/data/plugins，存量仓库仍返回
+    # <home>/plugins。测试必须锁「内核与 paths 同口径」，不能写死某一种布局——
+    # 写死旧布局会让干净 checkout 的 CI 直接失败（本地有 plugins/ 才恰好通过）。
+    from framework.paths import user_plugins_dir as _paths_user_plugins_dir
+    chk("_get_plugins_dir 与 framework.paths 同口径",
+        os.path.normpath(plugins_dir) == os.path.normpath(_paths_user_plugins_dir()),
+        f"{plugins_dir} != {_paths_user_plugins_dir()}")
     chk("_get_plugins_dat_dir = 仓库根/data/plugins_dat",
         os.path.normpath(dat_dir) == os.path.normpath(
             os.path.join(ROOT, 'data', 'plugins_dat')),
@@ -306,9 +311,10 @@ def test_startup_and_dispatch_smoke():
     chk("fw.config_path 指向传入配置",
         os.path.normpath(fw.config_path) == os.path.normpath(cfg_path),
         fw.config_path)
-    chk("fw._get_plugins_dir 落在仓库根",
-        os.path.normpath(fw._get_plugins_dir()) == os.path.normpath(
-            os.path.join(ROOT, 'plugins')),
+    # 同 test_paths_and_repo_layout：布局取决于 paths._prefer_data，不写死。
+    from framework.paths import user_plugins_dir as _paths_user_plugins_dir
+    chk("fw._get_plugins_dir 与 framework.paths 同口径",
+        os.path.normpath(fw._get_plugins_dir()) == os.path.normpath(_paths_user_plugins_dir()),
         fw._get_plugins_dir())
 
     # 核心插件加载路径：全部禁用时应安静扫过目录（真跑 _load_core_plugins）

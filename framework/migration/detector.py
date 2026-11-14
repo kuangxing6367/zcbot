@@ -43,7 +43,7 @@ LAYOUT_ANCHORS = (
         'range': '>=1.21.0',
         'layout': LAYOUT_DATA,
         'label': 'data/ 状态布局（1.21.0 起）',
-        'basis': 'CHANGELOG [1.21.1] 节 + framework/paths.py：配置、清单、用户插件统一落 data/',
+        'basis': 'CHANGELOG [1.22.0] 节 + framework/paths.py：配置、清单、用户插件统一落 data/',
     },
     {
         'range': '1.8.9..1.20.2',

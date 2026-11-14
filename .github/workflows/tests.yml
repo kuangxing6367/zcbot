@@ -109,7 +109,8 @@ jobs:
             tests/test_plugin_api_unmount.py tests/test_plugin_route_hotmount.py \
             tests/test_scheduler_reliability.py tests/test_session_tokens.py \
             tests/test_telegram_offset.py \
-            tests/test_ctx_contract_and_install_regressions.py -q
+            tests/test_ctx_contract_and_install_regressions.py \
+            tests/test_decorator_only_plugin.py -q
       # ── 多后端一致性套件（默认 sqlite，无需 MySQL）────────────────
       # tests/db_conformance 自带 conftest 参数化，--db 默认 sqlite；
       # 覆盖 schema 对齐、事务、类型映射、方言翻译与并发，共 51 例。

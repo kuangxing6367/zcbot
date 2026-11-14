@@ -26,12 +26,15 @@
 
 ---
 
-## 开发中（未发版）
+## [1.22.0] - 2026-11-14
 
-> 主题：**按「装完就能用」的标准，把 pip 安装态的整条上手路径跑通**。
-> 起因是一份外部实测报告，逐条复现后确认 6 条成立、1 条一半成立（含一处
-> 比报告更严重的隐患）、1 条不成立。全部修复均以-wheel 装进干净 venv 真跑验证，
-> 不以「读代码觉得没问题」结案。
+> 主题：**把「装完就能用」和「装了能验」两条路都跑通**——先是 pip 安装态的整条
+> 上手路径（入口 / 路径 / 版本自报 / CLI 视图 / 备份安全 / 发行包内容），再按外部
+> 静态检查报告补上插件的类型契约与 F821 门禁，最后做一轮全仓审查，兑现「装饰器插件
+> 可省略 `register`」的文档承诺并补齐 CI 缺口。三批改动全部以真跑结案（干净 venv、
+> 干净 wheel、全量测试），不以「读代码觉得没问题」为准。
+> 本节变化自 `435bdb7` 起陆续提交并推送到 `origin/main`，现随 `v1.22.0` 打 Tag 发版；
+> `VERSION` / `pyproject.toml` / `README.md` 三处版本口径已同步为 1.22.0。
 
 ### 默认安装与首次启动
 
@@ -163,6 +166,18 @@
   直接终止进程。全量 pytest 结束时偶发，表现为「测试都过了但进程 fatal」。
   改为弱引用登记 + `atexit` 统一 `stop()`，并在 `_flush_loop` / `_emit_summary`
   上加 `sys.is_finalizing()` 守卫。修复后连跑全量 + 5 次裸退出复现，0 次 fatal。
+
+### CI 红灯：干净 checkout 下的布局断言
+
+- `tests` workflow 在 `3b018ea` / `f7d6b65` 两次推送后失败（`Startup + dispatch smoke`，
+  Python 3.10 / 3.11 / 3.12 全挂，约 28s 退出）。根因不是产品代码：`test_smoke.py`
+  有两处断言写死了**旧插件布局** `<仓库根>/plugins`，而 `435bdb7` 起全新安装默认落
+  `<home>/data/plugins`（`framework.paths._prefer_data`）。开发机同时存在 `plugins/`
+  与 `data/`，`_prefer_data()` 走旧分支所以本地一直通过；CI 是干净 checkout，两处都
+  不存在 → 走新布局 → 断言失败。改为与 `framework.paths.user_plugins_dir()` 比口径，
+  不再写死任何一种布局。
+- `tests/test_decorator_only_plugin.py`（上一轮新增）没进 `tests.yml` 的 pytest 清单，
+  已补上——新测试不进 CI 等于没测。
 
 ### 未处理（需单独立项）
 
