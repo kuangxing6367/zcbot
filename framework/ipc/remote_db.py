@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 RemoteDatabase —— 宿主侧数据库代理（进程2 插件经此 RPC 到进程1 的真实 Database）
 

@@ -38,18 +38,18 @@ import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from framework.config import load_config
-from framework.database.db import init_db
-from framework.loader import PluginLoader
-from framework.messaging.router import MessageRouter
-from framework.messaging.event_bus import EventBus
-from framework.log_broker import log_broker, FrameworkLogHandler
-from framework.messaging.protocol import ServiceRegistry
-from framework.terminal import TerminalInput, terminal_commands, register_builtins
-from framework.hooks import HookRegistry, HookPoints
 from framework import i18n
 from framework.blackbox import blackbox as _global_blackbox
+from framework.config import load_config
+from framework.database.db import init_db
+from framework.hooks import HookPoints, HookRegistry
+from framework.loader import PluginLoader
+from framework.log_broker import FrameworkLogHandler, log_broker
+from framework.messaging.event_bus import EventBus
+from framework.messaging.protocol import ServiceRegistry
+from framework.messaging.router import MessageRouter
 from framework.runtime import current_event_id_var
+from framework.terminal import TerminalInput, register_builtins, terminal_commands
 
 logger = logging.getLogger('zcbot')
 
@@ -68,12 +68,11 @@ class _EventIdFilter(logging.Filter):
         return True
 
 
-from framework.core.stats_writer import AsyncStatsWriter  # noqa: F401  向后兼容 re-export
-
-
 from framework.core.dispatch import FrameworkDispatchMixin
 from framework.core.event_buffer import EventBuffer
 from framework.core.runtime import FrameworkRuntimeMixin
+from framework.core.stats_writer import AsyncStatsWriter  # noqa: F401  向后兼容 re-export
+
 
 class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
     """框架核心引擎"""
@@ -648,8 +647,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         终端命令 handler 用 print 输出；这里把 stdout 重定向后把文本回传，
         让核心进程的终端能展示宿主侧命令（plugins / tasks 等）的真实结果。
         """
-        import io
         import contextlib
+        import io
         handler = terminal_commands.get(name)
         if handler is None:
             return f"未知命令: {name}"

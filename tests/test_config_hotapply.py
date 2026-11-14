@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """配置热应用（framework/hotapply.py）与 /api/v1 别名回归测试。
 
 覆盖：
@@ -22,8 +21,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from framework import hotapply
-from framework.core import Framework
 from framework.api.webapp import create_web_app
+from framework.core import Framework
 
 _FAILED = []
 
@@ -51,11 +50,11 @@ def _build(extra_yaml=''):
     db = os.path.join(tmp, 'hot.db').replace('\\', '/')
     with open(cfg, 'w', encoding='utf-8') as f:
         f.write(
-            "database:\n  type: sqlite\n  path: {db}\n"
+            f"database:\n  type: sqlite\n  path: {db}\n"
             "log:\n  level: INFO\n"
             "security:\n  silent_auth: false\n  human_check:\n    enabled: false\n"
             "web:\n  host: 127.0.0.1\n  port: 8080\n"
-            "{extra}{tail}".format(db=db, extra=extra_yaml, tail=_CONFIG_TAIL)
+            f"{extra_yaml}{_CONFIG_TAIL}"
         )
     fw = Framework(config_path=cfg, role='standard')
     return fw, create_web_app(fw)

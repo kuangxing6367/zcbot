@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """适配器联调（全链路）：假 OneBot → Rust 适配器 → Go 内核 → Python 插件 → 回传。
 
 拓扑：
@@ -32,8 +31,8 @@ ROOT = os.path.dirname(HERE)                      # iipc/
 PYSIDE = os.path.dirname(ROOT)                   # python_side/
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "py_sdk"))
-from onebot_fake import FakeOneBot, group_msg, private_msg  # noqa: E402
 from iipc_client import IIPCClient, resolve_auth  # noqa: E402
+from onebot_fake import FakeOneBot, group_msg, private_msg  # noqa: E402
 
 KERNEL_EXE = os.path.join(ROOT, "go_kernel", "zcbot_kernel.exe")
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """渲染器外部资源（字体子集 + 原生扩展）的获取与校验。
 
 为什么要有这一层
@@ -293,8 +292,7 @@ class AssetManager:
             return None
         if free < need_bytes:
             raise IOError(
-                '磁盘空间不足：需要约 {:.0f}MB，{} 所在卷只剩 {:.0f}MB'.format(
-                    need_bytes / 1048576.0, path, free / 1048576.0))
+                f'磁盘空间不足：需要约 {need_bytes / 1048576.0:.0f}MB，{path} 所在卷只剩 {free / 1048576.0:.0f}MB')
         return free
 
     def _preflight(self):
@@ -309,10 +307,10 @@ class AssetManager:
         try:
             os.makedirs(d, exist_ok=True)
         except OSError as e:
-            return False, '资源目录不可创建（{}）：{}'.format(d, e), None
+            return False, f'资源目录不可创建（{d}）：{e}', None
 
         if not os.path.isdir(d):
-            return False, '资源目录路径被占用且不是目录：{}'.format(d), None
+            return False, f'资源目录路径被占用且不是目录：{d}', None
 
         probe = os.path.join(d, '.zcbot_write_probe')
         try:
@@ -320,8 +318,7 @@ class AssetManager:
                 f.write(b'1')
             os.remove(probe)
         except OSError as e:
-            return False, '资源目录不可写（只读挂载 / 权限不足 / 配额已满）：{}：{}'.format(
-                d, e), None
+            return False, f'资源目录不可写（只读挂载 / 权限不足 / 配额已满）：{d}：{e}', None
 
         free = None
         try:
@@ -407,14 +404,14 @@ class AssetManager:
                 os.replace(src_dir, dst_dir)
                 return None
             except OSError as e:
-                return '无法建立资源目录 {}：{}'.format(dst_dir, e)
+                return f'无法建立资源目录 {dst_dir}：{e}'
 
         removed = True
         try:
             shutil.rmtree(dst_dir)
         except OSError as e:
             removed = False        # 只读 / 被占用：下面走就地覆盖
-            _log('正式资源目录删除失败（{}），退化为就地覆盖'.format(e), 'warning')
+            _log(f'正式资源目录删除失败（{e}），退化为就地覆盖', 'warning')
         else:
             _log('正式资源目录已清空，准备原子改名')
 
@@ -424,7 +421,7 @@ class AssetManager:
                 return None
             except OSError as e:
                 # rename 失败但旧目录已被删，此时只能逐个搬回去
-                _log('资源目录改名失败（{}），改为逐文件复制'.format(e), 'warning')
+                _log(f'资源目录改名失败（{e}），改为逐文件复制', 'warning')
 
         # 就地覆盖：目标目录（可能只读）里的文件逐个写
         pairs = []
@@ -448,13 +445,13 @@ class AssetManager:
                 os.makedirs(os.path.dirname(dp), exist_ok=True)
                 shutil.copyfile(sp, dp)
             except OSError as e:
-                failed.append('{}（{}）'.format(rel, e))
+                failed.append(f'{rel}（{e}）')
 
         if not failed and manifest_src:
             try:
                 shutil.copyfile(manifest_src, os.path.join(dst_dir, 'manifest.json'))
             except OSError as e:
-                failed.append('manifest.json（{}）'.format(e))
+                failed.append(f'manifest.json（{e}）')
         if failed:
             # src 留着没意义（内容已在 dst 里尽力铺过），但它能让人看到哪步失败
             shutil.rmtree(src_dir, ignore_errors=True)
@@ -500,9 +497,8 @@ class AssetManager:
 
         need = SPACE_REQUIRED_MB * 1048576
         if free is not None and free < need:
-            st.error = ('磁盘空间不足：解压后约 15MB，连临时文件需要约 {}MB，'
-                        '{} 所在卷只剩 {:.0f}MB').format(
-                            SPACE_REQUIRED_MB, self.data_dir, st.free_mb)
+            st.error = (f'磁盘空间不足：解压后约 15MB，连临时文件需要约 {SPACE_REQUIRED_MB}MB，'
+                        f'{self.data_dir} 所在卷只剩 {st.free_mb:.0f}MB')
             st.manual_hint = self.manual_hint_text()
             self._state = st
             _log('渲染资源无法获取：' + st.error, 'error')
@@ -511,7 +507,7 @@ class AssetManager:
         tmp_zip = os.path.join(self.data_dir, 'image_renderer', 'assets.zip.part')
         version = None
         try:
-            _log('开始下载渲染资源: {}'.format(url))
+            _log(f'开始下载渲染资源: {url}')
             self._fetch(url, tmp_zip)
             manifest = self._extract(tmp_zip)          # 解压+校验到 .part 目录
             version = (manifest or {}).get('version')
@@ -524,13 +520,13 @@ class AssetManager:
                     os.path.dirname(tmp_zip), 'assets.zip'))
             except OSError as e:
                 # 归档只是留档，存不下来不影响资源本身可用
-                _log('资源包留档失败（不影响使用）：{}'.format(e), 'warning')
+                _log(f'资源包留档失败（不影响使用）：{e}', 'warning')
         except Exception as e:
-            st.error = '{}: {}'.format(type(e).__name__, e)
+            st.error = f'{type(e).__name__}: {e}'
             self._state = st
             _cleanup(tmp_zip)
             shutil.rmtree(self.version_dir + '.part', ignore_errors=True)
-            _log('渲染资源下载失败: {}'.format(st.error), 'error')
+            _log(f'渲染资源下载失败: {st.error}', 'error')
             # 3) 关键区分：失败 ≠ 没得用。已有旧资源时给出「仍在用旧版」的结论，
             #    否则用户会以为功能挂了，跑去查网络。
             if had_previous:
@@ -557,8 +553,7 @@ class AssetManager:
         st.writable = ok
         st.free_mb = None if free is None else round(free / 1048576.0, 1)
         if not st.ok:
-            st.error = '下载完成但资源仍不完整（可能是发布包缺少当前平台 {} 的产物）'.format(
-                platform_key())
+            st.error = f'下载完成但资源仍不完整（可能是发布包缺少当前平台 {platform_key()} 的产物）'
             _log(st.error, 'error')
         else:
             _log('渲染资源就绪（版本 {}，来自下载）'.format(st.version or '未知'))
@@ -569,11 +564,10 @@ class AssetManager:
         """手动放置资源的确切路径与文件名（日志/面板可直接照抄）。"""
         plat = platform_key() or '<平台>'
         fname = native_filename()
-        return ('把 fonts/ 与 native/{plat}/ 放到 {base}/（或直接放在插件目录 '
-                '{plugin}/：字体 msyh_subset_common.ttf、msyh_subset_ext.ttf、'
-                'charset_common.txt、charset_ext.txt；原生扩展 native/bin/{plat}/{fname}）'
-                ).format(base=self.version_dir, plugin=self.plugin_dir,
-                         plat=plat, fname=fname)
+        return (f'把 fonts/ 与 native/{plat}/ 放到 {self.version_dir}/（或直接放在插件目录 '
+                f'{self.plugin_dir}/：字体 msyh_subset_common.ttf、msyh_subset_ext.ttf、'
+                f'charset_common.txt、charset_ext.txt；原生扩展 native/bin/{plat}/{fname}）'
+                )
 
     def _fetch(self, url, dest):
         import urllib.request
@@ -597,9 +591,9 @@ class AssetManager:
             except OSError as e:
                 # ENOSPC / EACCES：区分「网络断了」和「盘写不下」，
                 # 否则用户看到 ConnectionReset 会去查网络，方向完全错。
-                raise IOError('写入临时文件失败（磁盘满 / 目录只读 / 配额耗尽）：{}'.format(e))
+                raise IOError(f'写入临时文件失败（磁盘满 / 目录只读 / 配额耗尽）：{e}')
             if total and int(total) != got:
-                raise IOError('下载不完整：期望 {} 字节，实际 {}'.format(total, got))
+                raise IOError(f'下载不完整：期望 {total} 字节，实际 {got}')
 
     def _extract(self, zip_path):
         """安全解压（防路径穿越）+ 逐条校验，返回包内 manifest.json 的 dict。
@@ -625,7 +619,7 @@ class AssetManager:
                 # 路径穿越防护：规范化后必须仍在目标目录内
                 dest = os.path.normpath(os.path.join(tmp_target, name))
                 if not dest.startswith(os.path.abspath(tmp_target) + os.sep):
-                    raise IOError('资源包内包含非法路径: {}'.format(name))
+                    raise IOError(f'资源包内包含非法路径: {name}')
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with zf.open(info) as src, open(dest, 'wb') as out:
                     shutil.copyfileobj(src, out)
@@ -659,16 +653,15 @@ class AssetManager:
         for arc, meta in mfiles.items():
             p = os.path.normpath(os.path.join(base, arc.replace('\\', '/')))
             if not os.path.isfile(p):
-                bad.append('缺文件 {}'.format(arc))
+                bad.append(f'缺文件 {arc}')
                 continue
             want_size = meta.get('size')
             if want_size is not None and os.path.getsize(p) != want_size:
-                bad.append('{} 大小不符（期望 {} 实际 {}）'.format(
-                    arc, want_size, os.path.getsize(p)))
+                bad.append(f'{arc} 大小不符（期望 {want_size} 实际 {os.path.getsize(p)}）')
                 continue
             want_hash = meta.get('sha256')
             if want_hash and sha256_of(p) != want_hash:
-                bad.append('{} sha256 不符'.format(arc))
+                bad.append(f'{arc} sha256 不符')
         return bad
 
 

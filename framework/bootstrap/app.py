@@ -6,7 +6,10 @@ import os
 import signal
 import sys
 
-from framework.bootstrap.instance_lock import acquire_instance_lock, cleanup_instance_lock
+from framework.bootstrap.instance_lock import (
+    acquire_instance_lock,
+    cleanup_instance_lock,
+)
 from framework.bootstrap.safe_mode import enter_safe_mode
 
 logger = logging.getLogger('zcbot')
@@ -42,8 +45,12 @@ async def amain():
     #          佛祖保佑             永无BUG
 
     from framework.core import Framework
-    from framework.crash_guard import (should_abort_boot, write_crash_log,
-                                        clear_crash_markers, fire_alert)
+    from framework.crash_guard import (
+        clear_crash_markers,
+        fire_alert,
+        should_abort_boot,
+        write_crash_log,
+    )
 
     # 支持命令行参数指定配置文件路径
     config_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -71,6 +78,7 @@ async def amain():
     crash_cfg = {}
     try:
         import yaml
+
         from framework.paths import resolve_config_path
         cp = resolve_config_path(config_path)
         if os.path.isfile(cp):
@@ -91,10 +99,10 @@ async def amain():
         crash = (crash_cfg.get('framework', {}) or {}).get('crash', {}) or {}
         path = crash.get('path') or os.path.join(root, 'error.log')
         print("\n" + "=" * 60)
-        print(f"[崩溃守卫] 检测到已累计多次启动崩溃（≥ 上限），拒绝继续启动，")
-        print(f"          以避免与守护进程(systemd/pm2)形成无限重启死循环。")
+        print("[崩溃守卫] 检测到已累计多次启动崩溃（≥ 上限），拒绝继续启动，")
+        print("          以避免与守护进程(systemd/pm2)形成无限重启死循环。")
         print(f"          请排查并修复根因（崩溃日志: {path} 及其 .N 轮转副本），")
-        print(f"          确认无误后删除这些 error.log* 文件再启动。")
+        print("          确认无误后删除这些 error.log* 文件再启动。")
         print("=" * 60)
         sys.exit(1)
 

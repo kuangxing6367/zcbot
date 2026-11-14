@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC 内核链路（Go 内核 + Rust 协议端 + 每插件独立进程）。
 
 **以源码方式随框架分发**：本目录只含源码，不含任何编译产物。
@@ -17,7 +16,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-__all__ = ["run", "build", "HERE"]
+__all__ = ["HERE", "build", "run"]
 
 
 def _load_launcher():

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P0 安全修复回归：真实 HTTP 行为（不是源码字符串匹配）。
 
 覆盖：普通 admin 不能经 Web 终端执行 shell、不能重启框架、不能读配置文件、
@@ -16,8 +15,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.core import Framework
 from framework.api.webapp import create_web_app
+from framework.core import Framework
 
 
 @pytest.fixture(scope='module')
@@ -27,7 +26,7 @@ def env():
     db_path = os.path.join(tmp, 'sec.db').replace('\\', '/')
     with open(cfg, 'w', encoding='utf-8') as f:
         f.write(
-            "database:\n  type: sqlite\n  path: {db}\n"
+            f"database:\n  type: sqlite\n  path: {db_path}\n"
             "plugin:\n  heartbeat_interval: 60\n"
             "log:\n  level: ERROR\n"
             "security:\n  silent_auth: false\n  human_check:\n    enabled: false\n"
@@ -36,7 +35,7 @@ def env():
             "  onebot_adapter: false\n  webui: false\n  http_api: false\n"
             "  http_inject: false\n  ws_client: false\n  qq_official: false\n"
             "  telegram: false\n  discord: false\n  session: false\n"
-            "  scheduler: false\n  image_renderer: false\n".format(db=db_path)
+            "  scheduler: false\n  image_renderer: false\n"
         )
     fw = Framework(config_path=cfg, role='standard')
     pw = bcrypt.hashpw(b'admin123', bcrypt.gensalt(12)).decode('utf-8')

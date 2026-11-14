@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """MessageRouter 匹配子系统（自 messaging/router.py 剥离的 mixin）
 
 _simple / 正则 / 插件命令匹配与命中统计；依赖 router 中的路由数据结构。
@@ -8,9 +7,9 @@ import logging
 import re
 from typing import Optional
 
+from framework.blackbox import record as _bb_record
 from framework.hooks import HookPoints
 from framework.log_broker import log_broker
-from framework.blackbox import record as _bb_record
 
 logger = logging.getLogger('zcbot')
 

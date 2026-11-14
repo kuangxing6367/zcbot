@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC SDK「吞消息 / 静默降级」修复的回归测试。
 
 覆盖三处历史静默丢弃点：
@@ -21,7 +20,6 @@ for p in (SDK_DIR, os.path.join(SDK_DIR, "deps")):
         sys.path.insert(0, p)
 
 import sdk  # noqa: E402
-
 
 # 关掉后台线程（flush 循环 / async 循环），让本测试完全确定性、不依赖 5ms 调度。
 sdk.PluginContext._start_flush_loop = lambda self: None

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """ZCBOT 极端 / 边界条件加固测试。
 
 覆盖框架在「畸形输入 / 坏数据 / 越权键 / 未知语言 / 命令树防呆」等极端情形下的行为：
@@ -19,11 +18,16 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
 from framework import i18n  # noqa: E402
-from framework.config import load_config  # noqa: E402
-from framework.cli import build_parser, main as cli_main  # noqa: E402
+from framework.cli import build_parser  # noqa: E402
+from framework.cli import main as cli_main
 from framework.cli.commands.config import do_config  # noqa: E402
-from framework.cli.utils import (_read_meta, render_table, set_core_plugin_enabled,
-                                 _yaml_get_enabled)  # noqa: E402
+from framework.cli.utils import (
+    _read_meta,
+    _yaml_get_enabled,  # noqa: E402
+    render_table,
+    set_core_plugin_enabled,
+)
+from framework.config import load_config  # noqa: E402
 
 
 # --------------------------------------------------------------------------

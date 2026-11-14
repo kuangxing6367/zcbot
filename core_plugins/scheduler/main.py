@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 定时任务调度器（官方插件）—— 薄封装
 权威实现已收敛到 framework/scheduler.py（TaskScheduler 唯一实现），本模块只负责：

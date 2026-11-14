@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 终端命令：消息收发与管理（send / recv / ban / unban / kick / broadcast）
 """

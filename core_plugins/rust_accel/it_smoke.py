@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """rust_accel 端到端集成冒烟：接收链路 + 广播链路（Todo 2+3 验收）"""
 import asyncio
 import json

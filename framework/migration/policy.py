@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """自动迁移开关策略：**默认开启，由配置文件决定，可手动关闭**。
 
 优先级（高 → 低）：
@@ -21,12 +20,18 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 from framework import paths
 
-__all__ = ['Decision', 'auto_migrate_enabled', 'read_config_switch',
-           'AUTO_MIGRATE_DEFAULT', 'CONFIG_KEY', 'ENV_KEY']
+__all__ = [
+    'AUTO_MIGRATE_DEFAULT',
+    'CONFIG_KEY',
+    'ENV_KEY',
+    'Decision',
+    'auto_migrate_enabled',
+    'read_config_switch',
+]
 
 AUTO_MIGRATE_DEFAULT = True
 CONFIG_KEY = 'framework.auto_migrate'
@@ -36,8 +41,8 @@ MAX_CONFIG_BYTES = 2 * 1024 * 1024
 
 _FALSE_WORDS = frozenset(('0', 'false', 'no', 'off', 'disable', 'disabled', 'never'))
 _TRUE_WORDS = frozenset(('1', 'true', 'yes', 'on', 'enable', 'enabled', 'always'))
-_SCAN_RE = re.compile(r'^\s{1,24}auto_migrate\s*:\s*([^#\r\n]+)', re.M)
-_TOP_RE = re.compile(r'^([A-Za-z_][\w.-]*)\s*:', re.M)
+_SCAN_RE = re.compile(r'^\s{1,24}auto_migrate\s*:\s*([^#\r\n]+)', re.MULTILINE)
+_TOP_RE = re.compile(r'^([A-Za-z_][\w.-]*)\s*:', re.MULTILINE)
 
 
 @dataclass(frozen=True)

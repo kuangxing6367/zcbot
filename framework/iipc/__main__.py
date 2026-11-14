@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """`python -m framework.iipc` 入口（等价于 `python startup.py --iipc`）。"""
 import sys
 

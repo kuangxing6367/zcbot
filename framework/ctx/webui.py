@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
 """PluginContext 仪表盘卡片 / WebUI 内嵌 / 管理页扩展 / 注册表 getter（自 ctx.py 剥离的 mixin）"""
 from typing import Callable
+
 
 class PluginWebuiMixin:
     """仪表盘卡片 / WebUI 内嵌 / 管理页扩展 / 注册表 getter"""

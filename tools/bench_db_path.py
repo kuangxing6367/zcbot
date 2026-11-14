@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """双核心 DB 写路径对比基准：同步 RPC 逐条 vs 异步广播攒批 vs 同步 RPC 攒批
 
 用真实 JsonRpcConnection（与双核心同一套协议）+ 真实 sqlite3（文件库 / WAL），
@@ -8,14 +7,15 @@
 """
 import os
 import sys
-import time
-import threading
 import tempfile
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import sqlite3
 import multiprocessing.connection as mpc
+import sqlite3
+
 from framework.ipc.protocol import JsonRpcConnection
 
 BATCH = 256

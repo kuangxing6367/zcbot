@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """插件 API 路由热挂载回归测试。
 
 背景：插件热重载发生在 Flask app 已经处理过请求之后，而 add_url_rule 被

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """插件加载失败的「平台化」诊断。
 
 把可通配化的报错（如 ``No module named X``、``cannot import name Y from X``、

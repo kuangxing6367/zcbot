@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """状态目录迁移子系统（内核内置，启动期自动执行，默认开启）。
 
 目录职责：
@@ -13,17 +12,40 @@
 方向是**向后兼容**：新内核接住旧版本留下的目录布局；自动迁移只是把历史
 状态收敛到 ``data/``，不要求旧版本能读新布局，也不改动被搬文件的内容。
 """
-from .version import (Version, compare_versions, current_version,
-                      current_version_string, parse_version, version_sources)
 from .detector import probe
+from .migrator import (
+                      ensure_auto_migrated,
+                      inspect,
+                      ledger_path,
+                      migrate,
+                      plan,
+                      read_ledger,
+)
 from .policy import Decision, auto_migrate_enabled, read_config_switch
-from .migrator import (ensure_auto_migrated, inspect, ledger_path, migrate,
-                       plan, read_ledger)
+from .version import (
+                      Version,
+                      compare_versions,
+                      current_version,
+                      current_version_string,
+                      parse_version,
+                      version_sources,
+)
 
 __all__ = [
-    'Version', 'parse_version', 'compare_versions', 'current_version',
-    'current_version_string', 'version_sources',
-    'probe', 'Decision', 'auto_migrate_enabled', 'read_config_switch',
-    'ensure_auto_migrated', 'inspect', 'plan', 'migrate', 'read_ledger',
-    'ledger_path',
+                      'Decision',
+                      'Version',
+                      'auto_migrate_enabled',
+                      'compare_versions',
+                      'current_version',
+                      'current_version_string',
+                      'ensure_auto_migrated',
+                      'inspect',
+                      'ledger_path',
+                      'migrate',
+                      'parse_version',
+                      'plan',
+                      'probe',
+                      'read_config_switch',
+                      'read_ledger',
+                      'version_sources',
 ]

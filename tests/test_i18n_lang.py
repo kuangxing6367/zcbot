@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """验证 i18n 词条已从源码字典外置到 framework/lang/*.yaml，且 API 行为不变。"""
 import os
 import sys

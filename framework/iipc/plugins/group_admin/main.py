@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """示例插件：群管小工具（演示 IIPC 命令 + 通用 API 通道 api.call）。
 
 命令：

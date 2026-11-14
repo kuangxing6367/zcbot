@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 安全加固断言测试（按用户要求：把「高并发必被拦」「票据计量化」写成断言）
 =========================================================================
@@ -16,9 +15,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.api import ratelimit as rl
-from framework.api import human_check as hc
 from framework.api import honeypot as hp
+from framework.api import human_check as hc
+from framework.api import ratelimit as rl
 
 PASS, FAIL = 0, 0
 
@@ -112,6 +111,7 @@ check("单 IP 签发超阈值后被限", issued <= hc._ISSUE_MAX, f"issued={issu
 
 print("== 6. 诱饵命名去 v1 + 陷阱 token 对齐真实规格 ==")
 import itertools
+
 v1_routes = []
 for tbl in (hp._DECOY_BASIC, hp._DECOY_FULL):
     v1_routes += [p for p in tbl if '/api/v1/' in p]

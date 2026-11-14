@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 终端命令：运维扩展（restart / shell / dbdump）
 

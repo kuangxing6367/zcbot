@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 全 API 面调用插件（plugins/api_surface）
 
@@ -214,7 +213,6 @@ def on_surface(event, match):
         _save(ctx, "call_async", False, "%s: %s" % (type(e).__name__, e))
 
     ctx.send_msg(user_id=int(_ADMIN), message="surface done")
-    return None
 
 
 def _write_data_dir(ctx):
@@ -256,7 +254,6 @@ def on_actions(event, match):
     _t(ctx, "actions.get_record", lambda: a.get_record(file="x.wav", out_format="mp3"))
     _t(ctx, "onebot(=actions 别名)", lambda: ctx.onebot.get_login_info())
     ctx.send_msg(user_id=int(_ADMIN), message="actions done")
-    return None
 
 
 # ══════════════════ async 面 ══════════════════
@@ -283,7 +280,6 @@ async def on_async(event, match):
         "CREATE TABLE IF NOT EXISTS surface_async (id INTEGER PRIMARY KEY AUTOINCREMENT, k TEXT)")
     _save(ctx, "create_table_async", True, "ok")
     await ctx.asend_msg(user_id=int(_ADMIN), message="async done")
-    return None
 
 
 async def _coro_probe():
@@ -358,7 +354,6 @@ def on_event_probe(event, match):
     _p("continue_route", lambda: event.continue_route() or "ok")
     _p("is_continue_route", lambda: event.is_continue_route())
     ctx.send_msg(user_id=int(_ADMIN), message="event done")
-    return None
 
 
 # ══════════════════ 多轮会话 ══════════════════
@@ -367,7 +362,6 @@ def on_waitfor(event, match):
     r = ctx.wait_for(event, prompt="请回答你的名字", timeout=8)
     _save(ctx, "wait_for", r is not None, _short(r))
     ctx.send_msg(user_id=int(_ADMIN), message="waitfor done")
-    return None
 
 
 def on_session(event, match):
@@ -381,14 +375,12 @@ def on_session(event, match):
     except Exception as e:
         _save(ctx, "create_session", False, "%s: %s" % (type(e).__name__, e))
     ctx.send_msg(user_id=int(_ADMIN), message="session done")
-    return None
 
 
 # ══════════════════ 回调 ══════════════════
 
 def _on_ping(payload):
     _recv_ev["ping"] = payload
-    return None
 
 
 def _before(payload):

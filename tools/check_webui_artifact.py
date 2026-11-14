@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """WebUI 发布产物完整性校验（CI 门禁 / 本地发版前自检）。
 
 背景：v1.20.0 曾因单文件 >1MB 的 element-plus chunk 走分批推送时漏推，

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """``zb config`` —— CLI 配置控制台（查看 / 修改 config.yaml）。
 
 ``set`` 采用按行原地替换，不动 YAML 里的注释（直接 yaml.dump 会把注释全冲掉）。

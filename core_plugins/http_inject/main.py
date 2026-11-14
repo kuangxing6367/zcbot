@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 HTTP 事件注入接入端（http_inject）
 
@@ -25,9 +24,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from framework.messaging.protocol import ProtocolAdapter
 from framework.security.hardening import (
-    DEFAULT_MAX_BODY_BYTES, DEFAULT_READ_TIMEOUT, InputRejected,
-    apply_socket_timeout, read_request_body, sanitize_event,
-    strict_json_object, token_ok,
+    DEFAULT_MAX_BODY_BYTES,
+    DEFAULT_READ_TIMEOUT,
+    InputRejected,
+    apply_socket_timeout,
+    read_request_body,
+    sanitize_event,
+    strict_json_object,
+    token_ok,
 )
 
 __plugin_meta__ = {
@@ -140,7 +144,6 @@ class HttpInjectHandler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         """不刷默认访问日志（避免刷屏）"""
-        pass
 
 
 class HttpInjectAdapter(ProtocolAdapter):

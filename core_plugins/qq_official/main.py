@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 QQ 官方机器人接入端（qq_official）
 
@@ -43,9 +42,10 @@ from urllib.parse import urlparse
 import requests
 import websockets
 
+from framework.messaging.backoff import Backoff
+from framework.messaging.backoff import now as _mono
 from framework.messaging.protocol import ProtocolAdapter
 from framework.security.hardening import sanitize_adapter_event
-from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
 
@@ -125,9 +125,9 @@ def _human_size(n: int) -> str:
     for unit, base in (('GB', 1024 ** 3), ('MB', 1024 ** 2), ('KB', 1024)):
         if n >= base:
             val = n / base
-            return ('{} {}'.format(int(val), unit) if val == int(val)
-                    else '{:.1f} {}'.format(val, unit))
-    return '{} 字节'.format(n)
+            return (f'{int(val)} {unit}' if val == int(val)
+                    else f'{val:.1f} {unit}')
+    return f'{n} 字节'
 # 段类型 → 上传文件后缀（用于 multipart 文件名，服务端按后缀识别）
 _MEDIA_EXT = {'image': 'png', 'video': 'mp4', 'record': 'silk',
               'voice': 'silk', 'file': 'bin'}
@@ -798,9 +798,20 @@ class QQOfficialAdapter(ProtocolAdapter):
 
     def capabilities(self):
         from framework.messaging.contract import (
-            CAP_AT, CAP_FILE, CAP_GROUP_ADMIN, CAP_IMAGE, CAP_KEYBOARD,
-            CAP_MARKDOWN, CAP_NOTICE, CAP_RECALL, CAP_REPLY, CAP_REQUEST,
-            CAP_TEXT, CAP_VIDEO, CAP_VOICE, Capabilities,
+            CAP_AT,
+            CAP_FILE,
+            CAP_GROUP_ADMIN,
+            CAP_IMAGE,
+            CAP_KEYBOARD,
+            CAP_MARKDOWN,
+            CAP_NOTICE,
+            CAP_RECALL,
+            CAP_REPLY,
+            CAP_REQUEST,
+            CAP_TEXT,
+            CAP_VIDEO,
+            CAP_VOICE,
+            Capabilities,
         )
         return Capabilities(
             # 入站无 CAP_AT：官方入站 content 是纯文本、不给结构化 at 信息，
@@ -860,7 +871,9 @@ class QQOfficialAdapter(ProtocolAdapter):
         markdown 上。这里按段组合自动选型，插件不用关心这个限制。
         """
         from framework.messaging.segments import (
-            canonical_type, media_ref, segments_to_text,
+            canonical_type,
+            media_ref,
+            segments_to_text,
         )
         text = segments_to_text(segments)
         media = None

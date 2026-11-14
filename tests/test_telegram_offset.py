@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """telegram 接入端 offset 持久化。
 
 要钉住的行为：offset 只放内存时，进程重启会把 Telegram 最近 24 小时未确认的

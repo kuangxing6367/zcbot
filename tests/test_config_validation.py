@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """配置 schema 校验（Gap 1）回归测试。
 
 铁律：路径用 __file__ 推导、不碰真实 config.yaml、不依赖网络。
@@ -10,6 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
+
 from framework.config import _DEFAULT_CONFIG, validate_config
 
 

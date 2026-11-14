@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """framework/api 安全面真实 HTTP 行为回归测试。
 
 与 tests/test_security_hardening.py（源码字符串匹配）互补：本文件验证
@@ -40,8 +39,8 @@ if ROOT not in sys.path:
 import bcrypt
 import pytest
 
-from framework.core import Framework
 from framework.api.webapp import create_web_app
+from framework.core import Framework
 
 
 def _write_config(tmp):
@@ -49,7 +48,7 @@ def _write_config(tmp):
     db = os.path.join(tmp, 'sec_test.db').replace('\\', '/')
     with open(cfg, 'w', encoding='utf-8') as f:
         f.write(
-            "database:\n  type: sqlite\n  path: {db}\n"
+            f"database:\n  type: sqlite\n  path: {db}\n"
             "plugin:\n  heartbeat_interval: 60\n"
             "log:\n  level: ERROR\n"
             # 关闭主动防御（silent_auth / human_check 默认会把未认证请求静默丢弃为 444），
@@ -61,7 +60,7 @@ def _write_config(tmp):
             "  onebot_adapter: false\n  webui: false\n  http_api: false\n"
             "  http_inject: false\n  ws_client: false\n  qq_official: false\n"
             "  telegram: false\n  discord: false\n  session: false\n"
-            "  scheduler: false\n  image_renderer: false\n".format(db=db)
+            "  scheduler: false\n  image_renderer: false\n"
         )
     return cfg, db
 

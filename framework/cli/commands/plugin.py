@@ -1,10 +1,15 @@
-# -*- coding: utf-8 -*-
 """``zb plugin`` —— 管理插件（list / search / store / install / uninstall）。"""
 import os
 import webbrowser
 
-from ..utils import (PROG, discover_plugins, plugin_enabled_state,
-                     set_core_plugin_enabled, enable_user_plugin, render_table)
+from ..utils import (
+    PROG,
+    discover_plugins,
+    enable_user_plugin,
+    plugin_enabled_state,
+    render_table,
+    set_core_plugin_enabled,
+)
 
 MARKET_URL = "https://github.com/kuangxing6367/zcbot"
 

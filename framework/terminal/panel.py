@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """终端运维面板（交互式菜单，framework/terminal 内置命令 tui）
 
 框架自带能力（非插件）：零第三方依赖（psutil 可选）。

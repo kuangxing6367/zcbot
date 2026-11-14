@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 数据库迁移引擎：版本账本 + 变更分级 + 授权闸门 + 执行证据链 + 执行前备份
 
@@ -659,7 +658,7 @@ def approval_gap(migration: Migration, context: MigrationContext) -> str:
     if not context.allow_destructive:
         return ('destructive 迁移不允许自动执行（ITIL 变更分级 / SOX 职责分离）：'
                 '需人工执行 `python -m framework.database.migrate up '
-                f'--approve <变更单号> --reason "<原因>"`')
+                '--approve <变更单号> --reason "<原因>"`')
     if not (context.ticket or '').strip():
         return 'destructive 迁移必须提供变更单号（--approve <变更单号>）'
     return ''

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 ApiContext —— Web 应用层的共享上下文
 

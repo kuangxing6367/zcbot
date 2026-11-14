@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 host_entry —— 双进程模式下进程2（宿主）的入口函数
 
@@ -52,6 +51,7 @@ def host_entry(config_path, address, token, core_pid):
     # 日志合并：宿主日志经 IPC 推送到核心 log_broker（WebUI 可见）。
     # 移除 root 的文件 handler，避免宿主与核心同时写同一 zcbot.log 造成竞争。
     import logging
+
     from framework.ipc.host_log import IpcLogHandler
     _root_logger = logging.getLogger()
     for _h in list(_root_logger.handlers):

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """zcbot IIPC 插件 SDK：1:1 对齐原框架插件 API 面。
 
 设计原则（用户定稿）：真 zcbot 插件拖进来应零改动运行。因此本文件逐项复刻
@@ -26,28 +25,40 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
-from iipc_client import IIPCClient
 from event import Event, _RoleCache
+from iipc_client import IIPCClient
 
 # 扩展面（服务注册表 / 插件间调用 / 共享 KV / 指标 / 依赖注入）
 try:
     from ext import (
-        attach as _attach_ext,
-        bind_args as _bind_args,
-        flush_pending as _flush_pending,
-        KVProxy,
         ConfigProxy,
+        KVProxy,
         _LazyHTTP,
+    )
+    from ext import (
+        attach as _attach_ext,
+    )
+    from ext import (
+        bind_args as _bind_args,
+    )
+    from ext import (
+        flush_pending as _flush_pending,
     )
 except ImportError:  # 兜底：sdk_dir 不在 sys.path 时（如被当作包导入）
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from ext import (
-        attach as _attach_ext,
-        bind_args as _bind_args,
-        flush_pending as _flush_pending,
-        KVProxy,
         ConfigProxy,
+        KVProxy,
         _LazyHTTP,
+    )
+    from ext import (
+        attach as _attach_ext,
+    )
+    from ext import (
+        bind_args as _bind_args,
+    )
+    from ext import (
+        flush_pending as _flush_pending,
     )
 
 # ─────────────────────────── 注册表 ───────────────────────────
@@ -1214,61 +1225,47 @@ class PluginContext:
     @property
     def kv(self) -> "KVProxy":
         """插件级共享 KV（命名空间隔离，跨事件/跨调用持久）。"""
-        ...
 
     @property
     def config(self) -> "ConfigProxy":
         """插件配置读写代理（带本地 TTL 缓存，落内核持久层）。"""
-        ...
 
     @property
     def http(self) -> "_LazyHTTP":
         """懒加载 HTTP 客户端（首次调用才 import requests，不进启动路径）。"""
-        ...
 
     def provide(self, name, version="", caps=None, meta=None):
         """注册一个可被其它插件解析的服务（服务注册表）。可作装饰器用。"""
-        ...
 
     def resolve_service(self, name=None, cap=None):
         """按名称或能力解析服务；返回服务描述 dict，未命中返回 None。"""
-        ...
 
     def services(self):
         """列出当前已注册的全部服务（list[ServiceEntry]）。"""
-        ...
 
     def expose(self, action=None):
         """声明本插件可被其它插件跨进程调用的动作（装饰器：@ctx.expose("foo")）。"""
-        ...
 
     def call_plugin(self, plugin, action, params=None, timeout=10):
         """跨插件 RPC：调用其它插件的 expose 动作，返回其结果。"""
-        ...
 
     def metric(self, name, value=1.0):
         """上报一个指标点（用于监控/看板）。"""
-        ...
 
     def metrics(self):
         """取回当前指标快照（dict）。"""
-        ...
 
     def declare_caps(self, caps):
         """声明本插件具备的能力集合（供 who_has 反向查询）。"""
-        ...
 
     def who_has(self, cap):
         """反查具备某能力的插件列表（list[str]）。"""
-        ...
 
     def plugins(self):
         """当前在线插件清单（list[str] of plugin_id）。"""
-        ...
 
     def transform(self, priority=50, action="transform", handler=None):
         """注册内核级全局变换节点：事件扇出前按 priority 改写/丢弃 event.data。"""
-        ...
 
 
 # ─────────────────────────── 事件分发 ───────────────────────────

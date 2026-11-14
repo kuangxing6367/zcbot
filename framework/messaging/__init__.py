@@ -10,19 +10,19 @@
 - contract:     接入端契约（事件补齐 / 能力自述 / 契约自检）
 """
 
+from . import contract, segments
 from .event import Event
 from .event_bus import EventBus
-from .protocol import ProtocolAdapter, ServiceRegistry, ActionProxy
+from .protocol import ActionProxy, ProtocolAdapter, ServiceRegistry
 from .router import MessageRouter
-from . import segments, contract
 
 __all__ = [
+    'ActionProxy',
     'Event',
     'EventBus',
+    'MessageRouter',
     'ProtocolAdapter',
     'ServiceRegistry',
-    'ActionProxy',
-    'MessageRouter',
-    'segments',
     'contract',
+    'segments',
 ]

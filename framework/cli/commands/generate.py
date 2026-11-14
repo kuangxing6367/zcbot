@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """``zb generate`` —— 生成启动脚本（统一指向唯一入口 startup.py）。"""
 import os
 

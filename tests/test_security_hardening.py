@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """v1.7.3 安全加固回归测试。
 
 覆盖 7 项安全修复：
@@ -118,7 +117,7 @@ def test_no_500_error_detail_leak():
         src = read_api(fname)
         # 命中模式：500 响应中直接拼接异常对象（str(e) / f'...{e}'）
         for m in re.finditer(r"jsonify\(\{['\"]code['\"]:\s*500,[^}]*['\"]msg['\"]:\s*(.*?)\},?\s*500\)",
-                             src, re.S):
+                             src, re.DOTALL):
             seg = m.group(1)
             if ('str(e)' in seg or '{e}' in seg) and '服务器内部错误' not in seg:
                 leaked.append(f"{fname}: {m.group(0)[:80]}")
@@ -132,7 +131,7 @@ def test_500_logger_present():
         if not fname.endswith('.py'):
             continue
         src = read_api(fname)
-        for m in re.finditer(r"except Exception as e:\s*\n(\s+)return jsonify\(.*?500", src, re.S):
+        for m in re.finditer(r"except Exception as e:\s*\n(\s+)return jsonify\(.*?500", src, re.DOTALL):
             body = m.group(0)
             if 'logger' not in body and 'exc_info' not in body:
                 missing.append(fname)

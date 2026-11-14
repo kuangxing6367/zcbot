@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 Web UI 服务器（自 framework/api/webapp.py 剥离）
 在独立线程中运行 Flask 应用：waitress（HTTP）/ werkzeug（HTTPS）。
 """
 import logging
 import threading
+
 from framework import i18n
 
 logger = logging.getLogger('zcbot')
@@ -98,7 +98,7 @@ class WebServer:
         try:
             if self.ssl_context is not None:
                 # HTTPS：waitress 不支持 TLS，使用 werkzeug 的 ssl_context
-                from werkzeug.serving import make_server, WSGIRequestHandler
+                from werkzeug.serving import WSGIRequestHandler, make_server
 
                 class _QuietHandler(WSGIRequestHandler):
                     def version_string(self):
@@ -120,7 +120,7 @@ class WebServer:
                         self.app, host=self.host, port=self.port, threads=8)
                 self._server.run()
             except ImportError:
-                from werkzeug.serving import make_server, WSGIRequestHandler
+                from werkzeug.serving import WSGIRequestHandler, make_server
 
                 class _QuietHandler(WSGIRequestHandler):
                     def version_string(self):

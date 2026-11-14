@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """PluginContext 同步/异步数据库操作与连接池（自 ctx.py 剥离的 mixin）"""
 import asyncio
 import logging

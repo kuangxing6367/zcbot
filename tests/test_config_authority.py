@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """配置权威划分：config.yaml 管运行参数，core_plugins.yaml 管启停
 
 回归口径：
@@ -13,6 +12,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
+
 import framework.config as C
 
 

@@ -21,6 +21,7 @@ def apply_allocator_policy():
     alloc = 'auto'
     try:
         import yaml
+
         # 与启动入口共用同一路径解析（支持 <home>/data/config.yaml 新布局）
         from framework.paths import resolve_config_path
         cfg_path = resolve_config_path()

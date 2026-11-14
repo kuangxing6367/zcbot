@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """core 插件开关回归测试（清单驱动语义）：
 1. core_plugins.yaml 是唯一权威：yaml false 必须禁用（含字符串 "false"）；
 2. config.yaml 段已废弃：显式 false 不再压制 yaml true，显式 true 也不再

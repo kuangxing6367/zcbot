@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """MySQL 配置类型校验 + 借连接快速失败（不把一次失败放大成 30s 假死）"""
 import os
 import sys

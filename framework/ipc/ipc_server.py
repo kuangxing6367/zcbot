@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 IPC 服务端（进程1 · 核心侧）
 
@@ -10,7 +9,7 @@ import logging
 import multiprocessing.connection as mpc
 import threading
 
-from framework.ipc.protocol import JsonRpcConnection, IpcClosed
+from framework.ipc.protocol import IpcClosed, JsonRpcConnection
 
 logger = logging.getLogger('zcbot')
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """插件进程入口：由 Go 主进程拉起，加载指定插件目录的 main.py 并接入 IIPC。"""
 import argparse
 import os

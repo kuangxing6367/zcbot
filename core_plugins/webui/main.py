@@ -61,8 +61,7 @@ def register(ctx):
 
     # 延迟导入，只在启用时加载 Flask 等重依赖
     # （依赖由 core_plugins/webui/requirements.txt 声明，缺失时加载器自动补装）
-    from framework.apis import create_web_app
-    from framework.apis import WebServer
+    from framework.apis import WebServer, create_web_app
 
     _web_server = WebServer(fw)
     fw.services.register('web_server', _web_server)

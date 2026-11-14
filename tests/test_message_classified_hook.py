@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回归测试：message.classified 扩展点必须真实发出且分类正确。
 
 背景（真实缺陷）：该扩展点曾实现在 dispatch 侧，引用了作用域内并不存在的 `ev`
@@ -22,9 +21,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, '.')
 
-from framework.messaging.router import MessageRouter, _PluginRoute, _RouteCommand
+from framework.hooks import HookPoints, HookRegistry
 from framework.messaging.event_bus import EventBus
-from framework.hooks import HookRegistry, HookPoints
+from framework.messaging.router import MessageRouter, _PluginRoute, _RouteCommand
 
 ERR_NEEDLE = 'message.classified 扩展点异常'
 
@@ -65,7 +64,6 @@ class _Module:
 
     def handler(self, ev, match):
         self.calls.append((ev, match))
-        return None
 
 
 def _build_router(captured):
@@ -180,7 +178,6 @@ async def test_classified_fires_even_when_propagation_stopped():
         class _StopModule:
             def handler(self, ev, match):
                 ev.stop_event()   # 正确 API：终止事件传播（Event.stop_event）
-                return None
 
         await _route(router, _StopModule(), '签到', simple='签到')
 

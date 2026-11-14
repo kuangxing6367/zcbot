@@ -12,9 +12,16 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from framework.security.hardening import (
-    DEFAULT_MAX_BODY_BYTES, DEFAULT_READ_TIMEOUT, InputRejected,
-    apply_socket_timeout, coerce_int, coerce_sql_params, coerce_text,
-    read_request_body, strict_json_object, token_ok,
+    DEFAULT_MAX_BODY_BYTES,
+    DEFAULT_READ_TIMEOUT,
+    InputRejected,
+    apply_socket_timeout,
+    coerce_int,
+    coerce_sql_params,
+    coerce_text,
+    read_request_body,
+    strict_json_object,
+    token_ok,
 )
 
 logger = logging.getLogger('zcbot')
@@ -46,7 +53,6 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """禁用默认日志"""
-        pass
 
     def _send_json(self, code, data):
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')
@@ -533,7 +539,7 @@ def register(ctx):
         import secrets
         token = secrets.token_hex(16)
         ctx.log(f"未配置 http_api.token，已自动生成: {token}")
-        ctx.log(f"请在 config.yaml 中设置 http_api.token 以固定令牌")
+        ctx.log("请在 config.yaml 中设置 http_api.token 以固定令牌")
 
     try:
         _server = HttpApiServer(

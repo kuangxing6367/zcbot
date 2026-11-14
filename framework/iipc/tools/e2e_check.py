@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC 端到端验收脚本（tools/e2e_check.py）
 
 自备"假适配器"连入内核，充当 OneBot 协议端：收 send_msg 类 api.call、回 res。

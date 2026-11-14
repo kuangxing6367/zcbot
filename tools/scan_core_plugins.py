@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """官方插件清单扫描工具（独立进程）
 
 职责：扫描 core_plugins/ 目录，把「已安装但 core_plugins.yaml 缺失」的

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """状态目录迁移执行器（幂等 / 可重入 / 绝不覆盖 / 绝不改写配置文件）。
 
 设计对齐 Flyway 的公认做法（``flyway_schema_history`` 账本、
@@ -30,10 +29,17 @@ import time
 from datetime import datetime, timezone
 
 from framework import paths
+
 from . import detector, policy, version
 
-__all__ = ['inspect', 'plan', 'migrate', 'ensure_auto_migrated',
-           'ledger_path', 'read_ledger']
+__all__ = [
+    'ensure_auto_migrated',
+    'inspect',
+    'ledger_path',
+    'migrate',
+    'plan',
+    'read_ledger',
+]
 
 logger = logging.getLogger('zcbot.migration')
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """``zb clean`` —— 清理项目缓存。"""
 import os
 import shutil

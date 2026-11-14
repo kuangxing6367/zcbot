@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """OneBot 11 假实现（联调用）：std-only WebSocket 服务端。
 
 用途：在没有真实 OneBot 实现（如 NapCat/LLOneBot）的环境下，联调验证

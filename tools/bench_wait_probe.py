@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """定位 bench_dispatch 中 fw_end2end 异常慢的原因：分段计时 put 与 await done。
 用法：python tools/bench_wait_probe.py [N]
 """

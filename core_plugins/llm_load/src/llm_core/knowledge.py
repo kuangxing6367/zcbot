@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """本地知识库（RAG）核心。
 
 存储：复用单个 SQLite 文件（放在插件 data 目录），把「文档 / 切片 / 向量 /
@@ -15,10 +14,10 @@
 但查询少于 3 个字时 FTS5 不生效，此时只走向量。
 """
 import json
-import time
-import struct
 import logging
 import sqlite3
+import struct
+import time
 from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger('zcbot.llm_core')

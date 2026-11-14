@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """A/B 对照：找出 bench_dispatch 的 fw_end2end 2ms/事件 的干扰因素。
 假说：asyncio.run(feed()) 多层 loop 嵌套 / wait_for 包一层 / 前置 event_bus 测试污染。
 用法：python tools/bench_ab.py [N]

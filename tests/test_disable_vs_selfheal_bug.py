@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 复现：禁用插件失效（自愈逻辑把已禁用插件重新拉起）
 
@@ -9,10 +8,10 @@
    —— 当前实现仍会 load+register 并把 DB 状态改回 running（BUG）
 """
 import os
-import sys
-import time
-import tempfile
 import shutil
+import sys
+import tempfile
+import time
 import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -31,7 +30,6 @@ class MockDB:
         if isinstance(params, (list, tuple)) and len(params) == 2:
             if 'SET status' in sql and self._active.get(params[0], 1):
                 pass  # 仅记录
-        return None
 
     def query(self, sql, params=None):
         return []

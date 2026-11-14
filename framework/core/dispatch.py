@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 
 #                    _ooOoo_
 #                   o8888888o
@@ -26,11 +25,12 @@
 import asyncio
 import logging
 
+from framework.blackbox import new_event_id
+from framework.blackbox import record as _bb_record
 from framework.hooks import HookPoints
 from framework.log_broker import log_broker
 from framework.messaging.adapter_registry import namespace_identity
 from framework.messaging.protocol import ProtocolAdapter
-from framework.blackbox import record as _bb_record, new_event_id
 from framework.runtime import current_event_id_var
 
 logger = logging.getLogger('zcbot')

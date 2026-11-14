@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """``zb self`` —— 管理 ZCBOT 实例自身（pip 安装 / 卸载 / 升级）。"""
 from ..utils import PROG, run_python
 

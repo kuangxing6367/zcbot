@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC 插件侧 Event 对象：对齐 framework/messaging/event.py 的公开面。
 
 原 zcbot 插件拿到的 event 是框架 Event 实例（属性 + 惰性权限 + 富媒体快捷属性），

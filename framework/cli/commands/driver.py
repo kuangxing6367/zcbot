@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """``zb driver`` —— 管理驱动器（Web 后台所用的服务器驱动）。
 
 ZCBOT 的「驱动器」即 Web 管理后台依赖的服务器实现（waitress / flask 等），

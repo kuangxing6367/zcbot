@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """状态目录迁移命令行（内核内置入口）。
 
     python -m framework.migration --inspect              只读体检

@@ -42,8 +42,9 @@ def _canvas_pixels(mod, use_native, x0, y0, x1, y1, radius=0):
         # 与原生 Canvas 同样的链式调用：先 rect 再 to_png
         c.rect(x0, y0, x1, y1, radius=radius, fill=(255, 0, 0))
         data = c.to_png()
-        from PIL import Image
         from io import BytesIO
+
+        from PIL import Image
 
         return _count_opaque_px(Image.open(BytesIO(data)).convert("RGBA"), (255, 0, 0))
     c = mod._CanvasPIL(300, 200, (0, 0, 0, 0), None)

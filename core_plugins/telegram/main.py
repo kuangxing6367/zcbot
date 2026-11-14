@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Telegram 接入端（telegram）
 
@@ -30,9 +29,9 @@ from typing import List, Optional
 
 import requests
 
+from framework.messaging.backoff import Backoff
 from framework.messaging.protocol import ProtocolAdapter
 from framework.security.hardening import sanitize_adapter_event
-from framework.messaging.backoff import Backoff
 
 logger = logging.getLogger('zcbot')
 
@@ -482,8 +481,17 @@ class TelegramAdapter(ProtocolAdapter):
 
     def capabilities(self):
         from framework.messaging.contract import (
-            CAP_EDIT, CAP_FILE, CAP_IMAGE, CAP_NOTICE, CAP_REACT, CAP_RECALL,
-            CAP_STICKER, CAP_TEXT, CAP_VIDEO, CAP_VOICE, Capabilities,
+            CAP_EDIT,
+            CAP_FILE,
+            CAP_IMAGE,
+            CAP_NOTICE,
+            CAP_REACT,
+            CAP_RECALL,
+            CAP_STICKER,
+            CAP_TEXT,
+            CAP_VIDEO,
+            CAP_VOICE,
+            Capabilities,
         )
         return Capabilities(
             inbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,
@@ -507,7 +515,9 @@ class TelegramAdapter(ProtocolAdapter):
         文本段合并成 caption 挂在首条媒体上，多余的纯文本另发一条。
         """
         from framework.messaging.segments import (
-            canonical_type, media_ref, segments_to_text,
+            canonical_type,
+            media_ref,
+            segments_to_text,
         )
         _METHOD = {'image': ('sendPhoto', 'photo'),
                    'voice': ('sendVoice', 'voice'),

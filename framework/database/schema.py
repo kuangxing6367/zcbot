@@ -16,8 +16,13 @@ import logging
 import time
 
 from framework.database.migrations import (
-    LEVEL_ADDITIVE, LEVEL_DESTRUCTIVE, LEVEL_REWRITE,
-    Migration, MigrationContext, run_pending as run_migrations)
+    LEVEL_ADDITIVE,
+    LEVEL_DESTRUCTIVE,
+    LEVEL_REWRITE,
+    Migration,
+    MigrationContext,
+)
+from framework.database.migrations import run_pending as run_migrations
 
 logger = logging.getLogger('zcbot')
 

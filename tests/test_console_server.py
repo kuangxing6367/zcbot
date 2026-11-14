@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """框架内置调试控制台 + SQL 方言修复 回归测试（离线）。
 
 覆盖：
@@ -21,7 +20,11 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from framework.console_server import (  # noqa: E402
-    ConsoleClient, ConsoleServer, load_credentials, _CREATE_SQL)
+    _CREATE_SQL,
+    ConsoleClient,
+    ConsoleServer,
+    load_credentials,
+)
 
 
 class _FakeDb:

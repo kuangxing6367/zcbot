@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """PluginContext 协议中立快捷动作 / 身份判断 / 群级插件开关（自 ctx.py 剥离的 mixin）"""
 
 class PluginMessagingMixin:

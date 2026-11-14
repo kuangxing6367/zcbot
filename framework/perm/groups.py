@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """权限组与节点管理
 组 CRUD + 组/用户节点 upsert
 
@@ -9,9 +8,8 @@ import logging
 
 logger = logging.getLogger('zcbot')
 
-from framework.perm import _now, normalize_node, invalidate_groups, invalidate_user
+from framework.perm import _now, invalidate_groups, invalidate_user, normalize_node
 from framework.perm.admin import audit
-
 
 # ═══════════════════════════════════════════════════════════
 # 组管理

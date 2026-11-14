@@ -13,11 +13,17 @@ from typing import Any, Dict, Optional
 
 from framework.hooks import HookPoints
 from framework.messaging.contract import (
-    CAP_TEXT, Capabilities, as_capabilities, contract_report, normalize_event,
+    CAP_TEXT,
+    Capabilities,
+    as_capabilities,
+    contract_report,
+    normalize_event,
     validate_adapter,
 )
 from framework.messaging.segments import (
-    normalize_message, segments_to_text, to_outgoing,
+    normalize_message,
+    segments_to_text,
+    to_outgoing,
 )
 
 logger = logging.getLogger('zcbot')

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Web 应用核心：Flask app 构建 + 共享基础设施（鉴权/CORS/限速/审计）
 
@@ -45,11 +44,15 @@ from types import SimpleNamespace
 
 from flask import Flask, Response, jsonify, request
 
+from framework.api.honeypot import tarpit as _tarpit_sleep
 from framework.dual_auth import DualRequestAuthSystem
 from framework.log_broker import log_broker
-from framework.api.honeypot import tarpit as _tarpit_sleep
 from framework.token_hash import (
-    hash_session_token, hash_api_key, api_key_matches, is_hashed_api_key)
+    api_key_matches,
+    hash_api_key,
+    hash_session_token,
+    is_hashed_api_key,
+)
 
 logger = logging.getLogger('zcbot')
 
@@ -134,8 +137,8 @@ def create_web_app(framework) -> Flask:
 
     # 健康探针路径：编排系统不感知端口隔离/纯 API 模式，必须任何端口都可达。
     # /metrics 视为与 /api/* 同侧（只在 API 端口暴露），避免公网 WebUI 端口泄露运行指标。
-    from framework.api.observability import PROBE_PATHS as _PROBE_PATHS
     from framework.api.observability import METRICS_PATH as _METRICS_PATH
+    from framework.api.observability import PROBE_PATHS as _PROBE_PATHS
 
     @app.before_request
     def _port_split_guard():
@@ -768,9 +771,26 @@ def create_web_app(framework) -> Flask:
 
     # ---- 按功能域注册路由（各模块 import 后调用 register(ctx)）----
     from framework.api import (
-        auth, admins, apikeys, dashboard, plugins, commands, users_groups, tasks,
-        logs, config, db_gateway, framework_ops, webui, files, stats, perm_api,
-        static_routes, session_tokens, honeypot, observability,
+        admins,
+        apikeys,
+        auth,
+        commands,
+        config,
+        dashboard,
+        db_gateway,
+        files,
+        framework_ops,
+        honeypot,
+        logs,
+        observability,
+        perm_api,
+        plugins,
+        session_tokens,
+        static_routes,
+        stats,
+        tasks,
+        users_groups,
+        webui,
     )
     auth.register(ctx)
     admins.register(ctx)

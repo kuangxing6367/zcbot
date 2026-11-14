@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 llm_core 载荷测试（全离线，不联网、不需要真实模型）
 
@@ -134,7 +133,7 @@ def test_execute_semantics():
     def send_pic(url: str):
         """发一张图片。"""
         seen['url'] = url
-        return None          # 约定：返回 None = 不进上下文
+        # 约定：返回 None = 不进上下文
 
     def boom(text: str):
         """会炸的工具。"""
@@ -518,7 +517,7 @@ def test_handle_chat_no_provider():
         is_group = True
         role = 'member'
 
-    match = re.match(r'/llm\s+(.*)', '/llm 你好', re.S)
+    match = re.match(r'/llm\s+(.*)', '/llm 你好', re.DOTALL)
     asyncio.run(main_mod.handle_chat(_Event(), match))
 
     assert ctx.msgs, "没有可用提供商时 handle_chat 没有回复任何消息（静默失败）"

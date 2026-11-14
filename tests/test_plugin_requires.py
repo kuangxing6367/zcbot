@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """插件声明式依赖（__plugin_meta__['requires']）回归测试。
 
 覆盖：
@@ -21,7 +20,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.loader.graph import PluginGraphMixin, normalize_requires, parse_meta_literal
+from framework.loader.graph import (
+    PluginGraphMixin,
+    normalize_requires,
+    parse_meta_literal,
+)
 
 _FAILED = []
 
@@ -167,8 +170,9 @@ def test_loaded_satisfies():
 # ── 3. 真实加载器拦截 ───────────────────────────────────────
 def test_runtime_guard():
     print("[7] 单插件加载时依赖缺失直接拒绝")
-    from framework.loader import PluginLoader
     from types import SimpleNamespace
+
+    from framework.loader import PluginLoader
 
     tmp = tempfile.mkdtemp(prefix='zcbot_req_')
     try:
@@ -202,9 +206,9 @@ def test_framework_e2e():
         db = os.path.join(tmp, 'req.db').replace('\\', '/')
         with open(cfg, 'w', encoding='utf-8') as f:
             f.write(
-                "database:\n  type: sqlite\n  path: {db}\n"
+                f"database:\n  type: sqlite\n  path: {db}\n"
                 "log:\n  level: ERROR\n"
-                "core_plugins: {{}}\n".format(db=db)
+                "core_plugins: {}\n"
             )
         plugins_dir = os.path.join(home, 'plugins')
         os.makedirs(plugins_dir, exist_ok=True)

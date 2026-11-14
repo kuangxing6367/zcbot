@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """最小 WS 客户端复现：连 FakeOneBot，掩码发一帧，读 3s 看收到什么。"""
 import base64
 import hashlib

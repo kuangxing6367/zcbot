@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 KOOK 接入端（kook）
 
@@ -43,9 +42,10 @@ import requests
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from framework.messaging.backoff import Backoff
+from framework.messaging.backoff import now as _mono
 from framework.messaging.protocol import ProtocolAdapter
 from framework.security.hardening import sanitize_adapter_event
-from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
 
@@ -633,7 +633,12 @@ class KookAdapter(ProtocolAdapter):
 
     def capabilities(self):
         from framework.messaging.contract import (
-            CAP_FILE, CAP_IMAGE, CAP_TEXT, CAP_VIDEO, CAP_VOICE, Capabilities,
+            CAP_FILE,
+            CAP_IMAGE,
+            CAP_TEXT,
+            CAP_VIDEO,
+            CAP_VOICE,
+            Capabilities,
         )
         return Capabilities(
             inbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_VOICE, CAP_FILE],
@@ -663,7 +668,10 @@ class KookAdapter(ProtocolAdapter):
                 return {'status': 'failed', 'retcode': -1,
                         'msg': 'KOOK 发送需要 group_id/channel_id（频道 id）'}
             from framework.messaging.segments import (
-                canonical_type, normalize_message as _canon,
+                canonical_type,
+            )
+            from framework.messaging.segments import (
+                normalize_message as _canon,
             )
             segs = _canon(params.get('message', params.get('text', '')))
             text = ''.join(str((s.get('data') or {}).get('text') or '')

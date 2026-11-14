@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """数据库迁移引擎（版本账本 / 校验和 / 失败重试 / 基线）回归测试
 
 验证的是账本语义本身，不依赖具体的框架表结构：
@@ -59,7 +58,6 @@ def _m2(db):
 
 def _m3(db):
     _CALLS.append('v3')
-    return None
 
 
 def _m1_changed(db):

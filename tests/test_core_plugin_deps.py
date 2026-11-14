@@ -19,8 +19,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from framework.deps import PluginDepsMixin
 from framework.core.runtime import FrameworkRuntimeMixin as CoreRuntime
+from framework.deps import PluginDepsMixin
 
 _CORE_DIR = os.path.join(_ROOT, 'core_plugins')
 _TMP_PLUGIN = 'zzz_test_missing_dep'

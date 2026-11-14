@@ -36,16 +36,17 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from startup import (                                          # noqa: E402,F401
-    amain, main,
-    _read_self_check_allow_missing,
-    _resolve_self_check_missing,
+from startup import (  # noqa: E402,F401
     _check_and_install_deps,
     _ensure_optional_driver,
-    _print_usage,
-    _read_version,
     _pop_language_arg,
+    _print_usage,
+    _read_self_check_allow_missing,
+    _read_version,
+    _resolve_self_check_missing,
     _run_attach,
+    amain,
+    main,
 )
 
 if __name__ == '__main__':

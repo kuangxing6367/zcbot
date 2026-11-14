@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """全仓统一的路径解析层（只用标准库，可在依赖自检之前安全 import）。
 
 历史上仓库里有两套互相矛盾的口径：
@@ -29,10 +28,17 @@ import os
 import sysconfig
 
 __all__ = [
-    'code_root', 'home_dir', 'state_dir', 'resolve_config_path',
-    'core_plugins_yaml_path', 'core_plugins_dir', 'user_plugins_dir',
-    'plugins_dat_dir', 'webui_web_dir', 'version_path',
+    'code_root',
+    'core_plugins_dir',
+    'core_plugins_yaml_path',
+    'home_dir',
     'migration_state_path',
+    'plugins_dat_dir',
+    'resolve_config_path',
+    'state_dir',
+    'user_plugins_dir',
+    'version_path',
+    'webui_web_dir',
 ]
 
 CONFIG_NAME = 'config.yaml'

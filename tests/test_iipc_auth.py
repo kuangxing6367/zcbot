@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC 鉴权回归测试（tests/test_iipc_auth.py）
 
 覆盖三层，既跑纯 Python 逻辑，也打真实 Go 内核做黑盒验证：
@@ -33,8 +32,7 @@ KERNEL = GO_DIR / ("zcbot_kernel.exe" if os.name == "nt" else "zcbot_kernel")
 if str(SDK_DIR) not in sys.path:
     sys.path.insert(0, str(SDK_DIR))
 
-from iipc_client import IIPCClient, resolve_auth, ENV_NAME  # noqa: E402
-
+from iipc_client import ENV_NAME, IIPCClient, resolve_auth  # noqa: E402
 
 # ───────────────────────── 1) 令牌解析（纯 Python，确定性） ─────────────────────────
 

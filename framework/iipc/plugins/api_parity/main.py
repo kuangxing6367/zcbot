@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """API 1:1 验收插件（api_parity）：覆盖原 zcbot 插件会碰到的全部 API 面。
 
 用两种等价写法各注册一半，证明两条路都通：
@@ -11,7 +10,7 @@ db 全系（query/one/execute/many/insert + async 变体）、get_all_config、
 audit_log、run_async/call_async、get_data_dir、hook、on_raw_message 接管、
 task.tick、event.emit 广播。
 """
-from framework.plugin import command, on, on_message, task, api, dashboard_card, hook
+from framework.plugin import api, command, dashboard_card, hook, on, on_message, task
 
 __plugin_meta__ = {
     "name": "API 验收",

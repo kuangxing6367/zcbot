@@ -53,23 +53,34 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 进程：pytest 会把 fd 1/2 重定向到捕获临时文件，execv 出的新进程会继承那对
 # fd，把用例跑进捕获文件里 —— 外部表现是「零输出 + 退出码 0」的假绿。
 from framework.bootstrap.allocator import apply_allocator_policy
+
 if __name__ == '__main__':
     apply_allocator_policy()
 
 # 对外兼容再导出（cli 子命令与回归测试直接 import 这些符号）
-from framework.bootstrap.deps_check import (            # noqa: E402
-    read_self_check_allow_missing as _read_self_check_allow_missing,
-    resolve_self_check_missing as _resolve_self_check_missing,
-    check_and_install_deps as _check_and_install_deps,
-    ensure_optional_driver as _ensure_optional_driver,
-)
-from framework.bootstrap.cli_dispatch import (         # noqa: E402
-    print_usage as _print_usage,
-    read_version as _read_version,
+from framework.bootstrap.app import amain  # noqa: E402
+from framework.bootstrap.cli_dispatch import (
     pop_language_arg as _pop_language_arg,
 )
+from framework.bootstrap.cli_dispatch import (  # noqa: E402
+    print_usage as _print_usage,
+)
+from framework.bootstrap.cli_dispatch import (
+    read_version as _read_version,
+)
 from framework.bootstrap.console_attach import run_attach as _run_attach  # noqa: E402
-from framework.bootstrap.app import amain              # noqa: E402
+from framework.bootstrap.deps_check import (
+    check_and_install_deps as _check_and_install_deps,
+)
+from framework.bootstrap.deps_check import (
+    ensure_optional_driver as _ensure_optional_driver,
+)
+from framework.bootstrap.deps_check import (  # noqa: E402
+    read_self_check_allow_missing as _read_self_check_allow_missing,
+)
+from framework.bootstrap.deps_check import (
+    resolve_self_check_missing as _resolve_self_check_missing,
+)
 
 
 def _run_auto_migration(config_path=None):

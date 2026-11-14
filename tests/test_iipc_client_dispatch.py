@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC 客户端事件分发「不再静默吞异常」回归测试。
 
 此前 _dispatch_loop 用 `except Exception: pass` 把事件处理器异常（含整个

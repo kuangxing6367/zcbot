@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 内核自修复能力故障注入验证。
 
@@ -11,12 +10,12 @@
 运行：python tests/test_self_heal.py  （直接 python 执行，非 pytest）
 """
 import os
-import sys
 import shutil
+import sys
 import tempfile
+import threading
 import time
 import types
-import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -64,7 +63,6 @@ class MockDB:
 
     def execute(self, sql, params=None):
         self.calls.append(('execute', sql, params))
-        return None
 
     def query(self, sql, params=None):
         self.calls.append(('query', sql, params))
@@ -72,7 +70,6 @@ class MockDB:
 
     def query_one(self, sql, params=None):
         self.calls.append(('query_one', sql, params))
-        return None
 
 
 def test_plugin_self_reload(tmp):

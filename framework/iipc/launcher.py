@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """IIPC 启动器（zcbot_go/python_side/iipc/launcher.py）
 
 拓扑（对应用户定稿）：
@@ -73,6 +72,7 @@ def _load_iipc_config():
     }
     try:
         import yaml
+
         from framework.paths import resolve_config_path
         path = resolve_config_path()
         if os.path.isfile(path):
@@ -162,10 +162,10 @@ def _relay(tag, line):
     # 无时间戳但带 [组件] 前缀（如插件 stdout 直通）：提取组件
     m2 = _COMP_RE.match(line)
     if m2:
-        lvl = "WARNING" if re.search(r"error|失败|panic", line, re.I) else "INFO"
+        lvl = "WARNING" if re.search(r"error|失败|panic", line, re.IGNORECASE) else "INFO"
         return m2.group(1), lvl, m2.group(2)
     # Rust 等无前缀行：含 error/失败 字样按 WARNING，其余 INFO
-    lvl = "WARNING" if re.search(r"error|失败|panic", line, re.I) else "INFO"
+    lvl = "WARNING" if re.search(r"error|失败|panic", line, re.IGNORECASE) else "INFO"
     return tag, lvl, line
 
 

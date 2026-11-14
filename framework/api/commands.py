@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 命令管理：静态/动态命令 + 关键词自动回复（dynamic_commands）
 """

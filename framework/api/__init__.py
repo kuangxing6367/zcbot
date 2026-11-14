@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 framework.api —— Web 应用层包
 

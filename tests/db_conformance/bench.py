@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """数据库基准测试（性能）。
 
 方法对齐 sysbench 的通行做法，只是 workload 换成框架真实访问模式：
@@ -98,7 +97,7 @@ def _runner(db, scenario, thread_id, deadline, rows, lat, lock, counters, run_ta
             counters['err'] += 1
             if counters['err'] <= 3:
                 counters.setdefault('errmsg', []).append(
-                    '{}: {}'.format(type(e).__name__, str(e)[:80]))
+                    f'{type(e).__name__}: {str(e)[:80]}')
             continue
         local_lat.append((time.perf_counter() - t0) * 1000)
         ops += 1
@@ -153,25 +152,25 @@ def main(argv=None):
     scen_list = [s.strip() for s in args.scenarios.split(',') if s.strip()]
 
     print('=' * 88)
-    print('数据库基准  数据量={} 行  每档 {} s'.format(args.rows, args.duration))
+    print(f'数据库基准  数据量={args.rows} 行  每档 {args.duration} s')
     print('=' * 88)
 
     for name in names:
         try:
             backend = make_backend(name)
         except Exception as e:
-            print('跳过 {}: {}'.format(name, e))
+            print(f'跳过 {name}: {e}')
             continue
         backend.provision()
         db = backend.make_database()
-        print('\n### 后端: {}  ({})'.format(name, _describe(db)))
+        print(f'\n### 后端: {name}  ({_describe(db)})')
         t0 = time.perf_counter()
         _prepare(db, args.rows)
-        print('    建表+灌数据 {:.2f}s'.format(time.perf_counter() - t0))
+        print(f'    建表+灌数据 {time.perf_counter() - t0:.2f}s')
 
         for scen in scen_list:
             label = SCENARIOS.get(scen, (scen,))[0]
-            print('\n  [{}] {}'.format(scen, label))
+            print(f'\n  [{scen}] {label}')
             print('    {:>7} {:>10} {:>9} {:>9} {:>9} {:>9} {:>7}'.format(
                 'threads', 'ops/s', 'p50ms', 'p95ms', 'p99ms', 'maxms', 'err'))
             for nt in thread_list:
@@ -195,10 +194,10 @@ def _describe(db):
     try:
         if db.db_type == 'sqlite':
             import sqlite3
-            return 'SQLite {}'.format(sqlite3.sqlite_version)
+            return f'SQLite {sqlite3.sqlite_version}'
         v = db.scalar("SELECT VERSION() AS v")
         cust = db.scalar("SELECT CONNECTION_ID() AS c")
-        return 'MySQL {} (conn {})'.format(v, cust)
+        return f'MySQL {v} (conn {cust})'
     except Exception:
         return db.db_type
 

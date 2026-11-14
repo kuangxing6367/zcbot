@@ -290,9 +290,8 @@ def build_sqlite_index_ddl(indexes: list) -> list:
     """
     out = []
     for table, name, cols in indexes:
-        col_sql = ', '.join('"{}"'.format(c) for c in cols)
-        out.append('CREATE INDEX IF NOT EXISTS "{}_{}" ON "{}" ({})'.format(
-            table, name, table, col_sql))
+        col_sql = ', '.join(f'"{c}"' for c in cols)
+        out.append(f'CREATE INDEX IF NOT EXISTS "{table}_{name}" ON "{table}" ({col_sql})')
     return out
 
 
@@ -444,7 +443,7 @@ def _mysql_prefix_indexes(sql: str, max_key_bytes: int = MYSQL_KEY_LIMIT_MODERN)
             if kind == 'text':
                 room = (max_key_bytes - used) // 4
                 if room > 0:
-                    fixed.append("`{}`({})".format(name, room))
+                    fixed.append(f"`{name}`({room})")
                     used += room * 4
                 else:
                     fixed.append(col)
@@ -455,7 +454,7 @@ def _mysql_prefix_indexes(sql: str, max_key_bytes: int = MYSQL_KEY_LIMIT_MODERN)
             else:
                 room = (max_key_bytes - used) // 4
                 if room > 0:
-                    fixed.append("`{}`({})".format(name, room))
+                    fixed.append(f"`{name}`({room})")
                     used += room * 4
                 else:
                     fixed.append(col)      # 预算已耗尽，保持原样交给 DB 报错

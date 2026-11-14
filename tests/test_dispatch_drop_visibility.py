@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回归测试：事件分发主干上「Hook 一票否决」必须可观测（不再静默吞）。
 
 覆盖三处此前的隐性丢弃点：
@@ -15,9 +14,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from framework.core.dispatch import FrameworkDispatchMixin
-from framework.messaging.router import MessageRouter
+from framework.hooks import HookPoints, HookRegistry
 from framework.messaging.event_bus import EventBus
-from framework.hooks import HookRegistry, HookPoints
+from framework.messaging.router import MessageRouter
 
 
 class _LogCapture(logging.Handler):

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """内核版本检测（SemVer 2.0.0）。
 
 依据 `semver.org` 规范：版本必须是 ``MAJOR.MINOR.PATCH``，可带
@@ -23,8 +22,12 @@ from dataclasses import dataclass
 from framework import paths
 
 __all__ = [
-    'Version', 'parse_version', 'compare_versions', 'current_version',
-    'current_version_string', 'version_sources',
+    'Version',
+    'compare_versions',
+    'current_version',
+    'current_version_string',
+    'parse_version',
+    'version_sources',
 ]
 
 # semver.org 官方推荐的 PCRE 命名组正则（原文见规范 FAQ）
@@ -37,7 +40,7 @@ _SEMVER_RE = re.compile(
 
 _VERSION_FILE_LIMIT = 256          # 版本文件不可能更大，防止读炸弹
 _PYPROJECT_LIMIT = 256 * 1024
-_PYPROJECT_RE = re.compile(r'^\s*version\s*=\s*["\']([^"\']{1,64})["\']', re.M)
+_PYPROJECT_RE = re.compile(r'^\s*version\s*=\s*["\']([^"\']{1,64})["\']', re.MULTILINE)
 
 
 @dataclass(frozen=True)

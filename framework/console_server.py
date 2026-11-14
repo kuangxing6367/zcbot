@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """框架内置的本地调试控制台 —— 无 TTY 也能接进运行中的框架。
 
 解决的问题：框架由 systemd 之类托管时没有交互终端，想调试只能重启。这里在
@@ -23,11 +22,12 @@ import hmac
 import json
 import logging
 import os
-from framework import i18n
 import secrets
 import socket
 import threading
 import time
+
+from framework import i18n
 
 logger = logging.getLogger('zcbot')
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 崩溃重启守卫（Crash-loop Guard）
 

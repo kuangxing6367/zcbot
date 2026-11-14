@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 IpcLogHandler —— 宿主进程（进程2）日志转发
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """image_renderer 运行时资源层（assets.py）的回归测试。
 
 覆盖的是几条「坏了会静默出事」的路径：
@@ -53,7 +52,7 @@ def build_zip(path, files=None, with_manifest=True, mutate_manifest=None):
     """
     files = dict(files if files is not None else _font_payloads())
     plat = assets.platform_key() or 'linux-x86_64'
-    files['native/{}/{}'.format(plat, assets.native_filename())] = b'native-binary'
+    files[f'native/{plat}/{assets.native_filename()}'] = b'native-binary'
 
     manifest = {'version': '9.9.9', 'files': {}}
     for arc, data in files.items():
@@ -146,7 +145,7 @@ def test_download_and_extract_ok(mgr, tmp_path):
     mgr.asset_url = file_url(zip_path)
 
     st = mgr.download()
-    assert st.ok is True, '下载失败: {}'.format(st.error)
+    assert st.ok is True, f'下载失败: {st.error}'
     assert st.version == '9.9.9'
     assert st.source == 'download'
     assert os.path.isdir(os.path.join(mgr.version_dir, 'fonts'))
@@ -374,7 +373,7 @@ def test_readonly_target_degrades_to_inplace_overwrite(mgr, tmp_path, monkeypatc
     mgr.asset_url = file_url(zip_path)
 
     st = mgr.download(force=True)
-    assert st.ok is True, '删不掉旧目录应退化为就地覆盖，而不是整体失败: {}'.format(st.error)
+    assert st.ok is True, f'删不掉旧目录应退化为就地覆盖，而不是整体失败: {st.error}'
     assert st.stale is False
 
 
@@ -391,7 +390,6 @@ def test_readonly_target_and_unwritable_files_keeps_old_assets(mgr, tmp_path, mo
     def deny_rmtree(path, *a, **kw):
         if os.path.abspath(str(path)) == os.path.abspath(mgr.version_dir) and not kw.get('ignore_errors'):
             raise PermissionError('read-only file system')
-        return None
 
     def deny_copy(src, dst, *a, **kw):
         raise PermissionError('read-only file system')
@@ -592,6 +590,7 @@ def test_read_cfg_ignores_ctx_database(monkeypatch):
 
 def test_status_route_serves_json():
     from flask import Flask
+
     from framework.api import registry
     main = _load_main()
     app = Flask(__name__)

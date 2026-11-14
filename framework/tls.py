@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 SSL/TLS 辅助。
 

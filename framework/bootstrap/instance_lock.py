@@ -238,8 +238,8 @@ def acquire_instance_lock(root):
             pass
         print("\n" + "=" * 60)
         print(f"[实例锁] 检测到另一个 ZCBOT 实例正在运行（PID {holder_pid}），")
-        print(f"          本进程立即退出，避免多实例抢端口 / 抢 DB / 双写。")
-        print(f"          如需强制启动，请先结束该进程或删除锁文件：")
+        print("          本进程立即退出，避免多实例抢端口 / 抢 DB / 双写。")
+        print("          如需强制启动，请先结束该进程或删除锁文件：")
         print(f"          {lock_path}")
         print("=" * 60)
         logger.warning(f"实例锁冲突：检测到另一个 ZCBOT 实例（PID {holder_pid}），本进程退出")
@@ -252,8 +252,8 @@ def acquire_instance_lock(root):
             pass
         print("\n" + "=" * 60)
         print("[实例锁] 检测到实例锁已被占用（PID 未知），本进程立即退出，")
-        print(f"          避免多实例抢端口 / 抢 DB / 双写。如需强制启动，")
-        print(f"          请先结束占用进程或删除锁文件：")
+        print("          避免多实例抢端口 / 抢 DB / 双写。如需强制启动，")
+        print("          请先结束占用进程或删除锁文件：")
         print(f"          {lock_path}")
         print("=" * 60)
         logger.warning("实例锁冲突：锁被占用但 PID 未知，本进程退出")

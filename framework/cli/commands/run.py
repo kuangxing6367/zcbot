@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """``zb run`` —— 运行机器人（可选热重载）。"""
 import os
 import subprocess

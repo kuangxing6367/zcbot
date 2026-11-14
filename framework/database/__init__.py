@@ -21,7 +21,7 @@ from .storage import create_storage
 __all__ = [
     'Database',
     'SqlSimEngine',
+    'auto_init_database',
     'create_storage',
     'init_db',
-    'auto_init_database',
 ]

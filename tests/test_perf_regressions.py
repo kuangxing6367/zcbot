@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """性能回归：命令权限缓存 + DB 初始化批量化。
 
 覆盖：
@@ -25,12 +24,13 @@ if ROOT not in sys.path:
 
 from framework.database.db import Database  # noqa: E402
 from framework.database.init_db import auto_init_database  # noqa: E402
-from framework.database.schema import _auto_create_tables, MIGRATIONS  # noqa: E402
+from framework.database.schema import MIGRATIONS, _auto_create_tables  # noqa: E402
 from framework.messaging.event import Event  # noqa: E402
 from framework.messaging.router import (  # noqa: E402
-    MessageRouter, _PermissionDecisionCache, invalidate_permission_cache,
+    MessageRouter,
+    _PermissionDecisionCache,
+    invalidate_permission_cache,
 )
-
 
 # ── 工具 ──────────────────────────────────────────────────────
 
@@ -52,8 +52,8 @@ def _clear_perm_globals():
     event._user_role_cache / perm._perm_cache 都是进程级全局且带 60s TTL，
     不清理会让后续用例直接命中上一个用例填充的条目，测不出真实往返。
     """
-    from framework.messaging import event as _ev_mod
     from framework import perm as _perm_mod
+    from framework.messaging import event as _ev_mod
     _ev_mod.invalidate_user_role_cache()
     _ev_mod.invalidate_group_role_cache()
     _perm_mod.invalidate_all()

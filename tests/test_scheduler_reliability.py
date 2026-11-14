@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """定时任务执行模型单测：时区解析 / 同步 handler 不占事件循环 / 超时 / 慢任务 / cron 校验。
 
 核心回归点：v1.19.0 之前 `scheduler` 的文档写「普通 def 转线程执行，不阻塞事件循环」，
@@ -17,8 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
-from framework.scheduler import (TaskScheduler, describe_timezone,
-                                 resolve_timezone)
+from framework.scheduler import TaskScheduler, describe_timezone, resolve_timezone
 
 
 class FakeLoader:

@@ -1,15 +1,13 @@
-# -*- coding: utf-8 -*-
 """调度器优雅停机（Gap 9）回归测试。
 
 铁律：不碰真实 config、不依赖网络；事件循环跑在后台线程。
 直接运行：PYTHONPATH=. python tests/test_scheduler_graceful.py
 """
 import asyncio
-import threading
-import time
-
 import os
 import sys
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """终端编码对齐（Windows 控制台代码页 vs Python UTF-8 模式）。
 
 背景：Python 若跑在 UTF-8 模式（`PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`），

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 插件市场 / GitHub 更新：check_update / update_from_github / 市场源管理 / 安装
 
@@ -278,7 +277,7 @@ def register(ctx):
                     logger.warning(f"[{plugin_name}] 新代码加载失败，已恢复旧代码备份")
                 audit_log(admin['id'], admin['username'], 'update_plugin_github',
                           'plugin', plugin_name, {'repo': repo, 'branch': branch}, 'failure', '加载失败')
-                return jsonify({'code': 500, 'msg': f'代码已下载但加载失败，请检查 main.py'}), 500
+                return jsonify({'code': 500, 'msg': '代码已下载但加载失败，请检查 main.py'}), 500
 
         except zipfile.BadZipFile:
             return jsonify({'code': 400, 'msg': '下载的 ZIP 文件无效'}), 400

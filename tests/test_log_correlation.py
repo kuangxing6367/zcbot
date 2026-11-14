@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回归测试：日志事件关联 ID（缺口 6）。
 
 背景（真实缺陷）：框架早有 current_event_id_var，但从未被 .set()，所有日志
@@ -61,8 +60,9 @@ async def test_text_formatter_renders_eid():
 
 
 async def test_json_formatter_includes_eid():
-    from framework.jsonlog import JsonFormatter
     import json
+
+    from framework.jsonlog import JsonFormatter
     token = current_event_id_var.set('evt-j')
     try:
         rec = _record()

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """热重载（HMR）逻辑单元测试。
 
 不启动完整框架，仅校验 PluginRuntimeMixin 的心跳分派逻辑：

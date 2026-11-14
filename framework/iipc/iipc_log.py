@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC 统一日志出口 —— 对齐原 zcbot 框架日志体系。
 
 原框架契约（config.yaml `log:` 段 + framework/log_broker.py）：
@@ -33,6 +32,7 @@ def _load_log_config(project_root):
     cfg = {}
     try:
         import yaml
+
         from framework.paths import resolve_config_path
         path = resolve_config_path()
         if os.path.isfile(path):

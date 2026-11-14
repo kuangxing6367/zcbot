@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """方言一致性测试套件（backend-agnostic conformance suite）。
 
 结构参照 SQLAlchemy 的多后端测试体系：

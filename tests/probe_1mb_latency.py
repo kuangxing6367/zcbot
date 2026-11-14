@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """实测：1MB 事件包在 l1_max_bytes=512KB 下必然溢出，验证落层与 IO 耗时。"""
 import asyncio
 import os

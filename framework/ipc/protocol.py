@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 轻量 IPC 信封协议（基于 multiprocessing.connection）
 

@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 """会话令牌协议测试（默认关闭；开启后才注册握手端点与请求闸门）"""
 import math
-import sys
-import types
 import os
 import random
+import sys
 import time
+import types
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

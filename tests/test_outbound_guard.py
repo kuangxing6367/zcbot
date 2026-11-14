@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """出站闸门单测：节流（全局/群/用户三级）/ 等待与拒绝 / 重试取舍 / 查询动作直通 / 接线。
 
 铁律：路径用 __file__ 推导、时间戳不写死时区、不污染真实目录。
@@ -209,8 +208,8 @@ def test_async_path():
 
 def test_adapter_acall_goes_through_gate():
     """接线验证：ProtocolAdapter.acall 必须经过闸门，不是只在 ApiCaller 上生效"""
-    from framework.messaging.protocol import ProtocolAdapter
     from framework.messaging.outbound_guard import gate as singleton
+    from framework.messaging.protocol import ProtocolAdapter
 
     old = singleton.describe()
     singleton.configure({'rate_limit': {'enabled': True, 'window': 60,

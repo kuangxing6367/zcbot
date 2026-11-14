@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """后端安全特性冒烟测试
 
 覆盖：
@@ -15,9 +14,8 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, '.')
 
+from framework.api import honeypot, security_levels
 from framework.api.webapp import create_web_app
-from framework.api import honeypot
-from framework.api import security_levels
 
 
 class StubFramework:

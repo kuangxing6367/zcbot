@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 CoreRuntime —— 双进程模式下进程1（核心）的运行时
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 create_web_app 共享辅助函数（自 framework/api/webapp.py 剥离）
 

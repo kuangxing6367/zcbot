@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 双核心（core/host 双进程）回归测试
 ==================================
@@ -13,16 +12,16 @@
 """
 import os
 import sys
-import time
 import threading
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from framework.core import Framework
-from framework.ipc.ipc_server import IpcServer
 from framework.ipc.ipc_client import IpcClient
+from framework.ipc.ipc_server import IpcServer
 from framework.ipc.protocol import RemoteError
 from framework.ipc.remote_db import RemoteDatabase
 
@@ -248,6 +247,7 @@ def test_remote_tx_run_all_ops():
     """
     import sqlite3
     import tempfile
+
     from framework.ipc.remote_tx import RemoteTxManager
 
     class _Db:
@@ -301,6 +301,7 @@ def test_remote_tx_run_all_ops():
 def test_ipc_adapter_batch_injection_order():
     """宿主 _on_event 批量帧：整批一次调度、按序派发（兼容单条）"""
     import asyncio
+
     from framework.ipc.ipc_adapter import IpcAdapter
 
     got = []

@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 """
 认证接口：登录 / 登出 / 当前用户 / 改密 + 双请求防破解认证 + 安全黑名单
 """
 import logging
+import secrets
 
 import bcrypt
-import secrets
 from flask import jsonify, request
 
 logger = logging.getLogger('zcbot')
@@ -214,7 +213,8 @@ def register(ctx):
     def security_status():
         """查看安全系统状态（等级 / 风险 IP / 黑名单 / 蜜罐命中画像）"""
         from framework.api import honeypot as _hp
-        from framework.api.security_levels import resolve as _resolve, all_levels
+        from framework.api.security_levels import all_levels
+        from framework.api.security_levels import resolve as _resolve
         data = dual_auth.get_status()
         sec = _resolve(framework.config.get('security'))
         data['security_level'] = sec['level']

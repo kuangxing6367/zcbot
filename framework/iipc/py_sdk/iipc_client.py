@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC 客户端（Python 插件侧）：复刻 zcbot IPC 的双向信封，但连接 Go 主进程。
 
 与旧 Python IPC（multiprocessing.connection + pickle + 回环 TCP）不同，这里：

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """后端能力声明。
 
 参照 SQLAlchemy 的 SuiteRequirements：能力由「声明」给出，测试用

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """rust_accel 端到端性能基准（与 Python 基线同口径对照）
 
 用量与 tools/bench_dispatch.py / tools/bench_workers.py 一致（N 缺省 2000）：

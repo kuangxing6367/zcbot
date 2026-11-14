@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """压力 / 故障注入 / 异常路径验收（tools/stress_check.py）
 
 e2e_check.py 与 adapter_e2e.py 全是"happy path 功能断言"（自证式：我的实现
@@ -30,8 +29,8 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 
-from onebot_fake import FakeOneBot, group_msg, ws_write_frame, OP_TEXT  # noqa: E402
 from iipc_client import IIPCClient, resolve_auth  # noqa: E402
+from onebot_fake import OP_TEXT, FakeOneBot, group_msg, ws_write_frame  # noqa: E402
 
 KERNEL_EXE = os.path.join(IIPC, "go_kernel", "zcbot_kernel.exe")
 RUST_EXE = os.path.join(IIPC, "rust_adapter", "target", "release",

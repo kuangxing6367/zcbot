@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 接口令牌（API Key）管理：与用户会话 token 解耦，专供外部程序调用 REST API
 """

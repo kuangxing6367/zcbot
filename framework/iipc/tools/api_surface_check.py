@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """全 API 面验收脚本（tools/api_surface_check.py）
 
 plugins/api_surface 把 SDK 全部公开 API 真实调用一遍并落库 (name, ok, detail)。

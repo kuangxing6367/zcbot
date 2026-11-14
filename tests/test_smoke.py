@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 启动 + 分发冒烟测试
 ====================
@@ -89,8 +88,8 @@ def _run_with_background_loop(fn, timeout=5):
 
 
 def test_paths_and_repo_layout():
-    import framework.core.runtime as rt
     import framework.core.base as b
+    import framework.core.runtime as rt
     root_rt = _repo_root_from(rt.__file__)
     root_b = _repo_root_from(b.__file__)
     chk("runtime 模块根=仓库根", os.path.normpath(root_rt) == os.path.normpath(ROOT),
@@ -190,7 +189,6 @@ def test_db_conn_import_without_pymysql():
         def find_spec(self, name, path=None, target=None):
             if name == 'pymysql' or name.startswith('pymysql.'):
                 raise ImportError('pymysql blocked for smoke test')
-            return None
 
     blocker = _BlockPymysql()
     sys.meta_path.insert(0, blocker)
@@ -229,7 +227,6 @@ def test_web_deps_lazy_with_stub():
         def find_spec(self, name, path=None, target=None):
             if name == 'flask' or name.startswith('flask.'):
                 raise ImportError('flask blocked for smoke test')
-            return None
 
     class _Cfg:
         def __init__(self):

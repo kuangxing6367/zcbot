@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """权限 Tracks 升降级
 轨道 CRUD + promote/demote
 
@@ -9,12 +8,13 @@ import logging
 
 logger = logging.getLogger('zcbot')
 
-from framework.perm import _now, normalize_node, invalidate_groups, invalidate_user
+from framework.perm import _now, invalidate_groups, invalidate_user, normalize_node
 from framework.perm.admin import audit
 from framework.perm.groups import (
-    add_user_group, list_user_nodes, remove_user_group,
+    add_user_group,
+    list_user_nodes,
+    remove_user_group,
 )
-
 
 # ═══════════════════════════════════════════════════════════
 # Tracks 升降级

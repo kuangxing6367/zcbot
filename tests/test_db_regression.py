@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 DB schema / 类型约束回归测试（T2 / T3）
 
@@ -22,7 +21,6 @@ if ROOT not in sys.path:
 
 from framework.database.db import Database, _auto_create_tables
 from framework.database.init_db import auto_init_database
-
 
 # ── 公共构造 ──────────────────────────────────────────────────
 

@@ -249,7 +249,7 @@ def _log_asset_notice(st, consent):
     url = _read_cfg('asset_url', '') or '（未配置 asset_url）'
     plat = _assets_module().platform_key() or 'unsupported'
     head = ('[image_renderer] 渲染资源缺失（字体子集 + 原生扩展，下载包约 9MB，'
-            '当前平台 {}）。').format(plat)
+            f'当前平台 {plat}）。')
 
     # 落盘能力优先报：这类失败跟网络无关，混在「要不要下载」的文案里
     # 只会让用户跑去查网络、换镜像。
@@ -294,7 +294,7 @@ def _manual_placement_hint(assets_mgr):
     except Exception:
         pass
     base = getattr(assets_mgr, 'version_dir', '<data>/image_renderer/assets')
-    return '把 fonts/ 与 native/<平台>/ 放到 {base}/ 下'.format(base=base)
+    return f'把 fonts/ 与 native/<平台>/ 放到 {base}/ 下'
 
 
 def _resolve_backend(force_download=False):
@@ -391,7 +391,7 @@ def _resolve_backend(force_download=False):
                 _BACKEND_ERROR = (
                     '原生渲染资源尚未获取（下载包约 9MB，当前 asset_consent=ask 不自动下载）。\n'
                     '  想自动获取：把 asset_consent 改成 auto 后重启\n'
-                    '  想手动放置：{}').format(st.manual_hint or _ASSETS.version_dir)
+                    f'  想手动放置：{st.manual_hint or _ASSETS.version_dir}')
             else:
                 _BACKEND_ERROR = st.error or (
                     '原生渲染资源不可用（缺当前平台 {} 的产物），且未回退 PIL。\n'
@@ -1251,8 +1251,9 @@ class _CanvasPIL:
         # 修复前这条链路是唯一没有 _guard_image_bytes 前置就直插 Pillow 解码的入口，
         # 恶意图片可绕过 image_resize/crop 的预算闸门（实测 paste 接受同一批畸形包）。
         _guard_image_bytes(image_bytes)
-        from PIL import Image as PILImage
         from io import BytesIO
+
+        from PIL import Image as PILImage
         img = PILImage.open(BytesIO(bytes(image_bytes))).convert("RGBA")
         if width is not None and height is not None:
             img = img.resize((int(width), int(height)), PILImage.Resampling.LANCZOS)
@@ -1381,8 +1382,9 @@ def _guard_image_bytes(blob):
             raise ValueError('图片内含脚本/外部实体/PostScript/MVG 内容，已拒绝解码')
     try:
         import warnings
-        from PIL import Image as _PILImage
         from io import BytesIO as _BytesIO
+
+        from PIL import Image as _PILImage
         with warnings.catch_warnings():
             warnings.simplefilter('error', _PILImage.DecompressionBombWarning)
             with _PILImage.open(_BytesIO(data)) as probe:
@@ -1398,10 +1400,8 @@ def _guard_image_bytes(blob):
         raise ValueError('图片尺寸非法，已拒绝解码')
     if w * h > _MAX_PIXELS:
         raise ValueError(
-            '图片尺寸过大已拒绝解码：{}×{} = {:.1f} 百万像素，上限 {:.1f} 百万像素'
-            '（约 {}MB 位图）。请先缩小后再处理。'.format(
-                w, h, w * h / 1e6, _MAX_PIXELS / 1e6,
-                _MAX_PIXELS * 4 // (1024 * 1024)))
+            f'图片尺寸过大已拒绝解码：{w}×{h} = {w * h / 1e6:.1f} 百万像素，上限 {_MAX_PIXELS / 1e6:.1f} 百万像素'
+            f'（约 {_MAX_PIXELS * 4 // (1024 * 1024)}MB 位图）。请先缩小后再处理。')
     if frames > _MAX_FRAMES:
         raise ValueError(f'动画帧数 {frames} 超过上限 {_MAX_FRAMES}，已拒绝解码')
     # 全文活动内容扫描：EXIF/XMP/注释区或尾随数据里塞脚本的 polyglot，
@@ -1432,8 +1432,9 @@ def image_resize(img_bytes, width, height, keep_ratio=True):
             return _NATIVE.image_resize(bytes(img_bytes), int(width), int(height), bool(keep_ratio))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_resize 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage
     from io import BytesIO
+
+    from PIL import Image as PILImage
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("RGBA")
     if keep_ratio:
         ratio = min(width / img.width, height / img.height)
@@ -1455,8 +1456,9 @@ def image_crop_16_9(img_bytes):
             return _NATIVE.image_crop_16_9(bytes(img_bytes))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_crop_16_9 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage
     from io import BytesIO
+
+    from PIL import Image as PILImage
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("RGBA")
     w, h = img.size
     target_h = round(w * 9 / 16)
@@ -1479,8 +1481,10 @@ def image_circle_crop(img_bytes, size=256):
             return _NATIVE.image_circle_crop(bytes(img_bytes), int(size))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_circle_crop 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage, ImageDraw
     from io import BytesIO
+
+    from PIL import Image as PILImage
+    from PIL import ImageDraw
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("RGBA").resize(
         (int(size), int(size)), PILImage.Resampling.LANCZOS)
     mask = PILImage.new("L", (int(size), int(size)), 0)
@@ -1501,8 +1505,10 @@ def image_round_corners(img_bytes, radius=16):
             return _NATIVE.image_round_corners(bytes(img_bytes), int(radius))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_round_corners 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage, ImageDraw
     from io import BytesIO
+
+    from PIL import Image as PILImage
+    from PIL import ImageDraw
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("RGBA")
     w, h = img.size
     mask = PILImage.new("L", (w, h), 0)
@@ -1523,8 +1529,10 @@ def image_blur(img_bytes, radius=4.0):
             return _NATIVE.image_blur(bytes(img_bytes), float(radius))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_blur 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage, ImageFilter
     from io import BytesIO
+
+    from PIL import Image as PILImage
+    from PIL import ImageFilter
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("RGBA").filter(
         ImageFilter.GaussianBlur(float(radius)))
     buf = BytesIO()
@@ -1541,8 +1549,9 @@ def image_flip(img_bytes, direction="horizontal"):
             return _NATIVE.image_flip(bytes(img_bytes), direction)
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_flip 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage
     from io import BytesIO
+
+    from PIL import Image as PILImage
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("RGBA")
     img = img.transpose(PILImage.Transpose.FLIP_LEFT_RIGHT if direction == "horizontal" else PILImage.Transpose.FLIP_TOP_BOTTOM)
     buf = BytesIO()
@@ -1559,8 +1568,9 @@ def image_rotate(img_bytes, angle=90):
             return _NATIVE.image_rotate(bytes(img_bytes), int(angle))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_rotate 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage
     from io import BytesIO
+
+    from PIL import Image as PILImage
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("RGBA")
     img = img.rotate(-int(angle), expand=True, resample=PILImage.Resampling.BICUBIC)
     buf = BytesIO()
@@ -1577,8 +1587,9 @@ def image_gray(img_bytes):
             return _NATIVE.image_gray(bytes(img_bytes))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_gray 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage
     from io import BytesIO
+
+    from PIL import Image as PILImage
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("L").convert("RGBA")
     buf = BytesIO()
     img.save(buf, format="PNG")
@@ -1594,8 +1605,10 @@ def image_contrast(img_bytes, factor=1.5):
             return _NATIVE.image_contrast(bytes(img_bytes), float(factor))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_contrast 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage, ImageEnhance
     from io import BytesIO
+
+    from PIL import Image as PILImage
+    from PIL import ImageEnhance
     img = PILImage.open(BytesIO(bytes(img_bytes))).convert("RGBA")
     img = ImageEnhance.Contrast(img).enhance(float(factor))
     buf = BytesIO()
@@ -1613,8 +1626,9 @@ def image_overlay(bg_bytes, fg_bytes, x=0, y=0):
             return _NATIVE.image_overlay(bytes(bg_bytes), bytes(fg_bytes), int(x), int(y))
         except Exception as e:
             logger.warning(f"[image_renderer] 原生 image_overlay 失败，回退 PIL: {e}")
-    from PIL import Image as PILImage
     from io import BytesIO
+
+    from PIL import Image as PILImage
     bg = PILImage.open(BytesIO(bytes(bg_bytes))).convert("RGBA")
     fg = PILImage.open(BytesIO(bytes(fg_bytes))).convert("RGBA")
     bg.alpha_composite(fg, (int(x), int(y)))

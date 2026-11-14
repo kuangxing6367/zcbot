@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """``zb adapter`` —— 管理适配器（list / search / install / uninstall）。
 
 ZCBOT 的适配器即 core_plugins 下带网络接入特征的条目，
@@ -7,8 +6,13 @@ ZCBOT 的适配器即 core_plugins 下带网络接入特征的条目，
 import os
 import webbrowser
 
-from ..utils import (PROG, discover_adapters, plugin_enabled_state,
-                     set_core_plugin_enabled, render_table)
+from ..utils import (
+    PROG,
+    discover_adapters,
+    plugin_enabled_state,
+    render_table,
+    set_core_plugin_enabled,
+)
 
 MARKET_URL = "https://github.com/kuangxing6367/zcbot"
 

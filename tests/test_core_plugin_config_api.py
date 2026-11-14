@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """官方插件配置在 WebUI 面板里能不能看到、能不能改。
 
 背景：官方插件的配置写在 core_plugins.yaml，启动时由 load_config 合并进
@@ -20,9 +19,9 @@ import yaml
 
 pytest.importorskip('flask')
 
-from flask import Flask, request                      # noqa: E402
+from flask import Flask, request  # noqa: E402
 
-import framework.api.config as cfg_api                # noqa: E402
+import framework.api.config as cfg_api  # noqa: E402
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 IpcAdapter —— 宿主侧的协议适配器（进程2）
 
@@ -13,8 +12,8 @@ IpcAdapter —— 宿主侧的协议适配器（进程2）
 import asyncio
 import logging
 
-from framework.messaging.protocol import ProtocolAdapter
 from framework.ipc.remote_api_caller import RemoteApiCaller, _NullConnection
+from framework.messaging.protocol import ProtocolAdapter
 
 logger = logging.getLogger('zcbot')
 

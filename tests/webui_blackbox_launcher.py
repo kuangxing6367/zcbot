@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 ZCBOT WebUI 黑盒测试启动器（仅负责启动一个全新实例，不做任何测试）
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 统计图表 + 环境信息
 """
@@ -75,6 +74,7 @@ def register(ctx):
         import psutil  # 延迟导入，避免拖慢框架启动
         try:
             import platform
+
             import distro
             has_distro = True
         except ImportError:

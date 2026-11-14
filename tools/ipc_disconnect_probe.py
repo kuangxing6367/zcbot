@@ -1,15 +1,14 @@
-# -*- coding: utf-8 -*-
 """对照验证：模拟「对端断开时唤醒等待中的 call」在 Linux 上的两种写法差异。
 
 用法：在 zcbot 仓库根目录下 python tools/ipc_disconnect_probe.py
 不依赖 pytest，只用标准库 + framework.ipc.protocol。
 （自 tmp/ 迁入：诊断 IPC 断开唤醒语义时可直接复用。）
 """
+import multiprocessing.connection as mpc
 import os
 import sys
 import threading
 import time
-import multiprocessing.connection as mpc
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from framework.ipc.protocol import JsonRpcConnection  # noqa: E402

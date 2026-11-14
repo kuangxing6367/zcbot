@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """权限引擎自测（临时脚本，验证后删除）。
 
 注意：本文件为脚本式自测，实际测试逻辑放在 `if __name__ == '__main__'` 内执行；
@@ -12,8 +11,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework.database.db import Database, _auto_create_tables
 from framework import perm
+from framework.database.db import Database, _auto_create_tables
 
 
 def chk(label, got, want):

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 接入端契约（Adapter Contract）
 
@@ -16,7 +15,10 @@ import logging
 from typing import Any, Dict, Iterable, List, Optional
 
 from .segments import (
-    canonical_type, normalize_message, segments_to_text, SEG_TEXT,
+    SEG_TEXT,
+    canonical_type,
+    normalize_message,
+    segments_to_text,
 )
 
 logger = logging.getLogger('zcbot.contract')
@@ -434,13 +436,42 @@ def contract_report(adapter: Any) -> dict:
 
 
 __all__ = [
-    'EVENT_MESSAGE', 'EVENT_NOTICE', 'EVENT_REQUEST', 'EVENT_META', 'EVENT_TYPES',
-    'NOTICE_TYPES', 'NOTICE_ALIASES', 'REQUEST_TYPES',
-    'CAP_TEXT', 'CAP_IMAGE', 'CAP_VOICE', 'CAP_VIDEO', 'CAP_FILE', 'CAP_STICKER',
-    'CAP_AT', 'CAP_REPLY', 'CAP_FACE', 'CAP_SHARE', 'CAP_JSON', 'CAP_LOCATION',
-    'CAP_POKE', 'CAP_MARKDOWN', 'CAP_KEYBOARD', 'CAP_FORWARD',
-    'CAP_RECALL', 'CAP_REACT', 'CAP_TYPING', 'CAP_GROUP_ADMIN', 'CAP_NOTICE',
-    'CAP_REQUEST', 'MEDIA_CAPS', 'IN', 'OUT',
-    'Capabilities', 'as_capabilities', 'normalize_event', 'validate_adapter',
+    'CAP_AT',
+    'CAP_FACE',
+    'CAP_FILE',
+    'CAP_FORWARD',
+    'CAP_GROUP_ADMIN',
+    'CAP_IMAGE',
+    'CAP_JSON',
+    'CAP_KEYBOARD',
+    'CAP_LOCATION',
+    'CAP_MARKDOWN',
+    'CAP_NOTICE',
+    'CAP_POKE',
+    'CAP_REACT',
+    'CAP_RECALL',
+    'CAP_REPLY',
+    'CAP_REQUEST',
+    'CAP_SHARE',
+    'CAP_STICKER',
+    'CAP_TEXT',
+    'CAP_TYPING',
+    'CAP_VIDEO',
+    'CAP_VOICE',
+    'EVENT_MESSAGE',
+    'EVENT_META',
+    'EVENT_NOTICE',
+    'EVENT_REQUEST',
+    'EVENT_TYPES',
+    'IN',
+    'MEDIA_CAPS',
+    'NOTICE_ALIASES',
+    'NOTICE_TYPES',
+    'OUT',
+    'REQUEST_TYPES',
+    'Capabilities',
+    'as_capabilities',
     'contract_report',
+    'normalize_event',
+    'validate_adapter',
 ]

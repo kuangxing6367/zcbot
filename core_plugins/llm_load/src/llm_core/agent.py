@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Agent 循环（tool loop）
 

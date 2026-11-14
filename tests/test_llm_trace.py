@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """验证 LLM 调用链追踪：agent.arun 在模型调用与工具执行处埋点，产出 result.trace。"""
 import asyncio
 import logging
@@ -13,7 +12,7 @@ if SRC not in sys.path:
 
 from llm_core.agent import ToolLoopAgent  # noqa: E402
 from llm_core.providers import Provider, ProviderReply, ToolCall  # noqa: E402
-from llm_core.tools import ToolRegistry, FunctionTool  # noqa: E402
+from llm_core.tools import FunctionTool, ToolRegistry  # noqa: E402
 
 _FAILED = False
 

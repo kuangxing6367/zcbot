@@ -1,17 +1,16 @@
-# -*- coding: utf-8 -*-
 """Framework 核心插件加载 / 依赖自愈 / 心跳·内存看门狗 / 内置任务（自 core.py 剥离的 mixin）"""
 import ast
 import asyncio
 import gc
 import importlib.util
 import logging
-from framework import i18n
 import os
 import sys
 import time
 
-from framework.memory import trim_memory, log_malloc_hint, process_memory_snapshot
+from framework import i18n
 from framework.deps import classify_load_error
+from framework.memory import log_malloc_hint, process_memory_snapshot, trim_memory
 
 logger = logging.getLogger('zcbot')
 
@@ -390,7 +389,10 @@ class FrameworkRuntimeMixin:
                             f"[内存看门狗] RSS {rss_mb:.1f}MB / 提交内存 {commit_mb:.1f}MB "
                             f"超过限制 {self._memory_limit_mb}MB，触发清理"
                         )
-                        from framework.messaging.event import _user_role_cache, _group_role_cache
+                        from framework.messaging.event import (
+                            _group_role_cache,
+                            _user_role_cache,
+                        )
                         cache_before = len(_user_role_cache) + len(_group_role_cache)
                         _user_role_cache.clear()
                         _group_role_cache.clear()

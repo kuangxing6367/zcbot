@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 出站 WebSocket 接入端（ws_client）
 
@@ -35,9 +34,10 @@ from urllib.parse import urlparse
 
 import websockets
 
+from framework.messaging.backoff import Backoff
+from framework.messaging.backoff import now as _mono
 from framework.messaging.protocol import ProtocolAdapter
 from framework.security.hardening import sanitize_adapter_event
-from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
 

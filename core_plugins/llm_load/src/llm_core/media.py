@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 多模态输入（图片）
 
@@ -27,7 +26,7 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger('zcbot.llm_core')
 
-__all__ = ['MediaCache', 'extract_images', 'build_user_content', 'image_part']
+__all__ = ['MediaCache', 'build_user_content', 'extract_images', 'image_part']
 
 # 常见的图片段类型（不同接入端写法略有差异，统一按包含关系判定）
 _IMAGE_TYPES = ('image', 'picture', 'photo')

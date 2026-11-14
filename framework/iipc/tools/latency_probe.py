@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """延迟探针：量 事件(OneBot)→send_msg(回 OneBot) 的各段耗时。"""
 import os
 import socket
@@ -12,9 +11,9 @@ ROOT = os.path.dirname(HERE)
 PYSIDE = os.path.dirname(ROOT)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "py_sdk"))
-from onebot_fake import FakeOneBot, group_msg  # noqa: E402
 from adapter_e2e import free_port, wait_tcp  # noqa: E402
 from iipc_client import resolve_auth  # noqa: E402
+from onebot_fake import FakeOneBot, group_msg  # noqa: E402
 
 # 生成/继承共享令牌并写入 os.environ，供本脚本拉起的 kernel / rust 子进程继承。
 resolve_auth()

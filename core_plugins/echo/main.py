@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 
 #                    _ooOoo_
 #                   o8888888o

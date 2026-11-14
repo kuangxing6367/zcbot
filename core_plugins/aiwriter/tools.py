@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工作区工具集（智能体的「手」）。
 
 工具集与语义，全部以工作区根目录为边界，越界一律拒绝：
@@ -504,12 +503,12 @@ class ToolRegistry:
             if j < 0:
                 break
             block, rest = rest[i:j], rest[j + 5:]
-            m = _re.search(r'<h2[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, _re.S)
+            m = _re.search(r'<h2[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, _re.DOTALL)
             if not m:
                 continue
             link = _html.unescape(m.group(1))
             title = _html.unescape(_re.sub(r'<[^>]+>', '', m.group(2))).strip()
-            sn = _re.search(r'<p[^>]*>(.*?)</p>', block, _re.S)
+            sn = _re.search(r'<p[^>]*>(.*?)</p>', block, _re.DOTALL)
             snippet = _html.unescape(_re.sub(r'<[^>]+>', '', sn.group(1))).strip() if sn else ''
             link = _re.sub(r'[?&](mkt|pc|form|qpvt|qs|sk|sp|sc|ensearch|filters)=[^&]*', '', link)
             out.append('%d. %s\n   %s%s' % (len(out) + 1, title, link,

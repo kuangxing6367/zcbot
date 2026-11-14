@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 插件管理（生命周期 + 依赖/隔离环境）：列表 / 上传 / 重载 / 启停 / 删除 / 依赖 / venv
 
@@ -397,7 +396,7 @@ def register(ctx):
                           'plugin', plugin_name,
                           {'venv_path': result.get('venv_path', ''),
                            'installed': result.get('installed', [])}, 'success')
-                msg = f"隔离环境已创建"
+                msg = "隔离环境已创建"
                 if result.get('installed'):
                     msg += f"，已安装依赖: {', '.join(result['installed'])}"
                 return jsonify({'code': 0, 'msg': msg, 'data': result})

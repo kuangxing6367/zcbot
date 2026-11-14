@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 系统配置 / 接入端连接 / 运行状态 / config.yaml 分组读写
 """
@@ -19,10 +18,10 @@ logger = logging.getLogger('zcbot')
 # 的超级管理员限制。普通管理员仍要能看配置页，故按字段脱敏而不是整接口收紧。
 _SENSITIVE_KEY = re.compile(
     r'(pass(word|wd)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|'
-    r'credential|jwt|cookie|dsn|auth[_-]?key)', re.I)
+    r'credential|jwt|cookie|dsn|auth[_-]?key)', re.IGNORECASE)
 # token_timeout / secret_length 之类是普通数值，不能当凭据打码
 _SAFE_KEY_HINT = re.compile(
-    r'(timeout|expire|ttl|interval|count|limit|enabled|length|size|level)', re.I)
+    r'(timeout|expire|ttl|interval|count|limit|enabled|length|size|level)', re.IGNORECASE)
 _MASK = '***'
 
 
@@ -429,7 +428,9 @@ def register(ctx):
         return jsonify({'code': 0, 'msg': msg, 'data': applied})
 
     # ---- 内存黑匣子调试接口 ----
-    from framework.blackbox import get_frames, stats as bb_stats, clear as bb_clear
+    from framework.blackbox import clear as bb_clear
+    from framework.blackbox import get_frames
+    from framework.blackbox import stats as bb_stats
 
     @app.route('/api/debug/blackbox', methods=['GET'])
     @require_auth
@@ -442,8 +443,8 @@ def register(ctx):
           便于一眼看出哪些事件未正常走完（停在某个阶段）。
         """
         try:
-            from framework.blackbox import (get_event_trace, stuck_at,
-                                            recent_event_ids as bb_recent)
+            from framework.blackbox import get_event_trace, stuck_at
+            from framework.blackbox import recent_event_ids as bb_recent
             event_id = request.args.get('event_id')
             if event_id:
                 trace = get_event_trace(event_id)

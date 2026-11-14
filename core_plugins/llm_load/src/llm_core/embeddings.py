@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """可插拔的 embedding（向量化）客户端。
 
 设计原则与 providers.py 一致：**不认识任何具体厂商**。这里只认一种方言——
@@ -9,13 +8,13 @@ Jina / Cohere 的特殊接口），写一个子类或传一个 embed 函数即�
 向量维度（dims）优先取配置；配置没给时，用首次返回的向量长度自动推断，
 这样 BGE-M3（1024）/ text-embedding-3-small（1536）等不同维度都不用手填。
 """
-import os
 import logging
+import os
 from typing import List
 
 logger = logging.getLogger('zcbot.llm_core')
 
-__all__ = ['EmbeddingError', 'EmbeddingClient']
+__all__ = ['EmbeddingClient', 'EmbeddingError']
 
 
 class EmbeddingError(Exception):

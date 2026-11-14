@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """zcbot 命令行入口（`pip install zcbot` 后执行 `zcbot`）。
 
 把「可写状态」与「代码位置」解耦：

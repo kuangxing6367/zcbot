@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """当前目录下「可能是哪一代版本留下的布局」的探测。
 
 只依据**本地可观测的磁盘特征**推断，不联网、不读 .git、不假装能精确报出
@@ -22,9 +21,16 @@ import os
 
 from framework import paths
 
-__all__ = ['probe', 'LAYOUT_ROOT', 'LAYOUT_DATA', 'LAYOUT_MIXED',
-           'LAYOUT_EMPTY', 'LAYOUT_MISSING', 'LAYOUT_UNKNOWN',
-           'LAYOUT_ANCHORS']
+__all__ = [
+    'LAYOUT_ANCHORS',
+    'LAYOUT_DATA',
+    'LAYOUT_EMPTY',
+    'LAYOUT_MISSING',
+    'LAYOUT_MIXED',
+    'LAYOUT_ROOT',
+    'LAYOUT_UNKNOWN',
+    'probe',
+]
 
 LAYOUT_ROOT = 'root'          # 旧布局：状态文件在 <home>/ 根
 LAYOUT_DATA = 'data'          # 新布局：状态文件在 <home>/data/

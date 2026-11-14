@@ -1,21 +1,20 @@
-# -*- coding: utf-8 -*-
 """PluginLoader 插件加载/卸载生命周期（自 loader.py 剥离的 mixin）
 
 load_plugin / unload_plugin / 合成包子模块预载 / 字节码清理 / venv path / 文件拆分。
 依赖 PluginLoader.__init__ 与 deps/config/runtime mixin 能力。
 """
-import logging
-from framework import i18n
+import gc
 import importlib.machinery
 import importlib.util
-import gc
+import logging
 import os
 import shutil
 import sys
 import types
 
-from framework.deps import pip_install_all, classify_load_error
+from framework import i18n
 from framework.blackbox import record as _bb_record
+from framework.deps import classify_load_error, pip_install_all
 
 logger = logging.getLogger('zcbot')
 

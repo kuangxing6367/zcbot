@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """一致性测试套件的 pytest 装配。
 
 后端选择：--db 可重复，默认 sqlite。
@@ -96,8 +95,8 @@ def table(empty_db, request):
 
     def _make(ddl_body, suffix=''):
         tname = (name + suffix)[:60]
-        empty_db.execute('DROP TABLE IF EXISTS {}'.format(tname))
-        empty_db.execute('CREATE TABLE {} ({})'.format(tname, ddl_body))
+        empty_db.execute(f'DROP TABLE IF EXISTS {tname}')
+        empty_db.execute(f'CREATE TABLE {tname} ({ddl_body})')
         created.append(tname)
         return tname
 
@@ -105,6 +104,6 @@ def table(empty_db, request):
 
     for t in created:
         try:
-            empty_db.execute('DROP TABLE IF EXISTS {}'.format(t))
+            empty_db.execute(f'DROP TABLE IF EXISTS {t}')
         except Exception:
             pass

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """内存黑匣子（Memory Black Box）单元测试。
 
 覆盖：环形缓冲、字节上限裁剪、禁用态不落帧、clear、limit 参数、模块级转发。
@@ -9,7 +8,15 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from framework.blackbox import BlackBox, blackbox, record, configure, get_frames, stats, clear  # noqa: E402
+from framework.blackbox import (  # noqa: E402
+    BlackBox,
+    blackbox,
+    clear,
+    configure,
+    get_frames,
+    record,
+    stats,
+)
 
 
 def test_ring_buffer_basic():

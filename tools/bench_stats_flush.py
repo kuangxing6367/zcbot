@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """验证 stats_writer 批量写库优化：注入 N 条注册请求 -> stop() 触发 _flush 计时。
 用法：python tools/bench_stats_flush.py [N]"""
 import asyncio

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 终端命令：插件启停 / 配置 / 重载（enable / disable / config / reload）
 """

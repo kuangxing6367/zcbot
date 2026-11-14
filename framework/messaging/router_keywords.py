@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 系统关键词自动回复（dynamic_commands 表）—— 自 messaging/router.py 剥离
 

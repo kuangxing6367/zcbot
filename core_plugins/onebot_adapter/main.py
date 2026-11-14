@@ -17,14 +17,18 @@ import threading
 import time
 import uuid
 from typing import Optional
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import websockets
 
 from framework.core.event_buffer import EventBuffer
 from framework.messaging.protocol import ProtocolAdapter
 from framework.security.hardening import (
-    InputRejected, sanitize_adapter_event, strict_json_object, token_ok)
+    InputRejected,
+    sanitize_adapter_event,
+    strict_json_object,
+    token_ok,
+)
 
 logger = logging.getLogger('zcbot')
 
@@ -726,9 +730,20 @@ class OneBotAdapter(ProtocolAdapter):
 
     def capabilities(self):
         from framework.messaging.contract import (
-            CAP_AT, CAP_FILE, CAP_FORWARD, CAP_GROUP_ADMIN, CAP_IMAGE,
-            CAP_JSON, CAP_NOTICE, CAP_RECALL, CAP_REPLY, CAP_REQUEST,
-            CAP_TEXT, CAP_VIDEO, CAP_VOICE, Capabilities,
+            CAP_AT,
+            CAP_FILE,
+            CAP_FORWARD,
+            CAP_GROUP_ADMIN,
+            CAP_IMAGE,
+            CAP_JSON,
+            CAP_NOTICE,
+            CAP_RECALL,
+            CAP_REPLY,
+            CAP_REQUEST,
+            CAP_TEXT,
+            CAP_VIDEO,
+            CAP_VOICE,
+            Capabilities,
         )
         return Capabilities(
             inbound=[CAP_TEXT, CAP_IMAGE, CAP_VOICE, CAP_VIDEO, CAP_FILE,

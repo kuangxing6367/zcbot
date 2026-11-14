@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """数据库表快照导出工具（sqlite 生产路径）
 
 把 sqlite 库的每个业务表导出为 data/db/sql/{table}.json——与调试模式

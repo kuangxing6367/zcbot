@@ -15,13 +15,6 @@ from typing import Dict
 
 import yaml
 
-from framework.loader.config import PluginConfigMixin, _CONFIG_FILE_EXTS  # noqa: F401  _CONFIG_FILE_EXTS 定义在 config，此处 re-export
-from framework.loader.graph import PluginGraphMixin
-from framework.loader.lifecycle import PluginLifecycleMixin, _PluginSourceLoader  # noqa: F401
-from framework.loader.runtime import PluginRuntimeMixin
-from framework.loader.ui import (
-    PluginUiExtensionsMixin, PluginWebuiMixin, PluginGroupSettingsMixin,
-)
 from framework.deps import (  # noqa: F401  兼容旧导入路径
     PluginDepsMixin,
     _check_version_compatible,
@@ -31,6 +24,15 @@ from framework.deps import (  # noqa: F401  兼容旧导入路径
     pip_install_all,
     pip_install_requirements,
     pip_install_with_mirror,
+)
+from framework.loader.config import _CONFIG_FILE_EXTS, PluginConfigMixin  # noqa: F401  _CONFIG_FILE_EXTS 定义在 config，此处 re-export
+from framework.loader.graph import PluginGraphMixin
+from framework.loader.lifecycle import PluginLifecycleMixin, _PluginSourceLoader  # noqa: F401
+from framework.loader.runtime import PluginRuntimeMixin
+from framework.loader.ui import (
+    PluginGroupSettingsMixin,
+    PluginUiExtensionsMixin,
+    PluginWebuiMixin,
 )
 
 logger = logging.getLogger('zcbot')

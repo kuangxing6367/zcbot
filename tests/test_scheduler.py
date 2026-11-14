@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """scheduler 官方插件测试：start 必须落在事件循环线程（压测轮"启动必报错"防回归）"""
 import asyncio
 

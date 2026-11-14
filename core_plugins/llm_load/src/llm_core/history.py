@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 会话历史与窗口治理
 
@@ -29,8 +28,15 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger('zcbot.llm_core')
 
-__all__ = ['Conversation', 'ConversationStore', 'SessionPersist',
-           'estimate_tokens', 'session_key', 'parse_session_key', 'content_text']
+__all__ = [
+    'Conversation',
+    'ConversationStore',
+    'SessionPersist',
+    'content_text',
+    'estimate_tokens',
+    'parse_session_key',
+    'session_key',
+]
 
 _CJK = re.compile(r'[\u4e00-\u9fff]')
 _LATIN = re.compile(r'[A-Za-z]+')

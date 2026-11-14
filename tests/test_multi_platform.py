@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """多平台接入（multi-platform access）逻辑验证。
 
 覆盖：
@@ -19,10 +18,10 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from framework.core.dispatch import FrameworkDispatchMixin
+from framework.core.stats_writer import AsyncStatsWriter
 from framework.database.db import Database
 from framework.messaging.adapter_registry import AdapterRegistry, namespace_identity
-from framework.core.stats_writer import AsyncStatsWriter
-from framework.core.dispatch import FrameworkDispatchMixin
 from framework.messaging.event import Event
 
 PASS = 0

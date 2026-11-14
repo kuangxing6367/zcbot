@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 调试模式（低性能模式 / 本地模拟 SQL）测试
 
@@ -30,7 +29,6 @@ import pytest
 from framework.database import db as db_module
 from framework.database.sql_sim import SqlSimEngine
 from framework.database.storage import create_storage, normalize_config
-
 
 # ── T1: 抽象层工厂 -------------------------------------------
 
@@ -421,6 +419,7 @@ def test_framework_debug_mode_flow(tmp_path):
     """Framework 配置 database.type: debug → storage_mode=='debug'、
     db_debug_mode is True；SQL 真实模拟而非空降级"""
     import asyncio
+
     from framework.core import Framework
 
     cfg_path = _write_debug_config(tmp_path)

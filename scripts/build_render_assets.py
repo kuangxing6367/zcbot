@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """打包 image_renderer 的运行时资源（字体子集 + 各平台原生扩展）。
 
 产物 assets.zip 结构（与 core_plugins/image_renderer/assets.py 的解析逻辑一一对应）：
@@ -77,7 +76,7 @@ def collect(strict):
     for plat, fname in PLATFORMS.items():
         src = os.path.join(PLUGIN, 'native', 'bin', plat, fname)
         if os.path.isfile(src):
-            entries.append(('native/{}/{}'.format(plat, fname), src))
+            entries.append((f'native/{plat}/{fname}', src))
         else:
             missing_native.append(plat)
 
@@ -93,13 +92,13 @@ def main(argv=None):
 
     entries, missing_fonts, missing_native = collect(args.strict)
 
-    print('收集资源：{} 个文件'.format(len(entries)))
+    print(f'收集资源：{len(entries)} 个文件')
     for arc, src in entries:
-        print('  {:<44} {:>8.2f}MB'.format(arc, os.path.getsize(src) / 1048576.0))
+        print(f'  {arc:<44} {os.path.getsize(src) / 1048576.0:>8.2f}MB')
     if missing_fonts:
-        print('缺字体（非 charset）: {}'.format(missing_fonts))
+        print(f'缺字体（非 charset）: {missing_fonts}')
     if missing_native:
-        print('缺平台产物: {}'.format(missing_native))
+        print(f'缺平台产物: {missing_native}')
 
     if not entries:
         print('没有任何可打包的文件，退出')
@@ -133,10 +132,10 @@ def main(argv=None):
     size = os.path.getsize(out_zip)
     digest = sha256_of(out_zip)
     with open(out_zip + '.sha256', 'w', encoding='utf-8') as f:
-        f.write('{}  assets.zip\n'.format(digest))
+        f.write(f'{digest}  assets.zip\n')
 
-    print('\n已生成: {}  ({:.2f}MB)'.format(out_zip, size / 1048576.0))
-    print('sha256: {}'.format(digest))
+    print(f'\n已生成: {out_zip}  ({size / 1048576.0:.2f}MB)')
+    print(f'sha256: {digest}')
     return 0
 
 

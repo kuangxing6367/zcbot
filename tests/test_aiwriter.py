@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """aiwriter（终端 AI 智能体）聚焦回归测试（离线，不联网）。
 
 覆盖：
@@ -44,8 +43,7 @@ from core_plugins.aiwriter import agent as aw_agent  # noqa: E402
 from core_plugins.aiwriter import main as aw_main  # noqa: E402
 from core_plugins.aiwriter import prompt as aw_prompt  # noqa: E402
 from core_plugins.aiwriter import session as aw_session  # noqa: E402
-from core_plugins.aiwriter.tools import (  # noqa: E402
-    PermissionDenied, ToolError, ToolRegistry)
+from core_plugins.aiwriter.tools import PermissionDenied, ToolError, ToolRegistry  # noqa: E402
 
 _ORIG_STREAM = aw_agent.stream_chat
 
@@ -471,9 +469,8 @@ def _mk_plugin(config=None):
     缺省把 aiwriter.workspace 指到临时目录——否则工作区默认是框架根目录，
     测试会往仓库里写文件。
     """
-    import framework.config as fc
-
     import core_plugins.aiwriter.main as m
+    import framework.config as fc
     d = tempfile.mkdtemp(prefix="aiwriter_app_")
     cfg = dict(config or {"aiwriter": {"api_key": "sk-x", "mode": "workspace"}})
     blk = dict(cfg.get("aiwriter") or {})
@@ -622,6 +619,7 @@ def test_app_slash_model_updates_cfg():
 
 def test_app_f2_opens_settings():
     import asyncio
+
     from core_plugins.aiwriter.tui import SettingsScreen
     app, m, fw, d, restore = _mk_app()
     try:
@@ -853,9 +851,8 @@ def test_app_new_command_clears_session():
 
 def test_persist_session_toggle():
     """persist_session=false 时，重启即全新会话；true 时保留。"""
-    import framework.config as fc
-
     import core_plugins.aiwriter.main as m
+    import framework.config as fc
     d = tempfile.mkdtemp(prefix="aiwriter_persist_")
     orig = fc.CORE_PLUGINS_YAML
     fc.CORE_PLUGINS_YAML = os.path.join(d, "core_plugins.yaml")
@@ -988,6 +985,7 @@ def test_app_sidebar_and_tab_cycle_mode():
 def test_app_agent_command_opens_editor():
     """/agent new 打开人格编辑弹窗；弹窗保存后创建并切换人格。"""
     import asyncio
+
     from core_plugins.aiwriter.tui import AgentScreen
     app, m, fw, d, restore = _mk_app()
     try:
@@ -1063,6 +1061,7 @@ def test_session_switch_delete_and_override():
 def test_app_sessions_command_and_screen():
     """/sessions 打开弹窗；弹窗内可新建 / 进入。"""
     import asyncio
+
     from core_plugins.aiwriter.tui import SessionScreen
     app, m, fw, d, restore = _mk_app()
     try:
@@ -1139,6 +1138,7 @@ def test_standalone_mode_db_is_readonly_and_usable():
 
 def test_agent_screen_rejects_bad_name():
     import asyncio
+
     from core_plugins.aiwriter.tui import AgentScreen
     app, m, fw, d, restore = _mk_app()
     try:

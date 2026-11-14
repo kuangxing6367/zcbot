@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """回归测试：Hook 串行/并行声明（对齐事件分发架构设计）。
 
 覆盖：
@@ -8,12 +7,13 @@
 4. 非短路扩展点，串行组与并行组结果都被收集。
 """
 import asyncio
+import os
+import sys
 import time
 
-import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework.hooks import HookPriority, HookPoints, HookRegistry
+from framework.hooks import HookPoints, HookPriority, HookRegistry
 
 
 def test_default_serial_preserves_priority_order():

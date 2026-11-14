@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 llm_load 装载器测试（离线，不需要真实模型）
 
@@ -21,7 +20,9 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from core_plugins.llm_load.main import (  # noqa: E402
-    read_manifest, release, verify,
+    read_manifest,
+    release,
+    verify,
 )
 
 _ZIP = os.path.join(_REPO_ROOT, 'core_plugins', 'llm_load', 'llm_core.zip')

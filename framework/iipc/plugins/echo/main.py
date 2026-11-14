@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """示例插件（1:1 框架写法）：回声 + ping 命令 + DB 往返 + API 通道 + 权限命令。
 
 证明：事件总线（message 事件）→ Python 插件处理 → 批量动作回传（send_msg）→

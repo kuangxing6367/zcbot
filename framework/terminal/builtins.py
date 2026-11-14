@@ -5,13 +5,13 @@ register_builtins(fw) 向全局注册表注册 help / status / send / ... 等命
 cmd_ops（运维扩展：restart / shell / dbdump，原 core_plugins/ops 迁入）。
 """
 from .cmd_core import register as _reg_core
-from .cmd_plugin import register as _reg_plugin
-from .cmd_msg import register as _reg_msg
 from .cmd_info import register as _reg_info
-from .cmd_update import register as _reg_update
+from .cmd_msg import register as _reg_msg
 from .cmd_ops import register as _reg_ops
-from .panel import register as _reg_panel
+from .cmd_plugin import register as _reg_plugin
+from .cmd_update import register as _reg_update
 from .helper import installed_core_plugins  # noqa: F401  向后兼容 re-export
+from .panel import register as _reg_panel
 
 
 def register_builtins(fw):

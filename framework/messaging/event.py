@@ -6,11 +6,19 @@ import re
 import time
 from collections import OrderedDict
 
-from framework.messaging.segments import (
-    data_list, first as first_seg, is_media_only, media_ref, media_segments,
-    normalize_message, pick, segments_to_text,
-)
 from framework.messaging.adapter_registry import namespace_identity
+from framework.messaging.segments import (
+    data_list,
+    is_media_only,
+    media_ref,
+    media_segments,
+    normalize_message,
+    pick,
+    segments_to_text,
+)
+from framework.messaging.segments import (
+    first as first_seg,
+)
 
 # 权限查询 TTL 缓存（热路径性能：避免每个事件反复查库）
 # 用户：user_id -> (role, is_blacklist, ts) ；群成员：(`group_id`,`user_id`) -> (role, ts)

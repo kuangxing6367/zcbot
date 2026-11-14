@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """终端 AI 智能体（官方插件，process=core）。
 
 把 AI 智能体做成 ZCBOT 的**终端界面 + 独立 CLI**：给它一个任务，它自己读工作区、
@@ -33,11 +32,11 @@ import time
 # 同名模块（如 plugins/llm_core/agent.py）在 sys.modules 里撞车。
 _PKG = None
 try:  # 包导入（测试 / 包内引用）
-    from .llm import LLMError, stream_chat
-    from .tools import ToolRegistry
-    from .agent import Agent
-    from .session import SessionStore
     from . import prompt as prompt_mod
+    from .agent import Agent
+    from .llm import LLMError, stream_chat
+    from .session import SessionStore
+    from .tools import ToolRegistry
     _PKG = __package__
 except ImportError:  # 兜底：加载器未把本模块建成包（老加载路径）时，自行补包属性
     import importlib
@@ -527,6 +526,7 @@ class _HostBridge:
             # 独立模式：直接读 core_plugins.yaml 的启用列表（真实可用）
             if self.standalone:
                 import yaml
+
                 from framework.config import CORE_PLUGINS_YAML
                 if os.path.isfile(CORE_PLUGINS_YAML):
                     with open(CORE_PLUGINS_YAML, encoding='utf-8') as f:
@@ -550,6 +550,7 @@ class _HostBridge:
         # 复用终端命令（已处理官方/用户插件差异与配置写回）
         import contextlib
         import io
+
         from framework.terminal import terminal_commands
         handler = terminal_commands.get(action)
         if handler is None:
@@ -588,6 +589,7 @@ def _persist_cfg(fw, cfg):
     editable = {k: cfg[k] for k in _EDITABLE_KEYS if k in cfg}
     try:
         import yaml
+
         from framework.config import CORE_PLUGINS_YAML
         path = CORE_PLUGINS_YAML
         data = {}

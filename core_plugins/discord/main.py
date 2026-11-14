@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Discord 接入端（discord）
 
@@ -34,9 +33,10 @@ import requests
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from framework.messaging.backoff import Backoff
+from framework.messaging.backoff import now as _mono
 from framework.messaging.protocol import ProtocolAdapter
 from framework.security.hardening import sanitize_adapter_event
-from framework.messaging.backoff import Backoff, now as _mono
 
 logger = logging.getLogger('zcbot')
 
@@ -695,8 +695,13 @@ class DiscordAdapter(ProtocolAdapter):
 
     def capabilities(self):
         from framework.messaging.contract import (
-            CAP_FILE, CAP_IMAGE, CAP_STICKER, CAP_TEXT, CAP_VIDEO,
-            CAP_VOICE, Capabilities,
+            CAP_FILE,
+            CAP_IMAGE,
+            CAP_STICKER,
+            CAP_TEXT,
+            CAP_VIDEO,
+            CAP_VOICE,
+            Capabilities,
         )
         return Capabilities(
             inbound=[CAP_TEXT, CAP_IMAGE, CAP_VIDEO, CAP_VOICE, CAP_FILE,
@@ -719,7 +724,9 @@ class DiscordAdapter(ProtocolAdapter):
         远程 URL 无法作为附件，退化为正文里的链接（在此标注 remote=True）。
         """
         from framework.messaging.segments import (
-            canonical_type, media_ref, segments_to_text,
+            canonical_type,
+            media_ref,
+            segments_to_text,
         )
         text = segments_to_text(segments)
         files, remote = [], []

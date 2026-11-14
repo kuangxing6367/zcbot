@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """HTTP / JSON / 事件流入的共享输入防护。
 
 依据：
@@ -17,12 +16,24 @@ import json
 import re
 
 __all__ = [
-    'InputRejected', 'DEFAULT_MAX_BODY_BYTES', 'DEFAULT_READ_TIMEOUT',
-    'DEFAULT_DRAIN_LIMIT_BYTES', 'content_length_value',
-    'parse_content_length', 'read_request_body', 'strict_json_object',
-    'token_ok', 'sanitize_event', 'sanitize_adapter_event', 'apply_socket_timeout',
-    'sanitize_log_text', 'scan_invisible_unicode', 'sanitize_log_detail',
-    'coerce_int', 'coerce_text', 'coerce_sql_params',
+    'DEFAULT_DRAIN_LIMIT_BYTES',
+    'DEFAULT_MAX_BODY_BYTES',
+    'DEFAULT_READ_TIMEOUT',
+    'InputRejected',
+    'apply_socket_timeout',
+    'coerce_int',
+    'coerce_sql_params',
+    'coerce_text',
+    'content_length_value',
+    'parse_content_length',
+    'read_request_body',
+    'sanitize_adapter_event',
+    'sanitize_event',
+    'sanitize_log_detail',
+    'sanitize_log_text',
+    'scan_invisible_unicode',
+    'strict_json_object',
+    'token_ok',
 ]
 
 DEFAULT_MAX_BODY_BYTES = 1024 * 1024        # 单请求体 1 MiB

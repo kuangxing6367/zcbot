@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """``zb create`` / ``zb init`` —— 项目与插件 / 适配器脚手架。"""
 import os
 

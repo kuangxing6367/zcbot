@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """中间件管线验收（tools/middleware_check.py）
 
 进程内确定性验收：直接驱动 sdk._on_event 与 ctx._flush，用假客户端捕获出站，

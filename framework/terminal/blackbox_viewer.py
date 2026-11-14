@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """内存黑匣子 TTY 查看器
 
 终端命令 `debug` 进入：在运行时 TTY 浏览内存黑匣子现场（事件流转 / 卡步诊断）。
@@ -25,8 +24,13 @@ import sys
 import time
 
 from framework.blackbox import (
-    get_frames, stats, get_event_trace, stuck_at,
-    recent_event_ids, clear, STAGE_STEP,
+    STAGE_STEP,
+    clear,
+    get_event_trace,
+    get_frames,
+    recent_event_ids,
+    stats,
+    stuck_at,
 )
 
 _PROMPT = "blackbox> "

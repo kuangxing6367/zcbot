@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 RemoteRouteRegistry —— 宿主进程（进程2）的远程 REST 路由注册器（务实版）
 

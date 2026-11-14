@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 PluginLoader 配置 schema 能力（自 framework/loader/ 剥离）
 

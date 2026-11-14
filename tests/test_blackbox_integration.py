@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """黑匣子 · 事件流 + 加载期 ctx 调用 真实集成验证。
 
 真实启动 Framework，验证：
@@ -16,9 +15,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from framework.blackbox import clear, configure, get_event_trace, get_frames, stuck_at
 from framework.core.base import Framework
-from framework.blackbox import (get_event_trace, stuck_at, get_frames,
-                                clear, configure)
 
 PASS = 0
 FAIL = 0

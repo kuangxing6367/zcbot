@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """ZIP 解包的安全校验与安全解包（生产代码共用）。
 
 依据：
@@ -22,8 +21,13 @@ import re
 import unicodedata
 import zipfile
 
-__all__ = ['SafeArchiveError', 'DEFAULT_LIMITS', 'FRAMEWORK_UPDATE_LIMITS',
-           'validate_zip', 'safe_extract_zip']
+__all__ = [
+    'DEFAULT_LIMITS',
+    'FRAMEWORK_UPDATE_LIMITS',
+    'SafeArchiveError',
+    'safe_extract_zip',
+    'validate_zip',
+]
 
 DEFAULT_LIMITS = {
     'max_entries': 1000,

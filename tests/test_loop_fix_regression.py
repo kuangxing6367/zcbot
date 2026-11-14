@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """loop 误用修复的回归测试（T6）
 
 覆盖三类修复：
@@ -18,7 +17,6 @@ import threading
 import time
 
 import pytest
-
 
 # ── 工具：后台事件循环线程 ──────────────────────────────
 

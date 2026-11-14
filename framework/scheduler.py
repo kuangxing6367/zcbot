@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 定时任务调度器（唯一权威实现）
 基于 APScheduler AsyncIOScheduler 实现 cron 任务调度
@@ -31,7 +30,6 @@ import functools
 import logging
 import threading
 import time
-
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timezone as _dt_timezone
 

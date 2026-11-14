@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 任务2（拆分核心架构债务）聚焦回归测试
 ======================================
@@ -172,8 +171,8 @@ def _strip_comment_lines(src: str) -> str:
 
 def test_scheduler_old_import_paths_same_class():
     """旧导入路径必须指向同一权威实现（framework.scheduler 与官方插件薄封装）"""
-    from framework.scheduler import TaskScheduler as fw_impl
     from core_plugins.scheduler.main import TaskScheduler as plugin_impl
+    from framework.scheduler import TaskScheduler as fw_impl
     assert fw_impl is plugin_impl, "旧导入路径必须指向同一个 TaskScheduler"
 
 
@@ -258,8 +257,8 @@ def _registry():
 
 def test_service_registry_import_paths():
     """旧导入路径不变：protocol 直接导入与 messaging 包再导出同一对象"""
-    from framework.messaging.protocol import ServiceRegistry as a
     from framework.messaging import ServiceRegistry as b
+    from framework.messaging.protocol import ServiceRegistry as a
     assert a is b
 
 
@@ -440,6 +439,7 @@ def test_session_disabled_registers_none():
 def test_session_no_timer_based_registration():
     """源级防回归：session 不得再使用固定延迟定时器（Timer）注册清理任务"""
     import inspect
+
     import core_plugins.session.main as m
     code = _strip_comment_lines(inspect.getsource(m))
     assert 'Timer' not in code
@@ -498,8 +498,11 @@ _EXPECTED_METHODS = ({f'db.{n}' for n in _DB_METHODS}
 
 def _wire_all(srv, fw, tx):
     from framework.ipc.core_services import (
-        register_core_handlers, register_host_log_relay,
-        register_remote_route_handler, register_tx_handlers)
+        register_core_handlers,
+        register_host_log_relay,
+        register_remote_route_handler,
+        register_tx_handlers,
+    )
     register_core_handlers(srv, fw)
     register_remote_route_handler(srv, fw)
     register_tx_handlers(srv, tx)
@@ -581,8 +584,8 @@ def test_core_services_tx_roundtrip():
 
 def test_core_services_route_register_without_web():
     """无 Web app 时 route.register 返回 {'ok': False, 'error': 'web 未启用'}（行为不变）"""
-    from framework.ipc.core_services import register_remote_route_handler
     from framework.api import registry as api_registry
+    from framework.ipc.core_services import register_remote_route_handler
     srv = _StubServer()
     register_remote_route_handler(srv, _FakeFramework())
     prev = getattr(api_registry, '_web_app', None)
@@ -670,6 +673,7 @@ def test_make_remote_view_flask_contract():
     """远程 stub 视图契约：dict→200；(status,dict)→状态码；(status,dict,headers)→
     带响应头；IPC 异常→503 {'code': -1, 'error': ...}"""
     import flask
+
     from framework.ipc.core_services import make_remote_view
 
     class _Srv:
@@ -731,7 +735,7 @@ def test_single_process_imports_do_not_load_ipc():
     """单进程路径导入调度器/会话栈不得加载 framework.ipc
     （子解释器验证，避免本测试进程的模块缓存干扰）"""
     code = (
-        "import sys; sys.path.insert(0, {root!r}); "
+        f"import sys; sys.path.insert(0, {ROOT!r}); "
         "import framework.scheduler; "
         "import core_plugins.scheduler.main; "
         "import core_plugins.session.main; "
@@ -740,7 +744,7 @@ def test_single_process_imports_do_not_load_ipc():
         "bad = [m for m in sys.modules "
         "if m == 'framework.ipc' or m.startswith('framework.ipc.')]; "
         "print(('IPC_LOADED:' + ','.join(bad)) if bad else 'IPC_CLEAN')"
-    ).format(root=ROOT)
+    )
     env = dict(os.environ, PYTHONIOENCODING='utf-8')
     proc = subprocess.run([sys.executable, '-c', code], capture_output=True,
                           encoding='utf-8', errors='replace',

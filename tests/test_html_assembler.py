@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """html_assembler 官方插件测试：引擎行为 + 官方插件装载（register/自测命令）"""
 import importlib.util
 import os

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """framework.plugin 的 IIPC 兼容实现：模块级装饰器一等公民 API。
 
 与框架原版 framework/plugin.py 的差异仅在「登记去向」：原版记入框架 _PENDING、

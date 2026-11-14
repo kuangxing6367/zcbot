@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """内存黑匣子 · 事件流追踪单元测试。
 
 覆盖：阶段编号体系、富字段（step/adapter/src/to/subscribers/waiting/queue）、
@@ -10,7 +9,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from framework.blackbox import BlackBox, STAGE_STEP  # noqa: E402
+from framework.blackbox import STAGE_STEP, BlackBox  # noqa: E402
 
 
 def test_stage_step_complete():

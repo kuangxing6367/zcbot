@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 RemoteApiCaller —— 宿主侧协议 API 调用代理
 

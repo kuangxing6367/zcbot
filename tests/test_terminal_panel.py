@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 终端运维面板测试（framework/terminal/panel.py，内置命令 tui）
 

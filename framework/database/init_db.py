@@ -419,7 +419,10 @@ def _init_mysql(database) -> dict:
                     "（避免多 TIMESTAMP 自动列导致的建表失败）")
 
             from framework.database.dialect import (
-                _mysql_prefix_indexes, MYSQL_KEY_LIMIT_OLD, MYSQL_KEY_LIMIT_MODERN)
+                MYSQL_KEY_LIMIT_MODERN,
+                MYSQL_KEY_LIMIT_OLD,
+                _mysql_prefix_indexes,
+            )
             key_limit = MYSQL_KEY_LIMIT_OLD if old_mysql else MYSQL_KEY_LIMIT_MODERN
 
             def _transform_ddl(stmt):
@@ -465,7 +468,7 @@ def _ensure_sqlite_indexes(database, sql_filename="init.sql") -> dict:
     存量部署永远走不到补建逻辑。所以这里用 CREATE INDEX IF NOT EXISTS 无条件跑，
     已有的索引是空操作，缺的补上；大表首次补建会有一次性耗时，属必要成本。
     """
-    from framework.database.dialect import extract_plain_indexes, build_sqlite_index_ddl
+    from framework.database.dialect import build_sqlite_index_ddl, extract_plain_indexes
 
     sql_file = _find_sql_file(sql_filename)
     if not sql_file:
@@ -646,8 +649,9 @@ def _split_sql_statements(sql: str) -> list:
 def _main():
     """独立运行: python -m framework.database.init_db [config.yaml]"""
     import sys
+
     from framework.config import load_config
-    from framework.database.db import init_db, _parse_sqlite_type
+    from framework.database.db import _parse_sqlite_type, init_db
 
     config_path = sys.argv[1] if len(sys.argv) > 1 else None
     config = load_config(config_path)

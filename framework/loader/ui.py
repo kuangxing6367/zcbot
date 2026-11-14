@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 PluginLoader 的 UI 相关能力（自 framework/loader/ 剥离）
 
@@ -56,7 +55,8 @@ class PluginUiExtensionsMixin:
         if not items:
             return result
 
-        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FutureTimeout
         if _cards_executor is None:
             _cards_executor = ThreadPoolExecutor(
                 max_workers=4, thread_name_prefix='zccards')

@@ -11,8 +11,9 @@ import os
 import sys
 import threading
 
-from .command import terminal_commands
 from framework import i18n
+
+from .command import terminal_commands
 
 logger = logging.getLogger('zcbot')
 

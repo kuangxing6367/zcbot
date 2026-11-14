@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """本轮加固的回归：内存看门狗 / 插件内存口径 / 日志缓存 / 坏行隔离 / 配置脱敏 / 更新误报。
 
 真实行为验证：前 7 组直接调被改函数，后面用 Flask test_client 走真实路由。
@@ -28,13 +27,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.memory import process_memory_snapshot
-from framework.loader.runtime import _estimate_module_size, PluginRuntimeMixin
-from framework.log_broker import LogBroker
-from framework.core.stats_writer import AsyncStatsWriter
+from framework.api import framework_update, static_routes
 from framework.api.config import _mask_sensitive, _strip_masks
-from framework.api import static_routes, framework_update
 from framework.core.runtime import FrameworkRuntimeMixin
+from framework.core.stats_writer import AsyncStatsWriter
+from framework.loader.runtime import PluginRuntimeMixin, _estimate_module_size
+from framework.log_broker import LogBroker
+from framework.memory import process_memory_snapshot
 
 
 class _Sink(logging.Handler):
@@ -277,15 +276,15 @@ def test_static_route_never_serves_debug_credentials():
 
 @pytest.fixture(scope='module')
 def web_env():
-    from framework.core import Framework
     from framework.api.webapp import create_web_app
+    from framework.core import Framework
 
     tmp = tempfile.mkdtemp(prefix='zcbot_hardening_')
     cfg = os.path.join(tmp, 'config.yaml')
     db_path = os.path.join(tmp, 'harden.db').replace('\\', '/')
     with open(cfg, 'w', encoding='utf-8') as f:
         f.write(
-            "database:\n  type: sqlite\n  path: {db}\n  password: 'db-real-pw'\n"
+            f"database:\n  type: sqlite\n  path: {db_path}\n  password: 'db-real-pw'\n"
             "onebot:\n  access_token: 'atk-real-value'\n  listen_port: 6830\n"
             "plugin:\n  heartbeat_interval: 60\n"
             "log:\n  level: ERROR\n"
@@ -295,7 +294,7 @@ def web_env():
             "  onebot_adapter: false\n  webui: false\n  http_api: false\n"
             "  http_inject: false\n  ws_client: false\n  qq_official: false\n"
             "  telegram: false\n  discord: false\n  session: false\n"
-            "  scheduler: false\n  image_renderer: false\n".format(db=db_path)
+            "  scheduler: false\n  image_renderer: false\n"
         )
     fw = Framework(config_path=cfg, role='standard')
     pw = bcrypt.hashpw(b'admin123', bcrypt.gensalt(12)).decode('utf-8')
@@ -511,8 +510,12 @@ def test_readyz_real_http_503_when_db_swallows_errors(web_env):
 def test_api_key_hash_helpers():
     """摘要带前缀、常量时间比对、明文不会被当成摘要。"""
     from framework.token_hash import (
-        API_KEY_HASH_PREFIX, hash_api_key, api_key_matches,
-        is_hashed_api_key, hash_session_token)
+        API_KEY_HASH_PREFIX,
+        api_key_matches,
+        hash_api_key,
+        hash_session_token,
+        is_hashed_api_key,
+    )
     raw = 'a' * 64
     stored = hash_api_key(raw)
     assert stored.startswith(API_KEY_HASH_PREFIX) and len(stored) == 71
@@ -528,7 +531,7 @@ def test_v11_migration_idempotent_and_keys_stay_usable(tmp_path):
     """真 SQLite：明文换成摘要、原文仍能比对、重复执行不二次哈希。"""
     from framework.database.db import Database
     from framework.database.schema import _migrate_api_tokens_hash
-    from framework.token_hash import hash_api_key, api_key_matches
+    from framework.token_hash import api_key_matches, hash_api_key
 
     db = Database({'type': 'sqlite', 'path': (tmp_path / 'apikeys.db').as_posix()})
     db.execute(
@@ -625,8 +628,8 @@ def test_deploy_and_update_exclude_closed_source_webui():
 
 
 def test_optional_driver_install_moved_out_of_event_loop(tmp_path, monkeypatch):
-    from framework.bootstrap import deps_check
     import framework.deps.pip as pipmod
+    from framework.bootstrap import deps_check
 
     (tmp_path / 'config.yaml').write_text('database:\n  type: sqlite\n', encoding='utf-8')
     monkeypatch.setattr(deps_check, '_PROJECT_ROOT', str(tmp_path))
@@ -650,8 +653,8 @@ def test_optional_driver_install_moved_out_of_event_loop(tmp_path, monkeypatch):
 # ------------------------------------------------ migrations 两阶段记账
 
 def test_migration_ledger_marks_running_before_apply(tmp_path):
-    from framework.database.db import Database
     from framework.database import migrations as M
+    from framework.database.db import Database
 
     db = Database({'type': 'sqlite', 'path': (tmp_path / 'ledger.db').as_posix()})
     seen = []
@@ -782,6 +785,7 @@ def test_sql_sim_close_quiet_when_log_stream_closed(tmp_path):
     用例环境能复现问题，不是靠「什么都没打」蒙混过关。
     """
     import contextlib
+
     from framework.database import sql_sim
 
     eng = sql_sim.SqlSimEngine({

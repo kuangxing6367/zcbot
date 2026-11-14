@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """会话令牌安全加固回归测试（真实 Framework + Flask test_client 发真 HTTP）。
 
 覆盖本轮三个安全点及配套取舍：
@@ -26,8 +25,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.core import Framework
 from framework.api.webapp import create_web_app
+from framework.core import Framework
 
 # 模拟「外部抓取」用的非回环地址（TEST-NET-2 文档地址，不会是真实主机）
 _REMOTE_ADDR = '198.51.100.23'
@@ -37,7 +36,7 @@ def _write_config(tmp_path, extra_yaml=''):
     cfg = tmp_path / 'config.yaml'
     db_path = (tmp_path / 'token_sec.db').as_posix()
     text = (
-        "database:\n  type: sqlite\n  path: {db}\n"
+        f"database:\n  type: sqlite\n  path: {db_path}\n"
         "plugin:\n  heartbeat_interval: 60\n"
         "log:\n  level: ERROR\n"
         # 关闭主动防御，稳定断言应用层 401（444 静默丢弃另由 smoke 测试覆盖）
@@ -48,7 +47,7 @@ def _write_config(tmp_path, extra_yaml=''):
         "  http_inject: false\n  ws_client: false\n  qq_official: false\n"
         "  telegram: false\n  discord: false\n  session: false\n"
         "  scheduler: false\n  image_renderer: false\n"
-    ).format(db=db_path)
+    )
     if extra_yaml:
         text += extra_yaml
     cfg.write_text(text, encoding='utf-8')
@@ -197,8 +196,8 @@ def test_metrics_token_allows_remote(tmp_path):
 def test_migration_adds_hash_column_and_purges_plaintext(tmp_path):
     """模拟老库（只有明文 token 列且已有会话）：跑 MIGRATIONS 后
     token_hash 列存在、明文被清空、且不回填哈希 —— 老会话全部作废。"""
-    from framework.database.db import Database
     from framework.database import migrations as M
+    from framework.database.db import Database
     from framework.database.schema import MIGRATIONS
 
     # 注册表形状：v1–v10 不可变，末尾追加 v11（api_tokens 摘要化）

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 黑匣子 · 极端运行时 & 异常/恶意输入 集成验证
 
@@ -15,11 +14,17 @@ import sys
 
 sys.path.insert(0, os.getcwd())
 
-from framework.core.base import Framework
-from framework.blackbox import (get_event_trace, stuck_at, get_frames, clear,
-                                stats, configure)
-from framework.core.event_buffer import EventBuffer
+from framework.blackbox import (
+    clear,
+    configure,
+    get_event_trace,
+    get_frames,
+    stats,
+    stuck_at,
+)
 from framework.config import get_home
+from framework.core.base import Framework
+from framework.core.event_buffer import EventBuffer
 
 PASS = 0
 FAIL = 0
@@ -172,7 +177,6 @@ async def main():
             1 / 0
         except Exception:
             pass  # 恶意/劣质插件把错误吞掉
-        return None
 
     await inject_command(fw, 'echo', '/__extreme_swallow', '__extreme_swallow', _h_swallow)
     clear()

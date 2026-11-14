@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Database 连接管理 mixin（自 database/db.py 剥离）
 
 初始化 / 连接获取 / 断线重连 / 线程连接关闭 / 池状态。
@@ -6,8 +5,8 @@
 """
 import logging
 import os
-import time
 import sqlite3
+import time
 
 # MySQL 连接断开类错误码（触发自动重连）——定义在此避免 db↔db_conn 循环
 _MYSQL_RECONNECT_ERRORS = {2006, 2013, 2055, 1927, 1040}

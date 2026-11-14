@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 """
 插件 WebUI 内嵌：列表 + 入口页 + 静态资源 + 侧边栏菜单
 """
 import logging
 import os
 
-from flask import jsonify, send_from_directory
 import yaml
+from flask import jsonify, send_from_directory
 
 logger = logging.getLogger('zcbot')
 

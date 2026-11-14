@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """插件目录归属与缓存回收的回归测试。
 
 守的契约（见 framework/plugin_paths.py 模块文档）：

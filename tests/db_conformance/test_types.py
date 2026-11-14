@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """数据类型往返一致性。
 
 框架把业务值统一走 `%s` 参数绑定，但两种后端对类型宽度/NULL/编码的处理并不
@@ -21,13 +20,13 @@ def typed(empty_db, request):
     import re
     name = 't_ty_' + re.sub(r'[^a-z0-9]+', '_',
                             request.node.name.lower())[:28].strip('_')
-    empty_db.execute("DROP TABLE IF EXISTS {}".format(name))
+    empty_db.execute(f"DROP TABLE IF EXISTS {name}")
     empty_db.execute(
-        "CREATE TABLE {} (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        f"CREATE TABLE {name} (id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "i_int INTEGER, i_big BIGINT, f_val REAL, s_txt VARCHAR(500), "
-        "s_long TEXT, dt VARCHAR(32))".format(name))
+        "s_long TEXT, dt VARCHAR(32))")
     yield name
-    empty_db.execute("DROP TABLE IF EXISTS {}".format(name))
+    empty_db.execute(f"DROP TABLE IF EXISTS {name}")
 
 
 def _roundtrip(db, table, **kw):
@@ -95,7 +94,7 @@ def test_long_text(typed, empty_db):
 
 def test_sql_injection_string_stored_verbatim(typed, empty_db):
     """参数绑定：引号注入串必须原样存原样读，且表还在。"""
-    s = "a'; DROP TABLE {}; --".format(typed)
+    s = f"a'; DROP TABLE {typed}; --"
     r = _roundtrip(empty_db, typed, s_txt=s)
     assert r['s_txt'] == s
     assert empty_db.table_exists(typed), "表被注入串删掉了"

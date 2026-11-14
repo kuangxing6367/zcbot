@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """框架可观测性端点（/healthz /readyz /metrics）真实 HTTP 行为回归测试。
 
 验证的是「运行期真的能用」，不是源码里写了字符串：
@@ -23,8 +22,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.core import Framework
 from framework.api.webapp import create_web_app
+from framework.core import Framework
 
 _FAILED = []
 
@@ -53,14 +52,14 @@ def _build(extra_yaml='', db_name='obs.db', started=False):
     db = os.path.join(tmp, db_name).replace('\\', '/')
     with open(cfg, 'w', encoding='utf-8') as f:
         f.write(
-            "database:\n  type: sqlite\n  path: {db}\n"
+            f"database:\n  type: sqlite\n  path: {db}\n"
             "plugin:\n  heartbeat_interval: 60\n"
             "log:\n  level: ERROR\n"
             # 关闭主动防御，让断言稳定观察 HTTP 语义（444 静默丢弃另由 smoke 测试覆盖）
             "security:\n  silent_auth: false\n  human_check:\n    enabled: false\n"
             "web:\n  host: 127.0.0.1\n  port: 8080\n"
-            "{extra}"
-            "{tail}".format(db=db, extra=extra_yaml, tail=_CONFIG_TAIL)
+            f"{extra_yaml}"
+            f"{_CONFIG_TAIL}"
         )
     fw = Framework(config_path=cfg, role='standard')   # 只初始化，不 start()
     if started:

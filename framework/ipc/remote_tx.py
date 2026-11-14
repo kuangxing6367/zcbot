@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 RemoteTxManager —— 核心进程（进程1）侧的跨进程事务管理器
 
@@ -16,8 +15,12 @@ import itertools
 import logging
 import threading
 
-from framework.database.db import _translate_sql_for_sqlite, _translate_sql_for_mysql
-from framework.database.db import _replace_now, _set_autocommit
+from framework.database.db import (
+    _replace_now,
+    _set_autocommit,
+    _translate_sql_for_mysql,
+    _translate_sql_for_sqlite,
+)
 
 logger = logging.getLogger('zcbot')
 

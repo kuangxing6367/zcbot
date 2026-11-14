@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """验证本地知识库（RAG）：入库 / 混合检索（向量 + 关键词）/ 删除 / 工具函数。
 
 不依赖网络与原生扩展：用确定性假 embedding + memory 后端，CI 也能跑。
@@ -14,9 +13,9 @@ SRC = os.path.join(_ROOT, 'core_plugins', 'llm_load', 'src')
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from llm_core.knowledge import KnowledgeBase, _split_text, _rrf  # noqa: E402
-from llm_core import embeddings as emb_mod  # noqa: E402
 import llm_core.main as llm_main  # noqa: E402
+from llm_core import embeddings as emb_mod  # noqa: E402
+from llm_core.knowledge import KnowledgeBase, _rrf, _split_text  # noqa: E402
 
 _FAILED = False
 

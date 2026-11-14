@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """终端命令共享 helper"""
 import os
 

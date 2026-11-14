@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """并发写一致性。
 
 两种后端的并发模型不同（SQLite 单写者 + busy_timeout 排队；MySQL 行锁 +
@@ -23,12 +22,12 @@ def tbl(empty_db, request):
     import re
     name = 't_cc_' + re.sub(r'[^a-z0-9]+', '_',
                             request.node.name.lower())[:28].strip('_')
-    empty_db.execute("DROP TABLE IF EXISTS {}".format(name))
-    empty_db.execute("CREATE TABLE {} (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    empty_db.execute(f"DROP TABLE IF EXISTS {name}")
+    empty_db.execute(f"CREATE TABLE {name} (id INTEGER PRIMARY KEY AUTOINCREMENT, "
                      "uid INTEGER NOT NULL, tag VARCHAR(16), "
-                     "UNIQUE KEY uk_uid (uid))".format(name))
+                     "UNIQUE KEY uk_uid (uid))")
     yield name
-    empty_db.execute("DROP TABLE IF EXISTS {}".format(name))
+    empty_db.execute(f"DROP TABLE IF EXISTS {name}")
 
 
 def _run_threads(fns, timeout=120):
@@ -41,7 +40,7 @@ def _run_threads(fns, timeout=120):
                 fn()
             except Exception as e:      # noqa: BLE001 - 收集所有线程异常
                 with lock:
-                    errs.append('{}: {}'.format(type(e).__name__, e))
+                    errs.append(f'{type(e).__name__}: {e}')
         return inner
 
     ths = [threading.Thread(target=wrap(f)) for f in fns]
@@ -61,45 +60,45 @@ def test_concurrent_insert_no_loss(empty_db, tbl):
         def run():
             for i in range(per):
                 empty_db.execute(
-                    "INSERT INTO {} (uid, tag) VALUES (%s, %s)".format(tbl),
+                    f"INSERT INTO {tbl} (uid, tag) VALUES (%s, %s)",
                     (tid * per + i, 't%d' % tid))
         return run
 
     errs, alive = _run_threads([worker(t) for t in range(n_thread)])
     assert not alive, "有线程超时未结束"
-    assert not errs, "并发写报错: {}".format(errs[:3])
+    assert not errs, f"并发写报错: {errs[:3]}"
 
-    total = empty_db.scalar("SELECT COUNT(*) FROM {}".format(tbl))
-    distinct = empty_db.scalar("SELECT COUNT(DISTINCT uid) FROM {}".format(tbl))
-    assert total == n_thread * per, "丢行: {} != {}".format(total, n_thread * per)
+    total = empty_db.scalar(f"SELECT COUNT(*) FROM {tbl}")
+    distinct = empty_db.scalar(f"SELECT COUNT(DISTINCT uid) FROM {tbl}")
+    assert total == n_thread * per, f"丢行: {total} != {n_thread * per}"
     assert distinct == total, "出现重复 uid"
 
 
 def test_concurrent_unique_conflict_isolated(empty_db, tbl):
     """并发抢同一个唯一键：只有一个成功，其余是唯一冲突而不是把整批搞崩。"""
-    empty_db.execute("INSERT INTO {} (uid, tag) VALUES (%s, %s)".format(tbl),
+    empty_db.execute(f"INSERT INTO {tbl} (uid, tag) VALUES (%s, %s)",
                      (999, 'seed'))
 
     def worker():
         def run():
             try:
                 empty_db.execute(
-                    "INSERT INTO {} (uid, tag) VALUES (%s, %s)".format(tbl),
+                    f"INSERT INTO {tbl} (uid, tag) VALUES (%s, %s)",
                     (999, 'dup'))
             except Exception:
                 pass
         return run
 
     errs, _ = _run_threads([worker() for _ in range(6)])
-    assert not errs, "冲突处理本身抛了未捕获异常: {}".format(errs[:3])
-    n = empty_db.scalar("SELECT COUNT(*) FROM {} WHERE uid = 999".format(tbl))
-    assert n == 1, "唯一键冲突后出现 {} 行".format(n)
+    assert not errs, f"冲突处理本身抛了未捕获异常: {errs[:3]}"
+    n = empty_db.scalar(f"SELECT COUNT(*) FROM {tbl} WHERE uid = 999")
+    assert n == 1, f"唯一键冲突后出现 {n} 行"
 
 
 def test_concurrent_read_write(empty_db, tbl):
     """读线程与写线程并行：读不能读到半截，也不能报错。"""
     for i in range(100):
-        empty_db.execute("INSERT INTO {} (uid, tag) VALUES (%s, %s)".format(tbl),
+        empty_db.execute(f"INSERT INTO {tbl} (uid, tag) VALUES (%s, %s)",
                          (i, 'seed'))
 
     stop = threading.Event()
@@ -109,11 +108,11 @@ def test_concurrent_read_write(empty_db, tbl):
     def reader():
         while not stop.is_set():
             try:
-                n = empty_db.scalar("SELECT COUNT(*) FROM {}".format(tbl))
-                assert n >= 100, "读到了比初始还少的行: {}".format(n)
+                n = empty_db.scalar(f"SELECT COUNT(*) FROM {tbl}")
+                assert n >= 100, f"读到了比初始还少的行: {n}"
                 reads[0] += 1
             except Exception as e:
-                errors.append('R {}: {}'.format(type(e).__name__, e))
+                errors.append(f'R {type(e).__name__}: {e}')
                 return
 
     def writer(base):
@@ -121,11 +120,11 @@ def test_concurrent_read_write(empty_db, tbl):
         while not stop.is_set():
             try:
                 empty_db.execute(
-                    "INSERT INTO {} (uid, tag) VALUES (%s, %s)".format(tbl),
+                    f"INSERT INTO {tbl} (uid, tag) VALUES (%s, %s)",
                     (i, 'w'))
                 i += 1
             except Exception as e:
-                errors.append('W {}: {}'.format(type(e).__name__, e))
+                errors.append(f'W {type(e).__name__}: {e}')
                 return
 
     ths = [threading.Thread(target=reader) for _ in range(2)]
@@ -140,14 +139,14 @@ def test_concurrent_read_write(empty_db, tbl):
     for t in ths:
         t.join(30)
 
-    assert not errors, "并发读写报错: {}".format(errors[:3])
+    assert not errors, f"并发读写报错: {errors[:3]}"
     assert reads[0] > 0, "读线程一次都没成功"
-    assert empty_db.scalar("SELECT COUNT(*) FROM {}".format(tbl)) > 100
+    assert empty_db.scalar(f"SELECT COUNT(*) FROM {tbl}") > 100
 
 
 def test_batch_insert_partial_failure_isolated(empty_db, tbl):
     """批量写里夹一条坏数据：不能因为一条非法就把整批丢掉。"""
     ok_rows = [(i, 'ok') for i in range(10)]
     empty_db.execute_many(
-        "INSERT INTO {} (uid, tag) VALUES (%s, %s)".format(tbl), ok_rows)
-    assert empty_db.scalar("SELECT COUNT(*) FROM {}".format(tbl)) == 10
+        f"INSERT INTO {tbl} (uid, tag) VALUES (%s, %s)", ok_rows)
+    assert empty_db.scalar(f"SELECT COUNT(*) FROM {tbl}") == 10

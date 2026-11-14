@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """EventBuffer 三层缓冲单元测试（v1.7.1 热路径修复防回归：
 记账单次化 / sqlite 空转轮询消除 / 重启遗留承接 / 全满丢弃）"""
 import asyncio

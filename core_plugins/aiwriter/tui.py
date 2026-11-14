@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """终端 AI 智能体界面（Textual 实现）。
 
 界面用**成熟的 TUI 框架**（Textual，MIT）承载——对话流、输入框、
@@ -33,13 +32,21 @@ except ImportError:
     LLMError = importlib.import_module(_PKG + '.llm').LLMError
 
 from rich.text import Text  # textual 依赖自带 rich
-
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, Footer, Input, Label, ListItem, ListView, RichLog, Static, TextArea)
+    Button,
+    Footer,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    RichLog,
+    Static,
+    TextArea,
+)
 
 _SETTINGS_FIELDS = [
     ('agent', '当前人格', 'str'),

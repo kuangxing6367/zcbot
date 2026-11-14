@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """PluginContext 命令 / 定时任务 / 事件订阅 / 扩展点 / 协议 API（自 ctx.py 剥离的 mixin）"""
 import asyncio
 from typing import Callable
 
 from framework.hooks import HookPriority
+
 
 class PluginEventsMixin:
     """命令 / 定时任务 / 事件订阅 / 扩展点 / 协议 API"""

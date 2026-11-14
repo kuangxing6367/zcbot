@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """端到端环节拆分基准 v2：同步函数用同步探针，修正 v1 把 log/stats 包成 async 导致未执行的 bug。
 
 用法：python tools/bench_breakdown.py [N]
@@ -116,7 +115,7 @@ async def main():
     for us, frac, name, cnt in rows:
         print(f"  {name:<28} {us:8.1f} us/ev  {frac*100:5.1f}%  (x{cnt/N:.1f}/ev)")
     # 非重叠估算：_process_event 内含 route/hooks/extract，单独列出
-    print(f"  [说明] _process_event 顶层 19us 含 router.route/hooks/extract；log+stats 为真身执行值")
+    print("  [说明] _process_event 顶层 19us 含 router.route/hooks/extract；log+stats 为真身执行值")
 
 
 if __name__ == '__main__':

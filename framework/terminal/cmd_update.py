@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 终端命令：框架源码更新（update）
 """
@@ -13,7 +12,11 @@ def register(fw):
     """注册本组终端命令"""
     def cmd_update(args):
         """更新框架: update [版本号]"""
-        import requests, zipfile, tempfile, shutil
+        import shutil
+        import tempfile
+        import zipfile
+
+        import requests
         repo = 'kuangxing6367/zcbot'
         branch = 'main'
         target = args.strip() or ''

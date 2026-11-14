@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """framework.stats_writer —— 兼容 shim
 
 AsyncStatsWriter 已移入 framework/core/stats_writer.py。

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """echo 自检插件 · 真实启动验证。
 
 真实启动 Framework，校验：

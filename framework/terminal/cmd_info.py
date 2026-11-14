@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 终端命令：用户 / 群 / 定时任务查询（users / groups / tasks）
 """
@@ -28,7 +27,7 @@ def register(fw):
         """查看群列表"""
         try:
             rows = fw.db.query("SELECT group_id, group_name, is_active FROM groups_info WHERE is_active=1 ORDER BY group_id")
-            print(f"活跃群列表:")
+            print("活跃群列表:")
             print("-" * 50)
             for row in rows:
                 gid = row['group_id']

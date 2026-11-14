@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 html_assembler 装配引擎 —— 单文件 HTML 装配（纯标准库，可脱离 zcbot 独立 import 使用）
 
@@ -19,9 +18,18 @@ import os
 import re
 
 __all__ = [
-    'HtmlAssembler', 'load_template', 'render_html', 'render_to_file',
-    'embed_image', 'make_assembler', 'configure', 'get_defaults',
-    'TemplateTooLarge', 'ImageTooLarge', 'OutputTooLarge', 'TooManyImages',
+    'HtmlAssembler',
+    'ImageTooLarge',
+    'OutputTooLarge',
+    'TemplateTooLarge',
+    'TooManyImages',
+    'configure',
+    'embed_image',
+    'get_defaults',
+    'load_template',
+    'make_assembler',
+    'render_html',
+    'render_to_file',
 ]
 
 # 占位符：{{ 前缀:key }} / {{ key }}，key 为「点分段」，段 = 字母数字下划线

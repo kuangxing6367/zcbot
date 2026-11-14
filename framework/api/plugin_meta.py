@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 插件元数据：README / 配置文件读写 / config_schema / 命令 / 依赖图
 """

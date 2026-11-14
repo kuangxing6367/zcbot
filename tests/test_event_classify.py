@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """四类事件统一分类契约层（架构 C 项）回归测试。
 
 直接运行：PYTHONPATH=. python tests/test_event_classify.py
@@ -10,11 +9,11 @@ import sys
 
 sys.path.insert(0, '.')
 
+from framework.hooks import HookPoints
 from framework.messaging import event_classify as ec
 from framework.messaging.event import Event
-from framework.messaging.router_match import RouterMatchMixin
 from framework.messaging.router import _PluginRoute, _RouteCommand
-from framework.hooks import HookPoints
+from framework.messaging.router_match import RouterMatchMixin
 
 
 def test_event_category_enum():

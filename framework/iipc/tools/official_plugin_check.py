@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """官方插件 1:1 验收脚本（tools/official_plugin_check.py）
 
 把「真·官方插件」原样拖进 IIPC 跑，验证 SDK 对官方文档承诺能力的覆盖：

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 打包 llm_core 载荷 → core_plugins/llm_load/llm_core.zip
 

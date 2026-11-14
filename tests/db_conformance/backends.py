@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """后端注册与 provisioning。
 
 后端可用性完全由环境变量决定：没配 MySQL 就自动跳过，不会让默认的
@@ -30,7 +29,7 @@ class Backend:
         self.tmpdir = tmpdir
 
     def __repr__(self):
-        return '<Backend {}>'.format(self.name)
+        return f'<Backend {self.name}>'
 
     # ── 生命周期 ────────────────────────────────────────────
     def provision(self):
@@ -50,9 +49,9 @@ class Backend:
         try:
             cur = conn.cursor()
             name = self.config['database']
-            cur.execute("DROP DATABASE IF EXISTS `{}`".format(name))
-            cur.execute("CREATE DATABASE `{}` DEFAULT CHARACTER SET utf8mb4 "
-                        "COLLATE utf8mb4_unicode_ci".format(name))
+            cur.execute(f"DROP DATABASE IF EXISTS `{name}`")
+            cur.execute(f"CREATE DATABASE `{name}` DEFAULT CHARACTER SET utf8mb4 "
+                        "COLLATE utf8mb4_unicode_ci")
         finally:
             conn.close()
 

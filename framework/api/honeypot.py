@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 蜜罐 / 诱饵端点模块（Honeypot / Decoy Endpoints）
 =================================================
@@ -196,9 +195,9 @@ def _inject_canary(resp, canary: str):
 # 绕过检测：识别路径变形手法
 # ---------------------------------------------------------------------------
 _EVASION_RULES = [
-    (re.compile(r'%25[0-9a-f]{2}', re.I), '双重 URL 编码'),
-    (re.compile(r'%2e|%2f|%5c', re.I), 'URL 编码路径字符'),
-    (re.compile(r'\.\./|\.\.\\|%2e%2e', re.I), '路径穿越'),
+    (re.compile(r'%25[0-9a-f]{2}', re.IGNORECASE), '双重 URL 编码'),
+    (re.compile(r'%2e|%2f|%5c', re.IGNORECASE), 'URL 编码路径字符'),
+    (re.compile(r'\.\./|\.\.\\|%2e%2e', re.IGNORECASE), '路径穿越'),
     (re.compile(r'%00'), '空字节注入'),
     (re.compile(r'//'), '重复斜杠'),
     (re.compile(r'\\\\'), '反斜杠路径'),

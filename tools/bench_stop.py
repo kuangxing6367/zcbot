@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """定位 fw.stop() 20 秒卡点。用法：python tools/bench_stop.py [N]"""
 import asyncio
 import os

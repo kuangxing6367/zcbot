@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Rust 加速层（官方插件）
 
@@ -32,7 +31,9 @@ import time
 from typing import Any, Dict, List, Optional
 
 from framework.security.hardening import (
-    InputRejected, sanitize_adapter_event, strict_json_object,
+    InputRejected,
+    sanitize_adapter_event,
+    strict_json_object,
 )
 
 logger = logging.getLogger('zcbot')

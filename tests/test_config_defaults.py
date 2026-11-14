@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """配置缺段补齐：旧 config.yaml 必须能拿到新版本引入的 section。
 
 铁律：路径用 __file__ 推导、文件写临时目录、不碰真实 config.yaml。

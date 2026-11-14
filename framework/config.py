@@ -5,6 +5,7 @@
 """
 import os
 import re
+
 import yaml
 
 logger = None  # 延迟初始化，避免循环导入
@@ -827,6 +828,7 @@ def get_config() -> dict:
 # tests/webui_blackbox_launcher.py 借此把插件配置指向一份隔离副本，
 # 从而在不改动真实仓库的前提下自定义 webui 监听端口等）。
 from framework.paths import core_plugins_yaml_path as _core_plugins_yaml_path  # noqa: E402
+
 CORE_PLUGINS_YAML = _core_plugins_yaml_path()
 
 
@@ -1180,6 +1182,7 @@ def set_core_plugin_enabled(name: str, enabled: bool):
 def _core_plugin_desc(name: str):
     """从 core_plugins/<name>/main.py 的 __plugin_meta__ 读取 desc（AST 静态解析，不执行代码）。"""
     import ast as _ast
+
     from framework.paths import core_plugins_dir
     path = os.path.join(core_plugins_dir(), name, 'main.py')
     try:

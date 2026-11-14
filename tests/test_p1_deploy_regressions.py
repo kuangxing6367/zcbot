@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """P1 部署坑回归：相对库路径、实例锁语义、同步桥自锁。
 
 铁律：路径由 __file__ / tmp_path 推导，不写死时区，不污染项目目录。
@@ -46,8 +45,8 @@ def test_sqlite_absolute_path_untouched(tmp_path):
 
 def test_instance_lock_path_prefers_writable_home(tmp_path, monkeypatch):
     """pip 安装 / 只读挂载时代码根不可写，锁必须落在 get_home()。"""
-    import framework.config as cfgmod
     import framework.bootstrap.instance_lock as il
+    import framework.config as cfgmod
 
     monkeypatch.setattr(cfgmod, 'get_home', lambda: str(tmp_path))
     p = il.instance_lock_path('/definitely/read-only/site-packages')

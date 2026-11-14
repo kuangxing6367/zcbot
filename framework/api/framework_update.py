@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 框架版本检查与源码更新（自 framework_ops.py 剥离）
 check_update / update_from_zip 白名单覆盖，用户数据一律跳过。
@@ -12,7 +11,11 @@ import zipfile
 import requests
 from flask import jsonify, request
 
-from framework.security.archive import FRAMEWORK_UPDATE_LIMITS, SafeArchiveError, safe_extract_zip
+from framework.security.archive import (
+    FRAMEWORK_UPDATE_LIMITS,
+    SafeArchiveError,
+    safe_extract_zip,
+)
 
 logger = logging.getLogger('zcbot')
 

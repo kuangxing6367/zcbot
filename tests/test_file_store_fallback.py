@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 存储降级 / 调试模式回归测试（去硬依赖）
 
@@ -20,9 +19,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.database.sql_sim import SqlSimEngine
 from framework.database import db as db_module
-
+from framework.database.sql_sim import SqlSimEngine
 
 # ── T1: init_db 降级为 SqlSimEngine ─────────────────────────
 
@@ -57,6 +55,7 @@ def test_init_db_explicit_file_type_raises():
 
 def test_terminal_input_skips_non_tty(monkeypatch):
     import io
+
     from framework.terminal.input import TerminalInput
 
     class _NullFw:
@@ -75,6 +74,7 @@ def test_terminal_input_skips_non_tty(monkeypatch):
 
 def test_terminal_input_starts_on_tty(monkeypatch):
     import io
+
     from framework.terminal.input import TerminalInput
 
     class _NullFw:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 core_services —— 核心进程侧 IPC 服务装配（内部模块，自 core_runtime.py 抽离）
 

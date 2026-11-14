@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 框架操作：版本 / 重启 / 终端命令（编排入口）
 
@@ -6,8 +5,8 @@
 register 同时注册两域路由（webapp 仅调用 framework_ops.register）。
 """
 import asyncio
-import io
 import contextlib
+import io
 import logging
 import os
 import sys

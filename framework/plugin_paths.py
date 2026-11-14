@@ -18,12 +18,12 @@ import shutil
 import time
 
 __all__ = [
-    'safe_dirname',
-    'plugin_cache_dir',
-    'purge_plugin_cache',
-    'purge_expired_cache',
     'CACHE_CLEANUP_SPEC',
+    'plugin_cache_dir',
+    'purge_expired_cache',
+    'purge_plugin_cache',
     'resolve_cache_cleanup_config',
+    'safe_dirname',
 ]
 
 # 缓存 TTL 定时清理的配置 schema + 默认值（单一事实源）。

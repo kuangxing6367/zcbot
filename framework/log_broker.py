@@ -16,7 +16,7 @@ from typing import Optional
 # CWE-117 / CWE-93 / OWASP Logging Cheat Sheet：不可信文本里的 CR/LF
 # 能伪造整行日志，ESC 能操控终端，bidi/零宽能欺骗审计者。
 # 只改日志字符串，事件原文与业务语义完全不动。
-from framework.security.hardening import sanitize_log_text, sanitize_log_detail
+from framework.security.hardening import sanitize_log_detail, sanitize_log_text
 
 MAX_CACHE = 2000  # 最大缓存条数
 MAX_ERROR_CACHE = 200  # ERROR/WARN 独立保留条数

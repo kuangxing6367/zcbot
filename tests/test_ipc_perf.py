@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IPC 性能优化回归测试（发送队列 + writer 线程 / 批量日志 / 断线快速失败）
 
 覆盖：
@@ -17,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import multiprocessing.connection as mpc
 
-from framework.ipc.protocol import JsonRpcConnection, IpcClosed
+from framework.ipc.protocol import IpcClosed, JsonRpcConnection
 
 
 def _pair():

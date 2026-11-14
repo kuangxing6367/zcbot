@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """看门狗必须能在循环卡死时抓到栈
 
 历史 bug：线程 id 靠 loop.call_soon_threadsafe 回调记录，

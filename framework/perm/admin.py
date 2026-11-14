@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """权限审计与维护
 audit / list_audit / cleanup_expired / context_from_event
 
@@ -10,7 +9,6 @@ import logging
 logger = logging.getLogger('zcbot')
 
 from framework.perm import _now, _parse_ts, invalidate_all
-
 
 # ═══════════════════════════════════════════════════════════
 # 审计

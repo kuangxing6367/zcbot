@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """cProfile 定位 bench_dispatch 的 fw_end2end 为何 2108us/事件（vs 探针 30us）。
 用法：python tools/bench_profile.py [N]
 """

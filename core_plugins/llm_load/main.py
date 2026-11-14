@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 LLM 核心装载器（llm_load）
 

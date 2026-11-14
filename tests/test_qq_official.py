@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """qq_official 适配器单元测试（v1.7.2 修复防回归：发送判定/token 锁/被动窗口/
 幂等去重/主动消息出口/上传文件名统一）。全部离线，不触网。"""
 import asyncio
@@ -8,7 +7,11 @@ import types
 import pytest
 
 from core_plugins.qq_official.main import (
-    QQOfficialAdapter, _next_msg_seq, normalize_event, normalize_message)
+    QQOfficialAdapter,
+    _next_msg_seq,
+    normalize_event,
+    normalize_message,
+)
 
 
 def _adapter(**kw):

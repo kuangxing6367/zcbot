@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 模型提供商（provider）总线
 
@@ -41,8 +40,12 @@ from typing import Any, Dict, List, Optional, Sequence
 logger = logging.getLogger('zcbot.llm_core')
 
 __all__ = [
-    'Provider', 'ProviderReply', 'ToolCall', 'OpenAICompatProvider',
-    'ProviderRegistry', 'ProviderError',
+    'OpenAICompatProvider',
+    'Provider',
+    'ProviderError',
+    'ProviderRegistry',
+    'ProviderReply',
+    'ToolCall',
 ]
 
 _DEFAULT_TIMEOUT = 120

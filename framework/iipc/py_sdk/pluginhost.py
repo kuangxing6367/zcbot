@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """pluginhost：由 Go 内核拉起的单一进程，负责发现并以 fork(Linux)/spawn(Windows) 启动各 Python 插件。
 
 内存设计（对应用户关切）：
@@ -54,8 +53,8 @@ def main():
     # 预加载 SDK + 公共依赖（Linux fork 的 COW 共享来源；spawn 模式无此收益但无害）
     run_plugin = None
     try:
-        import sdk  # noqa: F401
         import iipc_client  # noqa: F401
+        import sdk  # noqa: F401
         from sdk import run_plugin as _rp
         run_plugin = _rp
         log("已预加载 SDK（fork 模式子进程将 COW 共享只读页）")

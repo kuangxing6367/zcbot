@@ -131,7 +131,7 @@ def check_and_install_deps():
         print(f"[自检] 依赖安装完成（镜像: {result['mirror']}）")
     else:
         print(f"[自检] 依赖安装失败: {result['error']}")
-        print(f"[自检] 请手动执行: pip install -r requirements.txt")
+        print("[自检] 请手动执行: pip install -r requirements.txt")
         sys.exit(1)
 
 

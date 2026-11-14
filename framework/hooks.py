@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 扩展点系统（Hook Registry）—— 平台内核的核心契约
 
@@ -319,4 +318,3 @@ class HookRegistry:
                     handler(*args, **kwargs)
             except Exception as e:
                 logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}")
-        return None

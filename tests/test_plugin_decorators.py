@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """声明式插件装饰器 API（framework.plugin）单元测试。
 
 验证：模块顶层装饰器在导入期只登记，框架 flush 时统一落到 ctx，与在 register 体内
@@ -6,8 +5,7 @@
 """
 import types
 
-from framework.plugin import flush, clear_module
-
+from framework.plugin import clear_module, flush
 
 _SRC = '''
 from framework.plugin import (

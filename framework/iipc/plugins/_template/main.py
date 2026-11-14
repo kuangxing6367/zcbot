@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """插件模板（脚手架）：复制本目录即可开始写一个 zcbot IIPC 插件。
 
 给一份带完整类型标注的起点，
@@ -11,8 +10,8 @@
   - 扩展面方法（kv / config / http / call_plugin / transform / ...）由 SDK 运行时挂载，
     类型已在 PluginContext 上声明，补全可用。
 """
-from sdk import PluginContext
 from event import Event
+from sdk import PluginContext
 
 __plugin_meta__ = {
     "name": "我的插件",

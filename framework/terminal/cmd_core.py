@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 终端命令：核心信息（help / status / plugins / log / clear / exit）
 """

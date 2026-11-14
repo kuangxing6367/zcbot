@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """main.py 依赖自检可配置（dependencies.allow_missing）回归测试。
 
 直接运行：PYTHONPATH=. python tests/test_main_selfcheck_config.py

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 PluginLoader 运行时监控能力（自 framework/loader/ 剥离）
 

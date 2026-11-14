@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """help 内置帮助插件 · 真实启动验证。
 
 真实启动 Framework，校验：

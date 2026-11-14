@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """rust_accel 官方插件封装冒烟（T4 验收）
 
 fake framework + 真实 rust_accel(release) 二进制 + 真实 WS 客户端：

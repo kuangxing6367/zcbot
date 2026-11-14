@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """ZCBOT CLI —— 脚手架命令行工具。
 
 命令树为框架自带的命令行脚手架（``create / init / run / generate /

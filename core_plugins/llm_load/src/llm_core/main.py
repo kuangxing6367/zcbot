@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 LLM 对话核心（llm_core）
 
@@ -40,13 +39,18 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .agent import AgentResult, ToolLoopAgent
-from .history import (ConversationStore, SessionPersist, estimate_tokens,
-                      parse_session_key, session_key)
-from .media import MediaCache, build_user_content, extract_images
-from .mcp import bind_mcp_tools
-from .providers import OpenAICompatProvider, Provider, ProviderError, ProviderRegistry
 from .embeddings import EmbeddingClient, EmbeddingError
+from .history import (
+    ConversationStore,
+    SessionPersist,
+    estimate_tokens,
+    parse_session_key,
+    session_key,
+)
 from .knowledge import KnowledgeBase
+from .mcp import bind_mcp_tools
+from .media import MediaCache, build_user_content, extract_images
+from .providers import OpenAICompatProvider, Provider, ProviderError, ProviderRegistry
 from .tools import FunctionTool, ToolRegistry, llm_function, schema_from_callable
 
 logger = logging.getLogger('zcbot.llm_core')
@@ -98,7 +102,9 @@ _DEFAULT_SYSTEM_PROMPT = (
 _MAX_REPLY_CHARS = 1200
 
 try:  # Flask 是可选依赖（启用 webui 插件时才安装）
-    from flask import Response as flask_response, jsonify, request as flask_request
+    from flask import Response as flask_response
+    from flask import jsonify
+    from flask import request as flask_request
     _HAS_FLASK = True
 except Exception:  # noqa: BLE001
     jsonify = None
@@ -672,16 +678,16 @@ async def handle_status(event, match):
 def on_raw(raw_event: dict, bot_name: str):
     """原始消息：只做一件事——把图片抠出来暂存，返回 None 表示不接管消息。"""
     if not _cfg('vision_enabled', True):
-        return None
+        return
     try:
         images = extract_images(raw_event)
         if not images:
-            return None
+            return
         _Media.put(bot_name or '', raw_event.get('group_id'),
                    raw_event.get('user_id'), images)
     except Exception as e:  # noqa: BLE001
         logger.debug(f"[llm_core] 提取图片失败: {e}")
-    return None
+    return
 
 
 async def on_free_chat(payload: dict):

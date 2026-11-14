@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """入站可靠性守卫单测：去重 / 限流三级 / 配置关闭 / 异常放行。
 
 铁律：路径用 __file__ 推导、时间戳不写死时区、不污染真实目录。
@@ -171,6 +170,7 @@ def test_dispatch_wiring_dedup_and_notify():
     这里用最小 stub 避开整框架启动，直接断言「第二条重放不进 _process_event」。
     """
     import asyncio
+
     from framework.core.dispatch import FrameworkDispatchMixin
 
     class _Svc:

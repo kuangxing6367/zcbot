@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """IIPC 加固验收脚本（tools/iipc_hardening_test.py）
 
 针对已修复的四类缺陷做确定性验收（与 e2e_check.py 互补）：

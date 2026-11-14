@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """稳态吞吐基准：批量注入 N 条（不逐条 wait），对比 event_queue.workers = 1/2/4。
 用法：python tools/bench_workers.py [N]"""
 import asyncio

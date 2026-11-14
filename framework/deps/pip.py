@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """依赖安装：pip 镜像安装 / requirements 解析 / 版本兼容检查（自 deps.py 剥离）
 
 PluginDepsMixin 在 deps.py 中使用；pip_install_* 保持 from framework.deps import 兼容

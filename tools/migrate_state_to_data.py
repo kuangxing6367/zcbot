@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """兼容入口：状态目录迁移逻辑已迁入内核 ``framework/migration/``。
 
 本文件只保留旧命令行的参数与输出形态（``--home`` / ``--dry-run``），
@@ -17,8 +16,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework import paths                     # noqa: E402
-from framework.migration import migrator        # noqa: E402
+from framework import paths  # noqa: E402
+from framework.migration import migrator  # noqa: E402
 
 
 def main():

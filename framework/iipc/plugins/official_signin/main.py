@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 官方示例插件（逐字照抄 docs/指南/编写插件.md「完整的签到插件」一节）
 
@@ -9,7 +8,8 @@
   ctx.db_query_one(%s) / ctx.db_execute(%s) / ctx.send_msg
 且 handler 内直接使用裸 ctx（依赖框架把 ctx 注入插件模块全局的既有行为）。
 """
-import time, random
+import random
+import time
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:

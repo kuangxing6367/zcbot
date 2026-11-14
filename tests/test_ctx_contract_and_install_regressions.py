@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """模块级 ctx 注入契约 + pip 安装态修复的回归测试。
 
 起因是两份外部实测报告的复核结论：
@@ -124,8 +123,8 @@ def test_echo_handler_works_with_injected_ctx():
 
 def test_version_falls_back_to_installed_metadata(monkeypatch):
     """wheel 里没有 VERSION 文件，zb -v 必须读 dist-info 而不是报 0.0.0。"""
-    from framework.migration import version as vmod
     from framework.cli import utils as cli_utils
+    from framework.migration import version as vmod
 
     monkeypatch.setattr(vmod, '_read_version_file', lambda: (None, 'no VERSION'))
     monkeypatch.setattr(vmod, '_read_installed_metadata', lambda: ('9.8.7', 'metadata'))
@@ -223,7 +222,7 @@ def test_do_run_falls_back_to_packaged_entry(tmp_path, monkeypatch):
 def test_packaging_contract_web_stack_and_excludes():
     """默认路径会加载 webui，flask 三件套必须在核心依赖；开发期工具不能进 wheel。"""
     pyproject = (ROOT / 'pyproject.toml').read_text(encoding='utf-8')
-    dep_block = re.search(r'^dependencies\s*=\s*\[(.*?)^\]', pyproject, re.M | re.S)
+    dep_block = re.search(r'^dependencies\s*=\s*\[(.*?)^\]', pyproject, re.MULTILINE | re.DOTALL)
     assert dep_block, 'pyproject.toml 找不到 [project] dependencies'
     for pkg in ('"flask>=2.3.0"', '"flask-cors>=4.0.0"', '"waitress>=3.0.0"'):
         assert pkg in dep_block.group(1), f'{pkg} 掉出核心依赖'

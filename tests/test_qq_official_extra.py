@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """qq_official 适配器增量能力测试（富媒体 / markdown / 按钮 / 互动回调 /
 生命周期事件 / 撤回）。全部离线，不触网。"""
 import asyncio
@@ -9,11 +8,17 @@ import types
 import pytest
 
 from core_plugins.qq_official import main
-
 from core_plugins.qq_official.main import (
-    QQOfficialAdapter, _split_outgoing, _first_media, build_keyboard,
-    normalize_interaction, normalize_notice, _LIFECYCLE_EVENTS, _MSG_TYPE_MEDIA,
-    _MSG_TYPE_MARKDOWN, _MSG_TYPE_TEXT,
+    _LIFECYCLE_EVENTS,
+    _MSG_TYPE_MARKDOWN,
+    _MSG_TYPE_MEDIA,
+    _MSG_TYPE_TEXT,
+    QQOfficialAdapter,
+    _first_media,
+    _split_outgoing,
+    build_keyboard,
+    normalize_interaction,
+    normalize_notice,
 )
 
 
@@ -344,8 +349,8 @@ def test_call_api_send_voice_segment():
 
 
 def _http_resp(status=200, body=None, text=''):
-    import types as _t
     import json as _json
+    import types as _t
     content = _json.dumps(body).encode() if body is not None else b''
     return _t.SimpleNamespace(status_code=status, content=content,
                               text=text or (content.decode() if content else ''))

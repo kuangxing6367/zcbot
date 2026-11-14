@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """结构化日志（log.format=json）行为测试。
 
 验证的是真实输出行为，不是源码里有字符串：
@@ -190,14 +189,14 @@ def test_framework_wiring():
         log_path = os.path.join(tmp, 'test_json.log').replace('\\', '/')
         with open(cfg, 'w', encoding='utf-8') as f:
             f.write(
-                "database:\n  type: sqlite\n  path: {db}\n"
+                f"database:\n  type: sqlite\n  path: {db}\n"
                 "log:\n  level: INFO\n  format: json\n"
-                "  file: {log}\n"
+                f"  file: {log_path}\n"
                 "core_plugins:\n"
                 "  onebot_adapter: false\n  webui: false\n  http_api: false\n"
                 "  http_inject: false\n  ws_client: false\n  qq_official: false\n"
                 "  telegram: false\n  discord: false\n  session: false\n"
-                "  scheduler: false\n  image_renderer: false\n".format(db=db, log=log_path)
+                "  scheduler: false\n  image_renderer: false\n"
             )
         fw = Framework(config_path=cfg, role='standard')
         added = [h for h in root.handlers if h not in before]

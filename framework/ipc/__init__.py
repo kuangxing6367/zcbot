@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 framework.ipc —— 双进程模式跨进程通信层
 
