@@ -49,6 +49,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+logger = logging.getLogger('zcbot.i18n')
+
 try:
     import yaml
     _HAS_YAML = True
@@ -57,7 +59,6 @@ except Exception as _exc:
     yaml = None
     _HAS_YAML = False
 
-logger = logging.getLogger('zcbot.i18n')
 
 # ── 语言代码 ────────────────────────────────────────────────
 LANG_ZH = 'zh'

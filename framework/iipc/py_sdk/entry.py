@@ -1,9 +1,12 @@
 """插件进程入口：由 Go 主进程拉起，加载指定插件目录的 main.py 并接入 IIPC。"""
 import argparse
+import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+logger = logging.getLogger('zcbot')
 
 # 编码兜底：Windows 上 Python 默认按 GBK 编码 stdout，经内核透传后被上游按 UTF-8
 # 读成乱码（�）。在最早入口强制 UTF-8（内核侧也会注入 PYTHONIOENCODING，双保险）。
@@ -13,11 +16,7 @@ for _s in (sys.stdout, sys.stderr):
     except Exception as _exc:
         logger.debug('[<module>] 捕获异常后按降级路径继续: %s', _exc)
 
-import logging
-
 from sdk import run_plugin
-
-logger = logging.getLogger('zcbot')
 
 
 def main():
