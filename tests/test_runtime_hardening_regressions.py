@@ -800,28 +800,43 @@ def test_sql_sim_close_quiet_when_log_stream_closed(tmp_path):
 
     handler = logging.StreamHandler(io.StringIO())
     handler.stream.close()
-    sql_sim.logger.addHandler(handler)
+    # 只保留「死流」handler，并切断向父 logger 的传播：
+    # 旧写法把 handler 追加到全局链上，_log_streams_alive 的结果取决于**其它测试
+    # 残留的 handler**（pytest 的 caplog、log_broker、上一个用例没摘干净的桩），
+    # 3.12 上就因为链上多出一个活流而判成「可以打日志」，close() 打了一条 debug
+    # → handleError 多输出一次 → assert 2 == 1。判定必须只取决于本用例布置的环境。
+    saved_handlers = sql_sim.logger.handlers[:]
+    saved_propagate = sql_sim.logger.propagate
+    sql_sim.logger.handlers[:] = [handler]
+    sql_sim.logger.propagate = False
     old_level = sql_sim.logger.level
     old_raise = logging.raiseExceptions
     # 显式固定级别与 handleError 行为：pytest 单独跑时 zcbot 可能不是 DEBUG，
     # 对照组会不 emit，用例就变成「什么都没打」的假阴性。
     sql_sim.logger.setLevel(logging.DEBUG)
     logging.raiseExceptions = True
-    stderr_buf = io.StringIO()
+
+    close_out = io.StringIO()
+    control_out = io.StringIO()
     try:
-        with contextlib.redirect_stderr(stderr_buf):
+        with contextlib.redirect_stderr(close_out):
             eng.close()
+        # 对照组：同一环境（死流 handler）下直接 logger.debug 必须真的触发
+        # handleError，证明用例环境有效，不是靠「什么都没打」蒙混过关。
+        with contextlib.redirect_stderr(control_out):
             sql_sim.logger.debug('对照组：关闭流上的日志')
     finally:
-        sql_sim.logger.removeHandler(handler)
+        sql_sim.logger.handlers[:] = saved_handlers
+        sql_sim.logger.propagate = saved_propagate
         sql_sim.logger.setLevel(old_level)
         logging.raiseExceptions = old_raise
 
-    out = stderr_buf.getvalue()
-    assert 'Logging error' in out, '对照组未复现，测试环境无效'
-    assert 'I/O operation on closed file' in out
-    assert out.count('Logging error') == 1, 'close() 自身也产生了 logging 内部报错'
+    assert 'Logging error' not in close_out.getvalue(), 'close() 自身也产生了 logging 内部报错'
     assert os.path.exists(str(tmp_path / 'db' / 'sql' / 't.json')), '脏表仍应正常落盘'
+    # 对照组放最后：环境无效时先报这一条，比"close 产生了报错"更准确
+    control = control_out.getvalue()
+    assert 'Logging error' in control, '对照组未复现，测试环境无效'
+    assert 'I/O operation on closed file' in control
 
 
 def test_route_table_rebuilds_after_core_plugins_loaded(tmp_path):

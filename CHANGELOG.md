@@ -70,6 +70,18 @@
 Event 构造（含 reply 在前、CQ 字符串）逐一断言，并锁定"参数内部空格不被吞"、
 "`/helper` 不能被 `/help` 命中"。
 
+### 测试：sql_sim close 日志用例改为环境隔离判定
+
+`test_sql_sim_close_quiet_when_log_stream_closed` 只断言 `Logging error` 出现 **1** 次，
+但判定用的 `_log_streams_alive()` 会把「其它测试残留在 logger 链上的 handler」也算进去。
+CI 3.12 上就因此把死流判成可写，close() 打了一条 debug → handleError 多输出一次 →
+`assert 2 == 1` 假红（本地同一用例连跑 12 次全绿，3.10/3.11/3.13/3.14 也全绿）。
+
+- 用例改为：临时把 `sql_sim.logger.handlers` 收敛成仅一个死流 handler、切断 propagate，
+  close() 与对照组分别用独立的 stderr 缓冲，断言「close 期间 0 条 / 对照组 1 条」。
+  判定结果只取决于本用例布置的环境。
+- 反向验证：把 `_log_streams_alive` 打桩成恒定 True，该用例如期变红——不是放松断言。
+
 ### 变更：前端探测端点常驻，不再靠蜜罐兜底放行
 
 上一版给 `/api/session/handshake`、`/api/plugins/<名>/status` 开了"良性命中"分支，
