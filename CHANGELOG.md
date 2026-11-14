@@ -110,6 +110,29 @@ ruff 默认规则下全仓 4072 条违规中，1490 条属于工具自己标注�
   （3m23s）+ 脚本式 20/20；批次 B/C 366 + 32 + 110 个改动文件 `py_compile` 全通过、
   全量用例收集 968 例 0 错误、`F821` 门禁复跑仍为 0。
 
+### 工程：静默捕获治理（第一批，79 处）
+
+全仓 708 处「捕获后既不记日志也不抛出」的宽泛 `except`（`framework` 517 / `core_plugins` 180）。
+第一批只动框架自己在跑的路径，原则是**先让它可见，不改控制流**——所有降级行为一字未动：
+
+| 模块 | 处数 | 处理 |
+|---|---|---|
+| `core/event_buffer.py` | 10 | debug：行数统计、文件大小、句柄关闭、体积估算、L2 迁移单行失败 |
+| `core/base.py` | 9 | debug 8 + warning 1（控制台 stop 失败 → 线程可能未释放） |
+| `messaging/router.py` | 14 | debug 12 + warning 2（线程池解析权限失败、适配器判定 fail-open） |
+| `loader/runtime.py` | 13 | debug：内存估算、路由缓存失效、孤儿任务清理、状态回写 |
+| `console_server.py` | 18 | debug：acceptor 停止、连接关闭、只读打开回退读写 |
+| `bootstrap/instance_lock.py` | 15 | debug：锁目录/pid/fd/flock/残留锁清理 |
+
+两处例外刻意不处理，都写进了代码：
+
+- `terminal/panel.py` 的 17 处保持静默。面板运行在 ANSI 备用屏 + raw 输入模式，
+  写 stderr 会打花画面；终端恢复路径本身就在 `except` 里，再写日志可能重入。
+  失败一律走安全降级返回值，已写进模块 docstring。
+- `core/base.py` 命令执行失败那处不动：异常信息已经作为回复返回给用户，属已观测路径。
+
+`core_plugins` 的 180 处、`framework/api` 与 `framework/iipc` 的剩余部分留待后续批次。
+
 ### 其他
 
 - `pyproject.toml` dev 组补 `pytest-cov`，并把 `pytest-asyncio` 锁到 `<1.0`，
