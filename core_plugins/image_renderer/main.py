@@ -634,7 +634,7 @@ def register(ctx):
     try:
         ctx.register_api('/api/plugins/image_renderer/status', _status_view,
                          methods=['GET'], description='图片渲染后端与资源状态')
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug(f"[image_renderer] 状态接口注册失败（不影响渲染）: {e}")
     ctx.command(
         "/render_card",

@@ -15,7 +15,7 @@ from typing import Dict
 
 import yaml
 
-from framework.deps import (  # noqa: F401  兼容旧导入路径
+from framework.deps import (
     PluginDepsMixin,
     _check_version_compatible,
     _parse_requirements_file,
@@ -25,9 +25,9 @@ from framework.deps import (  # noqa: F401  兼容旧导入路径
     pip_install_requirements,
     pip_install_with_mirror,
 )
-from framework.loader.config import _CONFIG_FILE_EXTS, PluginConfigMixin  # noqa: F401  _CONFIG_FILE_EXTS 定义在 config，此处 re-export
+from framework.loader.config import _CONFIG_FILE_EXTS, PluginConfigMixin
 from framework.loader.graph import PluginGraphMixin
-from framework.loader.lifecycle import PluginLifecycleMixin, _PluginSourceLoader  # noqa: F401
+from framework.loader.lifecycle import PluginLifecycleMixin, _PluginSourceLoader
 from framework.loader.runtime import PluginRuntimeMixin
 from framework.loader.ui import (
     PluginGroupSettingsMixin,

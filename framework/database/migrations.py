@@ -307,7 +307,7 @@ def _ensure_columns(database, table: str, columns) -> None:
                 continue
             database.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}")
             logger.info("数据库迁移: 账本表 %s 补充列 %s", table, name)
-        except Exception as e:  # noqa: BLE001  并发补列/权限不足：不致命
+        except Exception as e:
             logger.debug("数据库迁移: 补充列 %s.%s 失败（可忽略）: %s", table, name, e)
 
 
@@ -321,7 +321,7 @@ def ensure_ledger(database) -> bool:
             logger.info("数据库迁移: 建立迁移账本表 %s", LEDGER_TABLE)
         _ensure_columns(database, LEDGER_TABLE, _LEDGER_EXTRA_COLUMNS)
         return True
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(
             "数据库迁移: 账本表 %s 不可用（%s），本次退化为不记账执行，"
             "迁移仍会逐条幂等执行但无法记录版本", LEDGER_TABLE, e)
@@ -338,7 +338,7 @@ def ensure_runs(database) -> bool:
         # 与 ensure_ledger 对齐：老表缺列时补齐，否则 _record_run 写不进去
         _ensure_columns(database, RUNS_TABLE, _RUNS_EXTRA_COLUMNS)
         return True
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("数据库迁移: 流水表 %s 不可用（%s），本次执行不留审计记录",
                        RUNS_TABLE, e)
         return False
@@ -353,7 +353,7 @@ def _ledger_rows(database) -> dict[int, dict]:
     """
     try:
         rows = database.query(f"SELECT * FROM {LEDGER_TABLE} ORDER BY version")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("数据库迁移: 读取账本失败: %s", e)
         return {}
     out = {}
@@ -414,8 +414,8 @@ def _record_run(database, migration: Migration | None, context: MigrationContext
         version = int(migration.version) if migration else 0
         app_version = ''
         try:
-            from framework import __version__ as app_version  # noqa: F401
-        except Exception:  # noqa: BLE001
+            from framework import __version__ as app_version
+        except Exception:
             app_version = ''
         database.execute(
             "INSERT INTO schema_migration_runs "
@@ -430,7 +430,7 @@ def _record_run(database, migration: Migration | None, context: MigrationContext
              (context.ticket or '')[:64], (context.reason or '')[:255],
              (error or '')[:500], (backup or '')[:255],
              getattr(database, 'db_type', '')[:16], (app_version or '')[:32]))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug("数据库迁移: 写执行流水失败（不影响迁移）: %s", e)
 
 
@@ -444,7 +444,7 @@ def runs(database, limit: int = 100) -> list[dict]:
         # 静默消失。下面 out.append 全部用 r.get() 缺列取默认。
         rows = database.query(
             f"SELECT * FROM {RUNS_TABLE} ORDER BY id DESC LIMIT {int(limit)}")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("数据库迁移: 读取执行流水失败: %s", e)
         return []
     out = []
@@ -493,7 +493,7 @@ def backup_snapshot(database, tag: str = '', keep: int = 5) -> dict:
             row = database.query_one("SHOW MASTER STATUS")
             if row:
                 position = f"{row.get('File', '')}:{row.get('Position', '')}"
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return {'ok': False, 'kind': 'binlog', 'position': '',
                     'note': f"无法读取 binlog 位点（{e}）；请自行确认实例备份后再继续"}
         if not position:
@@ -533,7 +533,7 @@ def backup_snapshot(database, tag: str = '', keep: int = 5) -> dict:
             out_dir, f"{_BACKUP_PREFIX}{stamp}{('-' + tag) if tag else ''}.db")
         try:
             database.execute("VACUUM INTO %s", (target,))
-        except Exception:  # noqa: BLE001  VACUUM INTO 不可用（旧版 SQLite）：退化为文件复制
+        except Exception:
             shutil.copy2(path, target)
             logger.warning("数据库迁移: VACUUM INTO 不可用，已退化为文件复制备份"
                            "（若库处于 WAL 模式，副本可能缺少未 checkpoint 的事务）")
@@ -541,7 +541,7 @@ def backup_snapshot(database, tag: str = '', keep: int = 5) -> dict:
         logger.info("数据库迁移: 已备份到 %s", target)
         return {'ok': True, 'kind': 'file', 'path': target,
                 'note': f'备份 {os.path.basename(target)}'}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {'ok': False, 'kind': 'file', 'path': '',
                 'note': f'备份失败（{type(e).__name__}: {e}）'}
 
@@ -555,12 +555,12 @@ def _prune_backups(out_dir: str, keep: int) -> None:
             (os.path.join(out_dir, f) for f in os.listdir(out_dir)
              if f.startswith(_BACKUP_PREFIX)),
             key=lambda p: os.path.getmtime(p), reverse=True)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return
     for old in files[keep:]:
         try:
             os.remove(old)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -715,7 +715,7 @@ def _mysql_lock(database, timeout: int = 30):
             conn.close()
             return None, False, f"等待命名锁超时（{timeout}s）"
         return (conn, cur), True, ''
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return None, True, f"命名锁不可用，已退化为无锁执行: {e}"
 
 
@@ -725,13 +725,13 @@ def _release_mysql_lock(handle) -> None:
     conn, cur = handle
     try:
         cur.execute("SELECT RELEASE_LOCK(%s)", (_MYSQL_LOCK_NAME,))
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     finally:
         for closer in (cur.close, conn.close):
             try:
                 closer()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
 
@@ -768,7 +768,7 @@ def plan(database, registry: Sequence[Migration],
     ledger = False
     try:
         ledger = database.table_exists(LEDGER_TABLE)
-    except Exception:  # noqa: BLE001
+    except Exception:
         ledger = False
     rows = _ledger_rows(database) if ledger else {}
     done = {v for v, r in rows.items() if r['success']}
@@ -987,13 +987,13 @@ def run_pending(database, registry: Sequence[Migration],
                     try:
                         _write_record(database, m, csum, 0, False,
                                       note='running', context=ctx)
-                    except Exception as we:  # noqa: BLE001
+                    except Exception as we:
                         logger.warning(
                             "数据库迁移: v%d %s 预写 running 失败（不阻塞执行）: %s",
                             m.version, m.name, we)
                 try:
                     m.apply(database)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     cost = int((time.time() - t0) * 1000)
                     err = f"{type(e).__name__}: {e}"
                     report['ok'] = False
@@ -1007,7 +1007,7 @@ def run_pending(database, registry: Sequence[Migration],
                         try:
                             _write_record(database, m, csum, cost, False, err,
                                           context=ctx)
-                        except Exception as we:  # noqa: BLE001
+                        except Exception as we:
                             logger.warning("数据库迁移: 失败记录写账本失败: %s", we)
                     _record_run(database, m, ctx, started_at, cost, False,
                                 error=err, backup=backup_ref)
@@ -1019,7 +1019,7 @@ def run_pending(database, registry: Sequence[Migration],
                 if report['ledger']:
                     try:
                         _write_record(database, m, csum, cost, True, context=ctx)
-                    except Exception as we:  # noqa: BLE001
+                    except Exception as we:
                         # DDL 已生效但账本没记上：下次启动会把它当 pending 重跑，
                         # 非幂等迁移会二次执行并可能卡住后续所有版本。旧实现只
                         # 打 warning 还照常报「已应用」+ ok=True，运维完全无感。
@@ -1060,7 +1060,7 @@ def status(database, registry: Sequence[Migration],
     ledger = False
     try:
         ledger = database.table_exists(LEDGER_TABLE)
-    except Exception:  # noqa: BLE001
+    except Exception:
         ledger = False
 
     rows = _ledger_rows(database) if ledger else {}
@@ -1135,7 +1135,7 @@ def verify(database, registry: Sequence[Migration],
         missing = missing_required_tables(database, include_extension=True)
         if missing:
             problems.append(f"缺失表 {len(missing)} 张：{', '.join(missing[:5])}")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         problems.append(f"结构自检失败：{type(e).__name__}: {e}")
     return {'ok': not problems, 'problems': problems,
             'current': st['current'], 'latest': st['latest']}

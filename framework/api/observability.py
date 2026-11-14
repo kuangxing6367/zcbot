@@ -102,14 +102,14 @@ def version_of(ctx=None) -> str:
     if callable(getter):
         try:
             return str(getter() or '')
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     try:
         path = os.path.join(os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__)))), 'VERSION')
         with open(path, 'r', encoding='utf-8') as f:
             return f.read().strip()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ''
 
 
@@ -152,7 +152,7 @@ def db_probe(framework):
             row = db.query_one('SELECT 1')
             value = (next(iter(row.values()), None) if isinstance(row, dict)
                      else row[0] if row else None)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return False, f'{type(e).__name__}: {e}'
     ms = (time.perf_counter() - t0) * 1000
     if not _is_select_one(value):
@@ -169,11 +169,11 @@ def plugin_counts(framework):
     if loader is not None:
         try:
             loaded = len(loader.get_loaded_plugins() or {})
-        except Exception:  # noqa: BLE001
+        except Exception:
             loaded = 0
         try:
             failed = len(getattr(loader, '_failed_mtimes', {}) or {})
-        except Exception:  # noqa: BLE001
+        except Exception:
             failed = 0
     return loaded, failed
 
@@ -235,7 +235,7 @@ def outbound_stats() -> dict:
     try:
         from framework.messaging.outbound_guard import gate
         return gate.stats()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return {}
 
 
@@ -254,7 +254,7 @@ def register(ctx):
     cfg = {}
     try:
         cfg = framework.config.get('observability') or {}
-    except Exception:  # noqa: BLE001
+    except Exception:
         cfg = {}
     if not isinstance(cfg, dict):
         cfg = {}
@@ -319,7 +319,7 @@ def register(ctx):
                 if path not in PROBE_PATHS and path != METRICS_PATH:
                     with _req_lock:
                         _req_counts[(request.method, int(resp.status_code))] += 1
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             return resp
 
@@ -329,7 +329,7 @@ def register(ctx):
                 return {}
             try:
                 return buf.stats() or {}
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return {}
 
         def _ws_connections():
@@ -340,7 +340,7 @@ def register(ctx):
                     primary = framework.services.get('protocol_adapter')
                 if primary is not None and hasattr(primary, 'get_connected_bots'):
                     return len(primary.get_connected_bots() or [])
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             return 0
 
@@ -352,7 +352,7 @@ def register(ctx):
                 proc = psutil.Process(os.getpid())
                 out['rss'] = proc.memory_info().rss
                 out['threads'] = proc.num_threads()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 out['threads'] = threading.active_count()
             return out
 
@@ -487,7 +487,7 @@ def register(ctx):
                 return resp
             try:
                 body = _render_metrics()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.error(f"[可观测性] 指标渲染失败: {e}")
                 return Response('# metrics render failed\n', status=500,
                                 mimetype='text/plain')

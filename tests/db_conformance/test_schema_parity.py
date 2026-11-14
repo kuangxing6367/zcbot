@@ -13,8 +13,8 @@ _ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from framework.database.dialect import extract_plain_indexes  # noqa: E402
-from framework.database.init_db import _REQUIRED_TABLES  # noqa: E402
+from framework.database.dialect import extract_plain_indexes
+from framework.database.init_db import _REQUIRED_TABLES
 
 
 def _init_sql_text():

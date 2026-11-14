@@ -10,9 +10,9 @@ SRC = os.path.join(_ROOT, 'core_plugins', 'llm_load', 'src')
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from llm_core.agent import ToolLoopAgent  # noqa: E402
-from llm_core.providers import Provider, ProviderReply, ToolCall  # noqa: E402
-from llm_core.tools import FunctionTool, ToolRegistry  # noqa: E402
+from llm_core.agent import ToolLoopAgent
+from llm_core.providers import Provider, ProviderReply, ToolCall
+from llm_core.tools import FunctionTool, ToolRegistry
 
 _FAILED = False
 
@@ -106,7 +106,7 @@ asyncio.run(run())
 
 
 # ── 追踪历史保留与 API 语义（main._record_trace / _view_trace）──
-import llm_core.main as main_mod  # noqa: E402
+import llm_core.main as main_mod
 
 
 class _FakeArgs:

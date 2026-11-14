@@ -15,7 +15,7 @@ _ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from framework.database.dialect import (  # noqa: E402
+from framework.database.dialect import (
     _translate_sql_for_mysql,
     _translate_sql_for_sqlite,
 )

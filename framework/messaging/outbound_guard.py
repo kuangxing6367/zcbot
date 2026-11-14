@@ -68,7 +68,7 @@ def _cfg_get(cfg, section, key, fallback):
         val = (cfg or {}).get(section) or {}
         if key in val and val[key] is not None:
             return val[key]
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return fallback
 
@@ -143,7 +143,7 @@ class OutboundGate:
             uid = params.get('user_id')
             if uid:
                 return 'user', str(uid)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return None, None
 
@@ -355,7 +355,7 @@ class OutboundGate:
                 # 登记，避免「检查」与「消费」之间被别的并发请求插队。
                 await asyncio.sleep(wait)
                 self._note_wait(wait)
-        except Exception as e:  # noqa: BLE001 - 闸门故障一律放行
+        except Exception as e:
             logger.debug(f"出站节流判定异常，直通发送: {e}")
 
         return await self._retry_async(action, call, waited)
@@ -374,7 +374,7 @@ class OutboundGate:
                     return self._reject(action, wait)
                 time.sleep(wait)
                 self._note_wait(wait)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"出站节流判定异常，直通发送: {e}")
 
         return self._retry_sync(action, call, waited)

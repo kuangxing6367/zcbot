@@ -34,7 +34,7 @@ def _default_operator() -> str:
             return val
     try:
         return getpass.getuser()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ''
 
 
@@ -108,7 +108,7 @@ def main(argv=None) -> int:
         db, registry = _load_database(args.config)
     except SystemExit:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"无法连接数据库: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
@@ -238,7 +238,7 @@ def main(argv=None) -> int:
     finally:
         try:
             db.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return 0
 

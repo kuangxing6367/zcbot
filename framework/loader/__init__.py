@@ -4,7 +4,7 @@
   from framework.loader import PluginLoader, pip_install_*  # 不变
   from framework.loader.lifecycle import PluginLifecycleMixin  # → framework.loader.lifecycle
 """
-from framework.deps import (  # noqa: F401  兼容旧导入路径
+from framework.deps import (
     PluginDepsMixin,
     _check_version_compatible,
     _parse_requirements_file,
@@ -14,17 +14,17 @@ from framework.deps import (  # noqa: F401  兼容旧导入路径
     pip_install_requirements,
     pip_install_with_mirror,
 )
-from framework.loader.base import (  # noqa: F401
+from framework.loader.base import (
     _CODE_FILE_NAMES,
     _CONFIG_FILE_EXTS,
     _CONFIG_FILE_NAMES,
     PluginLoader,
     _cards_executor,
 )
-from framework.loader.config import PluginConfigMixin  # noqa: F401
-from framework.loader.lifecycle import PluginLifecycleMixin, _PluginSourceLoader  # noqa: F401
-from framework.loader.runtime import PluginRuntimeMixin  # noqa: F401
-from framework.loader.ui import (  # noqa: F401
+from framework.loader.config import PluginConfigMixin
+from framework.loader.lifecycle import PluginLifecycleMixin, _PluginSourceLoader
+from framework.loader.runtime import PluginRuntimeMixin
+from framework.loader.ui import (
     PluginGroupSettingsMixin,
     PluginUiExtensionsMixin,
     PluginWebuiMixin,

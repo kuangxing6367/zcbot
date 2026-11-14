@@ -833,7 +833,7 @@ class TelegramAdapter(ProtocolAdapter):
         if b64:
             try:
                 raw = base64.b64decode(re.sub(r'\s+', '', b64))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return {'status': 'failed', 'retcode': -1,
                         'msg': f'base64 解码失败: {e}'}
             files = {field: (name or f'{field}.bin', raw,
@@ -863,7 +863,7 @@ class TelegramAdapter(ProtocolAdapter):
 
         try:
             payload = _post_media()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return {'status': 'failed', 'retcode': -3, 'msg': f'{method} 失败: {e}'}
         # caption 的实体解析失败同样是整条 400（媒体和 caption 一起发不出去），
         # 与文本路径一样降级纯文本重发；files 是内存 bytes，重发不产生二次读盘。
@@ -874,7 +874,7 @@ class TelegramAdapter(ProtocolAdapter):
             body.pop('parse_mode', None)
             try:
                 payload = _post_media()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return {'status': 'failed', 'retcode': -3,
                         'msg': f'{method} 失败: {e}'}
         result = self._result_or_error(payload, method)

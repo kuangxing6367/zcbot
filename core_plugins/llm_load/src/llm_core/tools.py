@@ -388,7 +388,7 @@ class ToolRegistry:
         except ToolCallError as e:
             # 回灌给模型，让它自己改参数重试
             return f"[工具 {tool.name}] 调用失败：{e}"
-        except Exception as e:  # noqa: BLE001 - 工具异常不能炸掉整个会话
+        except Exception as e:
             self._log.exception(f"工具 [{tool.name}] 执行异常")
             return f"[工具 {tool.name}] 执行异常：{e}"
 

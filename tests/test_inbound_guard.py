@@ -158,7 +158,7 @@ def test_guard_never_raises_on_odd_events():
     for e in odd:
         try:
             ok, reason, _ = g.check(e)
-        except Exception as ex:  # noqa: BLE001
+        except Exception as ex:
             raise SystemExit('断言失败：异常事件把守卫打挂 → %r %s' % (e, ex))
         check('健壮：异常事件返回判定而非抛出 %r' % (e,), isinstance(ok, bool), reason)
 

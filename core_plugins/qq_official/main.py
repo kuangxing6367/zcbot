@@ -1176,7 +1176,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 self._api_request, 'PUT', f'/interactions/{iid}',
                 json_body={'code': int(code)})
             return self._wrap({'id': iid}, ok=True)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning('qq_official 互动回调 ACK 失败: %s', e)
             return self._wrap({'error': str(e)}, ok=False)
 
@@ -1260,7 +1260,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                         resp = self._http.request(
                             method, url, headers=headers, json=json_body,
                             data=data, timeout=timeout)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     # 超时/连接类异常：小退避后重试（上限 2 次），其余直接抛
                     lowered = f'{type(e).__name__} {e}'.lower()
                     retryable = (('timeout' in lowered or 'connect' in lowered
@@ -1287,7 +1287,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 if resp.content:
                     try:
                         body = json.loads(resp.content)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         body = None
                 if resp.status_code < 400:
                     # HTTP 200 但 body 是业务错误（如 11244 token 失效）。
@@ -1512,7 +1512,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             try:
                 uploaded = await self._upload_media(
                     openid, seg_type, seg_data, is_group)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return None, f'{seg_type} 上传失败: {e}'
             body['msg_type'] = _MSG_TYPE_MEDIA
             body['media'] = uploaded
@@ -1601,7 +1601,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         try:
             data = await asyncio.to_thread(
                 self._api_request, 'POST', path, json_body=body)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             hint = self._group_error_hint(e)
             logger.warning('qq_official 群消息发送失败: %s', hint)
             if isinstance(e, _ApiError) and (
@@ -1626,7 +1626,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         try:
             data = await asyncio.to_thread(
                 self._api_request, 'POST', path, json_body=body)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             hint = self._group_error_hint(e)
             logger.warning('qq_official 单聊消息发送失败: %s', hint)
             return self._wrap({'error': hint}, ok=False)
@@ -1665,7 +1665,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         try:
             data = await asyncio.to_thread(
                 self._api_request, 'POST', path, json_body=body)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             hint = self._group_error_hint(e)
             logger.warning('qq_official 流式消息发送失败: %s', hint)
             return self._wrap({'error': hint}, ok=False)
@@ -1687,7 +1687,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         try:
             data = await asyncio.to_thread(
                 self._api_request, method, path, **kwargs)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             hint = self._group_error_hint(e)
             logger.warning('qq_official 群接口 %s 失败: %s', endpoint, hint)
             return self._wrap({'error': hint}, ok=False)
@@ -1705,7 +1705,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             data = await asyncio.to_thread(
                 self._api_request, 'POST', f'/v2/users/{user_openid}/messages',
                 json_body=body)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             hint = self._group_error_hint(e)
             logger.warning('qq_official 唤醒消息发送失败: %s', hint)
             return self._wrap({'error': hint}, ok=False)
@@ -1800,7 +1800,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                     self._api_request, 'DELETE', path,
                     json_body={'hidetip': bool(params.get('hidetip', False))})
                 return self._wrap({'message_id': msg_id}, ok=True)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning('qq_official 撤回失败: %s', e)
                 return self._wrap({'error': str(e)}, ok=False)
 
@@ -1839,7 +1839,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 data = await asyncio.to_thread(
                     self._api_request, 'POST', '/v2/generate_url_link',
                     json_body={'callbackData': callback})
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
             return self._wrap(data, ok=True)
 
@@ -1847,7 +1847,7 @@ class QQOfficialAdapter(ProtocolAdapter):
         if action == 'get_global_menu':
             try:
                 data = await asyncio.to_thread(self._api_request, 'GET', '/v2/menu')
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
             return self._wrap(data, ok=True)
         if action in ('set_global_menu', 'update_global_menu'):
@@ -1858,7 +1858,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             try:
                 data = await asyncio.to_thread(
                     self._api_request, 'PUT', '/v2/menu', json_body={'menu': menu})
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
             return self._wrap(data, ok=True)
 
@@ -1871,7 +1871,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             try:
                 data = await asyncio.to_thread(
                     self._api_request, 'GET', '/v2/panels', data=qp)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
             return self._wrap(data, ok=True)
         if action == 'get_panel':
@@ -1882,7 +1882,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             try:
                 data = await asyncio.to_thread(
                     self._api_request, 'GET', f'/v2/panels/{pid}')
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
             return self._wrap(data, ok=True)
         if action == 'create_panel':
@@ -1903,7 +1903,7 @@ class QQOfficialAdapter(ProtocolAdapter):
             try:
                 data = await asyncio.to_thread(
                     self._api_request, 'POST', '/v2/panels', json_body=payload)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
             return self._wrap(data, ok=True)
         if action == 'update_panel':
@@ -1916,7 +1916,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 data = await asyncio.to_thread(
                     self._api_request, 'PUT', f'/v2/panels/{pid}',
                     json_body={'panel': panel})
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
             return self._wrap(data, ok=True)
         if action == 'delete_panel':
@@ -1928,7 +1928,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 await asyncio.to_thread(
                     self._api_request, 'DELETE', f'/v2/panels/{pid}')
                 return self._wrap({'panel_id': pid}, ok=True)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
         if action == 'update_panel_targets':
             pid = str(params.get('panel_id') or '')
@@ -1945,7 +1945,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 data = await asyncio.to_thread(
                     self._api_request, 'PUT', f'/v2/panels/{pid}/target',
                     json_body=payload)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return self._wrap({'error': self._group_error_hint(e)}, ok=False)
             return self._wrap(data, ok=True)
 

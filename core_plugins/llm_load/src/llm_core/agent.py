@@ -172,7 +172,7 @@ class ToolLoopAgent:
                 try:
                     reply = await self._call_provider(
                         provider, messages, decls, temperature, max_tokens)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     result.trace['spans'].append({
                         'type': 'model', 'turn': turn,
                         'duration_ms': round((time.perf_counter() - _m_t0) * 1000, 2),
@@ -240,7 +240,7 @@ class ToolLoopAgent:
                 self._debug(f"第 {turn} 轮执行 {len(reply.tool_calls)} 个工具")
         except ProviderError as e:
             result.error = str(e)
-        except Exception as e:  # noqa: BLE001 - 任何异常都不该炸掉会话
+        except Exception as e:
             result.error = f"对话异常：{e}"
         else:
             # 到这里说明始终收敛不了：去掉工具 + 显式收口提示再问一次，让它给结论
@@ -254,7 +254,7 @@ class ToolLoopAgent:
                         text = _summarize_tool_outputs(result.tool_calls)
                     result.text = text
                     conversation.append({'role': 'assistant', 'content': text})
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     result.error = f"收口请求失败：{e}"
         finally:
             result.trace['total_ms'] = round((time.perf_counter() - _t0) * 1000, 2)

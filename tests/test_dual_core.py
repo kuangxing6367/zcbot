@@ -340,7 +340,7 @@ if __name__ == '__main__':
         try:
             t()
             print(f"PASS  {t.__name__}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             failed += 1
             print(f"FAIL  {t.__name__}: {e!r}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")

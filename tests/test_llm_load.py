@@ -19,7 +19,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from core_plugins.llm_load.main import (  # noqa: E402
+from core_plugins.llm_load.main import (
     read_manifest,
     release,
     verify,
@@ -195,7 +195,7 @@ if __name__ == '__main__':
         except AssertionError as e:
             failed += 1
             print(f"FAIL  {fn.__name__}: {e}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             failed += 1
             print(f"ERROR {fn.__name__}: {type(e).__name__}: {e}")
     print(f"\n{len(cases) - failed}/{len(cases)} passed")

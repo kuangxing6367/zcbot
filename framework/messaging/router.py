@@ -45,7 +45,7 @@ from typing import Optional
 from framework.hooks import HookPoints
 from framework.log_broker import log_broker
 from framework.messaging.event import _has_text_segment
-from framework.messaging.router_keywords import KeywordReplyMixin, _KeywordRule  # noqa: F401
+from framework.messaging.router_keywords import KeywordReplyMixin, _KeywordRule
 
 logger = logging.getLogger('zcbot')
 
@@ -69,8 +69,8 @@ class _RouteCommand:
         self.aliases = aliases
 
 
-from framework.blackbox import record as _bb_record  # noqa: E402
-from framework.messaging.router_match import (  # noqa: E402
+from framework.blackbox import record as _bb_record
+from framework.messaging.router_match import (
     RouterMatchMixin,
     SimpleMatch,
     _PluginRoute,

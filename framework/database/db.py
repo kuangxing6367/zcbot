@@ -50,19 +50,19 @@ from .dialect import (
     _translate_sql_for_mysql,
     _translate_sql_for_sqlite,
 )
-from .schema import _auto_create_tables  # noqa: F401  兼容旧导入路径 framework.database.db._auto_create_tables
+from .schema import _auto_create_tables
 
 logger = logging.getLogger('zcbot')
 
 # MySQL 连接断开类错误码（触发自动重连）——定义在 db_conn，此处 re-export 兼容旧导入
-from framework.database.db_conn import (  # noqa: F401
+from framework.database.db_conn import (
     _MYSQL_RECONNECT_ERRORS,
     _MYSQL_RECONNECT_KEYWORDS,
 )
 
 # ── 数据库引擎 ──────────────────────────────────────────────────────
 from .db_conn import DatabaseConnMixin
-from .storage import create_storage  # noqa: F401  存储抽象层工厂（debug/sqlite/mysql）
+from .storage import create_storage
 
 
 def _is_readonly_error(err) -> bool:

@@ -212,7 +212,7 @@ def test_framework_wiring():
         for h in root.handlers:
             try:
                 h.flush()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         log_path = os.path.join(tmp, 'test_json.log')
         check(os.path.isfile(log_path), f"日志文件已创建（{log_path}）")
@@ -229,13 +229,13 @@ def test_framework_wiring():
         for h in [h for h in root.handlers if h not in before]:
             try:
                 h.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             root.removeHandler(h)
         if fw is not None:
             try:
                 fw._db_executor.shutdown(wait=False)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

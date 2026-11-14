@@ -377,7 +377,7 @@ def main():
         print(f"\n[{fn.__name__}]")
         try:
             fn()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             import traceback
             traceback.print_exc()
             _FAILED.append(f'{fn.__name__}: {e}')

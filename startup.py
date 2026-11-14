@@ -58,24 +58,24 @@ if __name__ == '__main__':
     apply_allocator_policy()
 
 # 对外兼容再导出（cli 子命令与回归测试直接 import 这些符号）
-from framework.bootstrap.app import amain  # noqa: E402
+from framework.bootstrap.app import amain
 from framework.bootstrap.cli_dispatch import (
     pop_language_arg as _pop_language_arg,
 )
-from framework.bootstrap.cli_dispatch import (  # noqa: E402
+from framework.bootstrap.cli_dispatch import (
     print_usage as _print_usage,
 )
 from framework.bootstrap.cli_dispatch import (
     read_version as _read_version,
 )
-from framework.bootstrap.console_attach import run_attach as _run_attach  # noqa: E402
+from framework.bootstrap.console_attach import run_attach as _run_attach
 from framework.bootstrap.deps_check import (
     check_and_install_deps as _check_and_install_deps,
 )
 from framework.bootstrap.deps_check import (
     ensure_optional_driver as _ensure_optional_driver,
 )
-from framework.bootstrap.deps_check import (  # noqa: E402
+from framework.bootstrap.deps_check import (
     read_self_check_allow_missing as _read_self_check_allow_missing,
 )
 from framework.bootstrap.deps_check import (
@@ -92,7 +92,7 @@ def _run_auto_migration(config_path=None):
     try:
         from framework.migration import ensure_auto_migrated
         result = ensure_auto_migrated(config_path)
-    except Exception as e:  # noqa: BLE001 - 迁移是增强能力，不能拖垮启动
+    except Exception as e:
         print('[migration] 迁移模块不可用，按旧布局兼容运行: %s' % e)
         return
     if result.get('status') in ('applied', 'partial', 'manual-required',
@@ -131,7 +131,7 @@ def main():
     if argv[:1] and argv[0] in ('code', 'cc'):
         try:
             from core_plugins.aiwriter.main import run_cli
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"[code] 无法加载 AI 智能体界面: {e}")
             sys.exit(1)
         sys.exit(run_cli(argv[1] if len(argv) > 1 else None))
@@ -148,7 +148,7 @@ def main():
     if argv[:1] and argv[0] in _CLI_GROUPS:
         try:
             from framework.cli import main as _cli_main
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print('[cli] 无法加载 CLI 模块: %s' % e)
             sys.exit(1)
         sys.exit(_cli_main(argv))
@@ -161,7 +161,7 @@ def main():
         _run_auto_migration()
         try:
             from framework.iipc import run as _iipc_run
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print('[iipc] 无法加载 IIPC 链路: %s' % e)
             print('[iipc] 确认 framework/iipc/ 源码完整；IIPC 模式需要 go / cargo 工具链'
                   '（也可设 ZCBOT_GO_BIN / ZCBOT_CARGO 指定路径）。'

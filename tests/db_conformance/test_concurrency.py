@@ -38,7 +38,7 @@ def _run_threads(fns, timeout=120):
         def inner():
             try:
                 fn()
-            except Exception as e:      # noqa: BLE001 - 收集所有线程异常
+            except Exception as e:
                 with lock:
                     errs.append(f'{type(e).__name__}: {e}')
         return inner

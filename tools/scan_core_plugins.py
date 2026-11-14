@@ -22,9 +22,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-import yaml  # noqa: E402
+import yaml
 
-import framework.config as fc  # noqa: E402
+import framework.config as fc
 
 
 def _load_yaml(yaml_path):

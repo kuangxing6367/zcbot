@@ -104,7 +104,7 @@ def test_adapters_use_backoff():
     for label, mod_path, cls_name, kwargs in cases:
         try:
             mod = importlib.import_module(mod_path)
-        except Exception as e:  # noqa: BLE001  缺依赖时跳过而不是误判失败
+        except Exception as e:
             print('跳过 %s（导入失败：%s）' % (label, e))
             continue
         cls = getattr(mod, cls_name, None)
@@ -114,7 +114,7 @@ def test_adapters_use_backoff():
             cls = getattr(mod, candidates[0])
         try:
             inst = cls(_stub_framework(), **kwargs)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             check('%s：构造函数可无副作用创建' % label, False, str(e))
         check('%s：持有统一退避实例' % label,
               isinstance(getattr(inst, '_backoff', None), Backoff), cls_name)

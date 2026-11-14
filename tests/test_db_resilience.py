@@ -31,13 +31,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.database.db import Database  # noqa: E402
-from framework.database.init_db import (  # noqa: E402
+from framework.database.db import Database
+from framework.database.init_db import (
     _REQUIRED_TABLES,
     auto_init_database,
     missing_required_tables,
 )
-from framework.database.schema import _auto_create_tables  # noqa: E402
+from framework.database.schema import _auto_create_tables
 
 
 def _new_db(tmp_path, name="t.db"):

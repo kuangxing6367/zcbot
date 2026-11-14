@@ -29,8 +29,8 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 
-from iipc_client import IIPCClient, resolve_auth  # noqa: E402
-from onebot_fake import OP_TEXT, FakeOneBot, group_msg, ws_write_frame  # noqa: E402
+from iipc_client import IIPCClient, resolve_auth
+from onebot_fake import OP_TEXT, FakeOneBot, group_msg, ws_write_frame
 
 KERNEL_EXE = os.path.join(IIPC, "go_kernel", "zcbot_kernel.exe")
 RUST_EXE = os.path.join(IIPC, "rust_adapter", "target", "release",
@@ -48,7 +48,7 @@ def check(name, ok, detail=""):
     return bool(ok)
 
 
-from portutil import free_port, wait_tcp  # noqa: E402,F401  端口一律动态分配
+from portutil import free_port, wait_tcp
 
 
 def alive(p):

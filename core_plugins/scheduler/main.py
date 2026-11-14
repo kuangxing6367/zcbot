@@ -6,7 +6,7 @@
 """
 import logging
 
-from framework.scheduler import TaskScheduler  # noqa: F401  权威实现 + 兼容再导出
+from framework.scheduler import TaskScheduler
 
 logger = logging.getLogger('zcbot')
 

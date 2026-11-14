@@ -269,7 +269,7 @@ def _auto_create_tables(database, context=None):
     try:
         ctx = context or migrations_context(database, source='boot')
         report = run_migrations(database, MIGRATIONS, ctx)
-    except Exception as e:  # noqa: BLE001  注册表非法等：引擎自身故障
+    except Exception as e:
         logger.error("数据库迁移引擎异常，已跳过迁移: %s", e)
     else:
         if report.get('blocked'):
@@ -596,7 +596,7 @@ def _migrate_perm_tables(database):
     for ddl in index_ddls:
         try:
             database.execute(ddl)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # MySQL 无 CREATE INDEX IF NOT EXISTS：重复建索引报 Duplicate key name，
             # 属预期，不影响迁移结果（索引已存在）。
             logger.debug("补索引跳过（可能已存在）: %s", e)

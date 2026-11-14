@@ -19,7 +19,7 @@ for p in (SDK_DIR, os.path.join(SDK_DIR, "deps")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-import sdk  # noqa: E402
+import sdk
 
 # 关掉后台线程（flush 循环 / async 循环），让本测试完全确定性、不依赖 5ms 调度。
 sdk.PluginContext._start_flush_loop = lambda self: None

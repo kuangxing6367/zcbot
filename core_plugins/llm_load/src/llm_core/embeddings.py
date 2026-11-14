@@ -68,7 +68,7 @@ class EmbeddingClient:
             )
             resp.raise_for_status()
             payload = resp.json()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise EmbeddingError(f"embedding 请求失败：{e}") from e
         data = payload.get('data')
         if not isinstance(data, list) or not data:

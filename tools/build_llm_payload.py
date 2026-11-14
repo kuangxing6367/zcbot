@@ -68,7 +68,7 @@ def _read_version() -> str:
                 if isinstance(target, ast.Name) and target.id == '__version__':
                     try:
                         return str(ast.literal_eval(node.value))
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         break
     raise RuntimeError("main.py 里找不到 __version__，无法打包")
 

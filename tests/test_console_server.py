@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.console_server import (  # noqa: E402
+from framework.console_server import (
     _CREATE_SQL,
     ConsoleClient,
     ConsoleServer,
@@ -263,7 +263,7 @@ if __name__ == '__main__':
         try:
             t()
             print(f"PASS  {t.__name__}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             failed += 1
             print(f"FAIL  {t.__name__}: {e!r}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")

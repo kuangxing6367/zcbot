@@ -154,11 +154,11 @@ class _LazyHTTP(object):
             if self._mode:
                 return self._mode
             try:
-                import httpx  # noqa: F401
+                import httpx
                 self._mode = "httpx"
             except ImportError:
                 try:
-                    import requests  # noqa: F401
+                    import requests
                     self._mode = "requests"
                 except ImportError:
                     self._mode = "urllib"

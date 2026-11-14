@@ -73,7 +73,7 @@ class ConsoleServer:
     def _ensure_table(self, db):
         try:
             db.execute(_CREATE_SQL)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("console_access 建表失败: %s", e)
 
     def _load_or_create(self):
@@ -87,7 +87,7 @@ class ConsoleServer:
                     row = db.query_one(
                         "SELECT port, token, token_bits FROM console_access WHERE id=1")
                     break
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.debug("读取控制台凭证失败(第 %d 次): %s", attempt + 1, e)
                     time.sleep(0.2)
         if row:
@@ -96,7 +96,7 @@ class ConsoleServer:
                 self.token = str(row['token'])
                 self.token_bits = int(row['token_bits'] or self.token_bits)
                 return
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         # 首次：生成超长 token 并落库
         self.token = secrets.token_hex(max(1, self.token_bits // 8))
@@ -123,7 +123,7 @@ class ConsoleServer:
                     (1, self.port, self.token, self.token_bits, now, now))
             logger.info("调试控制台凭证已写入数据库（port=%s, token %s 位）",
                         self.port, self.token_bits)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("控制台凭证落库失败（端口/token 仅本次有效）: %s", e)
 
     # ── 生命周期 ───────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ class ConsoleServer:
         self._load_or_create()
         try:
             self._sock = self._bind()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("调试控制台启动失败: %s", e)
             return False
         self._stop = False
@@ -228,7 +228,7 @@ class ConsoleServer:
                 conn, _ = self._sock.accept()
             except OSError:
                 break
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             threading.Thread(target=self._serve, args=(conn,), daemon=True,
                              name='console-client').start()
@@ -248,7 +248,7 @@ class ConsoleServer:
                 return
             try:
                 msg = json.loads(line.decode('utf-8'))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self._send(f, {'ok': False, 'error': '协议错误'})
                 return
             if not hmac.compare_digest(str(msg.get('token', '')), self.token):
@@ -262,7 +262,7 @@ class ConsoleServer:
                     break
                 try:
                     msg = json.loads(line.decode('utf-8'))
-                except Exception:  # noqa: BLE001
+                except Exception:
                     self._send(f, {'ok': False, 'error': 'JSON 解析失败'})
                     continue
                 if msg.get('close'):
@@ -271,7 +271,7 @@ class ConsoleServer:
                     self._send(f, {'ok': True, 'output': self.run_agent(msg.get('agent') or '')})
                     continue
                 self._send(f, {'ok': True, 'output': self.run_command(msg.get('cmd') or '')})
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug("调试控制台连接结束: %s", e)
         finally:
             try:
@@ -285,7 +285,7 @@ class ConsoleServer:
         try:
             from framework.terminal import terminal_commands
             return sorted(terminal_commands.list_commands().keys())
-        except Exception:  # noqa: BLE001
+        except Exception:
             return []
 
     def run_command(self, command: str) -> str:
@@ -297,7 +297,7 @@ class ConsoleServer:
         import io
         try:
             from framework.terminal import terminal_commands
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return '终端命令不可用：%s' % e
         name = command.split()[0].lower()
         handler = terminal_commands.get(name)
@@ -309,7 +309,7 @@ class ConsoleServer:
             from framework.terminal.context import remote_session
             with contextlib.redirect_stdout(buf), remote_session():
                 handler(args)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             buf.write('\n执行异常: %s' % e)
         return buf.getvalue()
 
@@ -324,7 +324,7 @@ class ConsoleServer:
         svc = None
         try:
             svc = self.fw.services.get('aiwriter')
-        except Exception:  # noqa: BLE001
+        except Exception:
             svc = None
         if svc is None or not hasattr(svc, 'run'):
             return ('[错误] 未启用 aiwriter 插件（或未提供 agent 服务）：'
@@ -334,7 +334,7 @@ class ConsoleServer:
             from framework.terminal.context import remote_session
             with remote_session():
                 final = svc.run(text, on_event=lambda k, p: events.append((k, p)))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return '[错误] %s' % e
         out = []
         for k, p in events:

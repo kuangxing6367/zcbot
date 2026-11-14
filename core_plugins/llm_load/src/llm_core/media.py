@@ -114,7 +114,7 @@ def _read_as_data_uri(path: str) -> str | None:
             logger.warning(f"[llm_core] 本地文件不是白名单图片，已跳过: {path}")
             return None
         return f"data:{mime};base64," + base64.b64encode(raw).decode('ascii')
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(f"[llm_core] 读取图片失败: {e}")
         return None
 

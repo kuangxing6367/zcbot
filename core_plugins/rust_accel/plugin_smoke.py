@@ -12,7 +12,7 @@ sys.path.insert(0, r"E:\工程\机器人\zgric_onebot11_35xLe")
 
 import websockets
 
-from core_plugins.rust_accel.main import RustAccelService  # noqa: E402
+from core_plugins.rust_accel.main import RustAccelService
 
 BIN = r"C:/rust_accel_target/release/rust_accel.exe"
 

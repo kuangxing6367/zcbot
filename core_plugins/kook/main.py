@@ -280,7 +280,7 @@ class KookAdapter(ProtocolAdapter):
                 await self._connect_once()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning('kook 连接异常: %s', e)
             finally:
                 self._connected = False
@@ -340,12 +340,12 @@ class KookAdapter(ProtocolAdapter):
                 resp = self._http.request(
                     method, url, params=params, json=json_body,
                     timeout=timeout)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             return {'status': 'failed', 'retcode': -3,
                     'msg': f'KOOK 请求失败: {type(e).__name__} {e}'}
         try:
             body = resp.json() if resp.content else {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             body = {'_text': (resp.text or '')[:300]}
 
         if resp.status_code == 429:
@@ -447,7 +447,7 @@ class KookAdapter(ProtocolAdapter):
                 with open(path, 'rb') as f:
                     raw = f.read()
                 return raw, name or os.path.basename(path) or 'file', mime
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning('kook 读取媒体失败: %s', e)
         return b'', name, mime
 
@@ -533,7 +533,7 @@ class KookAdapter(ProtocolAdapter):
             self._pong_event.clear()
             try:
                 await ws.send(json.dumps({'s': _S_PING, 'sn': self._sn}))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return
             try:
                 await asyncio.wait_for(self._pong_event.wait(),
@@ -543,7 +543,7 @@ class KookAdapter(ProtocolAdapter):
                                _PONG_TIMEOUT)
                 try:
                     await ws.close()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 return
 
@@ -555,7 +555,7 @@ class KookAdapter(ProtocolAdapter):
                 text = (message.decode('utf-8', errors='replace')
                         if isinstance(message, (bytes, bytearray)) else message)
                 payload = json.loads(text)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 continue
             if not isinstance(payload, dict):
                 continue
@@ -573,7 +573,7 @@ class KookAdapter(ProtocolAdapter):
                     logger.error('kook 握手失败：%s（%s）', reason, code)
                     try:
                         await ws.close()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     return
                 old = self._session_id
@@ -612,7 +612,7 @@ class KookAdapter(ProtocolAdapter):
                 event = sanitize_adapter_event(event, self.bot_name)
                 try:
                     await self.framework.dispatch_event(event)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.error('kook 事件分发失败: %s', e)
 
     def _accept_sn(self, sn) -> bool:
@@ -744,7 +744,7 @@ class KookAdapter(ProtocolAdapter):
         if ws is not None:
             try:
                 await ws.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         await self._cancel_heartbeat()
         if self._supervisor is not None and not self._supervisor.done():
@@ -756,7 +756,7 @@ class KookAdapter(ProtocolAdapter):
         self._supervisor = None
         try:
             self._http.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 

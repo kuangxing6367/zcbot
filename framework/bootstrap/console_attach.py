@@ -72,7 +72,7 @@ def run_attach(argv):
     client = ConsoleClient(args.host, port, token)
     try:
         client.connect()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print('连接失败：%s（%s:%s）' % (e, args.host, port))
         return 1
 
@@ -108,7 +108,7 @@ def run_attach(argv):
                 else:
                     out = client.run(line)
                 print(out, end='')
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 print('[错误] %s' % e)
                 break
     finally:

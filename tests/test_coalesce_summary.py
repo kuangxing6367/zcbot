@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework.coalesce_log import LogCoalescer  # noqa: E402
+from framework.coalesce_log import LogCoalescer
 
 
 class Sink(logging.Handler):
@@ -109,7 +109,7 @@ if __name__ == '__main__':
         except AssertionError as e:
             print(f'FAIL {t.__name__}: {e}')
             fail += 1
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f'ERROR {t.__name__}: {type(e).__name__}: {e}')
             fail += 1
     print(f'\n{ok} passed, {fail} failed')

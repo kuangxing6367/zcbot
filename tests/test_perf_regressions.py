@@ -22,11 +22,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from framework.database.db import Database  # noqa: E402
-from framework.database.init_db import auto_init_database  # noqa: E402
-from framework.database.schema import MIGRATIONS, _auto_create_tables  # noqa: E402
-from framework.messaging.event import Event  # noqa: E402
-from framework.messaging.router import (  # noqa: E402
+from framework.database.db import Database
+from framework.database.init_db import auto_init_database
+from framework.database.schema import MIGRATIONS, _auto_create_tables
+from framework.messaging.event import Event
+from framework.messaging.router import (
     MessageRouter,
     _PermissionDecisionCache,
     invalidate_permission_cache,
@@ -238,7 +238,7 @@ def test_permission_cache_thread_safe():
                 if j % 50 == 0:
                     cache.invalidate(None)
                 len(cache)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             errors.append(e)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]

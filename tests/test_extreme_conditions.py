@@ -17,17 +17,17 @@ import pytest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-from framework import i18n  # noqa: E402
-from framework.cli import build_parser  # noqa: E402
+from framework import i18n
+from framework.cli import build_parser
 from framework.cli import main as cli_main
-from framework.cli.commands.config import do_config  # noqa: E402
+from framework.cli.commands.config import do_config
 from framework.cli.utils import (
     _read_meta,
-    _yaml_get_enabled,  # noqa: E402
+    _yaml_get_enabled,
     render_table,
     set_core_plugin_enabled,
 )
-from framework.config import load_config  # noqa: E402
+from framework.config import load_config
 
 
 # --------------------------------------------------------------------------

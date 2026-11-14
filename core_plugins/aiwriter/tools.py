@@ -442,7 +442,7 @@ class ToolRegistry:
                 raw = resp.read(self.max_output * 6)
                 charset = resp.headers.get_content_charset() or 'utf-8'
                 ctype = (resp.headers.get_content_type() or '').lower()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ToolError("抓取失败：%s" % e)
         try:
             text = raw.decode(charset, 'replace')
@@ -492,7 +492,7 @@ class ToolRegistry:
         try:
             with urllib.request.urlopen(req, timeout=self.net_timeout) as resp:
                 data = resp.read(4 << 20).decode('utf-8', 'replace')
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ToolError("联网搜索失败：%s" % e)
         out, rest = [], data
         while len(out) < limit:
@@ -554,7 +554,7 @@ class ToolRegistry:
             rows = self._host().db_query(sql)
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ToolError("查询失败：%s" % e)
         limit = int(a.get('limit', 50) or 50)
         rows = list(rows or [])[:limit]
@@ -570,7 +570,7 @@ class ToolRegistry:
             n = self._host().db_execute(sql)
         except ToolError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ToolError("执行失败：%s" % e)
         return "已执行，影响 %s 行" % n
 

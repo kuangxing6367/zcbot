@@ -261,7 +261,7 @@ def set_core_plugin_enabled(yaml_path, plugin_id, enabled):
     try:
         with open(yaml_path, "w", encoding="utf-8") as f:
             f.write(new_text)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return False, "写入失败: %s" % e
     return True, "core_plugins.%s.enabled = %s" % (plugin_id, enabled)
 
@@ -276,7 +276,7 @@ def enable_user_plugin(working_dir, plugin_id, enabled):
                 import shutil
                 shutil.move(dst, src)
                 return True, "已启用（从 plugins_disabled 移回 plugins）"
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return False, "移回失败: %s" % e
         if os.path.isdir(src):
             return True, "已启用"
@@ -288,7 +288,7 @@ def enable_user_plugin(working_dir, plugin_id, enabled):
                 import shutil
                 shutil.move(src, dst)
                 return True, "已禁用（移入 plugins_disabled）"
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return False, "移出失败: %s" % e
         return True, "已是禁用状态"
 

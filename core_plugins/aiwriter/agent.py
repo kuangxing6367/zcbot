@@ -73,7 +73,7 @@ class Agent:
                 try:
                     out = self.tools.call(c['name'], args)
                     ok = True
-                except Exception as e:  # noqa: BLE001 —— 工具异常回灌给模型，不外抛
+                except Exception as e:
                     out = '错误: %s' % e
                     ok = False
                 self._emit('tool_end', {'name': c['name'], 'args': args,

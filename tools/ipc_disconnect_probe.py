@@ -11,7 +11,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from framework.ipc.protocol import JsonRpcConnection  # noqa: E402
+from framework.ipc.protocol import JsonRpcConnection
 
 
 def _pair():

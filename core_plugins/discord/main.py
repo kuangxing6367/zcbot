@@ -509,7 +509,7 @@ class DiscordAdapter(ProtocolAdapter):
                 await self._recv_loop(ws)
         except ConnectionClosed as e:
             self._note_close_code(getattr(e, 'code', None))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # 握手阶段失败（HTTP 401/403 等）：token 错、bot 被禁用都属于这一类，
             # 重连不会自愈，标成致命并停止重试。
             status = getattr(e, 'status_code', None)
@@ -787,7 +787,7 @@ class DiscordAdapter(ProtocolAdapter):
                         name = item['name'] or os.path.basename(ref) or 'file.bin'
                     else:
                         continue
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.warning('discord 附件读取失败: %s', e)
                     continue
                 multipart.append((name, raw))

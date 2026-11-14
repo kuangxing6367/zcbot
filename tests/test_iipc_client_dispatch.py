@@ -17,7 +17,7 @@ SDK_DIR = os.path.abspath(SDK_DIR)
 if SDK_DIR not in sys.path:
     sys.path.insert(0, SDK_DIR)
 
-import iipc_client  # noqa: E402
+import iipc_client
 
 
 def _make_client():

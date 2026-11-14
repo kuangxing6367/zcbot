@@ -315,7 +315,7 @@ def _normalize_message_fields(event: dict, adapter: Any) -> None:
                 got = translate(raw_msg)
                 if isinstance(got, list):
                     segments = got
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug("接入端 normalize_incoming 失败，退回通用归一化: %s", e)
         if not isinstance(segments, list) or not segments:
             segments = normalize_message(raw_msg)
@@ -374,7 +374,7 @@ def validate_adapter(adapter: Any) -> list[str]:
             if not isinstance(got, list):
                 issues.append(f'{name}.normalize_incoming() 应返回 list，实际 '
                               f'{type(got).__name__}')
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             issues.append(f'{name}.normalize_incoming() 抛异常: {e}')
 
     # 出站翻译
@@ -382,7 +382,7 @@ def validate_adapter(adapter: Any) -> list[str]:
     if callable(tn):
         try:
             tn([{'type': SEG_TEXT, 'data': {'text': 'x'}}])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             issues.append(f'{name}.to_native() 抛异常: {e}')
 
     # 能力自述
@@ -392,7 +392,7 @@ def validate_adapter(adapter: Any) -> list[str]:
             parsed = as_capabilities(caps())
             if not parsed.outbound:
                 issues.append(f'{name}.capabilities() 未声明任何出站能力')
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             issues.append(f'{name}.capabilities() 抛异常: {e}')
 
     # 连接自描述
@@ -402,7 +402,7 @@ def validate_adapter(adapter: Any) -> list[str]:
             got = info()
             if got is not None and (not isinstance(got, dict) or not got.get('id')):
                 issues.append(f'{name}.get_connection_info() 缺少 id 字段')
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             issues.append(f'{name}.get_connection_info() 抛异常: {e}')
 
     return issues
@@ -415,7 +415,7 @@ def contract_report(adapter: Any) -> dict:
     if callable(fn):
         try:
             caps = as_capabilities(fn())
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     info = {}
     fn = getattr(adapter, 'get_connection_info', None)
@@ -423,7 +423,7 @@ def contract_report(adapter: Any) -> dict:
         try:
             got = fn()
             info = got if isinstance(got, dict) else {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             info = {}
     return {
         'id': info.get('id') or getattr(adapter, 'adapter_id', '') or type(adapter).__name__,

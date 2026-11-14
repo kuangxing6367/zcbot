@@ -870,7 +870,7 @@ if __name__ == '__main__':
             except AssertionError as e:
                 failed += 1
                 print(f"FAIL  {fn.__name__}: {e}")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 failed += 1
                 print(f"ERROR {fn.__name__}: {type(e).__name__}: {e}")
     finally:

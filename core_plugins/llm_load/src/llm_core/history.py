@@ -136,7 +136,7 @@ class Conversation:
         if self._persist_cb is not None:
             try:
                 self._persist_cb(self)
-            except Exception as e:  # noqa: BLE001 - 持久化失败不影响对话
+            except Exception as e:
                 logger.debug(f"[history] 会话落盘失败 {self.key}: {e}")
 
     # ---- 读写 ----
@@ -269,7 +269,7 @@ class SessionPersist:
         self._retention = max(3600, int(retention))
         try:
             os.makedirs(self._dir, exist_ok=True)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"[history] 会话目录创建失败 {self._dir}: {e}")
 
     def _path(self, key: str) -> str:
@@ -288,7 +288,7 @@ class SessionPersist:
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
             os.replace(tmp, self._path(conv.key))  # 原子替换，避免半截文件
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.debug(f"[history] 会话保存失败 {conv.key}: {e}")
 
     def load(self, key: str) -> dict | None:
@@ -298,7 +298,7 @@ class SessionPersist:
             if data.get('key') != key or not isinstance(data.get('messages'), list):
                 return None
             return data
-        except Exception:  # noqa: BLE001 - 不存在/损坏都当没有
+        except Exception:
             return None
 
     def delete(self, key: str) -> bool:
@@ -321,7 +321,7 @@ class SessionPersist:
             try:
                 with open(os.path.join(self._dir, name), 'r', encoding='utf-8') as f:
                     data = json.load(f)
-            except Exception:  # noqa: BLE001 - 半截/损坏文件跳过，不拖垮整个列表
+            except Exception:
                 continue
             if isinstance(data, dict) and isinstance(data.get('messages'), list):
                 out.append(data)

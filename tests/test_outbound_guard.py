@@ -172,7 +172,7 @@ def test_hits_capacity_eviction():
     try:
         for i in range(200):
             g.execute_sync('send_private_msg', None, {'user_id': i}, lambda: OK)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise SystemExit(f'断言失败：容量淘汰抛异常 {type(e).__name__}: {e}')
     check('容量：键数受上限约束', len(g._hits) <= 8, str(len(g._hits)))
 

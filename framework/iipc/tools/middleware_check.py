@@ -22,7 +22,7 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 sys.path.insert(0, HERE)
 
-import sdk  # noqa: E402
+import sdk
 
 
 class FakeClient:

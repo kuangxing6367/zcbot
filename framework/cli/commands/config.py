@@ -24,7 +24,7 @@ def do_config(args, working_dir):
 
     try:
         cfg = load_config(path) or {}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print("读取配置失败: %s" % e)
         return 1
 
@@ -76,7 +76,7 @@ def do_config(args, working_dir):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 text = f.read()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print("读取失败: %s" % e)
             return 1
         # 只匹配「行首（可含空格）+ key:」，注释行以 # 开头不会被误伤
@@ -88,7 +88,7 @@ def do_config(args, working_dir):
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(new_text)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print("写入失败: %s" % e)
             return 1
         print("已设置 %s = %s（重启后生效）" % (key, value))

@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import framework.crash_guard as cg  # noqa: E402
+import framework.crash_guard as cg
 
 
 def _cfg(max_restarts=5, enabled=True, path=None):

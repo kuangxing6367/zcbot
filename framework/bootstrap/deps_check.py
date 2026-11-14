@@ -176,7 +176,7 @@ def ensure_optional_driver(config_path=None):
             f.write('\n'.join(need) + '\n')
         from framework.deps.pip import pip_install_requirements
         result = pip_install_requirements(sys.executable, tmp_req, timeout=180)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         print(f"[自检] 数据库驱动安装异常: {e}")
         return
     finally:

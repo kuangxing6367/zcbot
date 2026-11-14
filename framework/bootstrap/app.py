@@ -119,7 +119,7 @@ async def amain():
                 threshold=_wd_cfg.get('threshold'),
                 stall_wait=_wd_cfg.get('stall_wait'),
             ).start(loop=loop)
-    except Exception as e:  # noqa: BLE001 - 诊断设施失败不能挡住启动
+    except Exception as e:
         logger.debug(f"事件循环看门狗启动失败: {e}")
         watchdog = None
 

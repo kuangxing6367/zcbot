@@ -482,7 +482,7 @@ def to_outgoing(message: Any, adapter=None) -> Any:
         return segments
     try:
         native = to_native(segments)
-    except Exception:  # noqa: BLE001 - 接入端翻译失败不应炸掉发送链路
+    except Exception:
         return segments
     return native if native is not None else segments
 

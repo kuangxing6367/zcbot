@@ -25,14 +25,14 @@ logger = logging.getLogger('zcbot.llm_core')
 try:
     import sqlite_vec
     _HAS_SQLITE_VEC = True
-except Exception:  # noqa: BLE001
+except Exception:
     sqlite_vec = None
     _HAS_SQLITE_VEC = False
 
 try:
     import numpy as np
     _HAS_NUMPY = True
-except Exception:  # noqa: BLE001
+except Exception:
     np = None
     _HAS_NUMPY = False
 
@@ -121,7 +121,7 @@ class KnowledgeBase:
             try:
                 self._conn.enable_load_extension(True)
                 self._conn.load_extension(sqlite_vec.loadable_path())
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(f"加载 sqlite_vec 失败，退回 memory: {e}")
                 self.backend = 'memory'
         self._init_schema()
@@ -153,7 +153,7 @@ class KnowledgeBase:
         try:
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS kb_fts USING fts5(text, tokenize='trigram')")
             self._has_fts = True
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"FTS5 不可用，关键词召回关闭: {e}")
             self._has_fts = False
         if self.backend == 'sqlite_vec' and self._vec_ready:
@@ -175,7 +175,7 @@ class KnowledgeBase:
             vecs = self.embed(chunks)
         except EmbeddingError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise EmbeddingError(f"向量化失败：{e}") from e
         if len(vecs) != len(chunks):
             raise EmbeddingError(f"embedding 返回 {len(vecs)} 条，期望 {len(chunks)} 条")
@@ -218,7 +218,7 @@ class KnowledgeBase:
             qvec = self.embed([query])[0]
         except EmbeddingError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise EmbeddingError(f"查询向量化失败：{e}") from e
         vec_rank = self._vector_search(qvec, top_k * 3)
         fts_rank = (self._fts_search(query, top_k * 3)
@@ -246,7 +246,7 @@ class KnowledgeBase:
                     "SELECT rowid, distance FROM kb_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
                     (_vec_blob(qvec), limit)).fetchall()
                 return [(r['rowid'], r['distance']) for r in rows]
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning(f"vec0 检索失败，退回内存检索: {e}")
         rows = self._conn.execute("SELECT rowid, vec FROM kb_vec_mem").fetchall()
         scored = [(r['rowid'], _cosine(qvec, json.loads(r['vec']))) for r in rows]
@@ -278,13 +278,13 @@ class KnowledgeBase:
             if self.backend == 'sqlite_vec' and self._vec_ready:
                 try:
                     c.execute("DELETE FROM kb_vec WHERE rowid=?", (cid,))
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             c.execute("DELETE FROM kb_vec_mem WHERE rowid=?", (cid,))
             if self._has_fts:
                 try:
                     c.execute("DELETE FROM kb_fts WHERE rowid=?", (cid,))
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
         c.execute("DELETE FROM kb_chunks WHERE doc_id=?", (doc_id,))
         c.execute("DELETE FROM kb_docs WHERE id=?", (doc_id,))
@@ -305,12 +305,12 @@ class KnowledgeBase:
         if self._has_fts:
             try:
                 c.execute("DELETE FROM kb_fts")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         if self.backend == 'sqlite_vec' and self._vec_ready:
             try:
                 c.execute("DELETE FROM kb_vec")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         c.commit()
         return before
@@ -318,5 +318,5 @@ class KnowledgeBase:
     def close(self):
         try:
             self._conn.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass

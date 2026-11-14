@@ -262,7 +262,7 @@ class MatrixAdapter(ProtocolAdapter):
             return str(state.get('since') or '')
         except FileNotFoundError:
             return ''
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning('matrix since 读取失败，从头开始: %s', e)
             return ''
 
@@ -275,7 +275,7 @@ class MatrixAdapter(ProtocolAdapter):
                 json.dump({'key': self._state_key(), 'since': self._since,
                            'updated_at': time.strftime('%Y-%m-%d %H:%M:%S')}, f)
             os.replace(tmp, path)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning('matrix since 保存失败（不影响收消息）: %s', e)
 
     # ── 生命周期 ────────────────────────────────────────────────
@@ -328,7 +328,7 @@ class MatrixAdapter(ProtocolAdapter):
                 else:
                     logger.debug('matrix sync 失败: %s', e)
                 await asyncio.sleep(backoff.next_delay(0))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self._connected = False
                 logger.warning('matrix 轮询异常: %s', e)
                 await asyncio.sleep(backoff.next_delay(0))
@@ -357,7 +357,7 @@ class MatrixAdapter(ProtocolAdapter):
                 event = sanitize_adapter_event(event, self.bot_name)
                 try:
                     await self.framework.dispatch_event(event)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     logger.error('matrix 事件分发失败: %s', e)
         # 本批全部入队后才推进 since；_closing 时故意不落盘，重启后重放
         if next_batch and not self._closing:
@@ -371,11 +371,11 @@ class MatrixAdapter(ProtocolAdapter):
         try:
             resp = self._http.request(
                 method, url, params=params, json=json_body, timeout=timeout)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise MatrixApiError('M_NETWORK', f'{type(e).__name__}: {e}')
         try:
             body = resp.json() if resp.content else {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             body = {}
         if resp.status_code >= 400:
             retry_after_ms = None
@@ -449,7 +449,7 @@ class MatrixAdapter(ProtocolAdapter):
             headers={'Content-Type': mime or 'application/octet-stream'})
         try:
             body = resp.json() if resp.content else {}
-        except Exception:  # noqa: BLE001
+        except Exception:
             body = {}
         if resp.status_code >= 400 or not body.get('content_uri'):
             raise MatrixApiError(
@@ -527,7 +527,7 @@ class MatrixAdapter(ProtocolAdapter):
                 with open(path, 'rb') as f:
                     raw = f.read()
                 return raw, name or os.path.basename(path) or 'file', mime
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning('matrix 读取媒体失败: %s', e)
         return b'', name, mime
 
@@ -594,7 +594,7 @@ class MatrixAdapter(ProtocolAdapter):
                 continue
             try:
                 path = await asyncio.to_thread(self._download_media, mxc, data)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.warning('matrix 媒体下载失败 %s: %s', mxc, e)
                 path = ''
             if path:
@@ -712,7 +712,7 @@ class MatrixAdapter(ProtocolAdapter):
                 pass
         try:
             self._http.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -762,7 +762,7 @@ def register(ctx):
             me = _adapter_instance._request(
                 'GET', '/_matrix/client/v3/account/whoami', timeout=5)
             _adapter_instance.user_id = (me or {}).get('user_id') or ''
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning('Matrix 无法自动获取 user_id: %s', e)
         if _adapter_instance.user_id:
             ctx.log(f'Matrix 已自动补全 user_id: {_adapter_instance.user_id}')

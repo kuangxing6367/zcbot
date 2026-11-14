@@ -65,7 +65,7 @@ class _StdioTransport:
             )
         except FileNotFoundError as e:
             raise MCPTransportError(f"找不到 MCP server 可执行文件: {command}") from e
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise MCPTransportError(f"启动 MCP server 失败: {e}") from e
         self._lock = threading.Lock()
 
@@ -77,7 +77,7 @@ class _StdioTransport:
             try:
                 self._proc.stdin.write((line + '\n').encode('utf-8'))
                 self._proc.stdin.flush()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 raise MCPTransportError(f"写入 MCP server 失败: {e}") from e
             deadline = time.time() + timeout
             while time.time() < deadline:
@@ -102,7 +102,7 @@ class _StdioTransport:
         if getattr(self, '_proc', None) is not None:
             try:
                 self._proc.terminate()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
 
@@ -121,7 +121,7 @@ class _HttpTransport:
         try:
             resp = requests.post(self.url, json=payload, headers=self.headers,
                                  timeout=timeout or self.timeout)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise MCPTransportError(f"请求 MCP 端点失败: {e}") from e
         if resp.status_code != 200:
             raise MCPTransportError(f"MCP 端点返回 {resp.status_code}: {resp.text[:200]}")
@@ -206,7 +206,7 @@ class MCPClient:
     def close(self) -> None:
         try:
             self._transport.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -230,7 +230,7 @@ def bind_mcp_tools(registry, servers: list[dict]) -> dict[str, int]:
             client = MCPClient(name, **cfg)
             client.handshake()
             tools = client.list_tools()
-        except Exception as e:  # noqa: BLE001 - 一台 server 挂掉不能影响整体启用
+        except Exception as e:
             logger.error(f"[llm_core] MCP server [{name}] 接入失败: {e}")
             summary[name] = 0
             continue

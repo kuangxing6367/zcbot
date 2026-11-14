@@ -71,7 +71,7 @@ class _EventIdFilter(logging.Filter):
 from framework.core.dispatch import FrameworkDispatchMixin
 from framework.core.event_buffer import EventBuffer
 from framework.core.runtime import FrameworkRuntimeMixin
-from framework.core.stats_writer import AsyncStatsWriter  # noqa: F401  向后兼容 re-export
+from framework.core.stats_writer import AsyncStatsWriter
 
 
 class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
@@ -411,7 +411,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             _fmt = jsonlog.apply_format(self.config.get('log', {}).get('format', 'text'))
             if _fmt == jsonlog.FORMAT_JSON:
                 logger.info("日志输出格式: JSON Lines（log.format=json）")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"日志格式设置失败，保持文本格式: {e}")
 
         # 日志合并（自动止刷屏）：对归一化后相同的 WARNING+ 日志在滑动窗口内合并计数，
@@ -684,7 +684,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 backlog=int(cfg.get('backlog', 8) or 8),
                 read_timeout=int(cfg.get('read_timeout', 3600) or 3600))
             self.console_server.start()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"调试控制台启动异常: {e}")
             self.console_server = None
         return self.console_server

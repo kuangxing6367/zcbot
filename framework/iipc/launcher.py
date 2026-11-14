@@ -46,8 +46,8 @@ ROOT = _find_root()
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "py_sdk"))
 
-import iipc_log  # noqa: E402
-from iipc_client import resolve_auth  # noqa: E402
+import iipc_log
+from iipc_client import resolve_auth
 
 
 def _load_iipc_config():

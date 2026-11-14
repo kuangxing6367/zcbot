@@ -262,7 +262,7 @@ def register(ctx):
                 buf = getattr(framework, '_event_buffer', None)
                 if buf is not None and hasattr(buf, 'stats'):
                     buffer_stats = buf.stats() or {}
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug(f"运行状态附加指标不可用: {e}")
 
             # 插件内存占用（已加载插件）
@@ -275,7 +275,7 @@ def register(ctx):
                     scheduler_stats = sch.stats() or {}
                 from framework.core.loop_watchdog import watchdog as _wd
                 loop_health = _wd.stats() or {}
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.debug(f"调度/循环指标不可用: {e}")
 
             plugin_mem = {}

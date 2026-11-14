@@ -10,7 +10,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from onebot_fake import FakeOneBot  # noqa: E402
+from onebot_fake import FakeOneBot
 
 
 def client_handshake(sock):

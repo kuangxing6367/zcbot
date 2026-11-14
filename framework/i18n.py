@@ -52,7 +52,7 @@ from pathlib import Path
 try:
     import yaml
     _HAS_YAML = True
-except Exception:  # noqa: BLE001
+except Exception:
     yaml = None
     _HAS_YAML = False
 
@@ -97,7 +97,7 @@ def _load_lang(code: str) -> dict:
         with open(path, encoding='utf-8') as fh:
             data = yaml.safe_load(fh) or {}
         return _flatten(data)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning('[i18n] 加载语言文件失败 %s: %s', path, e)
         return {}
 

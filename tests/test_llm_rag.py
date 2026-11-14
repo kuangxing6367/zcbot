@@ -13,9 +13,9 @@ SRC = os.path.join(_ROOT, 'core_plugins', 'llm_load', 'src')
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-import llm_core.main as llm_main  # noqa: E402
-from llm_core import embeddings as emb_mod  # noqa: E402
-from llm_core.knowledge import KnowledgeBase, _rrf, _split_text  # noqa: E402
+import llm_core.main as llm_main
+from llm_core import embeddings as emb_mod
+from llm_core.knowledge import KnowledgeBase, _rrf, _split_text
 
 _FAILED = False
 
@@ -52,7 +52,7 @@ def new_kb():
 def teardown(kb):
     try:
         os.remove(kb._test_path)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 

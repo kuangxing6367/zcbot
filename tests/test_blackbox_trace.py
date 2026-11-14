@@ -9,7 +9,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from framework.blackbox import STAGE_STEP, BlackBox  # noqa: E402
+from framework.blackbox import STAGE_STEP, BlackBox
 
 
 def test_stage_step_complete():

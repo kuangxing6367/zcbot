@@ -25,11 +25,11 @@ logger = logging.getLogger('zcbot')
 
 # ── 插件依赖 / 隔离 venv（混入 PluginLoader）─────────────────────
 
-from framework.deps.diagnose import (  # noqa: F401  平台化加载错误诊断
+from framework.deps.diagnose import (
     classify_load_error,
     diagnose_plugin_load_error,
 )
-from framework.deps.pip import (  # noqa: F401  向后兼容 re-export
+from framework.deps.pip import (
     _check_version_compatible,
     _get_host,
     _parse_requirements_file,

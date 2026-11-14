@@ -19,9 +19,9 @@ import yaml
 
 pytest.importorskip('flask')
 
-from flask import Flask, request  # noqa: E402
+from flask import Flask, request
 
-import framework.api.config as cfg_api  # noqa: E402
+import framework.api.config as cfg_api
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

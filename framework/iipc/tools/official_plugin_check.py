@@ -28,8 +28,8 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 sys.path.insert(0, HERE)
 
-from iipc_client import IIPCClient, resolve_auth  # noqa: E402
-from portutil import pick_addr  # noqa: E402
+from iipc_client import IIPCClient, resolve_auth
+from portutil import pick_addr
 
 # 端口动态分配：不写死，避免与开发机上正在跑的服务抢端口
 ADDR = pick_addr("ZCBOT_OFFICIAL_ADDR")

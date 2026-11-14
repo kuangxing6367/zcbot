@@ -158,7 +158,7 @@ class SettingsScreen(ModalScreen):
             self.plugin._rebuild_tools(cfg)
             self.plugin._rebuild_store(cfg)
             self.plugin._persist_cfg(self.plugin._FW, cfg)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.notify('保存失败：%s' % e, severity='error')
             return
         self.dismiss(True)
@@ -953,7 +953,7 @@ class AgentApp(App):
             self.plugin._archive_turn(text, final)
         except LLMError as e:
             self.call_from_thread(self._on_event, 'error', {'message': str(e)})
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.call_from_thread(self._on_event, 'error', {'message': '执行异常：%s' % e})
         finally:
             self.call_from_thread(self._on_done)

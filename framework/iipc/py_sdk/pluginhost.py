@@ -47,14 +47,14 @@ def main():
         sys.path.insert(0, a.sdk_dir)
 
     # 令牌优先走环境变量（内核经 exec 注入），命令行参数仅作显式覆盖。
-    from iipc_client import resolve_auth  # noqa: E402
+    from iipc_client import resolve_auth
     a.iipc_auth = resolve_auth(a.iipc_auth)
 
     # 预加载 SDK + 公共依赖（Linux fork 的 COW 共享来源；spawn 模式无此收益但无害）
     run_plugin = None
     try:
-        import iipc_client  # noqa: F401
-        import sdk  # noqa: F401
+        import iipc_client
+        import sdk
         from sdk import run_plugin as _rp
         run_plugin = _rp
         log("已预加载 SDK（fork 模式子进程将 COW 共享只读页）")

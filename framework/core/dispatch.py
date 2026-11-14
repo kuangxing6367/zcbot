@@ -184,7 +184,7 @@ class FrameworkDispatchMixin:
             adapter = self.services.adapter_for_source(event.get('bot_name'))
             event = _normalize_event(event, adapter)
             bot_name = event.get('bot_name') or 'default'
-        except Exception as e:  # noqa: BLE001 - 补齐失败不应吃掉事件
+        except Exception as e:
             logger.debug(f"事件契约补齐失败，按原样分发: {e}")
 
         # 入站可靠性守卫：断线重连重放去重 + 消息流限流（详见 docs/进阶/可靠性与限流.md）。
@@ -208,7 +208,7 @@ class FrameworkDispatchMixin:
                         except Exception as e:
                             logger.debug("限流提示回复失败（不影响限流判定）: %s", e)
                 return
-        except Exception as e:  # noqa: BLE001 - 守卫故障绝不让消息凭空消失
+        except Exception as e:
             logger.error("入站可靠性守卫异常，已放行事件: %s", e)
 
         # 事件进入内核前的扩展点（任何 handler 返回 False 即丢弃该事件）

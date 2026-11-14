@@ -17,7 +17,7 @@ from flask import Flask
 from werkzeug.test import EnvironBuilder
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from framework.api import registry  # noqa: E402
+from framework.api import registry
 
 
 def _request(app, method, path):

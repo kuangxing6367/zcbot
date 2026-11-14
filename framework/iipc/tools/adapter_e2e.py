@@ -31,8 +31,8 @@ ROOT = os.path.dirname(HERE)                      # iipc/
 PYSIDE = os.path.dirname(ROOT)                   # python_side/
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "py_sdk"))
-from iipc_client import IIPCClient, resolve_auth  # noqa: E402
-from onebot_fake import FakeOneBot, group_msg, private_msg  # noqa: E402
+from iipc_client import IIPCClient, resolve_auth
+from onebot_fake import FakeOneBot, group_msg, private_msg
 
 KERNEL_EXE = os.path.join(ROOT, "go_kernel", "zcbot_kernel.exe")
 

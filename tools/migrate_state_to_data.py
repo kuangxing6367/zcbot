@@ -16,8 +16,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework import paths  # noqa: E402
-from framework.migration import migrator  # noqa: E402
+from framework import paths
+from framework.migration import migrator
 
 
 def main():

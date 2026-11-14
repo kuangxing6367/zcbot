@@ -115,7 +115,7 @@ class ProtocolAdapter(ABC):
         """能力查询：`adapter.supports('voice', 'in')`"""
         try:
             return as_capabilities(self.capabilities()).supports(cap, direction)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     def normalize_incoming(self, raw_message) -> list:
@@ -368,7 +368,7 @@ class ServiceRegistry:
         """
         try:
             issues = validate_adapter(adapter)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"接入端 [{aid}] 契约自检异常: {e}")
             return
         if not issues:

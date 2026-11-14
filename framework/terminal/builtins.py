@@ -10,7 +10,7 @@ from .cmd_msg import register as _reg_msg
 from .cmd_ops import register as _reg_ops
 from .cmd_plugin import register as _reg_plugin
 from .cmd_update import register as _reg_update
-from .helper import installed_core_plugins  # noqa: F401  向后兼容 re-export
+from .helper import installed_core_plugins
 from .panel import register as _reg_panel
 
 

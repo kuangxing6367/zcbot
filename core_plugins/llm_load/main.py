@@ -223,7 +223,7 @@ def register(ctx):
     except FileNotFoundError as e:
         logger.error(f"[llm_load] {e}；请先执行 python tools/build_llm_payload.py --write")
         return
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error(f"[llm_load] 载荷不可用: {e}")
         return
 
@@ -266,7 +266,7 @@ def _register_commands(ctx):
     try:
         ctx.command('/llmload', handle_llmload, require_admin=True,
                     description="LLM 装载器：status / verify / reinstall")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(f"[llm_load] 注册命令失败: {e}")
 
 
@@ -292,12 +292,12 @@ def _restart_now(ctx, fw):
     try:
         sys.stdout.flush()
         sys.stderr.flush()
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     try:
         os.chdir(os.path.dirname(main_py))
         os.execv(sys.executable, [sys.executable, main_py] + sys.argv[1:])
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error(f"[llm_load] 重启失败: {e}")
 
 
@@ -309,7 +309,7 @@ def _state():
         return {'ok': False, 'error': '装载器尚未初始化'}
     try:
         manifest = read_manifest(zip_path)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {'ok': False, 'error': str(e)}
     report = verify(cfg['target_dir'], manifest, cfg.get('dat_dir'))
     report.update({
@@ -357,7 +357,7 @@ def handle_llmload(event, match):
                    + (f"，失败 {len(outcome['failed'])} 个" if outcome['failed'] else "")
                    + f"\n状态：{'一致' if after['ok'] else '仍不一致'}"
                    + "\n需要重启框架后生效")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             msg = f"重装失败：{e}"
     else:
         msg = "用法：/llmload status | verify | reinstall"

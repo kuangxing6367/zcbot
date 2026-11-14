@@ -519,7 +519,7 @@ def fill_missing_sections(config: dict) -> list:
     """
     try:
         defaults = yaml.safe_load(_DEFAULT_CONFIG) or {}
-    except Exception as e:  # noqa: BLE001 - 默认模板自身损坏不应阻断启动
+    except Exception as e:
         _get_logger().warning(f"解析默认配置模板失败，跳过缺段补齐: {e}")
         return []
     if not isinstance(defaults, dict) or not isinstance(config, dict):
@@ -793,7 +793,7 @@ def load_config(config_path: str = None) -> dict:
     # 不补的话，新能力（去重/限流、可观测、迁移管控…）对存量部署不可见不可调。
     try:
         _added = fill_missing_sections(config)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _get_logger().warning(f"配置缺段补齐失败（按原配置继续）: {e}")
     else:
         if _added:
@@ -804,7 +804,7 @@ def load_config(config_path: str = None) -> dict:
     # Gap 1：值与类型校验（只告警、不阻断启动、不改写文件）
     try:
         _issues = validate_config(config)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _get_logger().warning(f"配置校验异常（跳过）: {e}")
     else:
         if _issues:
@@ -827,7 +827,7 @@ def get_config() -> dict:
 # 注：支持环境变量 ZCBOT_CORE_PLUGINS_YAML 覆盖路径（黑盒测试启动器
 # tests/webui_blackbox_launcher.py 借此把插件配置指向一份隔离副本，
 # 从而在不改动真实仓库的前提下自定义 webui 监听端口等）。
-from framework.paths import core_plugins_yaml_path as _core_plugins_yaml_path  # noqa: E402
+from framework.paths import core_plugins_yaml_path as _core_plugins_yaml_path
 
 CORE_PLUGINS_YAML = _core_plugins_yaml_path()
 

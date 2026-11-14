@@ -36,7 +36,7 @@ def bench(name, coro):
 
 async def _pure_await():
     """直接 await 基线：空 async handler 直接 await"""
-    async def handler(ev):  # noqa: ARG001
+    async def handler(ev):
         return None
     for _ in range(N):
         await handler({'type': 'message'})
@@ -54,7 +54,7 @@ async def _event_bus_10subs():
     from framework.messaging.event_bus import EventBus
     bus = EventBus()
     for i in range(10):
-        async def h(p, _i=i):  # noqa: ARG001
+        async def h(p, _i=i):
             return None
         bus.subscribe('message', f'p{i}', h)
     ev = {'type': 'message'}

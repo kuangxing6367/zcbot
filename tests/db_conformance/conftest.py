@@ -13,8 +13,8 @@ _ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from tests.db_conformance.backends import make_backend  # noqa: E402
-from tests.db_conformance.requirements import caps_of  # noqa: E402
+from tests.db_conformance.backends import make_backend
+from tests.db_conformance.requirements import caps_of
 
 
 def pytest_addoption(parser):

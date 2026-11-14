@@ -228,7 +228,7 @@ def _append_memory(text):
         with open(p, "a", encoding="utf-8") as f:
             f.write("- %s\n" % text.replace("\n", " "))
         return True, "已记入长期记忆（memory.md）"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return False, "写入失败：%s" % e
 
 
@@ -238,7 +238,7 @@ def _clear_memory():
         return True, "已清空长期记忆"
     except FileNotFoundError:
         return True, "长期记忆本来就是空的"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return False, "清空失败：%s" % e
 
 
@@ -774,7 +774,7 @@ def _cmd_code(args):
         rc = subprocess.call([sys.executable, main_py, "code"], cwd=_ROOT)
     except KeyboardInterrupt:
         return
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _out("[code] 启动界面失败：%s" % e)
         return
     if rc:
@@ -812,7 +812,7 @@ class _StubFramework:
         try:
             self.db = _StandaloneDb((config or {}).get('database'))
             self.db_path = self.db.path
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             self.db_error = str(e)
 
     def stop(self):
@@ -845,12 +845,12 @@ def run_cli(config_path=None):
     """CLI 入口：命令行直接打开 AI 智能体界面。返回退出码。"""
     try:
         tui = _load_tui()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _out("[code] 界面不可用：%s" % e)
         return 1
     try:
         _fw, plugin = bootstrap(config_path)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _out("[code] 初始化失败：%s" % e)
         return 1
     try:

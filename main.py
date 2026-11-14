@@ -36,7 +36,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from startup import (  # noqa: E402,F401
+from startup import (
     _check_and_install_deps,
     _ensure_optional_driver,
     _pop_language_arg,

@@ -856,11 +856,11 @@ def _mount_api_v1_aliases(app):
             app.add_url_rule(alias, endpoint=endpoint, view_func=view,
                              methods=sorted(methods) or None)
             created += 1
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"[API 版本化] 别名注册失败 {alias}: {e}")
     if created:
         logger.info(f"[API 版本化] 已挂载 {created} 条 /api/v1/* 别名（旧路径保持不变）")
 
 
 # 向后兼容 re-export（WebServer 本体已拆至 webserver.py）
-from framework.api.webserver import WebServer  # noqa: F401,E402
+from framework.api.webserver import WebServer

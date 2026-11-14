@@ -3,6 +3,6 @@
 AsyncStatsWriter 已移入 framework/core/stats_writer.py。
 旧导入路径 from framework.stats_writer import AsyncStatsWriter 保持有效。
 """
-from framework.core.stats_writer import AsyncStatsWriter  # noqa: F401
+from framework.core.stats_writer import AsyncStatsWriter
 
 __all__ = ['AsyncStatsWriter']

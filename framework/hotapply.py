@@ -74,7 +74,7 @@ def _apply_log(framework, cfg: dict) -> list:
                 notes.append(f'未知日志格式 {raw}，已回落到 {applied}')
             else:
                 notes.append(f'日志格式即时生效: {applied}')
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             notes.append(f'日志格式应用失败: {e}')
     return notes
 
@@ -93,7 +93,7 @@ def _apply_framework(framework, cfg: dict) -> list:
             if kwargs:
                 configure(**kwargs)
                 notes.append('内存黑匣子配置即时生效')
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"[热应用] 黑匣子配置应用失败: {e}")
     return notes
 
@@ -123,7 +123,7 @@ def _apply_outbound(framework, cfg: dict) -> list:
             f"出站重试即时生效：{'开启' if rt['enabled'] else '关闭'}"
             f"（额外 {rt['attempts']} 次，首次退避 {rt['backoff']}s）",
         ]
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(f"[热应用] 出站闸门配置应用失败: {e}")
         return [f'出站闸门配置应用失败: {e}']
 
@@ -193,7 +193,7 @@ def apply_section(framework, section: str, data: dict) -> dict:
     if fn is not None:
         try:
             notes = list(fn(framework, merged) or [])
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"[热应用] 配置段 [{section}] 即时应用失败: {e}")
             notes = [f'即时应用失败: {e}']
 

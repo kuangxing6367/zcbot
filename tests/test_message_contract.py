@@ -13,10 +13,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from framework.messaging import contract as C  # noqa: E402
-from framework.messaging import segments as S  # noqa: E402
-from framework.messaging.event import Event  # noqa: E402
-from framework.messaging.protocol import ProtocolAdapter  # noqa: E402
+from framework.messaging import contract as C
+from framework.messaging import segments as S
+from framework.messaging.event import Event
+from framework.messaging.protocol import ProtocolAdapter
 
 _PASS = []
 _FAIL = []
@@ -433,7 +433,7 @@ def main():
     for fn in tests:
         try:
             fn()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             import traceback
             _FAIL.append(f"{fn.__name__} 抛异常: {e}\n{traceback.format_exc()}")
     for name in _PASS:

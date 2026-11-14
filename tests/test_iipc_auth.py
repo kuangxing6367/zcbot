@@ -32,7 +32,7 @@ KERNEL = GO_DIR / ("zcbot_kernel.exe" if os.name == "nt" else "zcbot_kernel")
 if str(SDK_DIR) not in sys.path:
     sys.path.insert(0, str(SDK_DIR))
 
-from iipc_client import ENV_NAME, IIPCClient, resolve_auth  # noqa: E402
+from iipc_client import ENV_NAME, IIPCClient, resolve_auth
 
 # ───────────────────────── 1) 令牌解析（纯 Python，确定性） ─────────────────────────
 

@@ -22,7 +22,7 @@ __all__ = ["HERE", "build", "run"]
 def _load_launcher():
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
-    import launcher  # noqa: E402  同目录下，非框架包内模块
+    import launcher
     return launcher
 
 

@@ -30,7 +30,7 @@ if ROOT not in sys.path:
 # 缺失时整模块 skip：否则 15 条用例会因导入失败集体报假红，
 # 把「环境没装可选依赖」误报成「功能坏了」。脚本直跑时退化为干净跳过。
 try:
-    import rich  # noqa: F401
+    import rich
 except ImportError:  # pragma: no cover - 仅在无 rich 的最小化环境触发
     try:
         import pytest
@@ -39,11 +39,11 @@ except ImportError:  # pragma: no cover - 仅在无 rich 的最小化环境触�
         print("SKIP test_aiwriter: aiwriter TUI 依赖 rich 未安装")
         sys.exit(0)
 
-from core_plugins.aiwriter import agent as aw_agent  # noqa: E402
-from core_plugins.aiwriter import main as aw_main  # noqa: E402
-from core_plugins.aiwriter import prompt as aw_prompt  # noqa: E402
-from core_plugins.aiwriter import session as aw_session  # noqa: E402
-from core_plugins.aiwriter.tools import PermissionDenied, ToolError, ToolRegistry  # noqa: E402
+from core_plugins.aiwriter import agent as aw_agent
+from core_plugins.aiwriter import main as aw_main
+from core_plugins.aiwriter import prompt as aw_prompt
+from core_plugins.aiwriter import session as aw_session
+from core_plugins.aiwriter.tools import PermissionDenied, ToolError, ToolRegistry
 
 _ORIG_STREAM = aw_agent.stream_chat
 
@@ -1183,7 +1183,7 @@ if __name__ == "__main__":
         try:
             t()
             print(f"PASS  {t.__name__}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             failed += 1
             print(f"FAIL  {t.__name__}: {e!r}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")

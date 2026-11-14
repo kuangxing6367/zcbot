@@ -102,7 +102,7 @@ def with_prior_buses():
         # 前置：event_bus 测试（与 bench_dispatch 相同）
         bus = EventBus()
         for i in range(10):
-            async def h(p, _i=i):  # noqa: ARG001
+            async def h(p, _i=i):
                 return None
             bus.subscribe('message', f'p{i}', h)
         ev = {'type': 'message'}

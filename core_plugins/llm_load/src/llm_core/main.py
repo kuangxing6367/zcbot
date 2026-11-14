@@ -106,7 +106,7 @@ try:  # Flask 是可选依赖（启用 webui 插件时才安装）
     from flask import jsonify
     from flask import request as flask_request
     _HAS_FLASK = True
-except Exception:  # noqa: BLE001
+except Exception:
     jsonify = None
     flask_request = None
     flask_response = None
@@ -159,7 +159,7 @@ def calculator(expression: str):
         if isinstance(value, float) and value == int(value) and abs(value) < max_pow * 10:
             value = int(value)
         return f"{expr} = {value}"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"计算失败：{e}"
 
 
@@ -206,7 +206,7 @@ def _init_kb():
             backend=cfg.get('backend', 'auto'),
         )
         logger.info(f"知识库就绪：{_KB.backend} 后端，向量维度 {_KB.dims or '待首次入库推断'}")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error(f"知识库初始化失败: {e}")
         _KB = None
 
@@ -229,7 +229,7 @@ def knowledge_search(query: str) -> str:
         hits = _KB.search(query, top_k=int(_cfg('rag_top_k', 5)))
     except EmbeddingError as e:
         return f"知识库检索出错：{e}"
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return f"知识库检索出错：{e}"
     if not hits:
         return "知识库里没有命中相关内容。"
@@ -254,7 +254,7 @@ def _cfg(key: str, default=None):
         return default
     try:
         return ctx.get_config(key, default)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return default
 
 
@@ -328,7 +328,7 @@ def _current_conv():
             return None
         return _Svc.store.get(session_key(
             source, ev.group_id if ev.is_group else None, ev.user_id), create=False)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -519,7 +519,7 @@ def _caller_owner() -> str:
         # 本帧 → tool/deco → 调用者
         caller = frame.f_back.f_back if frame and frame.f_back else None
         return caller.f_globals.get('__name__', '') if caller else ''
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ''
 
 
@@ -530,7 +530,7 @@ def _check_chat_gates(user_id) -> str | None:
     for gate in _CHAT_GATES:
         try:
             tip = gate(user_id)
-        except Exception as e:  # noqa: BLE001 - 闸门故障不拦截对话
+        except Exception as e:
             logger.debug(f"[llm_core] 对话闸门异常: {e}")
             continue
         if tip:
@@ -597,7 +597,7 @@ async def handle_chat(event, match):
             'tools': [c['name'] for c in result.tool_calls],
             'chars': len(body), 'model': result.model,
         })
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -685,7 +685,7 @@ def on_raw(raw_event: dict, bot_name: str):
             return
         _Media.put(bot_name or '', raw_event.get('group_id'),
                    raw_event.get('user_id'), images)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.debug(f"[llm_core] 提取图片失败: {e}")
     return
 
@@ -720,7 +720,7 @@ async def on_free_chat(payload: dict):
         event = _FakeEvent(payload)
     try:
         await handle_chat(event, _FakeMatch())
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error(f"[llm_core] 自由对话处理失败: {e}")
 
 
@@ -865,7 +865,7 @@ def _view_kb_ingest():
         doc_id = _KB.add_text(title, text, source=source)
     except EmbeddingError as e:
         return jsonify({'code': 1, 'msg': f'向量化失败：{e}'})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return jsonify({'code': 1, 'msg': f'入库失败：{e}'})
     return jsonify({'code': 0, 'data': {'doc_id': doc_id}})
 
@@ -899,7 +899,7 @@ def _view_kb_search():
         hits = _KB.search(q, top_k=k)
     except EmbeddingError as e:
         return jsonify({'code': 1, 'msg': f'检索失败：{e}'})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return jsonify({'code': 1, 'msg': f'检索失败：{e}'})
     return jsonify({'code': 0, 'data': {'results': hits}})
 
@@ -1058,7 +1058,7 @@ def _view_delete_sessions():
     for key in keys:
         try:
             ok = bool(_Svc.store.drop(key))
-        except Exception as e:  # noqa: BLE001 - 一个删不掉不影响其它
+        except Exception as e:
             logger.debug(f"[llm_core] 删除会话失败 {key}: {e}")
             ok = False
         (deleted if ok else failed).append(key)
@@ -1122,7 +1122,7 @@ def register(plugin_ctx):
     if _cfg('persist_sessions', True):
         try:
             persist = SessionPersist(os.path.join(ctx.get_data_dir(), 'llm_sessions'))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(f"会话持久化不可用，退回纯内存: {e}")
     _Store = ConversationStore(
         system_prompt=_cfg('system_prompt', _DEFAULT_SYSTEM_PROMPT),
@@ -1135,7 +1135,7 @@ def register(plugin_ctx):
     def _perm_check(user_id, node, context=None, role=None):
         try:
             return ctx.has_perm(user_id, node, context, role)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
 
     def _pick_provider(_model=None):
@@ -1159,7 +1159,7 @@ def register(plugin_ctx):
         try:
             summary = bind_mcp_tools(registry, mcp_cfg)
             logger.info(f"MCP 接入结果: {summary}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.error(f"MCP 接入异常: {e}")
 
     # 6. 服务门面
@@ -1170,7 +1170,7 @@ def register(plugin_ctx):
     try:
         import sys
         sys.modules.setdefault('plugin_llm_core', sys.modules[__name__])
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # 7. 命令
@@ -1193,7 +1193,7 @@ def register(plugin_ctx):
         # 一个插件只有一个侧边栏入口（框架前端按插件名折叠，多注册会撞进同一个页面），
         # 概览与会话管理做成 index.html 内部的标签页
         ctx.webui(title="LLM 对话", entry="index.html", icon="◈", order=40, sidebar=True)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(f"注册 WebUI 页面失败: {e}")
     if _HAS_FLASK:
         ctx.register_api('/api/llm_core/overview', _view_overview,
@@ -1239,13 +1239,13 @@ def unregister():
             services.remove('llm_core')
         elif hasattr(services, 'unregister'):
             services.unregister('llm_core')
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     if _Service is not None:
         # 把本插件注册的工具一并清干净，避免重载后重复登记
         try:
             _Service.unregister_by_owner('llm_core')
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     _Service = None
 
@@ -1275,7 +1275,7 @@ def _resolve_provider_for(event, text: str) -> Provider | None:
         return _Svc._providers.require()
     except ProviderError:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -1293,7 +1293,7 @@ def _split_text(text: str, size: int = None) -> list[str]:
     if size is None:
         try:
             size = max(100, int(_cfg('max_reply_chars', _MAX_REPLY_CHARS)))
-        except Exception:  # noqa: BLE001
+        except Exception:
             size = _MAX_REPLY_CHARS
     if len(text) <= size:
         return [text]
