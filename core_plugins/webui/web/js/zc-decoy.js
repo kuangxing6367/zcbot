@@ -4,9 +4,16 @@
  */
 (function(w,d){
   try{
-    var X=w.XMLHttpRequest?new w.XMLHttpRequest():null;
-    if(!X){return;}
-    function g(p){try{X.open('GET',p,true);X.send();}catch(e){}}
+    if(!w.XMLHttpRequest){return;}
+    // 每个请求独立对象。旧实现复用一个 XHR 连发四个：第二次 open() 会 abort
+    // 上一次请求，浏览器控制台冒一堆 net::ERR_ABORTED，服务端还会收到半截请求。
+    function g(p){
+      try{
+        var x=new w.XMLHttpRequest();
+        x.open('GET',p,true);
+        x.send();
+      }catch(e){}
+    }
     function boot(){
       // 与主应用同源的伪端点：真实浏览器会发起，混入正常流量，扫描器无法与真端点区分
       g('/api/internal/telemetry');

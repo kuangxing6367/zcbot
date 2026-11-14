@@ -78,6 +78,7 @@ def tarpit(ms: int):
 _MAX_STAT_KEYS = 512
 _stats = {
     'total_hits': 0,
+    'benign_hits': 0,
     'evasion_hits': 0,
     'canary_issued': 0,
     'blacklisted': 0,
@@ -108,6 +109,7 @@ def get_stats(top_n: int = 10) -> dict:
                     for k, v in sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:top_n]]
         return {
             'total_hits': _stats['total_hits'],
+            'benign_hits': _stats['benign_hits'],
             'evasion_hits': _stats['evasion_hits'],
             'canary_issued': _stats['canary_issued'],
             'blacklisted': _stats['blacklisted'],
@@ -123,7 +125,8 @@ def get_stats(top_n: int = 10) -> dict:
 def reset_stats():
     """清空统计（供管理端调用）"""
     with _stats_lock:
-        _stats.update({'total_hits': 0, 'evasion_hits': 0, 'canary_issued': 0,
+        _stats.update({'total_hits': 0, 'benign_hits': 0, 'evasion_hits': 0,
+                       'canary_issued': 0,
                        'blacklisted': 0, 'first_hit_at': None, 'last_hit_at': None,
                        'by_ip': {}, 'by_path': {}, 'by_reason': {}})
 
@@ -1427,8 +1430,13 @@ def register(ctx):
     def _tarpit():
         tarpit(tarpit_ms)
 
-    def _hit(path, reason, canary=None, evasion='', ban=True):
-        """命中诱饵：记录取证信息 + 统计 +（ban=True 时）拉黑来源 IP"""
+    def _hit(path, reason, canary=None, evasion='', ban=True, benign=False):
+        """命中诱饵：记录取证信息 + 统计 +（ban=True 时）拉黑来源 IP
+
+        benign=True 用于「真实前端会主动调用、但当前部署没注册」的路径：
+        只累加独立的良性计数，不打 warning、不写审计表、不进威胁画像 TOP 榜。
+        这类请求以前走默认分支，会让正常用户被记成攻击者甚至被拉黑。
+        """
         # 【踩坑保佑】安全加固 前端诱饵
         # 坑：deception等于零  →  _hit
         #                    _ooOoo_
@@ -1475,32 +1483,42 @@ def register(ctx):
             except Exception as _exc:
                 logger.debug('[_hit] 捕获异常后按降级路径继续: %s', _exc)
 
-        # 统计画像
+        # 统计画像：良性流量单独计数，混进 total_hits 会让安全看板把正常用户
+        # 当成攻击者（曾经 by_ip 榜首就是打开管理后台的自己）
         now_str = time.strftime('%Y-%m-%d %H:%M:%S')
-        with _stats_lock:
-            _stats['total_hits'] += 1
-            if evasion:
-                _stats['evasion_hits'] += 1
-            if canary:
-                _stats['canary_issued'] += 1
-            if _stats['first_hit_at'] is None:
-                _stats['first_hit_at'] = now_str
-            _stats['last_hit_at'] = now_str
-            _bump(_stats['by_ip'], ip)
-            _bump(_stats['by_path'], path)
-            _bump(_stats['by_reason'], reason)
+        if benign:
+            with _stats_lock:
+                _stats['benign_hits'] += 1
+        else:
+            with _stats_lock:
+                _stats['total_hits'] += 1
+                if evasion:
+                    _stats['evasion_hits'] += 1
+                if canary:
+                    _stats['canary_issued'] += 1
+                if _stats['first_hit_at'] is None:
+                    _stats['first_hit_at'] = now_str
+                _stats['last_hit_at'] = now_str
+                _bump(_stats['by_ip'], ip)
+                _bump(_stats['by_path'], path)
+                _bump(_stats['by_reason'], reason)
 
-        logger.warning(
-            f"[蜜罐] 命中诱饵 {request.method} {path} ← {ip} "
-            f"UA={detail['ua']!r} 原因={reason}"
-            + (f" 绕过手法={evasion}" if evasion else "")
-            + (f" canary={canary}" if canary else ""))
+        if benign:
+            logger.debug(
+                f"[蜜罐] 前端良性调用 {request.method} {path} ← {ip} 原因={reason}")
+        else:
+            logger.warning(
+                f"[蜜罐] 命中诱饵 {request.method} {path} ← {ip} "
+                f"UA={detail['ua']!r} 原因={reason}"
+                + (f" 绕过手法={evasion}" if evasion else "")
+                + (f" canary={canary}" if canary else ""))
 
-        try:
-            audit_log(None, f'honeypot:{ip}', 'honeypot_hit', 'security', path,
-                      detail, 'failure', reason)
-        except Exception as _exc:
-            logger.debug('[_hit] 捕获异常后按降级路径继续: %s', _exc)
+        if not benign:
+            try:
+                audit_log(None, f'honeypot:{ip}', 'honeypot_hit', 'security', path,
+                          detail, 'failure', reason)
+            except Exception as _exc:
+                logger.debug('[_hit] 捕获异常后按降级路径继续: %s', _exc)
 
         if do_blacklist and ban:
             # 默认对内网 / 白名单 IP 豁免拉黑（避免误伤本机/局域网、统计虚高）。
@@ -1686,14 +1704,30 @@ def register(ctx):
         logger.warning(f"[蜜罐] 注册 local.debug.js 陷阱失败: {e}")
 
     # ---- 兜底：未知 /api/* 路径 ----
+    # 前端会主动探测、但「当前部署没启用对应功能」的路径。它们落到兜底规则里
+    # 不代表任何攻击意图：WebUI 一打开就发 /api/session/handshake（会话令牌默认
+    # 关闭）和 /api/plugins/<名>/status（对应插件没启用）。旧实现按默认分支处理，
+    # 结果是正常用户刷新几次就被自己的服务器拉黑 —— 表现成「随机白屏/转圈」。
+    _FE_SESSION_PATHS = frozenset({'/api/session/handshake', '/api/session/confirm'})
+    _FE_PLUGIN_STATUS = re.compile(r'^/api/plugins/[A-Za-z0-9_.-]+/status$')
+
+    def _is_frontend_probe(full_path: str) -> bool:
+        return full_path in _FE_SESSION_PATHS or bool(_FE_PLUGIN_STATUS.match(full_path))
+
     if unknown_api_decoy:
         def _api_fallback(subpath):
+            full_path = '/api/' + (subpath or '')
+            if _is_frontend_probe(full_path):
+                # 良性：记 debug 计数，不 tarpit（拖 600ms 会让前端以为网络卡）、
+                # 不发 canary、不写审计、不拉黑
+                _hit(full_path, '功能未启用(前端探测)', benign=True, ban=False)
+                return jsonify({'code': 404, 'msg': 'Not Found'}), 404
             evasion = detect_evasion() if evasion_detect else ''
             canary = _new_canary() if canary_enabled else None
             if canary:
-                _remember_canary(canary, get_client_ip(), '/api/' + (subpath or ''),
+                _remember_canary(canary, get_client_ip(), full_path,
                                  (request.headers.get('User-Agent') or '')[:256])
-            _hit('/api/' + (subpath or ''), '未知 API 路径探测', canary=canary, evasion=evasion)
+            _hit(full_path, '未知 API 路径探测', canary=canary, evasion=evasion)
             _tarpit()
             resp = body_generic_decoy()
             if canary:

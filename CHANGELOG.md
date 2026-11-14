@@ -34,6 +34,50 @@
 > 另有 14 个文件的用例函数体零 `assert`，被 pytest 收集到却永远 PASS。
 > 本节改动全部以真跑结案（本地全量 + 干净树序列 + CI 实跑）。
 
+### 修复：WebUI 首屏 1.71 MB 全量重下 → 0.49 MB，二次访问 0 字节
+
+线上反馈「前端太大 + 随机刷新会命中诱饵」，查下来是两个独立问题叠在一起。
+
+**体积**：首屏 9 个资源合计 1,792,361 B，服务端既不做压缩、也不给 `Cache-Control`，
+浏览器每次刷新（以及在管理后台里点来点去）都在重新拉 element-plus 那个 1.03 MB 的 chunk。
+
+- `framework/api/static_routes.py` 重写交付路径：JS/CSS/SVG 按 `Accept-Encoding`
+  现场 gzip（压缩结果按 `(路径, mtime, size)` 缓存在进程内，带容量上限与陈旧键清理），
+  带 `Vary: Accept-Encoding`。
+- 缓存分层：`app.D4M7--WT.js` 这类带内容 hash 的文件名给
+  `public, max-age=31536000, immutable`；`theme-init.js` / `zc-decoy.js` 这类散装脚本
+  没有 hash，只给 5 分钟；`index.html` 必须 `no-cache`，否则发版后用户还在跑旧引用。
+- 补 `ETag`（mtime+size）与 `If-None-Match` → 304。注意 Werkzeug 的
+  `ETags.contains()` 只认不带引号的裸值，响应头里才加引号。
+- 静态读取统一走 `werkzeug.security.safe_join`：`filename` 直接来自 URL，
+  旧实现拼路径等于把 `../../config.yaml` 交给 `open()`。
+
+实测（本机，同一套产物）：1,792,361 B → **511,937 B（-71.4%）**，
+`element-plus` 1,055,560 → 321,064 B，CSS 379,342 → 52,464 B；
+带 ETag 的二次访问 9 个资源全部 304、**0 B**。
+
+**误伤**：`[蜜罐] 命中诱饵 POST /api/session/handshake ← 111.x.x.x` 这类日志，
+来源不是扫描器，是**自己的管理后台**：
+
+- WebUI 一打开就 `POST /api/session/handshake`（会话令牌默认关闭，
+  `framework/api/session_tokens.py` 不注册路由）；
+- 同时 `GET /api/plugins/image_renderer/status`（该插件没启用）。
+
+两条都落到 `/api/<path>` 兜底诱饵，走默认分支：**拉黑 IP + tarpit 600ms + 写审计表**。
+`blacklist_ttl` 默认 3600，于是正常用户打开后台就被自己服务器封一小时，
+表现成「随机转圈/白屏」。安全看板的 TOP IP 榜首也一直是自己。
+
+- `_hit()` 增加 `benign` 分支：良性只累加独立的 `_stats['benign_hits']`，
+  打 debug 日志、不写审计、不进 `total_hits`/`by_ip` 威胁画像。
+- `_api_fallback` 对前端探测路径放行：`/api/session/handshake`、`/api/session/confirm`、
+  `/api/plugins/<名>/status` 返回标准 404 JSON，不 tarpit、不发 canary、不拉黑。
+  其它未知路径的处置完全不变（用例里锁住了这条）。
+- `webui/web/js/zc-decoy.js`：四个诱饵请求原本复用一个 `XMLHttpRequest`，
+  第二次 `open()` 会 abort 上一次，控制台一堆 `net::ERR_ABORTED`；改为每个请求独立对象。
+
+> 已经中招的部署：误封记录在 `ip_blacklist` 表（`expires_at` 到点自动解封），
+> 也可以登录后台 `POST /api/security/unban {"ip": "..."}`（需超管）或直接删那一行。
+
 ### 工程：清理「用例返回值当汇报文字」（59 处）与死代码 ApiContext
 
 `tests/` 里有一批用例用 `return "xxx 正常"` 把成功信息交给脚本运行器 `print`。
