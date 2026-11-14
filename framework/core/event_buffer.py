@@ -77,14 +77,16 @@ class _FileL2Backend:
                     n += 1
             self._fh.seek(0, os.SEEK_END)
             return n
-        except Exception:
+        except Exception as _exc:
+            logger.debug('L2 行数统计失败，按 0 处理: %s', _exc)
             return 0
 
     def _file_size(self) -> int:
         try:
             self._fh.flush()
             return os.path.getsize(self._path)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('事件缓冲文件大小获取失败，按 0 处理: %s', _exc)
             return 0
 
     def _compact(self):
@@ -219,8 +221,8 @@ class _FileL2Backend:
                 with self._lock:
                     self._fh.close()
                 self._fh = None
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('关闭事件缓冲文件句柄失败: %s', _exc)
 
 
 class EventBuffer:
@@ -271,7 +273,8 @@ class EventBuffer:
         try:
             from framework.config import get_home
             home = get_home()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('读取 home 目录失败，相对路径按 data_dir 解析: %s', _exc)
             home = None
         self.sqlite_path = buf_cfg.get('sqlite_path') or os.path.join(data_dir, 'event_buffer.db')
         self.l2_path = buf_cfg.get('l2_path') or os.path.join(data_dir, 'event_buffer.l2.log')
@@ -588,7 +591,8 @@ class EventBuffer:
                 else:
                     total += 8
             return total
-        except Exception:
+        except Exception as _exc:
+            logger.debug('事件体积估算失败，按保守值 4096 记: %s', _exc)
             return 4096  # 无法估算时按保守值记账
 
     # ---------- sqlite 层 ----------
@@ -625,8 +629,8 @@ class EventBuffer:
                             if bak.write(ev):
                                 migrated += 1
                                 migrated_ids.append(row_id)
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            logger.debug('L2 降级迁移单行失败，跳过该行: %s', _exc)
         except Exception as e:
             logger.warning(f"L2 sqlite→file 降级迁移异常（忽略，继续降级）: {e}")
         # 1.5) 删除已迁移成功的行，避免 sqlite 恢复后与 file 重复消费
@@ -645,8 +649,8 @@ class EventBuffer:
             if self._sqlite_conn is not None:
                 with self._sqlite_lock:
                     self._sqlite_conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('降级后关闭 sqlite 连接失败: %s', _exc)
         self._sqlite_conn = None
         if bak is not None:
             self._l2_file = bak
@@ -849,7 +853,8 @@ class EventBuffer:
             with self._sqlite_lock:
                 cur = self._sqlite_conn.execute("SELECT COUNT(*) FROM event_buffer")
                 return int(cur.fetchone()[0])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('sqlite 遗留行清点失败，按 0 处理: %s', _exc)
             return 0
 
     def sqlite_count(self) -> int:
@@ -859,7 +864,8 @@ class EventBuffer:
             with self._sqlite_lock:
                 cur = self._sqlite_conn.execute("SELECT COUNT(*) FROM event_buffer")
                 return int(cur.fetchone()[0])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('sqlite 行数统计失败，按 0 处理: %s', _exc)
             return 0
 
     # ---------- 入队 ----------
@@ -1142,8 +1148,8 @@ done 非空（wait=True 同步语义）时阻塞进 L1，不参与溢出，保�
                         self._sqlite_conn.execute("VACUUM")
                         self._sqlite_conn.commit()
                     self._sqlite_conn.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('退出前收缩/关闭 sqlite 失败: %s', _exc)
             self._sqlite_conn = None
         if self._l2_file is not None:
             self._l2_file.close()

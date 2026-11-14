@@ -222,8 +222,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             self._refresh_task.cancel()
             try:
                 await self._refresh_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('退出时等待路由刷新任务结束: %s', _exc)
             self._refresh_task = None
 
     async def _refresh_loop(self):
@@ -282,7 +282,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             k = self.db.query_one(
                 "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS m FROM dynamic_commands")
             return (p['n'], p['m'], c['n'], c['a'], c['m'], k['n'], k['m'])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('路由签名查询失败，本次按全量重建处理: %s', _exc)
             return None
 
     def _rebuild_routes(self):
@@ -292,8 +293,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         if now - self._last_group_cache_refresh >= 30.0:
             try:
                 self.framework.plugin_loader._refresh_group_plugin_cache()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('群插件开关缓存刷新失败: %s', _exc)
             self._last_group_cache_refresh = now
 
         # 2. 轻量签名：路由表未变动则跳过完整重建（省去命令全量加载 + 正则重编译）。
@@ -505,7 +506,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         try:
             from framework import perm
             ctx = perm.context_from_event(ev)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('权限上下文构建失败，按空上下文处理: %s', _exc)
             ctx = {}
         ctx_sig = tuple(sorted((str(k), str(v)) for k, v in ctx.items()))
         return (str(ev.user_id), str(ev.group_id or ''),
@@ -523,12 +525,14 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         """
         try:
             role = ev.role
-        except Exception:
+        except Exception as _exc:
+            logger.debug('读取事件角色失败，回落到 sender_role: %s', _exc)
             role = getattr(ev, 'sender_role', 'member') or 'member'
             ev._role_cache = role
         try:
             pset = ev._perm_set()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('构建事件权限集失败，按默认角色降级: %s', _exc)
             from framework import perm
             pset = perm.PermissionSet(ev.user_id, {}, ['default'], {}, {})
             ev._perm_cache = pset
@@ -538,7 +542,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         """路由前准备权限快照：命中缓存零 DB / 零线程切换，miss 才 to_thread。"""
         try:
             key = self._perm_key(ev)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('权限缓存键构建失败，跳过权限预取: %s', _exc)
             return
         hit = self._perm_cache.get(key)
         if hit is not None:
@@ -547,9 +552,10 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         try:
             role, pset = await asyncio.to_thread(
                 self._resolve_permissions_sync, ev)
-        except Exception:
+        except Exception as _exc:
             # 线程池异常：给 Event 注入安全默认值，避免后续热路径回落到
             # 事件循环里的同步查库（与 Event 自身降级语义一致）。
+            logger.warning('线程池解析权限失败，事件按默认权限处理: %s', _exc)
             from framework import perm
             ev._role_cache = getattr(ev, 'sender_role', 'member') or 'member'
             ev._perm_cache = perm.PermissionSet(
@@ -569,13 +575,13 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             from framework.messaging import event as _event_mod
             _event_mod.invalidate_user_role_cache(user_id)
             _event_mod.invalidate_group_role_cache()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('清理事件角色缓存失败: %s', _exc)
         try:
             from framework import perm as _perm_mod
             _perm_mod.invalidate_all()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('清理权限插件缓存失败: %s', _exc)
 
     async def route(self, event: dict, bot_name: str = 'default'):
         """
@@ -764,8 +770,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             # 路由结束：复位事件标识（handler 内的 ctx.send_msg 不再误关联）
             try:
                 _eid_var.reset(_eid_token)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('复位事件标识 contextvar 失败: %s', _exc)
 
     async def _broadcast_message_event(self, ev, message: str) -> bool:
         """
@@ -779,12 +785,14 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         # 黑匣子：未命中 → 广播 message 事件（broadcast）—— 列出订阅了 message 事件的插件
         try:
             subs = self.framework.event_bus.subscriber_names('message')
-        except Exception:
+        except Exception as _exc:
+            logger.debug('读取 message 事件订阅者失败，按空处理: %s', _exc)
             subs = []
         try:
             from framework.runtime import current_event_id_var as _eid_var
             _eid = _eid_var.get()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('读取当前事件标识失败，黑匣子记录不带 event_id: %s', _exc)
             _eid = None
         _bb_record('broadcast', plugin='router', fn='_broadcast_message_event',
                    event_id=_eid,
@@ -811,7 +819,8 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         def _fn(plugin_name):
             try:
                 return bool(allowed(plugin_name, adapter_key))
-            except Exception:
+            except Exception as _exc:
+                logger.warning('插件适配器判定异常，按允许广播处理（fail-open）: %s', _exc)
                 return True   # 判定异常不阻断广播
         return _fn
     async def _broadcast_non_text(self, event: dict, bot_name: str = 'default'):

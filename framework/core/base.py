@@ -253,8 +253,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 # 把 uuid 挂到适配器实例上，供调试/路由快速取用
                 try:
                     adapter._drive_uuid = uuid_val
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('适配器不支持挂载 _drive_uuid（可能有 __slots__）: %s', _exc)
                 logger.info(
                     f"多平台接入：适配器 [{key}] 已登记（uuid={uuid_val[:8]}…）")
         except Exception as e:
@@ -264,7 +264,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         """multi_platform.namespace 是否开启（默认 False=裸号，旧行为）。"""
         try:
             return bool((self.config.get('multi_platform') or {}).get('namespace', False))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('读取 multi_platform.namespace 失败，按关闭处理: %s', _exc)
             return False
 
     def adapter_plugin_allowed(self, plugin_name: str, adapter_key: str) -> bool:
@@ -278,7 +279,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 1) 适配器白名单（config[adapter_key].plugins）
         try:
             whitelist = (self.config.get(adapter_key) or {}).get('plugins') or []
-        except Exception:
+        except Exception as _exc:
+            logger.debug('读取适配器插件白名单失败，按空处理: %s', _exc)
             whitelist = []
         if whitelist and plugin_name not in whitelist:
             return False
@@ -292,7 +294,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             module = self.plugin_loader.get_plugin_module(plugin_name)
             meta = getattr(module, '__plugin_meta__', None) or {}
             padapters = meta.get('adapters') or []
-        except Exception:
+        except Exception as _exc:
+            logger.debug('读取插件适配器声明失败，按空处理: %s', _exc)
             padapters = []
         if padapters and adapter_key not in padapters:
             return False
@@ -710,8 +713,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             self._startup_load_task.cancel()
             try:
                 await self._startup_load_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('退出时等待插件异步加载任务结束: %s', _exc)
             self._startup_load_task = None
 
         # 触发关闭扩展点（插件可在此释放资源/落盘/断开外部连接）
@@ -731,8 +734,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 # 在事件循环线程里直接调会把整个框架冻住，
                 # 看门狗就会打「阻塞约 4.8s」——而那时其实正在正常退出。
                 await asyncio.to_thread(self.console_server.stop)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.warning('控制台服务停止失败（线程可能未释放）: %s', _exc)
             self.console_server = None
 
         # 停止 L4 写缓冲后台任务并收尾 flush（先于事件缓冲排空，确保 L4 残留落 L2）
@@ -774,8 +777,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             self._member_sync_task.cancel()
             try:
                 await self._member_sync_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('退出时等待群成员同步任务结束: %s', _exc)
             self._member_sync_task = None
         try:
             await asyncio.to_thread(self._flush_member_sync)
@@ -793,8 +796,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             self._heartbeat_task.cancel()
             try:
                 await self._heartbeat_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('退出时等待心跳任务结束: %s', _exc)
             self._heartbeat_task = None
 
         # 停止内存看门狗
@@ -802,8 +805,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             self._memory_watchdog_task.cancel()
             try:
                 await self._memory_watchdog_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('退出时等待内存看门狗结束: %s', _exc)
             self._memory_watchdog_task = None
 
         # 停止插件加载器的内存监控线程（旧实现停机后线程仍活着并继续打告警）

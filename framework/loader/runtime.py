@@ -37,13 +37,15 @@ def _estimate_module_size(module, max_items: int = 4096) -> float:
     def _size_of(value):
         try:
             return max(0, sys.getsizeof(value))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('getsizeof 失败，按 0 记: %s', _exc)
             return 0
 
     def _skip(value):
         try:
             return value.__class__.__name__.startswith(('module', 'function', 'type'))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('跳过判定失败，按不可跳过对象处理: %s', _exc)
             return True
 
     for value in list(vars(module).values()):
@@ -64,7 +66,8 @@ def _estimate_module_size(module, max_items: int = 4096) -> float:
                     continue
                 seen.add(oid)
                 total += _size_of(item)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('插件内存估算遍历子对象失败，跳过该对象: %s', _exc)
             continue
     return total / 1024 / 1024
 
@@ -162,11 +165,13 @@ class PluginRuntimeMixin:
                                 else:
                                     self._memory_violations.pop(name, None)
 
-                            except Exception:
-                                pass  # 单个插件估算失败不影响其他
+                            except Exception as _exc:
+                                logger.debug('[内存监控] 单插件内存估算失败: %s', _exc)
+                                # 单个插件估算失败不影响其他
 
-                except Exception:
-                    pass  # 监控异常不干扰主流程
+                except Exception as _exc:
+                    logger.debug('[内存监控] 监控轮次异常: %s', _exc)
+                    # 监控异常不干扰主流程
 
         t = threading.Thread(target=monitor, daemon=True, name="memory_monitor")
         self._memory_monitor_thread = t
@@ -246,12 +251,12 @@ class PluginRuntimeMixin:
                         "UPDATE plugins SET status='running', has_register=1 "
                         "WHERE plugin_name=%s", (plugin_name,)
                     )
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('热重载后回写插件状态失败: %s', _exc)
                 try:
                     self.framework.router._invalidate_cache()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('热重载后使路由缓存失效失败: %s', _exc)
                 logger.info(f"[{plugin_name}] 热重载完成（代码已更新）")
                 return True
             else:
@@ -310,13 +315,13 @@ class PluginRuntimeMixin:
         if changed:
             try:
                 self.framework.router._invalidate_cache()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('心跳变更后使路由缓存失效失败: %s', _exc)
         # 无论是否发生变化，心跳后也刷新一次路由表（兜底：DB 与内存对齐）
         try:
             self.framework.router._invalidate_cache()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('心跳后兜底刷新路由缓存失败: %s', _exc)
 
 
 
@@ -425,16 +430,16 @@ class PluginRuntimeMixin:
                             scheduler._scheduler.remove_job(tid)
                             scheduler._plugin_tasks.pop(tid, None)
                             logger.info(f"[自检] 移除调度器孤儿任务: {tid}")
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            logger.debug('移除调度器孤儿任务失败: %s', _exc)
             except Exception as e:
                 logger.warning(f"[自检] 调度器孤儿清理失败: {e}")
 
             # 3) 路由表兜底刷新（孤儿命令删除后保证内存与 DB 对齐）
             try:
                 self.framework.router._invalidate_cache()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('自检中使路由缓存失效失败: %s', _exc)
         except Exception as e:
             logger.error(f"[自检] 异常: {e}")
 
@@ -481,13 +486,13 @@ class PluginRuntimeMixin:
                                     "UPDATE plugins SET status='running', has_register=1 "
                                     "WHERE plugin_name=%s", (name,)
                                 )
-                            except Exception:
-                                pass
+                            except Exception as _exc:
+                                logger.debug('自修复后回写插件状态失败: %s', _exc)
                             logger.info(f"[{name}] 自修复成功：插件已自动重新加载并注册")
                             try:
                                 self.framework.router._invalidate_cache()
-                            except Exception:
-                                pass
+                            except Exception as _exc:
+                                logger.debug('自修复后使路由缓存失效失败: %s', _exc)
                         else:
                             # load 成功但 register 失败：登记新快照，下次文件再变化时重试
                             # （load_plugin 成功会覆盖 _loaded_plugins；register 失败会更新 _failed_mtimes）
