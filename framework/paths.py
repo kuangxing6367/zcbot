@@ -24,8 +24,11 @@
 ``config.yaml`` 的 ``framework.auto_migrate: false`` 可关闭），命令行入口
 ``python -m framework.migration --inspect``。本模块只保留路径解析，不承载迁移逻辑。
 """
+import logging
 import os
 import sysconfig
+
+logger = logging.getLogger('zcbot')
 
 __all__ = [
     'code_root',
@@ -60,8 +63,8 @@ def _in_site_packages(path: str) -> bool:
             d = sysconfig.get_paths().get(key)
             if d and p.startswith(os.path.abspath(d)):
                 return True
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_in_site_packages] 捕获异常后按降级路径继续: %s', _exc)
     return False
 
 

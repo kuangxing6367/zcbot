@@ -111,13 +111,15 @@ def register(ctx):
             if primary is not None:
                 try:
                     adapters = {primary._connection_id(): primary}
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[_collect_connection_adapters] 捕获异常后按降级路径继续: %s', _exc)
                     adapters = {}
         out = []
         for aid, adapter in adapters.items():
             try:
                 meta = adapter.get_connection_info()
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_collect_connection_adapters] 捕获异常后按降级路径继续: %s', _exc)
                 meta = None
             if not isinstance(meta, dict):
                 continue
@@ -127,7 +129,8 @@ def register(ctx):
                 cfg = dict(_read_yaml_section(section) or (framework.config.get(section) or {}))
             try:
                 bots = adapter.get_connected_bots() or []
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_collect_connection_adapters] 捕获异常后按降级路径继续: %s', _exc)
                 bots = []
             status = {'connected_bots': bots, 'total': len(bots)}
             extra = meta.get('status_extra')
@@ -245,7 +248,8 @@ def register(ctx):
                     primary = framework.services.get('protocol_adapter')
                 if primary is not None and hasattr(primary, 'get_connected_bots'):
                     bots = primary.get_connected_bots() or []
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[runtime_stats] 捕获异常后按降级路径继续: %s', _exc)
                 bots = []
             db_type = framework.config.get('database', {}).get('type', 'unknown')
 
@@ -284,10 +288,10 @@ def register(ctx):
                     try:
                         plugin_mem[pname] = round(
                             psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 1)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as _exc:
+                        logger.debug('[runtime_stats] 捕获异常后按降级路径继续: %s', _exc)
+            except Exception as _exc:
+                logger.debug('[runtime_stats] 捕获异常后按降级路径继续: %s', _exc)
 
             return jsonify({'code': 0, 'data': {
                 'cpu_percent': round(psutil.cpu_percent(interval=None) or 0, 1),
@@ -338,7 +342,8 @@ def register(ctx):
         try:
             from framework.config import list_core_plugins_state
             extra = {it['section'] for it in list_core_plugins_state()}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_yaml_sections] 捕获异常后按降级路径继续: %s', _exc)
             extra = set()
         return base + tuple(sorted(extra - set(base)))
 

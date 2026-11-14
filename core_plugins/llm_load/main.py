@@ -292,8 +292,8 @@ def _restart_now(ctx, fw):
     try:
         sys.stdout.flush()
         sys.stderr.flush()
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_restart_now] 捕获异常后按降级路径继续: %s', _exc)
     try:
         os.chdir(os.path.dirname(main_py))
         os.execv(sys.executable, [sys.executable, main_py] + sys.argv[1:])
@@ -310,6 +310,7 @@ def _state():
     try:
         manifest = read_manifest(zip_path)
     except Exception as e:
+        logger.debug('[_state] 捕获异常后按降级路径继续: %s', e)
         return {'ok': False, 'error': str(e)}
     report = verify(cfg['target_dir'], manifest, cfg.get('dat_dir'))
     report.update({
@@ -358,6 +359,7 @@ def handle_llmload(event, match):
                    + f"\n状态：{'一致' if after['ok'] else '仍不一致'}"
                    + "\n需要重启框架后生效")
         except Exception as e:
+            logger.debug('[handle_llmload] 捕获异常后按降级路径继续: %s', e)
             msg = f"重装失败：{e}"
     else:
         msg = "用法：/llmload status | verify | reinstall"

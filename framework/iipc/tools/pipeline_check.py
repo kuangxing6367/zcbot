@@ -28,8 +28,12 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 sys.path.insert(0, HERE)
 
+import logging
+
 from iipc_client import IIPCClient, resolve_auth
 from portutil import pick_addr
+
+logger = logging.getLogger('zcbot')
 
 ADDR = pick_addr("ZCBOT_PIPELINE_ADDR")
 AUTH = resolve_auth()  # 生成/继承高熵令牌并写入 os.environ，内核与客户端同源
@@ -91,8 +95,8 @@ def _wait_kv(cli, key, timeout=25):
             r = cli.call("kv.get", {"key": key}, timeout=3)
             if r and r.get("found"):
                 return r.get("value")
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_wait_kv] 捕获异常后按降级路径继续: %s', _exc)
         time.sleep(0.4)
     return None
 
@@ -122,8 +126,8 @@ def main():
         try:
             for line in kproc.stdout:
                 log_ref.append(line)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[pump] 捕获异常后按降级路径继续: %s', _exc)
     threading.Thread(target=pump, daemon=True).start()
 
     try:
@@ -148,7 +152,8 @@ def main():
             try:
                 r = cli.call("plugin.list", {}, timeout=3)
                 ids = [p["plugin_id"] for p in (r or {}).get("plugins", [])]
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
                 ids = []
             if "tf_plugin" in ids and "echo_plugin" in ids:
                 break
@@ -169,8 +174,8 @@ def main():
         try:
             cli.call("kv.del", {"key": "echo.seen"}, timeout=3)
             cli.call("kv.del", {"key": "echo.cmd"}, timeout=3)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
         # 2) 命中命令的消息：验证命令基于"变换后"文本命中
         try:
             cli.call("debug.inject", {
@@ -203,17 +208,18 @@ def main():
 
         try:
             cli.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
     finally:
         try:
             kproc.terminate()
             kproc.wait(timeout=10)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
             try:
                 kproc.kill()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
 
     ok = sum(1 for _, v, _ in results if v)
     bad = [n for n, v, _ in results if not v]

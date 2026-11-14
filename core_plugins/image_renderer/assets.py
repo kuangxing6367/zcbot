@@ -45,11 +45,14 @@
 import hashlib
 import io
 import json
+import logging
 import os
 import platform
 import shutil
 import sys
 import zipfile
+
+logger = logging.getLogger('zcbot')
 
 logger = None       # 由 main.py 注入，避免重复建 logger
 
@@ -627,7 +630,8 @@ class AssetManager:
                     with open(dest, 'rb') as f:
                         try:
                             manifest = json.loads(f.read().decode('utf-8'))
-                        except Exception:
+                        except Exception as _exc:
+                            logger.debug('[_extract] 捕获异常后按降级路径继续: %s', _exc)
                             manifest = None
 
         bad = self._verify_extracted(tmp_target, manifest)

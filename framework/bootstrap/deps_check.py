@@ -6,6 +6,7 @@
 WARNING，不安装、不打断启动、不退出（详见该配置段说明）。
 """
 import importlib.metadata as _imd
+import logging
 import os
 import re
 import sys
@@ -13,6 +14,8 @@ import tempfile
 
 # 统一走 paths（stdlib only，可在 yaml 未安装之前 import）
 from framework.paths import code_root, resolve_config_path
+
+logger = logging.getLogger('zcbot')
 
 _PROJECT_ROOT = code_root()
 
@@ -37,7 +40,8 @@ def read_self_check_allow_missing(config_path=None):
             allow = [allow]
         norm = lambda n: str(n).strip().lower().replace('_', '-')
         return {norm(x) for x in allow if x}
-    except Exception:
+    except Exception as _exc:
+        logger.warning('[read_self_check_allow_missing] 捕获异常后按降级路径继续: %s', _exc)
         return set()
 
 
@@ -152,7 +156,8 @@ def ensure_optional_driver(config_path=None):
         import yaml
         with open(path, 'r', encoding='utf-8') as f:
             cfg = yaml.safe_load(f) or {}
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[ensure_optional_driver] 捕获异常后按降级路径继续: %s', _exc)
         return  # 读不到配置就不猜；自定义配置格式由运行期自己处理
     db = cfg.get('database') or {}
     if not isinstance(db, dict) or str(db.get('type') or '').lower() != 'mysql':

@@ -75,6 +75,7 @@ def _apply_log(framework, cfg: dict) -> list:
             else:
                 notes.append(f'日志格式即时生效: {applied}')
         except Exception as e:
+            logger.debug('[_apply_log] 捕获异常后按降级路径继续: %s', e)
             notes.append(f'日志格式应用失败: {e}')
     return notes
 

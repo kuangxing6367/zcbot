@@ -3,9 +3,12 @@
 不依赖任何第三方库（仅标准库），保证 CLI 在最小环境下也能跑。
 """
 import ast
+import logging
 import os
 import re
 import sys
+
+logger = logging.getLogger('zcbot')
 
 PROG = "zb"
 
@@ -25,16 +28,17 @@ def read_version():
         # ``0.0.0+unknown`` 表示四处来源全都没读到，此时给调用方一个可读的
         # 明确标记，而不是伪装成合法版本号 0.0.0。
         return v.replace('+unknown', '') if v.startswith('0.0.0+') else v
-    except Exception:
+    except Exception as _exc:
         # CLI 是最后一道可用的救命入口，任何异常都不允许把 --version 弄崩。
+        logger.debug('[read_version] 捕获异常后按降级路径继续: %s', _exc)
         cand = os.path.join(REPO_ROOT, "VERSION")
         try:
             with open(cand, "r", encoding="utf-8") as f:
                 v = f.read().strip()
                 if v:
                     return v
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[read_version] 捕获异常后按降级路径继续: %s', _exc)
         return "0.0.0+unknown"
 
 
@@ -42,7 +46,8 @@ def read_file(path, default=""):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[read_file] 捕获异常后按降级路径继续: %s', _exc)
         return default
 
 
@@ -53,7 +58,8 @@ def _read_meta(main_py):
     """用 ast 安全提取 ``__plugin_meta__`` 字面量（不 import 插件代码，避免拉依赖）。"""
     try:
         tree = ast.parse(read_file(main_py))
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_read_meta] 捕获异常后按降级路径继续: %s', _exc)
         return {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -62,7 +68,8 @@ def _read_meta(main_py):
                     try:
                         val = ast.literal_eval(node.value)
                         return val if isinstance(val, dict) else {}
-                    except Exception:
+                    except Exception as _exc:
+                        logger.debug('[_read_meta] 捕获异常后按降级路径继续: %s', _exc)
                         return {}
     return {}
 
@@ -77,7 +84,8 @@ def _kernel_plugin_dirs():
     try:
         from framework import paths
         return paths.user_plugins_dir(), paths.core_plugins_dir()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_kernel_plugin_dirs] 捕获异常后按降级路径继续: %s', _exc)
         return None, None
 
 
@@ -139,7 +147,8 @@ def plugin_enabled_state(working_dir, plugin_id, kind):
             resolved = paths.core_plugins_yaml_path()
             if resolved and os.path.isfile(resolved):
                 yaml_path = resolved
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[plugin_enabled_state] 捕获异常后按降级路径继续: %s', _exc)
             if not os.path.isfile(yaml_path):
                 yaml_path = os.path.join(working_dir, "core_plugins.yaml")
         return _yaml_get_enabled(yaml_path, "core_plugins", plugin_id, default=False)
@@ -262,6 +271,7 @@ def set_core_plugin_enabled(yaml_path, plugin_id, enabled):
         with open(yaml_path, "w", encoding="utf-8") as f:
             f.write(new_text)
     except Exception as e:
+        logger.debug('[set_core_plugin_enabled] 捕获异常后按降级路径继续: %s', e)
         return False, "写入失败: %s" % e
     return True, "core_plugins.%s.enabled = %s" % (plugin_id, enabled)
 
@@ -277,6 +287,7 @@ def enable_user_plugin(working_dir, plugin_id, enabled):
                 shutil.move(dst, src)
                 return True, "已启用（从 plugins_disabled 移回 plugins）"
             except Exception as e:
+                logger.debug('[enable_user_plugin] 捕获异常后按降级路径继续: %s', e)
                 return False, "移回失败: %s" % e
         if os.path.isdir(src):
             return True, "已启用"
@@ -289,6 +300,7 @@ def enable_user_plugin(working_dir, plugin_id, enabled):
                 shutil.move(src, dst)
                 return True, "已禁用（移入 plugins_disabled）"
             except Exception as e:
+                logger.debug('[enable_user_plugin] 捕获异常后按降级路径继续: %s', e)
                 return False, "移出失败: %s" % e
         return True, "已是禁用状态"
 

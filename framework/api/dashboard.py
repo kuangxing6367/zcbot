@@ -29,7 +29,8 @@ def register(ctx):
             data['plugins_active'] = row['cnt'] if row else 0
             row = db.query_one("SELECT COUNT(*) as cnt FROM plugins")
             data['plugins_total'] = row['cnt'] if row else 0
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_collect_dashboard_stats] 捕获异常后按降级路径继续: %s', _exc)
             data['plugins_active'] = 0
             data['plugins_total'] = 0
 
@@ -38,7 +39,8 @@ def register(ctx):
             data['commands_total'] = row['cnt'] if row else 0
             row = db.query_one("SELECT COUNT(*) as cnt FROM dynamic_commands WHERE is_active = 1")
             data['dynamic_commands'] = row['cnt'] if row else 0
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_collect_dashboard_stats] 捕获异常后按降级路径继续: %s', _exc)
             data['commands_total'] = 0
             data['dynamic_commands'] = 0
 
@@ -47,14 +49,16 @@ def register(ctx):
             data['users_total'] = row['cnt'] if row else 0
             row = db.query_one("SELECT COUNT(*) as cnt FROM groups_info WHERE is_active = 1")
             data['groups_active'] = row['cnt'] if row else 0
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_collect_dashboard_stats] 捕获异常后按降级路径继续: %s', _exc)
             data['users_total'] = 0
             data['groups_active'] = 0
 
         try:
             row = db.query_one("SELECT COUNT(*) as cnt FROM tasks WHERE is_active = 1")
             data['tasks_active'] = row['cnt'] if row else 0
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_collect_dashboard_stats] 捕获异常后按降级路径继续: %s', _exc)
             data['tasks_active'] = 0
         return data
 
@@ -91,8 +95,8 @@ def register(ctx):
                         ws_port = extra.get('ws_port')
                     if ws_port is None and info.get('config_section'):
                         ws_port = (framework.config.get(info['config_section']) or {}).get('listen_port')
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[dashboard] 捕获异常后按降级路径继续: %s', _exc)
         data['bots'] = bots
         data['ws_port'] = ws_port
         data['adapter_name'] = adapter_name

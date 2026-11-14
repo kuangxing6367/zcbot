@@ -68,8 +68,8 @@ def _cfg_get(cfg, section, key, fallback):
         val = (cfg or {}).get(section) or {}
         if key in val and val[key] is not None:
             return val[key]
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_cfg_get] 捕获异常后按降级路径继续: %s', _exc)
     return fallback
 
 
@@ -143,8 +143,8 @@ class OutboundGate:
             uid = params.get('user_id')
             if uid:
                 return 'user', str(uid)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_target] 捕获异常后按降级路径继续: %s', _exc)
         return None, None
 
     @staticmethod

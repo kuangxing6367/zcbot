@@ -71,8 +71,8 @@ def host_entry(config_path, address, token, core_pid):
                 window=float(fw.config.get('log', {}).get('coalesce_window', 10)),
                 min_level=_lvl,
             ))
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[host_entry] 捕获异常后按降级路径继续: %s', _exc)
     _ipc_log_handler.start()
     _root_logger.addHandler(_ipc_log_handler)
 
@@ -87,8 +87,8 @@ def host_entry(config_path, address, token, core_pid):
                     logger.warning("核心进程已退出，宿主即将关闭")
                     stop_event.set()
                     return
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_parent_watchdog] 捕获异常后按降级路径继续: %s', _exc)
 
     async def _amain():
         loop = asyncio.get_running_loop()
@@ -116,13 +116,13 @@ def host_entry(config_path, address, token, core_pid):
                     stop = getattr(f, 'stop', None)
                     if callable(stop):
                         stop()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_amain] 捕获异常后按降级路径继续: %s', _exc)
             # 冲刷剩余日志（避免丢最后一批 host 日志），再关闭 IPC
             try:
                 _ipc_log_handler.flush_logs()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_amain] 捕获异常后按降级路径继续: %s', _exc)
             client.close()
 
     try:

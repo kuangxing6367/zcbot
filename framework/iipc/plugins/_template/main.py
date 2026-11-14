@@ -10,8 +10,12 @@
   - 扩展面方法（kv / config / http / call_plugin / transform / ...）由 SDK 运行时挂载，
     类型已在 PluginContext 上声明，补全可用。
 """
+import logging
+
 from event import Event
 from sdk import PluginContext
+
+logger = logging.getLogger('zcbot')
 
 __plugin_meta__ = {
     "name": "我的插件",
@@ -72,6 +76,7 @@ def register(ctx: PluginContext):
             res = ctx.call_plugin("other_plugin", "some_action", {"x": 1})
             ctx.send_msg(message="rpc=%s" % res, user_id=event.user_id)
         except Exception as e:
+            logger.debug('[rpc] 捕获异常后按降级路径继续: %s', e)
             ctx.send_msg(message="rpc_err=%s" % e, user_id=event.user_id)
 
     # ── 内核级全局变换节点（事件扇出前改写，可选）──

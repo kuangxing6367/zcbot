@@ -48,7 +48,8 @@ def parse_meta_literal(main_file: str) -> dict:
     try:
         with open(main_file, 'r', encoding='utf-8') as f:
             tree = ast.parse(f.read(), filename=main_file)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[parse_meta_literal] 捕获异常后按降级路径继续: %s', _exc)
         return {}
 
     for node in tree.body:
@@ -64,7 +65,8 @@ def parse_meta_literal(main_file: str) -> dict:
             if isinstance(target, ast.Name) and target.id == '__plugin_meta__':
                 try:
                     meta = ast.literal_eval(value)
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[parse_meta_literal] 捕获异常后按降级路径继续: %s', _exc)
                     return {}
                 return meta if isinstance(meta, dict) else {}
     return {}
@@ -141,7 +143,8 @@ class PluginGraphMixin:
         """读取插件声明的必需插件列表（规范化后）"""
         try:
             meta = self.declared_meta(plugin_name, plugin_path)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[declared_requires] 捕获异常后按降级路径继续: %s', _exc)
             return []
         return normalize_requires(meta.get('requires'))
 
@@ -185,7 +188,8 @@ class PluginGraphMixin:
         for name in names:
             try:
                 declared = [d for d in self.declared_requires(name) if d != name]
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[resolve_load_order] 捕获异常后按降级路径继续: %s', _exc)
                 declared = []
             deps[name] = declared
             missing = [d for d in declared if d not in name_set and d not in loaded]

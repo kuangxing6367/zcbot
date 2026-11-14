@@ -61,7 +61,8 @@ def register(ctx):
                     with open(ref_path, 'r', encoding='utf-8') as f:
                         return f.read().strip()[:7]
             return ref[:7]
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_get_framework_local_commit] 捕获异常后按降级路径继续: %s', _exc)
             return ''
 
     @app.route('/api/framework/check_update', methods=['GET'])
@@ -105,8 +106,8 @@ def register(ctx):
                             if best_t is None or tv > best_t:
                                 best, best_t = rel, tv
                         release = best
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.warning('[check_framework_update] 捕获异常后按降级路径继续: %s', _exc)
 
             if release:
                 tag = release.get('tag_name', '') or ''
@@ -289,8 +290,8 @@ def register(ctx):
             finally:
                 try:
                     os.unlink(tmp_zip)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[update_framework] 捕获异常后按降级路径继续: %s', _exc)
                 shutil.rmtree(tmp_dir, ignore_errors=True)
         except SafeArchiveError as e:
             return jsonify({'code': 400, 'msg': f'更新包安全校验失败: {e}'}), 400

@@ -6,8 +6,11 @@ config / dual_auth / 限速表 等）锁死在闭包里，导致无法拆分、�
 这里用统一上下文对象承载这些状态，供各功能域路由模块（auth.py / plugins.py
 / commands.py / db_gateway.py 等，随 S4 迁移）注册时读取。
 """
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
+
+logger = logging.getLogger('zcbot')
 
 
 @dataclass
@@ -37,5 +40,6 @@ class ApiContext:
         """从框架服务注册表取服务"""
         try:
             return self.framework.services.get(name)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[service] 捕获异常后按降级路径继续: %s', _exc)
             return default

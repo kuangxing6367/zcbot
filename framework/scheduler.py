@@ -134,14 +134,16 @@ def describe_timezone(tz) -> str:
             sign = '+' if total >= 0 else '-'
             total = abs(total)
             return f'本地时区 (UTC{sign}{total // 3600:02d}:{total % 3600 // 60:02d})'
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[describe_timezone] 捕获异常后按降级路径继续: %s', _exc)
             return '本地时区'
     name = getattr(tz, 'key', None) or getattr(tz, 'tzname', None) or str(tz)
     offset = None
     try:
         from datetime import datetime
         offset = datetime.now(tz).utcoffset()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[describe_timezone] 捕获异常后按降级路径继续: %s', _exc)
         offset = None
     if offset is None:
         return str(name)
@@ -188,7 +190,8 @@ class TaskScheduler:
         """读 scheduler 段。框架未注入 config（单测/早期阶段）时按默认值跑。"""
         try:
             cfg = (self.framework.config or {}).get('scheduler') or {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_read_config] 捕获异常后按降级路径继续: %s', _exc)
             cfg = {}
         return dict(cfg) if isinstance(cfg, dict) else {}
 
@@ -406,8 +409,8 @@ class TaskScheduler:
         if self._scheduler.running:
             try:
                 self._scheduler.shutdown(wait=False)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
             logger.info("定时任务调度器已停止")
         self._shutdown_executor()
 
@@ -490,7 +493,8 @@ class TaskScheduler:
         if runner.done() and not runner.cancelled():
             try:
                 exc = runner.exception()
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_finish_runner] 捕获异常后按降级路径继续: %s', _exc)
                 exc = None
             if exc is not None:
                 logger.debug(f"{label} 在途任务最终异常: {exc!r}")
@@ -622,8 +626,8 @@ class TaskScheduler:
         if not task.cancelled():
             try:
                 task.exception()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_silence_task] 捕获异常后按降级路径继续: %s', _exc)
 
     async def _invoke(self, func, label: str):
         """统一的执行入口：协程 await、同步转线程、超时、耗时统计、慢告警。
@@ -779,8 +783,8 @@ class TaskScheduler:
                 job = self._scheduler.get_job(job_id)
                 nxt = getattr(job, 'next_run_time', None) if job else None
                 task['next_run'] = str(nxt) if nxt else None
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[add_plugin_task] 捕获异常后按降级路径继续: %s', _exc)
             logger.debug(f"[{plugin_name}] 定时任务已注册: {cron_expr} -> "
                          f"{handler_name}（下次 {task['next_run']}）")
         except Exception as e:
@@ -793,16 +797,16 @@ class TaskScheduler:
         for jid in to_remove:
             try:
                 self._scheduler.remove_job(jid)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[remove_plugin_tasks] 捕获异常后按降级路径继续: %s', _exc)
             self._forget_task(self._plugin_tasks.pop(jid, None))
 
     def remove_task(self, job_id: str):
         """移除单个任务"""
         try:
             self._scheduler.remove_job(job_id)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[remove_task] 捕获异常后按降级路径继续: %s', _exc)
         self._forget_task(self._plugin_tasks.pop(job_id, None))
 
     def _forget_task(self, task):

@@ -170,7 +170,8 @@ def _inject_canary(resp, canary: str):
         if 'json' in ctype:
             try:
                 obj = json.loads(data)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_inject_canary] 捕获异常后按降级路径继续: %s', _exc)
                 return
             if isinstance(obj, dict):
                 obj['request_id'] = canary
@@ -1306,7 +1307,8 @@ def new_canary():
         return None
     try:
         return _canary_fn()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[new_canary] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 
@@ -1470,8 +1472,8 @@ def register(ctx):
                 raw = request.get_data(as_text=True) or ''
                 if raw:
                     detail['body'] = raw[:max_body_log]
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_hit] 捕获异常后按降级路径继续: %s', _exc)
 
         # 统计画像
         now_str = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -1497,8 +1499,8 @@ def register(ctx):
         try:
             audit_log(None, f'honeypot:{ip}', 'honeypot_hit', 'security', path,
                       detail, 'failure', reason)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_hit] 捕获异常后按降级路径继续: %s', _exc)
 
         if do_blacklist and ban:
             # 默认对内网 / 白名单 IP 豁免拉黑（避免误伤本机/局域网、统计虚高）。
@@ -1508,7 +1510,8 @@ def register(ctx):
                 exempt = dual_auth.is_whitelisted(ip)
                 if not ban_internal_ips:
                     exempt = exempt or dual_auth.is_internal(ip)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_hit] 捕获异常后按降级路径继续: %s', _exc)
                 exempt = False
             if exempt:
                 logger.debug(f"[蜜罐] 内网/白名单 IP 豁免拉黑: {ip}")
@@ -1590,13 +1593,13 @@ def register(ctx):
         try:
             j = request.get_json(silent=True) or {}
             submitted = str(j.get('token') or j.get('csrf') or '')
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_admin_trap] 捕获异常后按降级路径继续: %s', _exc)
         if not submitted:
             try:
                 submitted = str(request.form.get('token') or request.form.get('csrf') or '')
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_admin_trap] 捕获异常后按降级路径继续: %s', _exc)
         # 静默标记：提交长度是否恰为下发令牌的一半（仅取证画像；页面不透露任何长度）
         issued_len = 0
         with _TRAP_LOCK:

@@ -173,7 +173,8 @@ class SessionManager:
                         consume = True
                 else:
                     consume = handler(raw_event)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[on_raw_message] 捕获异常后按降级路径继续: %s', _exc)
                 consume = True
             if not consume:
                 return False
@@ -229,8 +230,8 @@ def register(ctx):
         _ready_handle = None
     try:
         fw.unregister_raw_message_handlers('session_manager')
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[register] 捕获异常后按降级路径继续: %s', _exc)
 
     _manager = SessionManager(fw)
     fw.services.register('session_manager', _manager)
@@ -276,25 +277,25 @@ def unregister():
         if _ready_handle is not None:
             try:
                 fw.services.cancel_ready(_ready_handle)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)
             _ready_handle = None
         # 2) 清理任务已注册：从调度器移除（幂等，未注册时为空操作）
         scheduler = fw.services.get('scheduler')
         if scheduler is not None:
             try:
                 scheduler.remove_plugin_tasks('session')
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)
         # 3) 摘除原始消息处理器（旧 manager 的绑定方法会把它钉在内存里）
         try:
             fw.unregister_raw_message_handlers('session_manager')
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)
         # 4) 摘除服务注册：停用后 ctx.wait_for() 明确报「未加载」而非继续用死对象
         try:
             fw.services.remove('session_manager')
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)
     _manager = None
     _fw = None

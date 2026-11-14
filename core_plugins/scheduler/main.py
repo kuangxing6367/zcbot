@@ -34,8 +34,8 @@ def register(ctx):
     if _scheduler is not None:
         try:
             _scheduler.stop()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[register] 捕获异常后按降级路径继续: %s', _exc)
         _scheduler = None
 
     sched_cfg = fw.config.get('scheduler', {})
@@ -61,5 +61,5 @@ def unregister():
     if fw is not None:
         try:
             fw.services.remove('scheduler')
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)

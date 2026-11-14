@@ -372,6 +372,7 @@ class PluginDepsMixin:
             log.info(f"[{plugin_name}] 隔离环境已删除: {venv_path}")
             return {'success': True, 'msg': '隔离环境已删除'}
         except Exception as e:
+            logger.debug('[remove_isolated_env] 捕获异常后按降级路径继续: %s', e)
             return {'success': False, 'error': str(e)}
 
     def scan_venv_usage(self) -> dict:

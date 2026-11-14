@@ -15,11 +15,14 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass
 
 from framework import paths
+
+logger = logging.getLogger('zcbot')
 
 __all__ = [
     'Version',
@@ -168,6 +171,7 @@ def _read_installed_metadata() -> tuple[str | None, str]:
     try:
         return metadata.version('zcbot'), 'installed metadata'
     except Exception as e:                  # PackageNotFoundError 及各种坏元数据
+        logger.debug('[_read_installed_metadata] 捕获异常后按降级路径继续: %s', e)
         return None, 'installed metadata 不可读: %s' % type(e).__name__
 
 

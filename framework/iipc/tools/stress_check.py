@@ -48,7 +48,11 @@ def check(name, ok, detail=""):
     return bool(ok)
 
 
+import logging
+
 from portutil import free_port, wait_tcp
+
+logger = logging.getLogger('zcbot')
 
 
 def alive(p):
@@ -61,7 +65,8 @@ def wait_api(ob, action, timeout=10):
     while time.time() < deadline:
         try:
             v = ob.api_q.get(timeout=max(0.1, deadline - time.time()))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[wait_api] 捕获异常后按降级路径继续: %s', _exc)
             break
         if v.get("action") == action:
             return v
@@ -74,7 +79,8 @@ def wait_send(ob, predicate, timeout=10):
     while time.time() < deadline:
         try:
             v = ob.api_q.get(timeout=max(0.1, deadline - time.time()))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[wait_send] 捕获异常后按降级路径继续: %s', _exc)
             break
         if v.get("action") == "send_msg" and predicate(v.get("params", {})):
             return v.get("params", {})
@@ -85,7 +91,8 @@ def _drain_q(ob):
     while True:
         try:
             ob.api_q.get_nowait()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_drain_q] 捕获异常后按降级路径继续: %s', _exc)
             return
 
 
@@ -96,7 +103,8 @@ def _collect(ob, sent_at, timeout=30):
     while time.time() < deadline and len(recv_at) < len(sent_at):
         try:
             v = ob.api_q.get(timeout=max(0.1, deadline - time.time()))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_collect] 捕获异常后按降级路径继续: %s', _exc)
             break
         if v.get("action") != "send_msg":
             continue
@@ -152,10 +160,10 @@ def kernel_pids(klog_path, plugin="echo"):
                 if mark in line:
                     try:
                         pids.append(int(line.split(mark)[1].split(")")[0]))
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+                    except Exception as _exc:
+                        logger.debug('[kernel_pids] 捕获异常后按降级路径继续: %s', _exc)
+    except Exception as _exc:
+        logger.debug('[kernel_pids] 捕获异常后按降级路径继续: %s', _exc)
     return pids
 
 
@@ -299,6 +307,7 @@ def main():
             try:
                 c.call("no.such.method", {"x": 1}, timeout=5)
             except Exception as e:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', e)
                 err = str(e)
             check("未知 method 返回 error 而非崩溃", err is not None, err)
             err = None
@@ -306,6 +315,7 @@ def main():
                 c.call("db.query", {"sql": "SELECT * FROM no_such_table"},
                        timeout=5)
             except Exception as e:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', e)
                 err = str(e)
             check("坏 SQL 返回 error 而非崩溃", err is not None, err)
             ok = False
@@ -316,6 +326,7 @@ def main():
                 print("  正常查询异常: %s" % e)
             check("异常调用后内核仍正常服务", ok)
         except Exception as e:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', e)
             check("内核异常路径探测可连接", False, str(e))
         check("全场景后内核仍存活", alive(kernel))
     finally:

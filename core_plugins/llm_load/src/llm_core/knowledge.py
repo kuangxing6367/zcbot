@@ -25,14 +25,16 @@ logger = logging.getLogger('zcbot.llm_core')
 try:
     import sqlite_vec
     _HAS_SQLITE_VEC = True
-except Exception:
+except Exception as _exc:
+    logger.debug('[<module>] 捕获异常后按降级路径继续: %s', _exc)
     sqlite_vec = None
     _HAS_SQLITE_VEC = False
 
 try:
     import numpy as np
     _HAS_NUMPY = True
-except Exception:
+except Exception as _exc:
+    logger.debug('[<module>] 捕获异常后按降级路径继续: %s', _exc)
     np = None
     _HAS_NUMPY = False
 
@@ -278,14 +280,14 @@ class KnowledgeBase:
             if self.backend == 'sqlite_vec' and self._vec_ready:
                 try:
                     c.execute("DELETE FROM kb_vec WHERE rowid=?", (cid,))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[delete_doc] 捕获异常后按降级路径继续: %s', _exc)
             c.execute("DELETE FROM kb_vec_mem WHERE rowid=?", (cid,))
             if self._has_fts:
                 try:
                     c.execute("DELETE FROM kb_fts WHERE rowid=?", (cid,))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[delete_doc] 捕获异常后按降级路径继续: %s', _exc)
         c.execute("DELETE FROM kb_chunks WHERE doc_id=?", (doc_id,))
         c.execute("DELETE FROM kb_docs WHERE id=?", (doc_id,))
         c.commit()
@@ -305,18 +307,18 @@ class KnowledgeBase:
         if self._has_fts:
             try:
                 c.execute("DELETE FROM kb_fts")
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[clear] 捕获异常后按降级路径继续: %s', _exc)
         if self.backend == 'sqlite_vec' and self._vec_ready:
             try:
                 c.execute("DELETE FROM kb_vec")
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[clear] 捕获异常后按降级路径继续: %s', _exc)
         c.commit()
         return before
 
     def close(self):
         try:
             self._conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)

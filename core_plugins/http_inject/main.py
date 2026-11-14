@@ -19,6 +19,7 @@ ProtocolAdapter：把 HTTP 请求当作事件源，交给 framework.dispatch_eve
 """
 import asyncio
 import json
+import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -33,6 +34,8 @@ from framework.security.hardening import (
     strict_json_object,
     token_ok,
 )
+
+logger = logging.getLogger('zcbot')
 
 __plugin_meta__ = {
     "name": "http_inject",
@@ -92,7 +95,8 @@ class HttpInjectHandler(BaseHTTPRequestHandler):
             fut = asyncio.run_coroutine_threadsafe(
                 self.framework.dispatch_event(event), self.framework.loop)
             fut.result(timeout=10)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[do_POST] 捕获异常后按降级路径继续: %s', _exc)
             self._json(500, {"ok": False, "error": "dispatch failed"})
             return
 

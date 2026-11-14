@@ -129,8 +129,8 @@ class FrameworkRuntimeMixin:
                                 _bb_record('load_ctx', plugin=name, fn=_e['kind'],
                                            msg=_e['detail'][:120])
                             ctx._register_journal = []
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[_load_core_plugins] 捕获异常后按降级路径继续: %s', _exc)
 
                     logger.info(f"官方插件 [{name}] 已加载")
 
@@ -195,8 +195,8 @@ class FrameworkRuntimeMixin:
                             mod = info.get('module')
                             if mod and mod not in bucket:
                                 bucket.append(mod)
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[_load_core_plugins] 捕获异常后按降级路径继续: %s', _exc)
                 else:
                     if info['kind']:
                         logger.error(
@@ -211,7 +211,8 @@ class FrameworkRuntimeMixin:
         try:
             with open(main_file, 'r', encoding='utf-8') as f:
                 tree = ast.parse(f.read(), filename=main_file)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_read_plugin_process_tag] 捕获异常后按降级路径继续: %s', _exc)
             return None
         for node in tree.body:
             if isinstance(node, ast.Assign):
@@ -219,7 +220,8 @@ class FrameworkRuntimeMixin:
                     if isinstance(target, ast.Name) and target.id == '__plugin_meta__':
                         try:
                             meta = ast.literal_eval(node.value)
-                        except Exception:
+                        except Exception as _exc:
+                            logger.debug('[_read_plugin_process_tag] 捕获异常后按降级路径继续: %s', _exc)
                             return None
                         if isinstance(meta, dict):
                             return meta.get('process')

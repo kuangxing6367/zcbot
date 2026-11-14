@@ -263,6 +263,7 @@ class RustAccelService:
                 if line:
                     result['line'] = line.decode('utf-8', 'replace').strip()
             except Exception as e:
+                logger.debug('[_reader] 捕获异常后按降级路径继续: %s', e)
                 result['err'] = str(e)
 
         th = threading.Thread(target=_reader, daemon=True, name='rust-hello')
@@ -288,13 +289,13 @@ class RustAccelService:
                 line = raw.decode('utf-8', 'replace').rstrip()
                 if line:
                     logger.debug("[rust_accel:%s] %s", tag, line)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_drain] 捕获异常后按降级路径继续: %s', _exc)
         finally:
             try:
                 stream.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_drain] 捕获异常后按降级路径继续: %s', _exc)
 
     def _kill_proc(self):
         proc = self.proc
@@ -303,12 +304,12 @@ class RustAccelService:
         if proc.poll() is None:
             try:
                 proc.kill()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_kill_proc] 捕获异常后按降级路径继续: %s', _exc)
         try:
             proc.wait(timeout=5)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_kill_proc] 捕获异常后按降级路径继续: %s', _exc)
 
     async def stop(self):
         """优雅关闭：先发 shutdown -> 取消 IPC 循环 -> 清 pending -> 等待退出"""
@@ -329,14 +330,14 @@ class RustAccelService:
             try:
                 self._writer.write(b'{"type":"shutdown"}\n')
                 await self._writer.drain()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         if self._task is not None:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
             self._task = None
         for fut in list(self._pending.values()):
             if not fut.done():
@@ -347,8 +348,8 @@ class RustAccelService:
             try:
                 self._writer.close()
                 await self._writer.wait_closed()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
             self._writer = None
         proc = self.proc
         if proc is not None and proc.poll() is None:
@@ -361,12 +362,12 @@ class RustAccelService:
                 logger.warning("[rust_accel] shutdown 超时，强制终止子进程")
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
                 try:
                     proc.wait()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         # 进程已确认退出后（或本就无进程）才清空引用，保证
         # running_proc=False 意味着子进程已真正退出、无句柄残留
         self.proc = None
@@ -410,8 +411,8 @@ class RustAccelService:
                     try:
                         writer.close()
                         await writer.wait_closed()
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[_ipc_loop] 捕获异常后按降级路径继续: %s', _exc)
 
     def _handle_line(self, line: str):
         """IPC 行分发（事件循环线程执行）
@@ -515,6 +516,7 @@ class RustAccelService:
                 self._writer.write((json.dumps(msg, ensure_ascii=False) + '\n').encode())
                 await self._writer.drain()
             except Exception as e:
+                logger.debug('[acall] 捕获异常后按降级路径继续: %s', e)
                 return {'status': 'failed', 'retcode': -3, 'msg': f'发送失败: {e}'}
             try:
                 return await asyncio.wait_for(fut, timeout=_CALL_PY_TIMEOUT)
@@ -532,6 +534,7 @@ class RustAccelService:
                 self.acall(action, bot=bot, **params), self._loop)
             return fut.result(timeout=_CALL_PY_TIMEOUT + 5)
         except Exception as e:
+            logger.debug('[call] 捕获异常后按降级路径继续: %s', e)
             return {'status': 'failed', 'retcode': -3, 'msg': str(e)}
 
     async def query_connections(self) -> list:
@@ -543,7 +546,8 @@ class RustAccelService:
             await self._writer.drain()
             msg = await asyncio.wait_for(fut, timeout=5)
             return msg.get('connections', [])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[query_connections] 捕获异常后按降级路径继续: %s', _exc)
             return []
         finally:
             self._pending.pop('__connlist__', None)
@@ -615,8 +619,8 @@ def _close_service(svc, loop):
         if svc.proc is not None and svc.proc.poll() is None:
             try:
                 svc.proc.kill()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_close_service] 捕获异常后按降级路径继续: %s', _exc)
         svc.proc = None
     except Exception as e:
         logger.error(f"[rust_accel] unregister 关闭异常: {e}")

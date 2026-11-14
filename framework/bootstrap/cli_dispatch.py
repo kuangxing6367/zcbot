@@ -1,14 +1,18 @@
 """顶层参数解析与子命令相关的小工具：版本、帮助、语言参数。"""
+import logging
 import os
 
 from framework.paths import version_path
+
+logger = logging.getLogger('zcbot')
 
 
 def read_version():
     try:
         with open(version_path(), 'r', encoding='utf-8') as f:
             return f.read().strip()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[read_version] 捕获异常后按降级路径继续: %s', _exc)
         return 'unknown'
 
 

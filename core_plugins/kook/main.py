@@ -300,8 +300,8 @@ class KookAdapter(ProtocolAdapter):
             t.cancel()
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[_cancel_heartbeat] 捕获异常后按降级路径继续: %s', _exc)
 
     # ── REST ────────────────────────────────────────────────────
 
@@ -341,11 +341,13 @@ class KookAdapter(ProtocolAdapter):
                     method, url, params=params, json=json_body,
                     timeout=timeout)
         except Exception as e:
+            logger.debug('[_api] 捕获异常后按降级路径继续: %s', e)
             return {'status': 'failed', 'retcode': -3,
                     'msg': f'KOOK 请求失败: {type(e).__name__} {e}'}
         try:
             body = resp.json() if resp.content else {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_api] 捕获异常后按降级路径继续: %s', _exc)
             body = {'_text': (resp.text or '')[:300]}
 
         if resp.status_code == 429:
@@ -533,7 +535,8 @@ class KookAdapter(ProtocolAdapter):
             self._pong_event.clear()
             try:
                 await ws.send(json.dumps({'s': _S_PING, 'sn': self._sn}))
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_heartbeat_loop] 捕获异常后按降级路径继续: %s', _exc)
                 return
             try:
                 await asyncio.wait_for(self._pong_event.wait(),
@@ -543,8 +546,8 @@ class KookAdapter(ProtocolAdapter):
                                _PONG_TIMEOUT)
                 try:
                     await ws.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_heartbeat_loop] 捕获异常后按降级路径继续: %s', _exc)
                 return
 
     async def _recv_loop(self, ws):
@@ -555,7 +558,8 @@ class KookAdapter(ProtocolAdapter):
                 text = (message.decode('utf-8', errors='replace')
                         if isinstance(message, (bytes, bytearray)) else message)
                 payload = json.loads(text)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_recv_loop] 捕获异常后按降级路径继续: %s', _exc)
                 continue
             if not isinstance(payload, dict):
                 continue
@@ -573,8 +577,8 @@ class KookAdapter(ProtocolAdapter):
                     logger.error('kook 握手失败：%s（%s）', reason, code)
                     try:
                         await ws.close()
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[_recv_loop] 捕获异常后按降级路径继续: %s', _exc)
                     return
                 old = self._session_id
                 self._session_id = (d or {}).get('session_id') or ''
@@ -744,20 +748,20 @@ class KookAdapter(ProtocolAdapter):
         if ws is not None:
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         await self._cancel_heartbeat()
         if self._supervisor is not None and not self._supervisor.done():
             self._supervisor.cancel()
             try:
                 await self._supervisor
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         self._supervisor = None
         try:
             self._http.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
 
 
 # ── 注册入口 ──────────────────────────────────────────────────

@@ -23,8 +23,12 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 sys.path.insert(0, HERE)
 
+import logging
+
 from iipc_client import IIPCClient, resolve_auth
 from portutil import pick_addr
+
+logger = logging.getLogger('zcbot')
 
 # 端口动态分配：不写死，避免与开发机上正在跑的服务抢端口
 ADDR = pick_addr("ZCBOT_SURFACE_ADDR")
@@ -156,7 +160,8 @@ def main():
             kproc.terminate()
             try:
                 kproc.wait(5)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
                 kproc.kill()
 
     failed = [r for r in results if not r[1]]
@@ -175,8 +180,8 @@ def wait_register(ad, timeout=25.0):
             rows = db(ad, "SELECT DISTINCT plugin_name FROM commands WHERE plugin_name='api_surface'")
             if rows:
                 return True
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[wait_register] 捕获异常后按降级路径继续: %s', _exc)
         time.sleep(0.1)
     return False
 

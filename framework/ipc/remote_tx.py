@@ -115,7 +115,8 @@ class RemoteTxManager:
         if op == 'pool_status':
             try:
                 return self._db.pool_status
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[run] 捕获异常后按降级路径继续: %s', _exc)
                 return {}
 
         # ---- SQL 类操作 ----
@@ -199,5 +200,5 @@ class RemoteTxManager:
     def _cleanup(self, entry):
         try:
             entry['conn'].close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_cleanup] 捕获异常后按降级路径继续: %s', _exc)

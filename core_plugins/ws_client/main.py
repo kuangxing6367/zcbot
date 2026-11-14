@@ -69,7 +69,8 @@ def _extract_b64(data: str) -> str | None:
         try:
             base64.b64decode(s, validate=True)
             return s
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_extract_b64] 捕获异常后按降级路径继续: %s', _exc)
             return None
     return None
 
@@ -209,7 +210,8 @@ class WsClientAdapter(ProtocolAdapter):
         try:
             p = urlparse(self.url)
             hint = f"{p.scheme}://{p.netloc}{p.path or '/'}"
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[get_connection_info] 捕获异常后按降级路径继续: %s', _exc)
             hint = self.url
         return {
             'id': 'ws_client',
@@ -240,7 +242,8 @@ class WsClientAdapter(ProtocolAdapter):
         self._closing = False
         try:
             self._loop = self.framework.loop
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[start] 捕获异常后按降级路径继续: %s', _exc)
             self._loop = None
         loop = self._loop
         if loop is None or not loop.is_running():
@@ -295,7 +298,8 @@ class WsClientAdapter(ProtocolAdapter):
         # websockets 14.x 参数名 additional_headers；12/13 为 extra_headers
         try:
             _major = int(str(websockets.__version__).split('.')[0])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_connect_once] 捕获异常后按降级路径继续: %s', _exc)
             _major = 0
         _hdr_kw = ('additional_headers' if _major >= 14 else 'extra_headers')
         _kwargs = dict(
@@ -364,15 +368,15 @@ class WsClientAdapter(ProtocolAdapter):
         if ws is not None:
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         for task in (self._supervisor, self._recv_task):
             if task is not None and not task.done():
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                except (asyncio.CancelledError, Exception) as _exc:
+                    logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         self._supervisor = None
         self._recv_task = None
 

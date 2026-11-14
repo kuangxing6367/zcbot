@@ -415,7 +415,8 @@ def _record_run(database, migration: Migration | None, context: MigrationContext
         app_version = ''
         try:
             from framework import __version__ as app_version
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_record_run] 捕获异常后按降级路径继续: %s', _exc)
             app_version = ''
         database.execute(
             "INSERT INTO schema_migration_runs "
@@ -494,6 +495,7 @@ def backup_snapshot(database, tag: str = '', keep: int = 5) -> dict:
             if row:
                 position = f"{row.get('File', '')}:{row.get('Position', '')}"
         except Exception as e:
+            logger.debug('[backup_snapshot] 捕获异常后按降级路径继续: %s', e)
             return {'ok': False, 'kind': 'binlog', 'position': '',
                     'note': f"无法读取 binlog 位点（{e}）；请自行确认实例备份后再继续"}
         if not position:
@@ -519,7 +521,8 @@ def backup_snapshot(database, tag: str = '', keep: int = 5) -> dict:
                 try:
                     from framework.config import get_home
                     path = os.path.normpath(os.path.join(get_home(), path))
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[backup_snapshot] 捕获异常后按降级路径继续: %s', _exc)
                     path = os.path.abspath(path)
         if not path:
             return {'ok': False, 'kind': 'file', 'path': '',
@@ -542,6 +545,7 @@ def backup_snapshot(database, tag: str = '', keep: int = 5) -> dict:
         return {'ok': True, 'kind': 'file', 'path': target,
                 'note': f'备份 {os.path.basename(target)}'}
     except Exception as e:
+        logger.debug('[backup_snapshot] 捕获异常后按降级路径继续: %s', e)
         return {'ok': False, 'kind': 'file', 'path': '',
                 'note': f'备份失败（{type(e).__name__}: {e}）'}
 
@@ -555,13 +559,14 @@ def _prune_backups(out_dir: str, keep: int) -> None:
             (os.path.join(out_dir, f) for f in os.listdir(out_dir)
              if f.startswith(_BACKUP_PREFIX)),
             key=lambda p: os.path.getmtime(p), reverse=True)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_prune_backups] 捕获异常后按降级路径继续: %s', _exc)
         return
     for old in files[keep:]:
         try:
             os.remove(old)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_prune_backups] 捕获异常后按降级路径继续: %s', _exc)
 
 
 # ── 注册表校验 ────────────────────────────────────────────────
@@ -716,6 +721,7 @@ def _mysql_lock(database, timeout: int = 30):
             return None, False, f"等待命名锁超时（{timeout}s）"
         return (conn, cur), True, ''
     except Exception as e:
+        logger.debug('[_mysql_lock] 捕获异常后按降级路径继续: %s', e)
         return None, True, f"命名锁不可用，已退化为无锁执行: {e}"
 
 
@@ -725,14 +731,14 @@ def _release_mysql_lock(handle) -> None:
     conn, cur = handle
     try:
         cur.execute("SELECT RELEASE_LOCK(%s)", (_MYSQL_LOCK_NAME,))
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_release_mysql_lock] 捕获异常后按降级路径继续: %s', _exc)
     finally:
         for closer in (cur.close, conn.close):
             try:
                 closer()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_release_mysql_lock] 捕获异常后按降级路径继续: %s', _exc)
 
 
 # ── 主流程 ────────────────────────────────────────────────────
@@ -768,7 +774,8 @@ def plan(database, registry: Sequence[Migration],
     ledger = False
     try:
         ledger = database.table_exists(LEDGER_TABLE)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[plan] 捕获异常后按降级路径继续: %s', _exc)
         ledger = False
     rows = _ledger_rows(database) if ledger else {}
     done = {v for v, r in rows.items() if r['success']}
@@ -1060,7 +1067,8 @@ def status(database, registry: Sequence[Migration],
     ledger = False
     try:
         ledger = database.table_exists(LEDGER_TABLE)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[status] 捕获异常后按降级路径继续: %s', _exc)
         ledger = False
 
     rows = _ledger_rows(database) if ledger else {}
@@ -1136,6 +1144,7 @@ def verify(database, registry: Sequence[Migration],
         if missing:
             problems.append(f"缺失表 {len(missing)} 张：{', '.join(missing[:5])}")
     except Exception as e:
+        logger.warning('[verify] 捕获异常后按降级路径继续: %s', e)
         problems.append(f"结构自检失败：{type(e).__name__}: {e}")
     return {'ok': not problems, 'problems': problems,
             'current': st['current'], 'latest': st['latest']}

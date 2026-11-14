@@ -27,8 +27,8 @@ def list_groups(db) -> list:
     try:
         for r in db.query("SELECT group_name, COUNT(*) AS c FROM perm_group_nodes GROUP BY group_name"):
             counts[r['group_name']] = int(r['c'] or 0)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[list_groups] 捕获异常后按降级路径继续: %s', _exc)
     result = []
     for r in rows:
         d = dict(r)
@@ -42,7 +42,8 @@ def list_groups(db) -> list:
 def get_group(db, name) -> dict:
     try:
         return db.query_one("SELECT * FROM perm_groups WHERE name = %s", (name,))
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[get_group] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 
@@ -201,7 +202,8 @@ def list_user_nodes(db, user_id) -> list:
     try:
         return db.query("SELECT * FROM perm_user_nodes WHERE user_id = %s ORDER BY id",
                         (int(user_id),))
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[list_user_nodes] 捕获异常后按降级路径继续: %s', _exc)
         return []
 
 

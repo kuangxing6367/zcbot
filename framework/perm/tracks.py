@@ -23,14 +23,16 @@ from framework.perm.groups import (
 def list_tracks(db) -> list:
     try:
         return db.query("SELECT * FROM perm_tracks ORDER BY name")
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[list_tracks] 捕获异常后按降级路径继续: %s', _exc)
         return []
 
 
 def get_track(db, name) -> dict:
     try:
         return db.query_one("SELECT * FROM perm_tracks WHERE name = %s", (name,))
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[get_track] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 

@@ -298,7 +298,8 @@ class SessionPersist:
             if data.get('key') != key or not isinstance(data.get('messages'), list):
                 return None
             return data
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[load] 捕获异常后按降级路径继续: %s', _exc)
             return None
 
     def delete(self, key: str) -> bool:
@@ -321,7 +322,8 @@ class SessionPersist:
             try:
                 with open(os.path.join(self._dir, name), 'r', encoding='utf-8') as f:
                     data = json.load(f)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[iter_records] 捕获异常后按降级路径继续: %s', _exc)
                 continue
             if isinstance(data, dict) and isinstance(data.get('messages'), list):
                 out.append(data)

@@ -197,8 +197,8 @@ def create_web_app(framework) -> Flask:
                     # 同站跨源仍会带 Cookie），构成完整的跨源读通道。
                     if ohost == (request.host or '').split(':')[0] and oport == _web_port:
                         return origin
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_resolve_cors_origin] 捕获异常后按降级路径继续: %s', _exc)
         if _cors_cfg:
             if isinstance(_cors_cfg, str):
                 allowed = [o.strip() for o in _cors_cfg.split(',') if o.strip()]
@@ -689,8 +689,8 @@ def create_web_app(framework) -> Flask:
                         "UPDATE api_tokens SET last_used_at = %s WHERE id = %s",
                         (str(int(time.time())), row['id'])
                     )
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.warning('[_verify_token] 捕获异常后按降级路径继续: %s', _exc)
                 return {'id': 'api:' + str(row['id']), 'username': 'api:' + row['name'], 'role': row['role']}
         return None
 
@@ -698,7 +698,8 @@ def create_web_app(framework) -> Flask:
         """将登录 token 同步到 HttpOnly Cookie（SameSite=Lax），供 iframe 场景兜底鉴权"""
         try:
             timeout = web_cfg.get('token_timeout') or web_cfg.get('session_timeout', 86400)
-        except Exception:
+        except Exception as _exc:
+            logger.warning('[_sync_token_cookie] 捕获异常后按降级路径继续: %s', _exc)
             timeout = 86400
         resp.set_cookie(
             'zcbot_token', token or '',

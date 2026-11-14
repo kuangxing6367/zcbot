@@ -11,6 +11,8 @@ IpcLogHandler —— 宿主进程（进程2）日志转发
 import logging
 import threading
 
+logger = logging.getLogger('zcbot')
+
 
 class IpcLogHandler(logging.Handler):
     """把日志记录批量转发为核心侧的 host 日志（经 IPC）"""
@@ -39,7 +41,8 @@ class IpcLogHandler(logging.Handler):
                 'logger': record.name,
                 'msg': record.getMessage(),
             }
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[emit] 捕获异常后按降级路径继续: %s', _exc)
             return  # 记录格式化异常则丢弃，不影响日志系统
         batch = None
         with self._lock:
@@ -59,9 +62,9 @@ class IpcLogHandler(logging.Handler):
     def _flush(self, batch):
         try:
             self._client.notify('log', {'batch': batch})
-        except Exception:
+        except Exception as _exc:
             # 连接未就绪 / 已断开时静默丢弃，不影响插件运行
-            pass
+            logger.debug('[_flush] 捕获异常后按降级路径继续: %s', _exc)
 
     def flush_logs(self):
         """同步冲刷剩余日志（宿主关闭前调用，避免丢最后一批）"""

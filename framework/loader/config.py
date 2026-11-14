@@ -52,7 +52,8 @@ class PluginConfigMixin:
                     try:
                         with open(src_path, 'r', encoding='utf-8', errors='ignore') as f:
                             src = f.read()
-                    except Exception:
+                    except Exception as _exc:
+                        logger.debug('[read_config_schema] 捕获异常后按降级路径继续: %s', _exc)
                         continue
                     # 匹配 get_config("key", default) 及带别名的 _get_config("key", default)
                     for m in re.finditer(

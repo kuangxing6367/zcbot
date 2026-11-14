@@ -24,8 +24,12 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 sys.path.insert(0, HERE)
 
+import logging
+
 from iipc_client import IIPCClient, resolve_auth
 from portutil import pick_addr
+
+logger = logging.getLogger('zcbot')
 
 ADDR = pick_addr("ZCBOT_HARDEN_ADDR")
 AUTH = resolve_auth()  # 生成/继承高熵令牌并写入 os.environ，内核与客户端同源
@@ -55,8 +59,8 @@ def _pump(kproc, log_ref):
         try:
             for line in kproc.stdout:
                 log_ref.append(line)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[fn] 捕获异常后按降级路径继续: %s', _exc)
     threading.Thread(target=fn, daemon=True).start()
 
 
@@ -100,7 +104,8 @@ def test_db_corruption(kernel, plugins_dir):
         kproc.terminate()
         try:
             kproc.wait(5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[test_db_corruption] 捕获异常后按降级路径继续: %s', _exc)
             kproc.kill()
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -159,7 +164,8 @@ def test_config_null(kernel, plugins_dir):
         kproc.terminate()
         try:
             kproc.wait(5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[test_config_null] 捕获异常后按降级路径继续: %s', _exc)
             kproc.kill()
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -200,8 +206,8 @@ def test_proc_stats(kernel, plugins_dir):
                 if "echo" in names:
                     reg = True
                     break
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[test_proc_stats] 捕获异常后按降级路径继续: %s', _exc)
             time.sleep(0.1)
         check("echo 插件已注册(被内核直拉)", reg)
         # 调 proc_stats
@@ -219,7 +225,8 @@ def test_proc_stats(kernel, plugins_dir):
         kproc.terminate()
         try:
             kproc.wait(5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[test_proc_stats] 捕获异常后按降级路径继续: %s', _exc)
             kproc.kill()
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -280,7 +287,8 @@ def test_crash_bomb_and_shutdown(kernel):
         kproc.terminate()
         try:
             kproc.wait(8)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[test_crash_bomb_and_shutdown] 捕获异常后按降级路径继续: %s', _exc)
             kproc.kill()
         time.sleep(1)
         orphans_after = _count_plugin_procs(boom_dir)
@@ -313,6 +321,7 @@ def _count_plugin_procs(plugin_dir):
                     n += 1
             return n
         except Exception as e:
+            logger.debug('[_count_plugin_procs] 捕获异常后按降级路径继续: %s', e)
             last_err = e
             time.sleep(1)
     print("  (进程枚举失败: %s)" % last_err)

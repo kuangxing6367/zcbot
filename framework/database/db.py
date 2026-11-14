@@ -223,8 +223,8 @@ class Database(DatabaseConnMixin):
                 if not getattr(self._local, 'in_txn', False):
                     try:
                         conn.rollback()
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[_do] 捕获异常后按降级路径继续: %s', _exc)
                 raise
             finally:
                 cursor.close()
@@ -332,8 +332,8 @@ class Database(DatabaseConnMixin):
             if not self._ping_if_idle(conn, force=True):
                 try:
                     conn.close()        # 归还即丢弃失效连接
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[transaction] 捕获异常后按降级路径继续: %s', _exc)
                 conn = self._get_conn()
                 self._ping_if_idle(conn, force=True)
         # 固定事务连接：事务内所有 db.* 调用走同一连接
@@ -349,8 +349,8 @@ class Database(DatabaseConnMixin):
         except Exception:
             try:
                 conn.rollback()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[transaction] 捕获异常后按降级路径继续: %s', _exc)
             raise
         finally:
             self._local.in_txn = False
@@ -358,13 +358,13 @@ class Database(DatabaseConnMixin):
             if self.db_type == 'mysql':
                 try:
                     _set_autocommit(conn, True)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[transaction] 捕获异常后按降级路径继续: %s', _exc)
                 if borrowed:
                     try:
                         conn.close()  # 归还连接池
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[transaction] 捕获异常后按降级路径继续: %s', _exc)
             # SQLite 线程本地连接不关闭，交给后续复用
 
     # ── 启动期元数据快照（批量探测，消除逐表/逐列串行往返）──────────

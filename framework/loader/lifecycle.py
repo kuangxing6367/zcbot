@@ -567,8 +567,8 @@ class PluginLifecycleMixin:
                             "UPDATE plugins SET status='error', has_register=0 WHERE plugin_name=%s",
                             (plugin_name,)
                         )
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[load_plugin] 捕获异常后按降级路径继续: %s', _exc)
                     # 登记失败快照，供心跳检测到文件修复后自动重载
                     self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                     return False
@@ -591,8 +591,8 @@ class PluginLifecycleMixin:
                         "UPDATE plugins SET status='error', has_register=0 WHERE plugin_name=%s",
                         (plugin_name,)
                     )
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[load_plugin] 捕获异常后按降级路径继续: %s', _exc)
                 # 登记失败快照，供心跳检测到文件修复后自动重载
                 self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
                 return False
@@ -750,8 +750,8 @@ class PluginLifecycleMixin:
             plugin_path = info.get('path') or os.path.join(self.plugins_dir, plugin_name)
             norm = os.path.normpath(plugin_path)
             sys.path = [p for p in sys.path if os.path.normpath(p) != norm]
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[unload_plugin] 捕获异常后按降级路径继续: %s', _exc)
 
         # 清理文件快照（含失败自愈记录：卸载后不再尝试自动重载）
         with self._lock:
@@ -775,5 +775,5 @@ class PluginLifecycleMixin:
         # 插件已从内存移除，让路由表立即重建，避免路由到已卸载插件
         try:
             self.framework.router._invalidate_cache()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[unload_plugin] 捕获异常后按降级路径继续: %s', _exc)

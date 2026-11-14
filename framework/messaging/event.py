@@ -2,6 +2,7 @@
 Event 对象
 封装 OneBot 11 上报的事件数据，供插件 handler 使用
 """
+import logging
 import re
 import time
 from collections import OrderedDict
@@ -19,6 +20,8 @@ from framework.messaging.segments import (
 from framework.messaging.segments import (
     first as first_seg,
 )
+
+logger = logging.getLogger('zcbot')
 
 # 权限查询 TTL 缓存（热路径性能：避免每个事件反复查库）
 # 用户：user_id -> (role, is_blacklist, ts) ；群成员：(`group_id`,`user_id`) -> (role, ts)
@@ -308,7 +311,8 @@ class Event:
                     return grole
             self._role_cache = 'member'
             return 'member'
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[role] 捕获异常后按降级路径继续: %s', _exc)
             self._role_cache = self.sender_role
             return self._role_cache
 
@@ -356,7 +360,8 @@ class Event:
                 self._perm_cache = perm.PermissionSet(self.user_id, ctx, ['default'], {}, {})
             else:
                 self._perm_cache = perm.resolve(db, self.user_id, ctx, self.role)
-        except Exception:
+        except Exception as _exc:
+            logger.warning('[_perm_set] 捕获异常后按降级路径继续: %s', _exc)
             self._perm_cache = perm.PermissionSet(self.user_id, {}, ['default'], {}, {})
         return self._perm_cache
 

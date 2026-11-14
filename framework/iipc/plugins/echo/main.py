@@ -6,7 +6,11 @@ DB 在 Go 侧执行（不占 Python GIL）→ 通用 api.call 通道（get_login
 本文件刻意使用与原 zcbot 插件完全相同的写法（ctx.command/ctx.on 实例方法形态），
 拖进真框架也能跑——IIPC 的 1:1 目标即此。
 """
+import logging
+
 from sdk import PluginContext
+
+logger = logging.getLogger('zcbot')
 
 __plugin_meta__ = {
     "name": "回声插件",
@@ -62,6 +66,7 @@ def register(ctx: PluginContext):
             ctx.send_msg(message="db=" + str(rows),
                          user_id=event.user_id, group_id=event.group_id)
         except Exception as e:
+            logger.debug('[ping] 捕获异常后按降级路径继续: %s', e)
             ctx.send_msg(message="db_err=" + str(e),
                          user_id=event.user_id, group_id=event.group_id)
 

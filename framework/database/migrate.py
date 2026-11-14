@@ -20,10 +20,13 @@
 """
 import argparse
 import getpass
+import logging
 import os
 import sys
 
 from framework.database import migrations as M
+
+logger = logging.getLogger('zcbot')
 
 
 def _default_operator() -> str:
@@ -34,7 +37,8 @@ def _default_operator() -> str:
             return val
     try:
         return getpass.getuser()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_default_operator] 捕获异常后按降级路径继续: %s', _exc)
         return ''
 
 
@@ -238,8 +242,8 @@ def main(argv=None) -> int:
     finally:
         try:
             db.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
     return 0
 
 

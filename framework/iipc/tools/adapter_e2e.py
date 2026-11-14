@@ -31,8 +31,12 @@ ROOT = os.path.dirname(HERE)                      # iipc/
 PYSIDE = os.path.dirname(ROOT)                   # python_side/
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "py_sdk"))
+import logging
+
 from iipc_client import IIPCClient, resolve_auth
 from onebot_fake import FakeOneBot, group_msg, private_msg
+
+logger = logging.getLogger('zcbot')
 
 KERNEL_EXE = os.path.join(ROOT, "go_kernel", "zcbot_kernel.exe")
 
@@ -89,14 +93,14 @@ def wait_plugins_ready(addr, needed, timeout=45):
                       [p.get("plugin_id") for p in (r or {}).get("plugins", [])])
             if needed.issubset(ids):
                 return True
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[wait_plugins_ready] 捕获异常后按降级路径继续: %s', _exc)
         finally:
             if cli is not None:
                 try:
                     cli.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[wait_plugins_ready] 捕获异常后按降级路径继续: %s', _exc)
         time.sleep(0.5)
     return False
 

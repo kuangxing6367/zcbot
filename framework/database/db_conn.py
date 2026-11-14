@@ -37,8 +37,9 @@ class DatabaseConnMixin:
             try:
                 from framework.config import get_home
                 db_path = os.path.normpath(os.path.join(get_home(), db_path))
-            except Exception:
+            except Exception as _exc:
                 # 极端情况（配置模块不可导入）退回代码根，仍优于 cwd
+                logger.debug('[_init_sqlite] 捕获异常后按降级路径继续: %s', _exc)
                 db_path = os.path.normpath(os.path.join(
                     os.path.dirname(os.path.dirname(os.path.dirname(
                         os.path.abspath(__file__)))), db_path))
@@ -257,8 +258,9 @@ class DatabaseConnMixin:
             return False
         try:
             raw._zc_last_ping = now
-        except Exception:
-            pass        # 挂不上时间戳就退化为每次都检测，只影响性能不影响正确性
+        except Exception as _exc:
+            logger.debug('[_ping_if_idle] 捕获异常后按降级路径继续: %s', _exc)
+            # 挂不上时间戳就退化为每次都检测，只影响性能不影响正确性
         return True
 
     def _get_conn_mysql(self):
@@ -303,8 +305,8 @@ class DatabaseConnMixin:
                 return conn
             try:
                 conn.close()        # 归还即丢弃（DBUtils 会剔除失效连接）
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_get_conn_mysql] 捕获异常后按降级路径继续: %s', _exc)
             if time.time() >= deadline:
                 raise RuntimeError(
                     "MySQL 连接池里没有可用连接（连续 ping 失败），请检查网络或"
@@ -323,8 +325,8 @@ class DatabaseConnMixin:
                     logger.warning(f"关闭 SQLite 线程连接失败: {e}")
                 try:
                     del self._local.conn
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_close_thread_conn] 捕获异常后按降级路径继续: %s', _exc)
 
     def _mark_conn_used(self):
         """记录连接最近使用时间（避免频繁 ping）"""
@@ -402,8 +404,8 @@ class DatabaseConnMixin:
                     'idle': idle,
                     'total': checked_out + idle,
                 }
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[pool_status] 捕获异常后按降级路径继续: %s', _exc)
         return {
             'type': self.db_type,
             'path': getattr(self, '_db_path', None),

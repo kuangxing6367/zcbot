@@ -8,11 +8,14 @@
 带看门狗重启与优雅关闭；fork 路径需在 Linux 验证，Windows 仅验证 spawn 回退路径。
 """
 import argparse
+import logging
 import os
 import signal
 import subprocess
 import sys
 import time
+
+logger = logging.getLogger('zcbot')
 
 
 def log(msg):
@@ -82,6 +85,7 @@ def main():
                 try:
                     run_plugin(pdir, pid_id, a.iipc_addr, a.iipc_auth)
                 except Exception as e:
+                    logger.debug('[launch] 捕获异常后按降级路径继续: %s', e)
                     sys.stderr.write("[pluginhost child %s] %s\n" % (pid_id, e))
                 finally:
                     os._exit(0)
@@ -144,13 +148,13 @@ def main():
         if "pid" in info:
             try:
                 os.kill(info["pid"], signal.SIGTERM)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
         else:
             try:
                 info["proc"].terminate()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
     log("pluginhost 退出")
 
 

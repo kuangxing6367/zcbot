@@ -108,8 +108,8 @@ class RemoteDatabase:
         except Exception:
             try:
                 self._client.call('tx.rollback', {'tx_id': tx_id})
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[transaction] 捕获异常后按降级路径继续: %s', _exc)
             raise
         finally:
             self._local.tx_id = None

@@ -17,7 +17,10 @@
 """
 import inspect
 import json
+import logging
 import threading
+
+logger = logging.getLogger('zcbot')
 
 # 内核回调插件的固定方法名（与 go_kernel/protocol.go 的 MethodPluginInvoke 对齐）
 PLUGIN_INVOKE = "plugin.invoke"
@@ -65,14 +68,16 @@ class ConfigProxy(object):
     def get(self, key, default=None):
         try:
             v = self._ctx.get_config(key, default)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[get] 捕获异常后按降级路径继续: %s', _exc)
             return default
         return default if v is None else v
 
     def set(self, key, value):
         try:
             return self._ctx.set_config(key, value)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[set] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def __getitem__(self, key):
@@ -91,7 +96,8 @@ class KVProxy(object):
     def get(self, key, default=None):
         try:
             r = self._ctx._client.call("kv.get", {"key": key}, timeout=5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[get] 捕获异常后按降级路径继续: %s', _exc)
             return default
         if not r or not r.get("found"):
             return default
@@ -103,28 +109,32 @@ class KVProxy(object):
         try:
             self._ctx._client.call("kv.set", {"key": key, "value": value, "ttl": int(ttl)}, timeout=5)
             return True
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[set] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def delete(self, key):
         try:
             self._ctx._client.call("kv.del", {"key": key}, timeout=5)
             return True
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[delete] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def incr(self, key, delta=1):
         try:
             r = self._ctx._client.call("kv.incr", {"key": key, "delta": delta}, timeout=5)
             return (r or {}).get("value")
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[incr] 捕获异常后按降级路径继续: %s', _exc)
             return None
 
     def keys(self, prefix=""):
         try:
             r = self._ctx._client.call("kv.keys", {"prefix": prefix}, timeout=5)
             return (r or {}).get("keys", [])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[keys] 捕获异常后按降级路径继续: %s', _exc)
             return []
 
     # 字典式便利
@@ -266,14 +276,16 @@ def _resolve_one(p, injectors):
     if p.name in injectors:
         try:
             return injectors[p.name]()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_resolve_one] 捕获异常后按降级路径继续: %s', _exc)
             return None
     # 3) 注解名命中（如 def h(event, logger: Logger)）
     ann = p.annotation
     if isinstance(ann, str) and ann in injectors:
         try:
             return injectors[ann]()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_resolve_one] 捕获异常后按降级路径继续: %s', _exc)
             return None
     # 4) 有默认值就用默认值，否则 None（不让插件因为少个参数就崩）
     return None if p.default is inspect.Parameter.empty else p.default
@@ -306,8 +318,8 @@ def flush_pending(ctx):
         except Exception as e:
             try:
                 ctx.logger.warning("延迟声明 %s 失败: %s" % (method, e))
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[flush_pending] 捕获异常后按降级路径继续: %s', _exc)
     return done
 
 
@@ -326,7 +338,8 @@ def attach(cls):
                    "caps": list(caps or []), "meta": meta or {}}
         try:
             self._client.call("service.register", payload, timeout=5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[provide] 捕获异常后按降级路径继续: %s', _exc)
             _queue_decl(self, "service.register", payload)
         return True
 
@@ -342,7 +355,8 @@ def attach(cls):
         try:
             r = self._client.call("service.list", {}, timeout=5)
             return (r or {}).get("services", [])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[services] 捕获异常后按降级路径继续: %s', _exc)
             return []
 
     def expose(self, action=None):
@@ -406,14 +420,16 @@ def attach(cls):
         try:
             self._client.call("metric.observe", {"name": str(name), "value": float(value)}, timeout=5)
             return True
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[metric] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def metrics(self):
         try:
             r = self._client.call("metric.snapshot", {}, timeout=5)
             return (r or {}).get("metrics", {})
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[metrics] 捕获异常后按降级路径继续: %s', _exc)
             return {}
 
     def declare_caps(self, caps):
@@ -421,7 +437,8 @@ def attach(cls):
         payload = {"caps": list(caps)}
         try:
             self._client.call("capability.declare", payload, timeout=5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[declare_caps] 捕获异常后按降级路径继续: %s', _exc)
             _queue_decl(self, "capability.declare", payload)
         return True
 
@@ -430,7 +447,8 @@ def attach(cls):
         try:
             r = self._client.call("capability.query", {"cap": cap}, timeout=5)
             return (r or {}).get("plugins", [])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[who_has] 捕获异常后按降级路径继续: %s', _exc)
             return []
 
     def plugins(self):
@@ -438,7 +456,8 @@ def attach(cls):
         try:
             r = self._client.call("plugin.list", {}, timeout=5)
             return (r or {}).get("plugins", [])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[plugins] 捕获异常后按降级路径继续: %s', _exc)
             return []
 
     def transform(self, priority=50, action="transform", handler=None):
@@ -471,7 +490,8 @@ def attach(cls):
         payload = {"plugin": self.plugin_id, "action": action, "priority": int(priority)}
         try:
             self._client.call("pipeline.transform", payload, timeout=5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[transform] 捕获异常后按降级路径继续: %s', _exc)
             _queue_decl(self, "pipeline.transform", payload)
         return handler
 

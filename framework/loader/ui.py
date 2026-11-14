@@ -254,8 +254,8 @@ class PluginWebuiMixin:
                 pkg = _split_pkg_name(dep)
                 if pkg and pkg in webui_names:
                     return pkg
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_resolve_webui_host] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
     def get_plugin_webui_path(self, plugin_name: str) -> str:

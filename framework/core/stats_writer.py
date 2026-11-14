@@ -137,7 +137,8 @@ class AsyncStatsWriter:
         fw = self.framework
         try:
             enabled = fw.multi_platform_namespace()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_namespace_id] 捕获异常后按降级路径继续: %s', _exc)
             enabled = False
         if not enabled:
             return raw_id
@@ -289,7 +290,7 @@ class AsyncStatsWriter:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
             self._task = None
         await asyncio.to_thread(self._flush)

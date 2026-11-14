@@ -20,8 +20,8 @@ def _read_web_section(framework, project_root) -> dict:
                 doc = yaml.safe_load(f) or {}
             web = doc.get('web')
             return web if isinstance(web, dict) else {}
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_read_web_section] 捕获异常后按降级路径继续: %s', _exc)
     return {}
 
 

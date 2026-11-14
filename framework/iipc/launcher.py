@@ -46,8 +46,12 @@ ROOT = _find_root()
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "py_sdk"))
 
+import logging
+
 import iipc_log
 from iipc_client import resolve_auth
+
+logger = logging.getLogger('zcbot')
 
 
 def _load_iipc_config():
@@ -180,15 +184,15 @@ def pump(name, stream, on_line=None):
             if on_line is not None:
                 try:
                     on_line(line)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[pump] 捕获异常后按降级路径继续: %s', _exc)
     except Exception as e:
         log(name, "日志泵异常(已停止该进程日志转发): %s" % e, "ERROR")
     finally:
         try:
             stream.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[pump] 捕获异常后按降级路径继续: %s', _exc)
 
 
 def spawn(name, argv, cwd=None, env=None, on_line=None):
@@ -327,8 +331,8 @@ def sweep_plugins():
              "| ForEach-Object { $_.Terminate() }"],
             capture_output=True, timeout=10,
         )
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[sweep_plugins] 捕获异常后按降级路径继续: %s', _exc)
 
 
 def shutdown():
@@ -343,16 +347,16 @@ def shutdown():
         if p is not None and p.poll() is None:
             try:
                 p.terminate()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[shutdown] 捕获异常后按降级路径继续: %s', _exc)
     time.sleep(0.5)
     with procs_lock:
         for p in procs.values():
             if p.poll() is None:
                 try:
                     p.kill()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[shutdown] 捕获异常后按降级路径继续: %s', _exc)
     sweep_plugins()
     log("launcher", "已停止全部子进程")
 
@@ -392,8 +396,8 @@ def _mem_watchdog(max_mb):
                         rss = psutil.Process(p.pid).memory_info().rss / 1024 / 1024
                         parts.append("%s=%.0fMB" % (n, rss))
                         total += rss
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[loop] 捕获异常后按降级路径继续: %s', _exc)
                 # 各插件进程（内核逐插件直拉，每个是一个独立 Python 解释器，真正的内存大户）：
                 # 此前 launcher 监控只扫自身 procs（仅 kernel+rust），完全看不到它们，给出假安全感。
                 # 现经内核 debug.proc_stats 拿 PID，逐个累加到总 RSS，并在告警里点名。
@@ -410,16 +414,18 @@ def _mem_watchdog(max_mb):
                                 rss = psutil.Process(pid).memory_info().rss / 1024 / 1024
                                 parts.append("%s=%.0fMB" % (pl.get("plugin_id"), rss))
                                 total += rss
-                            except Exception:
-                                pass
-                except Exception:
-                    pass  # 内核未就绪/断开时跳过插件部分，不影响 kernel+rust 监控
+                            except Exception as _exc:
+                                logger.debug('[loop] 捕获异常后按降级路径继续: %s', _exc)
+                except Exception as _exc:
+                    logger.debug('[loop] 捕获异常后按降级路径继续: %s', _exc)
+                    # 内核未就绪/断开时跳过插件部分，不影响 kernel+rust 监控
                 if total > max_mb:
                     log("memwatch",
                         "子进程总 RSS %.0fMB 超阈值 %dMB（%s）——仅告警，不杀进程"
                         % (total, max_mb, ", ".join(parts)), "WARNING")
-            except Exception:
-                pass  # 监控异常不干扰主流程
+            except Exception as _exc:
+                logger.debug('[loop] 捕获异常后按降级路径继续: %s', _exc)
+                # 监控异常不干扰主流程
 
     threading.Thread(target=loop, daemon=True, name="iipc-memwatch").start()
 

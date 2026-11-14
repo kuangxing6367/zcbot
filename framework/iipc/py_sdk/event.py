@@ -16,8 +16,11 @@ IIPC 为了让真插件零改动跑起来，在这里 1:1 复刻同一张面：
 权限查询惰性化：role 首次访问时经 IIPC 向内核查一次（带本进程 TTL 缓存），
 与原实现"首次查询后缓存"的语义一致。
 """
+import logging
 import re
 import time
+
+logger = logging.getLogger('zcbot')
 
 
 def _extract_text(message):
@@ -143,7 +146,8 @@ class Event:
         if self._perm_bridge is not None:
             try:
                 row = self._perm_bridge(self.user_id, self.group_id)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_role_row] 捕获异常后按降级路径继续: %s', _exc)
                 row = None
         self._role_cache = row or {}
         return self._role_cache
@@ -202,7 +206,8 @@ class Event:
             return bool(self._has_perm_fn(self.user_id, node,
                                           context=self._perm_context(),
                                           role=self.role))
-        except Exception:
+        except Exception as _exc:
+            logger.warning('[has_perm] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def check_perm(self, node):

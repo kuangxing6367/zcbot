@@ -663,6 +663,7 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 else:
                     await asyncio.to_thread(handler, args)
         except Exception as e:
+            logger.debug('[terminal_exec] 捕获异常后按降级路径继续: %s', e)
             return f"命令 [{name}] 执行失败: {e}"
         out = buf.getvalue()
         return out if out.strip() else f"[{name}] 已执行"

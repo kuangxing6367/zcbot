@@ -44,7 +44,8 @@ def register(ctx):
         # 解析符号链接后的真实路径必须仍在允许根目录内（防 symlink 逃逸）
         try:
             abs_real = os.path.realpath(abs_path)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_safe_file_path] 捕获异常后按降级路径继续: %s', _exc)
             abs_real = abs_path
         # 检查是否在任意允许的根目录下
         for root in roots:
@@ -326,6 +327,7 @@ def register(ctx):
                 f.save(dest)
                 saved.append(os.path.basename(dest))
             except Exception as e:
+                logger.debug('[file_browser_upload] 捕获异常后按降级路径继续: %s', e)
                 failed.append({'name': name, 'err': str(e)})
         if saved:
             audit_log(admin['id'], admin['username'], 'file_upload', 'dir', target,

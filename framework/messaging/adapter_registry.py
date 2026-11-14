@@ -77,8 +77,8 @@ class AdapterRegistry:
                 "UPDATE drive SET last_seen=NOW(), self_id=%s "
                 "WHERE adapter_key=%s",
                 (str(self_id), adapter_key))
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_touch] 捕获异常后按降级路径继续: %s', _exc)
 
     def uuid_for(self, adapter_key: str) -> str:
         """查内存缓存中的 uuid（无则返回 ''）。"""

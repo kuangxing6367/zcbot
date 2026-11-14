@@ -89,6 +89,7 @@ def register(ctx):
                             break
                         last_err = f'HTTP {resp.status_code}'
                     except Exception as e:
+                        logger.warning('[check_plugin_update] 捕获异常后按降级路径继续: %s', e)
                         last_err = str(e)
                 if not latest_sha:
                     return jsonify({'code': 500, 'msg': f'GitHub API 获取失败: {last_err}'}), 500
@@ -132,7 +133,8 @@ def register(ctx):
             pa += [0] * (n - len(pa))
             pb += [0] * (n - len(pb))
             return pa > pb
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_version_gt] 捕获异常后按降级路径继续: %s', _exc)
             return str(a) != str(b)
 
     def _load_market_registry() -> dict:
@@ -145,6 +147,7 @@ def register(ctx):
                 if plugins:
                     return {'plugins': plugins}
             except Exception as e:
+                logger.debug('[_load_market_registry] 捕获异常后按降级路径继续: %s', e)
                 last_err = str(e)
         logger.warning(f"加载官方市场 registry 失败: {last_err}")
         return {'plugins': []}
@@ -183,7 +186,8 @@ def register(ctx):
         try:
             from framework.config import _CORE_PLUGIN_SCHEMA
             return set(_CORE_PLUGIN_SCHEMA.keys())
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_framework_official_names] 捕获异常后按降级路径继续: %s', _exc)
             return set()
 
     def _declares_core_target(plugin_dir: str) -> bool:
@@ -201,7 +205,8 @@ def register(ctx):
                 data = yaml.safe_load(f) or {}
             return (str(data.get('install_target', '')).strip().lower() == 'core_plugins'
                     and data.get('official') is True)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_declares_core_target] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def _core_install_allowed(plugin_name: str, plugin_dir: str):
@@ -305,8 +310,8 @@ def register(ctx):
                     cache = json.load(f)
                 if time.time() - cache.get('ts', 0) < _MARKET_CACHE_TTL:
                     return jsonify({'code': 0, 'data': cache['data']})
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[plugin_market] 捕获异常后按降级路径继续: %s', _exc)
 
         sources = [_DEFAULT_MARKET] + _read_market_sources_custom()
         all_plugins, errors = [], []
@@ -320,7 +325,8 @@ def register(ctx):
                                 {'name': src.get('name', '默认源'), 'url': cand}))
                             ok_src = True
                             break
-                        except Exception:
+                        except Exception as _exc:
+                            logger.debug('[plugin_market] 捕获异常后按降级路径继续: %s', _exc)
                             continue
                     if not ok_src:
                         errors.append(f"{src.get('name', src.get('url', ''))}: 所有源均获取失败")
@@ -334,7 +340,8 @@ def register(ctx):
                                 {'name': src.get('name', '自定义源'), 'url': cand}))
                             ok_src = True
                             break
-                        except Exception:
+                        except Exception as _exc:
+                            logger.debug('[plugin_market] 捕获异常后按降级路径继续: %s', _exc)
                             continue
                     if not ok_src:
                         errors.append(f"{src.get('name', src_url)}: 所有源均获取失败")
@@ -349,8 +356,8 @@ def register(ctx):
         try:
             with open(cache_path, 'w', encoding='utf-8') as f:
                 json.dump({'ts': time.time(), 'data': result}, f, ensure_ascii=False)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[plugin_market] 捕获异常后按降级路径继续: %s', _exc)
         if not all_plugins and os.path.isfile(cache_path):
             try:
                 with open(cache_path, 'r', encoding='utf-8') as f:
@@ -359,8 +366,8 @@ def register(ctx):
                     cache_data = cache['data']
                     cache_data['errors'] = (cache_data.get('errors') or []) + ['网络获取失败，展示缓存数据（可能不是最新）']
                     return jsonify({'code': 0, 'data': cache_data, 'cached': True})
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[plugin_market] 捕获异常后按降级路径继续: %s', _exc)
         return jsonify({'code': 0, 'data': result})
 
     @app.route('/api/plugins/market/sources', methods=['GET'])

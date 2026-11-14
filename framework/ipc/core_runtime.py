@@ -157,8 +157,8 @@ class CoreRuntime:
                 if self.host_proc.is_alive():
                     self.host_proc.terminate()
                 self.host_proc.join(5)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_restart_host] 捕获异常后按降级路径继续: %s', _exc)
 
         logger.warning(f"宿主进程重启（第 {self._restart_count}/{max_restarts} 次）")
         self._spawn_host()
@@ -211,15 +211,15 @@ class CoreRuntime:
             try:
                 self.host_proc.terminate()
                 self.host_proc.join(5)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_stop] 捕获异常后按降级路径继续: %s', _exc)
         # 冲刷在途事件批次（关停前落最后一帧，避免窗口内事件丢失）
         batcher = getattr(self.framework, '_ipc_event_batcher', None)
         if batcher is not None:
             try:
                 await batcher.flush()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_stop] 捕获异常后按降级路径继续: %s', _exc)
         if self.server is not None:
             self.server.close()
         try:

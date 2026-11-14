@@ -7,6 +7,9 @@
 error / done），终端据此实时渲染过程；循环本身不打印，便于测试与复用。
 """
 import json
+import logging
+
+logger = logging.getLogger('zcbot')
 
 try:  # 包导入（测试 / 包内引用）
     from .llm import LLMError, stream_chat
@@ -67,13 +70,15 @@ class Agent:
                     args = json.loads(c.get('arguments') or '{}')
                     if not isinstance(args, dict):
                         args = {}
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[run] 捕获异常后按降级路径继续: %s', _exc)
                     args = {}
                 self._emit('tool_start', {'name': c['name'], 'args': args})
                 try:
                     out = self.tools.call(c['name'], args)
                     ok = True
                 except Exception as e:
+                    logger.debug('[run] 捕获异常后按降级路径继续: %s', e)
                     out = '错误: %s' % e
                     ok = False
                 self._emit('tool_end', {'name': c['name'], 'args': args,

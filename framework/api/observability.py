@@ -102,14 +102,15 @@ def version_of(ctx=None) -> str:
     if callable(getter):
         try:
             return str(getter() or '')
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[version_of] 捕获异常后按降级路径继续: %s', _exc)
     try:
         path = os.path.join(os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__)))), 'VERSION')
         with open(path, 'r', encoding='utf-8') as f:
             return f.read().strip()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[version_of] 捕获异常后按降级路径继续: %s', _exc)
         return ''
 
 
@@ -153,6 +154,7 @@ def db_probe(framework):
             value = (next(iter(row.values()), None) if isinstance(row, dict)
                      else row[0] if row else None)
     except Exception as e:
+        logger.debug('[db_probe] 捕获异常后按降级路径继续: %s', e)
         return False, f'{type(e).__name__}: {e}'
     ms = (time.perf_counter() - t0) * 1000
     if not _is_select_one(value):
@@ -169,11 +171,13 @@ def plugin_counts(framework):
     if loader is not None:
         try:
             loaded = len(loader.get_loaded_plugins() or {})
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[plugin_counts] 捕获异常后按降级路径继续: %s', _exc)
             loaded = 0
         try:
             failed = len(getattr(loader, '_failed_mtimes', {}) or {})
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[plugin_counts] 捕获异常后按降级路径继续: %s', _exc)
             failed = 0
     return loaded, failed
 
@@ -235,7 +239,8 @@ def outbound_stats() -> dict:
     try:
         from framework.messaging.outbound_guard import gate
         return gate.stats()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[outbound_stats] 捕获异常后按降级路径继续: %s', _exc)
         return {}
 
 
@@ -254,7 +259,8 @@ def register(ctx):
     cfg = {}
     try:
         cfg = framework.config.get('observability') or {}
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[register] 捕获异常后按降级路径继续: %s', _exc)
         cfg = {}
     if not isinstance(cfg, dict):
         cfg = {}
@@ -319,8 +325,8 @@ def register(ctx):
                 if path not in PROBE_PATHS and path != METRICS_PATH:
                     with _req_lock:
                         _req_counts[(request.method, int(resp.status_code))] += 1
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_zcbot_count_requests] 捕获异常后按降级路径继续: %s', _exc)
             return resp
 
         def _buffer_stats():
@@ -329,7 +335,8 @@ def register(ctx):
                 return {}
             try:
                 return buf.stats() or {}
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_buffer_stats] 捕获异常后按降级路径继续: %s', _exc)
                 return {}
 
         def _ws_connections():
@@ -340,8 +347,8 @@ def register(ctx):
                     primary = framework.services.get('protocol_adapter')
                 if primary is not None and hasattr(primary, 'get_connected_bots'):
                     return len(primary.get_connected_bots() or [])
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_ws_connections] 捕获异常后按降级路径继续: %s', _exc)
             return 0
 
         def _process_gauges():
@@ -352,7 +359,8 @@ def register(ctx):
                 proc = psutil.Process(os.getpid())
                 out['rss'] = proc.memory_info().rss
                 out['threads'] = proc.num_threads()
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_process_gauges] 捕获异常后按降级路径继续: %s', _exc)
                 out['threads'] = threading.active_count()
             return out
 
@@ -441,7 +449,8 @@ def register(ctx):
             try:
                 from framework.core.loop_watchdog import watchdog as _wd
                 ws = _wd.stats()
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_render_metrics] 捕获异常后按降级路径继续: %s', _exc)
                 ws = None
             if ws:
                 emit('zcbot_event_loop_lag_seconds', 'gauge',

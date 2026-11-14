@@ -9,7 +9,10 @@
     dashboard_card / webui / override_webui / group_extension / user_extension
 """
 import inspect
+import logging
 import threading
+
+logger = logging.getLogger('zcbot')
 
 _lock = threading.Lock()
 # module_name -> [(kind, kwargs, handler), ...]（与原版 _PENDING 同构）
@@ -74,9 +77,9 @@ def _apply(kind, kwargs, handler, ctx):
             ctx.register_group_extension(handler=handler, **kwargs)
         elif kind == 'user_extension':
             ctx.register_user_extension(handler=handler, **kwargs)
-    except Exception:
+    except Exception as _exc:
         # 单个注册项失败不影响其余项（与原版 _apply 的容错一致）
-        pass
+        logger.debug('[_apply] 捕获异常后按降级路径继续: %s', _exc)
 
 
 # ── 装饰器 API（签名与原版一致）─────────────────────────────────

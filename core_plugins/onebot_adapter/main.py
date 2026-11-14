@@ -201,8 +201,8 @@ def _extract_token(path, headers):
             qs = parse_qs(urlparse(path).query)
             if 'access_token' in qs:
                 token = qs['access_token'][0]
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.warning('[_extract_token] 捕获异常后按降级路径继续: %s', _exc)
     return token
 
 
@@ -211,12 +211,12 @@ def _get_request_path(ws, path=None):
         return path
     try:
         return ws.request.path
-    except (AttributeError, Exception):
-        pass
+    except (AttributeError, Exception) as _exc:
+        logger.debug('[_get_request_path] 捕获异常后按降级路径继续: %s', _exc)
     try:
         return ws.path
-    except (AttributeError, Exception):
-        pass
+    except (AttributeError, Exception) as _exc:
+        logger.debug('[_get_request_path] 捕获异常后按降级路径继续: %s', _exc)
     return '/'
 
 
@@ -224,12 +224,12 @@ def _get_request_headers(ws):
     for attr in ('request_headers', 'headers'):
         try:
             return getattr(ws, attr)
-        except (AttributeError, Exception):
-            pass
+        except (AttributeError, Exception) as _exc:
+            logger.debug('[_get_request_headers] 捕获异常后按降级路径继续: %s', _exc)
     try:
         return ws.request.headers
-    except (AttributeError, Exception):
-        pass
+    except (AttributeError, Exception) as _exc:
+        logger.debug('[_get_request_headers] 捕获异常后按降级路径继续: %s', _exc)
     return {}
 
 
@@ -240,14 +240,15 @@ def _get_header_value(headers, name: str) -> str:
         v = headers.get(name) or headers.get(name.lower()) or headers.get(name.upper())
         if v:
             return str(v)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_get_header_value] 捕获异常后按降级路径继续: %s', _exc)
     lname = name.lower()
     for k, val in headers.items():
         try:
             if str(k).lower() == lname:
                 return str(val)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_get_header_value] 捕获异常后按降级路径继续: %s', _exc)
             continue
     return ''
 
@@ -301,6 +302,7 @@ class BotConnection:
 
             return self._responses.pop(echo, {})
         except Exception as e:
+            logger.debug('[acall] 捕获异常后按降级路径继续: %s', e)
             return {"status": "failed", "retcode": -3, "msg": str(e)}
         finally:
             self._pending.pop(echo, None)
@@ -321,6 +323,7 @@ class BotConnection:
             future = asyncio.run_coroutine_threadsafe(self.acall(action, **params), loop)
             return future.result(timeout=15)
         except Exception as e:
+            logger.debug('[call] 捕获异常后按降级路径继续: %s', e)
             return {"status": "failed", "retcode": -3, "msg": str(e)}
 
     def on_response(self, data: dict):
@@ -490,7 +493,8 @@ class OneBotWebSocketServer:
             if not token_ok(token, self.access_token):
                 try:
                     return connection.respond(403, "access_token error\n")
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[_process_request_v13] 捕获异常后按降级路径继续: %s', _exc)
                     return None
         return None
 
@@ -511,8 +515,8 @@ class OneBotWebSocketServer:
             if not token_ok(token, self.access_token):
                 try:
                     await ws.close(code=4001, reason="access_token error")
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_handle_connection] 捕获异常后按降级路径继续: %s', _exc)
                 return
 
         self_id = _get_header_value(headers, 'X-Self-ID')
@@ -621,8 +625,8 @@ class OneBotWebSocketServer:
         if prev is not None and not prev.done():
             try:
                 await prev
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_dispatch_ordered] 捕获异常后按降级路径继续: %s', _exc)
         await self._dispatch(data, bot_name)
 
     async def _dispatch(self, data: dict, bot_name: str):
@@ -645,7 +649,8 @@ class OneBotWebSocketServer:
         try:
             await ws.send(json.dumps(data, ensure_ascii=False))
             return True
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[asend] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def send(self, bot_name: str, data: dict) -> bool:
@@ -654,7 +659,8 @@ class OneBotWebSocketServer:
         try:
             future = asyncio.run_coroutine_threadsafe(self.asend(bot_name, data), self._loop)
             return future.result(timeout=5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[send] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def get_connected_bots(self) -> list:
@@ -667,14 +673,14 @@ class OneBotWebSocketServer:
             self._server_task.cancel()
             try:
                 await self._server_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         if self._server:
             self._server.close()
             try:
                 await self._server.wait_closed()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
 
 
 # ── 适配器主类 ────────────────────────────────────────────────
@@ -794,8 +800,8 @@ class OneBotAdapter(ProtocolAdapter):
             self.framework.event_bus.emit('after_message_sent', {
                 'bot': bot_name, 'action': action, 'params': params, 'response': resp,
             })
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_on_message_sent] 捕获异常后按降级路径继续: %s', _exc)
 
 
 # ── 插件注册入口 ──────────────────────────────────────────────

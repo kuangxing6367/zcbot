@@ -404,20 +404,20 @@ def _rebuild_sqlite_text_column(database, table, column):
         for ir in idx_rows:
             try:
                 database.execute(ir['sql'])
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_rebuild_sqlite_text_column] 捕获异常后按降级路径继续: %s', _exc)
         logger.info(
             f"数据库迁移: {table}.{column} 声明 {cur} → TEXT（重建表保留数据）")
     except Exception:
         # 回滚：删除新表，恢复旧表名
         try:
             database.execute(f"DROP TABLE IF EXISTS {new}")
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_rebuild_sqlite_text_column] 捕获异常后按降级路径继续: %s', _exc)
         try:
             database.execute(f"ALTER TABLE {old} RENAME TO {table}")
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_rebuild_sqlite_text_column] 捕获异常后按降级路径继续: %s', _exc)
         raise
 
 

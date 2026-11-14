@@ -22,8 +22,11 @@
 规范段形状固定为 `{'type': str, 'data': dict}`。`data` 里能放什么由下面
 `MEDIA_DATA_KEYS` 约定，未列出的键允许透传（适配器可塞协议私有字段）。
 """
+import logging
 import re
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger('zcbot')
 
 # ─────────────────────────────────────────────────────────────
 # 规范段类型
@@ -482,7 +485,8 @@ def to_outgoing(message: Any, adapter=None) -> Any:
         return segments
     try:
         native = to_native(segments)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[to_outgoing] 捕获异常后按降级路径继续: %s', _exc)
         return segments
     return native if native is not None else segments
 

@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 
 from . import migrator
+
+logger = logging.getLogger('zcbot')
 
 _STATUS_RC = {'partial': 1, 'error': 1}
 
@@ -77,6 +80,7 @@ def main(argv=None) -> int:
                                     config_path=args.config)
             is_inspect = False
     except Exception as e:
+        logger.debug('[main] 捕获异常后按降级路径继续: %s', e)
         data = {'status': 'error', 'detail': '%s: %s' % (type(e).__name__, e),
                 'actions': [], 'kernel_version': '', 'layout': '',
                 'detected_candidates': []}

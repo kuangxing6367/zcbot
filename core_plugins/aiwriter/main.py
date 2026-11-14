@@ -26,6 +26,8 @@ import os
 import sys
 import time
 
+logger = logging.getLogger('zcbot')
+
 # 本插件的包名（_PKG）：包导入时用真实包名；框架以顶层模块加载时，给本模块
 # 补上 __path__/__package__ 使其成为包，再用相对导入——与框架给用户插件建
 # 合成包同一机制，避免 agent/llm/tools/session/prompt 这些通用名与其它插件的
@@ -150,8 +152,8 @@ def _temp_dir():
     d = os.path.join(_ROOT, "data", "tmp")
     try:
         os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_temp_dir] 捕获异常后按降级路径继续: %s', _exc)
     return d
 
 
@@ -192,7 +194,8 @@ def _load_plugin_brief():
                     with open(p, encoding='utf-8', errors='replace') as f:
                         parts.append('# 来自仓库 %s\n%s' % (rel, f.read()))
                     break
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_load_plugin_brief] 捕获异常后按降级路径继续: %s', _exc)
                 continue
         else:
             # 全都找不到：显式告知，避免"约定悄悄消失"这类难以察觉的退化
@@ -213,8 +216,8 @@ def _load_memory():
         if os.path.isfile(p):
             with open(p, encoding="utf-8", errors="replace") as f:
                 return f.read()
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_load_memory] 捕获异常后按降级路径继续: %s', _exc)
     return ""
 
 
@@ -229,6 +232,7 @@ def _append_memory(text):
             f.write("- %s\n" % text.replace("\n", " "))
         return True, "已记入长期记忆（memory.md）"
     except Exception as e:
+        logger.debug('[_append_memory] 捕获异常后按降级路径继续: %s', e)
         return False, "写入失败：%s" % e
 
 
@@ -239,6 +243,7 @@ def _clear_memory():
     except FileNotFoundError:
         return True, "长期记忆本来就是空的"
     except Exception as e:
+        logger.debug('[_clear_memory] 捕获异常后按降级路径继续: %s', e)
         return False, "清空失败：%s" % e
 
 
@@ -255,8 +260,8 @@ def _archive_turn(user_text, assistant_text):
         with open(p, "a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": int(time.time()), "user": user_text,
                                 "assistant": assistant_text}, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_archive_turn] 捕获异常后按降级路径继续: %s', _exc)
 
 
 def _read_history(limit=20):
@@ -271,10 +276,12 @@ def _read_history(limit=20):
         for ln in lines:
             try:
                 out.append(json.loads(ln))
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_read_history] 捕获异常后按降级路径继续: %s', _exc)
                 continue
         return list(reversed(out))
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_read_history] 捕获异常后按降级路径继续: %s', _exc)
         return []
 
 
@@ -520,8 +527,8 @@ class _HostBridge:
             loaded = self.fw.plugin_loader.get_loaded_plugins()
             if loaded:
                 return sorted(loaded.keys())
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[plugins] 捕获异常后按降级路径继续: %s', _exc)
         try:
             # 独立模式：直接读 core_plugins.yaml 的启用列表（真实可用）
             if self.standalone:
@@ -535,12 +542,13 @@ class _HostBridge:
                           if isinstance(v, dict) and v.get('enabled')]
                     if on:
                         return sorted(on)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[plugins] 捕获异常后按降级路径继续: %s', _exc)
         try:
             from framework.terminal.helper import installed_core_plugins
             return sorted(installed_core_plugins())
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[plugins] 捕获异常后按降级路径继续: %s', _exc)
             return []
 
     def plugin_action(self, action, name):
@@ -609,8 +617,8 @@ def _persist_cfg(fw, cfg):
         data["core_plugins"] = cps
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_persist_cfg] 捕获异常后按降级路径继续: %s', _exc)
     if isinstance(fw.config.get("aiwriter"), dict):
         fw.config["aiwriter"].update(editable)
     else:
@@ -623,12 +631,13 @@ def _list_plugins(fw):
         names = sorted((fw.plugin_loader.get_loaded_plugins() or {}).keys())
         if names:
             return names
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_list_plugins] 捕获异常后按降级路径继续: %s', _exc)
     try:
         from framework.terminal.helper import installed_core_plugins
         return sorted(installed_core_plugins())
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_list_plugins] 捕获异常后按降级路径继续: %s', _exc)
         return []
 
 
@@ -700,6 +709,7 @@ def _scaffold_plugin(name):
         with open(os.path.join(base, "README.md"), "w", encoding="utf-8") as f:
             f.write(_PLUGIN_README.format(name=name, cmd=name))
     except Exception as e:
+        logger.debug('[_scaffold_plugin] 捕获异常后按降级路径继续: %s', e)
         return False, "生成失败：%s" % e
     return True, "已生成插件骨架：plugins/%s/（main.py + README.md）" % name
 
@@ -764,8 +774,8 @@ def _cmd_code(args):
                  "       本地终端直接跑：python startup.py code（python main.py code 亦可）\n"
                  "       只想在文本通道里跟智能体对话：python startup.py -a --agent")
             return
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_cmd_code] 捕获异常后按降级路径继续: %s', _exc)
     main_py = os.path.join(_ROOT, "main.py")
     if not os.path.isfile(main_py):
         _out("[code] 找不到入口：%s" % main_py)
@@ -775,6 +785,7 @@ def _cmd_code(args):
     except KeyboardInterrupt:
         return
     except Exception as e:
+        logger.debug('[_cmd_code] 捕获异常后按降级路径继续: %s', e)
         _out("[code] 启动界面失败：%s" % e)
         return
     if rc:
@@ -813,6 +824,7 @@ class _StubFramework:
             self.db = _StandaloneDb((config or {}).get('database'))
             self.db_path = self.db.path
         except Exception as e:
+            logger.debug('[__init__] 捕获异常后按降级路径继续: %s', e)
             self.db_error = str(e)
 
     def stop(self):
@@ -846,11 +858,13 @@ def run_cli(config_path=None):
     try:
         tui = _load_tui()
     except Exception as e:
+        logger.debug('[run_cli] 捕获异常后按降级路径继续: %s', e)
         _out("[code] 界面不可用：%s" % e)
         return 1
     try:
         _fw, plugin = bootstrap(config_path)
     except Exception as e:
+        logger.debug('[run_cli] 捕获异常后按降级路径继续: %s', e)
         _out("[code] 初始化失败：%s" % e)
         return 1
     try:
@@ -874,8 +888,8 @@ class _AgentService:
         key = _session_key()
         try:
             _maybe_compact(key)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[run] 捕获异常后按降级路径继续: %s', _exc)
         tools = _TOOLS
         system = _system_prompt()
         messages = _STORE.build_messages(key, system, text)
@@ -907,8 +921,8 @@ def register(ctx):
     # 暴露智能体服务（调试控制台等文本通道可用 `svc.run(text)` 对话）
     try:
         _FW.services.register("aiwriter", _AgentService())
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[register] 捕获异常后按降级路径继续: %s', _exc)
     ctx.log("终端 AI 智能体已注册：model=%s mode=%s workspace=%s（终端输入 code 打开界面）"
             % (_CFG.get("model"), _CFG.get("mode"), _TOOLS.root))
 
@@ -918,12 +932,12 @@ def unregister():
     try:
         from framework.terminal import terminal_commands
         terminal_commands.remove("code")
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)
     try:
         _FW.services.remove("aiwriter")
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)
     _CTX = None
     _FW = None
     _TOOLS = None

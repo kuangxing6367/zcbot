@@ -115,7 +115,8 @@ class ProtocolAdapter(ABC):
         """能力查询：`adapter.supports('voice', 'in')`"""
         try:
             return as_capabilities(self.capabilities()).supports(cap, direction)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[supports] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def normalize_incoming(self, raw_message) -> list:
@@ -183,7 +184,8 @@ class ProtocolAdapter(ABC):
         info = None
         try:
             info = self.get_connection_info()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_connection_id] 捕获异常后按降级路径继续: %s', _exc)
             info = None
         if isinstance(info, dict) and info.get('id'):
             return str(info['id'])
@@ -250,11 +252,13 @@ class ProtocolAdapter(ABC):
                     return {"status": "failed", "retcode": -2,
                             "msg": f"调用结果等待超时: {e}"}
                 except Exception as e:
+                    logger.debug('[_invoke] 捕获异常后按降级路径继续: %s', e)
                     return {"status": "failed", "retcode": -3, "msg": str(e)}
             # 没有可复用的运行循环时，在本线程临时运行（极少路径）
             try:
                 return asyncio.run(coro)
             except Exception as e:
+                logger.debug('[_invoke] 捕获异常后按降级路径继续: %s', e)
                 return {"status": "failed", "retcode": -3, "msg": str(e)}
 
         from framework.messaging.outbound_guard import gate as _out_gate
@@ -512,8 +516,8 @@ class ServiceRegistry:
                 bots = adapter.get_connected_bots() or []
                 if source in bots:
                     return adapter
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[adapter_for_source] 捕获异常后按降级路径继续: %s', _exc)
         for adapter in self._adapters.values():
             if getattr(adapter, 'bot_name', None) == source:
                 return adapter
@@ -522,8 +526,8 @@ class ServiceRegistry:
             try:
                 if source in (primary.get_connected_bots() or []):
                     return primary
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[adapter_for_source] 捕获异常后按降级路径继续: %s', _exc)
             if getattr(primary, 'bot_name', None) == source:
                 return primary
         return None

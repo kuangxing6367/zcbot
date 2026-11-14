@@ -73,8 +73,8 @@ class IpcServer:
                 if self.conn is not None:
                     try:
                         self.conn.close()
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[_accept_loop] 捕获异常后按降级路径继续: %s', _exc)
                 self.conn = JsonRpcConnection(
                     raw_conn, methods=self._methods, events=self._events)
                 if self._loop is not None:
@@ -124,10 +124,10 @@ class IpcServer:
         if self.conn is not None:
             try:
                 self.conn.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
             self.conn = None
         try:
             self._listener.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)

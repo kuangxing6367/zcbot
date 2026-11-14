@@ -11,8 +11,8 @@ class PluginDatabaseMixin:
         """记录一次 ctx 注册动作（加载期流水，供黑匣子 plugin_loaded 摘要）。"""
         try:
             self._register_journal.append({'kind': kind, 'detail': detail})
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_journal] 捕获异常后按降级路径继续: %s', _exc)
 
     # 以下方法依赖 PluginContext.__init__ 建立的实例字段
 

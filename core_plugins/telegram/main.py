@@ -146,7 +146,8 @@ def _extract_b64(data: str) -> str | None:
         try:
             base64.b64decode(s, validate=True)
             return s
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_extract_b64] 捕获异常后按降级路径继续: %s', _exc)
             return None
     return None
 
@@ -693,12 +694,12 @@ class TelegramAdapter(ProtocolAdapter):
             t.cancel()
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         try:
             self._http.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
 
     # ── 出站发送 ────────────────────────────────────────────────
 
@@ -834,6 +835,7 @@ class TelegramAdapter(ProtocolAdapter):
             try:
                 raw = base64.b64decode(re.sub(r'\s+', '', b64))
             except Exception as e:
+                logger.debug('[_send_media] 捕获异常后按降级路径继续: %s', e)
                 return {'status': 'failed', 'retcode': -1,
                         'msg': f'base64 解码失败: {e}'}
             files = {field: (name or f'{field}.bin', raw,
@@ -864,6 +866,7 @@ class TelegramAdapter(ProtocolAdapter):
         try:
             payload = _post_media()
         except Exception as e:
+            logger.debug('[_send_media] 捕获异常后按降级路径继续: %s', e)
             return {'status': 'failed', 'retcode': -3, 'msg': f'{method} 失败: {e}'}
         # caption 的实体解析失败同样是整条 400（媒体和 caption 一起发不出去），
         # 与文本路径一样降级纯文本重发；files 是内存 bytes，重发不产生二次读盘。
@@ -875,6 +878,7 @@ class TelegramAdapter(ProtocolAdapter):
             try:
                 payload = _post_media()
             except Exception as e:
+                logger.debug('[_send_media] 捕获异常后按降级路径继续: %s', e)
                 return {'status': 'failed', 'retcode': -3,
                         'msg': f'{method} 失败: {e}'}
         result = self._result_or_error(payload, method)

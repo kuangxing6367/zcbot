@@ -221,8 +221,8 @@ def _read_cfg(key, default=None):
         if isinstance(sec, dict) and key in sec:
             v = sec[key]
             return default if v is None else v
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_read_cfg] 捕获异常后按降级路径继续: %s', _exc)
     return default
 
 
@@ -291,8 +291,8 @@ def _manual_placement_hint(assets_mgr):
     # main 里再拼一份只会两边慢慢漂移。
     try:
         return assets_mgr.manual_hint_text()
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_manual_placement_hint] 捕获异常后按降级路径继续: %s', _exc)
     base = getattr(assets_mgr, 'version_dir', '<data>/image_renderer/assets')
     return f'把 fonts/ 与 native/<平台>/ 放到 {base}/ 下'
 
@@ -489,7 +489,8 @@ def _font_tier_charset(charset_path):
         if os.path.isfile(charset_path):
             with io.open(charset_path, encoding='utf-8') as f:
                 cs = set(f.read())
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_font_tier_charset] 捕获异常后按降级路径继续: %s', _exc)
         cs = None
     _FONT_CHARSET_CACHE[charset_path] = cs
     return cs
@@ -574,7 +575,8 @@ def _get_font(size, bold=False):
             f = ImageFont.truetype(fp, size)
             _font_cache_put(key, f)
             return f
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_get_font] 捕获异常后按降级路径继续: %s', _exc)
             continue
 
     # 一个中文字体都没找到：明确告警（否则整站卡片静默变豆腐块，很难被发现）
@@ -588,7 +590,8 @@ def _get_font(size, bold=False):
             f = ImageFont.load_default()
         _font_cache_put(key, f)
         return f
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_get_font] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 
@@ -603,8 +606,9 @@ def _status_view(params=None):
     try:
         from flask import jsonify
         return jsonify(payload)
-    except Exception:
+    except Exception as _exc:
         # 没有 Flask 时（纯 IPC 宿主）退回纯 dict，由调用方序列化
+        logger.debug('[_status_view] 捕获异常后按降级路径继续: %s', _exc)
         return payload
 
 
@@ -1085,8 +1089,8 @@ def _send_image(ctx, event, img_or_bytes):
         if img_path:
             try:
                 os.unlink(img_path)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_send_image] 捕获异常后按降级路径继续: %s', _exc)
 
 
 # ---------------------------------------------------------------- Canvas（原生优先，PIL 回退）

@@ -83,7 +83,8 @@ async def amain():
         cp = resolve_config_path(config_path)
         if os.path.isfile(cp):
             crash_cfg = yaml.safe_load(open(cp, encoding='utf-8')) or {}
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[amain] 捕获异常后按降级路径继续: %s', _exc)
         crash_cfg = {}
 
     # 崩溃守卫：达重启上限则进入安全模式（假启动）或明确拒绝，打破守护进程无限拉起。
@@ -133,8 +134,8 @@ async def amain():
     if watchdog is not None:
         try:
             watchdog.suspend()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[amain] 捕获异常后按降级路径继续: %s', _exc)
     try:
         framework = Framework(config_path)
         # 异步启动模式：config.yaml → startup.wait_ready: false 时不等待插件加载完成，
@@ -146,8 +147,8 @@ async def amain():
             if watchdog is not None:
                 try:
                     watchdog.resume()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[amain] 捕获异常后按降级路径继续: %s', _exc)
         # 启动成功：复位崩溃计数（健康运行即清零，避免误杀正常重启）
         clear_crash_markers(crash_cfg, root)
         # 等待停止信号 / Ctrl+C
@@ -162,12 +163,12 @@ async def amain():
         if watchdog is not None:
             try:
                 watchdog.stop()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[amain] 捕获异常后按降级路径继续: %s', _exc)
         if framework is not None:
             try:
                 await framework.stop()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[amain] 捕获异常后按降级路径继续: %s', _exc)
         if lock_fd is not None:
             cleanup_instance_lock()

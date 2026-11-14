@@ -1,7 +1,10 @@
 """``zb create`` / ``zb init`` —— 项目与插件 / 适配器脚手架。"""
+import logging
 import os
 
 from ..utils import PROG
+
+logger = logging.getLogger('zcbot')
 
 PLUGIN_TEMPLATE = '''# -*- coding: utf-8 -*-
 """{desc}"""
@@ -257,7 +260,8 @@ def _create_adapter(args, working_dir):
     try:
         from framework.paths import core_plugins_yaml_path
         yaml_path = core_plugins_yaml_path()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_create_adapter] 捕获异常后按降级路径继续: %s', _exc)
         yaml_path = os.path.join(working_dir, "core_plugins.yaml")
     set_core_plugin_enabled(yaml_path, name, False)
     print("已创建适配器: %s（默认 disabled，改 core_plugins.yaml 启用）" % target)
@@ -278,8 +282,8 @@ def _state_paths(working_dir):
         from framework import paths
         cfg = paths.resolve_config_path()
         plugins = paths.user_plugins_dir()
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_state_paths] 捕获异常后按降级路径继续: %s', _exc)
     return cfg, plugins
 
 

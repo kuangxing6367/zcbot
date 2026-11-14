@@ -192,8 +192,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     ws = fw.services.get('ws_server')
                     if ws and hasattr(ws, 'get_connected_bots'):
                         bots = ws.get_connected_bots()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_handle_status] 捕获异常后按降级路径继续: %s', _exc)
 
             plugins = list(fw.plugin_loader.get_loaded_plugins().keys())
 
@@ -208,6 +208,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 }
             })
         except Exception as e:
+            logger.debug('[_handle_status] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_plugins(self):
@@ -311,6 +312,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 asyncio.run(_send())
             self._send_json(200, {'ok': True})
         except Exception as e:
+            logger.debug('[_do_send] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_kick(self, body):
@@ -337,6 +339,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             future.result(timeout=10)
             self._send_json(200, {'ok': True})
         except Exception as e:
+            logger.debug('[_handle_kick] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_ban(self, body):
@@ -366,6 +369,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             future.result(timeout=10)
             self._send_json(200, {'ok': True})
         except Exception as e:
+            logger.debug('[_handle_ban] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_unban(self, body):
@@ -393,6 +397,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             future.result(timeout=10)
             self._send_json(200, {'ok': True})
         except Exception as e:
+            logger.debug('[_handle_unban] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_broadcast(self, body):
@@ -416,14 +421,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                     try:
                         await api.acall('send_msg', group_id=gid, message=message)
                         success += 1
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[_broadcast] 捕获异常后按降级路径继续: %s', _exc)
                 return success, len(group_ids)
 
             future = asyncio.run_coroutine_threadsafe(_broadcast(), self.framework.loop)
             success, total = future.result(timeout=30)
             self._send_json(200, {'ok': True, 'data': {'success': success, 'total': total}})
         except Exception as e:
+            logger.debug('[_handle_broadcast] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_reload(self):
@@ -431,6 +437,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             loaded = self.framework.plugin_loader.reload_all()
             self._send_json(200, {'ok': True, 'data': {'reloaded': loaded}})
         except Exception as e:
+            logger.debug('[_handle_reload] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_db_query(self, body):
@@ -444,6 +451,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             result = [dict(r) for r in rows]
             self._send_json(200, {'ok': True, 'data': result})
         except Exception as e:
+            logger.debug('[_handle_db_query] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_db_execute(self, body):
@@ -456,6 +464,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             affected = self.framework.db.execute(sql, params)
             self._send_json(200, {'ok': True, 'data': {'affected': affected}})
         except Exception as e:
+            logger.debug('[_handle_db_execute] 捕获异常后按降级路径继续: %s', e)
             self._send_json(500, {'ok': False, 'error': str(e)})
 
     def _handle_help(self):

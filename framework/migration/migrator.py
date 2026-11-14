@@ -91,6 +91,7 @@ def read_ledger(home=None):
             return None, '账本校验和不符，视为损坏'
         return data, 'ok'
     except Exception as e:  # 损坏账本不能被当成「已迁移」
+        logger.debug('[read_ledger] 捕获异常后按降级路径继续: %s', e)
         return None, '账本不可解析 (%s)，视为损坏' % type(e).__name__
 
 
@@ -265,6 +266,7 @@ def migrate(home=None, dry_run=False, force=False, config_path=None) -> dict:
                 _write_ledger(home, record)   # 类比 Flyway baselineOnMigrate
                 result['detail'] += '；已写入基线账本'
             except Exception as e:
+                logger.debug('[migrate] 捕获异常后按降级路径继续: %s', e)
                 result['detail'] += '；基线账本写入失败 (%s)' % type(e).__name__
         return result
     if dry_run:

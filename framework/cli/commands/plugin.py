@@ -1,4 +1,5 @@
 """``zb plugin`` —— 管理插件（list / search / store / install / uninstall）。"""
+import logging
 import os
 import webbrowser
 
@@ -10,6 +11,8 @@ from ..utils import (
     render_table,
     set_core_plugin_enabled,
 )
+
+logger = logging.getLogger('zcbot')
 
 MARKET_URL = "https://github.com/kuangxing6367/zcbot"
 
@@ -25,8 +28,8 @@ def do_plugin(args, working_dir):
         print("打开插件集市: %s" % MARKET_URL)
         try:
             webbrowser.open(MARKET_URL)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[do_plugin] 捕获异常后按降级路径继续: %s', _exc)
         return 0
     if action == "install":
         return _enable(args.id, working_dir, True)
@@ -64,7 +67,8 @@ def _plugin_roots_desc():
         user_root, core_root = _kernel_plugin_dirs()
         parts = [p for p in (user_root, core_root) if p]
         return " 、".join(parts) if parts else "（未解析到）"
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_plugin_roots_desc] 捕获异常后按降级路径继续: %s', _exc)
         return "（未解析到）"
 
 

@@ -3,6 +3,7 @@
 ZCBOT 的适配器即 core_plugins 下带网络接入特征的条目，
 故适配器管理与插件管理共用同一份 ``core_plugins.yaml`` 启用开关。
 """
+import logging
 import os
 import webbrowser
 
@@ -13,6 +14,8 @@ from ..utils import (
     render_table,
     set_core_plugin_enabled,
 )
+
+logger = logging.getLogger('zcbot')
 
 MARKET_URL = "https://github.com/kuangxing6367/zcbot"
 
@@ -28,8 +31,8 @@ def do_adapter(args, working_dir):
         print("打开适配器集市: %s" % MARKET_URL)
         try:
             webbrowser.open(MARKET_URL)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[do_adapter] 捕获异常后按降级路径继续: %s', _exc)
         return 0
     if action == "install":
         return _enable(args.id, working_dir, True)

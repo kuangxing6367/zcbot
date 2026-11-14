@@ -86,7 +86,8 @@ def register(ctx):
         try:
             with open(_os.path.join(web_static, 'index.html'), 'r', encoding='utf-8') as f:
                 html = f.read()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[serve_index] 捕获异常后按降级路径继续: %s', _exc)
             return send_from_directory(web_static, 'index.html')
         if '__ZC_API_BASE__' not in html and '<script type="module"' in html:
             html = html.replace('<script type="module"',

@@ -74,7 +74,8 @@ def _url_allowed(url: str) -> bool:
         return False
     try:
         p = urlparse(url)
-    except Exception:
+    except Exception as _exc:
+        logger.warning('[_url_allowed] 捕获异常后按降级路径继续: %s', _exc)
         return False
     if p.scheme not in ('http', 'https') or not p.hostname or p.username or p.password:
         return False
@@ -189,7 +190,8 @@ def image_part(source: dict[str, str]) -> dict | None:
             return None
         try:
             raw = base64.b64decode(value, validate=True)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[image_part] 捕获异常后按降级路径继续: %s', _exc)
             return None
         mime = _mime_of(raw) if _is_image_bytes(raw) else ''
         if not mime:

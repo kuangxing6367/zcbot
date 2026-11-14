@@ -5,6 +5,7 @@
 - 调用模式改为"事件推送 + 动作批量回传"，规避逐调用同步往返
 """
 import json
+import logging
 import os
 import queue
 import secrets
@@ -12,6 +13,8 @@ import socket
 import sys
 import threading
 import traceback
+
+logger = logging.getLogger('zcbot')
 
 # 共享令牌的环境变量名。启动器（launcher）在派生任何子进程之前生成/写入该变量，
 # Go 内核、Rust 适配器、Python 插件进程全部继承；令牌不落命令行参数，避免进程列表泄露。
@@ -102,12 +105,12 @@ class IIPCClient:
         # 并发 recv 争用底层缓冲锁，造成死锁（实测 cli.close() 会卡死）。
         try:
             self._sock.shutdown(socket.SHUT_RDWR)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
         try:
             self._sock.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
         self._event_q.put(None)  # 唤醒派发线程退出
         self._lost.set()
 
@@ -229,6 +232,7 @@ class IIPCClient:
                         res = h(msg.get("params") or {})
                         self._send({"t": "res", "id": msg["id"], "result": res})
                     except Exception as e:
+                        logger.debug('[_read_loop_inner] 捕获异常后按降级路径继续: %s', e)
                         self._send({"t": "res", "id": msg["id"], "error": str(e)})
                 else:
                     self._send({"t": "res", "id": msg["id"], "error": "unknown method"})

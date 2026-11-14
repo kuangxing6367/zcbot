@@ -9,7 +9,11 @@
 展示 IIPC 的「命令路由 + 通用 API 通道」两个处理面，验证 Python 侧能经内核
 调用任意 OneBot action 并把结果回传。
 """
+import logging
+
 from sdk import PluginContext
+
+logger = logging.getLogger('zcbot')
 
 __plugin_meta__ = {
     "name": "群管小工具",
@@ -44,6 +48,7 @@ def register(ctx: PluginContext):
             ctx.send_msg(message="本群成员数: %d" % n,
                          user_id=event.user_id, group_id=event.group_id)
         except Exception as e:
+            logger.debug('[members] 捕获异常后按降级路径继续: %s', e)
             ctx.send_msg(message="查询失败: %s" % e,
                          user_id=event.user_id, group_id=event.group_id)
 
@@ -59,6 +64,7 @@ def register(ctx: PluginContext):
             ctx.send_msg(message="已禁言 %s 600 秒" % target,
                          user_id=event.user_id, group_id=event.group_id)
         except Exception as e:
+            logger.debug('[ban] 捕获异常后按降级路径继续: %s', e)
             ctx.send_msg(message="禁言失败: %s" % e,
                          user_id=event.user_id, group_id=event.group_id)
 
@@ -74,5 +80,6 @@ def register(ctx: PluginContext):
             ctx.send_msg(message="已踢出 %s" % target,
                          user_id=event.user_id, group_id=event.group_id)
         except Exception as e:
+            logger.debug('[kick] 捕获异常后按降级路径继续: %s', e)
             ctx.send_msg(message="踢出失败: %s" % e,
                          user_id=event.user_id, group_id=event.group_id)

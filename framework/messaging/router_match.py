@@ -329,7 +329,8 @@ class RouterMatchMixin:
                     try:
                         from framework.runtime import current_event_id_var as _eid_var
                         _eid = _eid_var.get()
-                    except Exception:
+                    except Exception as _exc:
+                        logger.debug('[_match_plugin_commands] 捕获异常后按降级路径继续: %s', _exc)
                         _eid = None
                     _bb_record('handler_enter', plugin=plugin_name,
                                fn=cmd.handler_name, event_id=_eid, step=9,

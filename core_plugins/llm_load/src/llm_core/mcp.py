@@ -102,8 +102,8 @@ class _StdioTransport:
         if getattr(self, '_proc', None) is not None:
             try:
                 self._proc.terminate()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
 
 
 class _HttpTransport:
@@ -206,8 +206,8 @@ class MCPClient:
     def close(self) -> None:
         try:
             self._transport.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
 
 
 def bind_mcp_tools(registry, servers: list[dict]) -> dict[str, int]:

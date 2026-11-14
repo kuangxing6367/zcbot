@@ -311,6 +311,7 @@ class LoopWatchdog:
                 lines.append(f"  {item.filename}:{item.lineno} in {item.name}"
                              f"  |  {(item.line or '').strip()[:100]}")
         except Exception as e:
+            logger.debug('[_capture_stack] 捕获异常后按降级路径继续: %s', e)
             return f'  （抓栈失败: {e}）'
         if not lines:
             return '  （栈中只有 asyncio 调度帧，阻塞发生在 C 扩展内）'

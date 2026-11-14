@@ -85,7 +85,8 @@ def register(ctx):
                         (r['plugin_name'],)
                     )
                     r['command_count'] = cmd_cnt['cnt'] if cmd_cnt else 0
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[list_plugins] 捕获异常后按降级路径继续: %s', _exc)
                     r['command_count'] = 0
                 try:
                     task_cnt = db.query_one(
@@ -93,7 +94,8 @@ def register(ctx):
                         (r['plugin_name'],)
                     )
                     r['task_count'] = task_cnt['cnt'] if task_cnt else 0
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[list_plugins] 捕获异常后按降级路径继续: %s', _exc)
                     r['task_count'] = 0
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
@@ -156,8 +158,8 @@ def register(ctx):
                             try:
                                 shutil.rmtree(old_path, ignore_errors=True)
                                 logger.debug(f"已清理旧备份: {old}")
-                            except Exception:
-                                pass
+                            except Exception as _exc:
+                                logger.debug('[upload_plugin] 捕获异常后按降级路径继续: %s', _exc)
                     backup_dir = target_dir + f'.bak.{int(time.time())}'
                     shutil.move(target_dir, backup_dir)
 
@@ -183,8 +185,8 @@ def register(ctx):
                 if backup_dir and os.path.isdir(backup_dir):
                     try:
                         shutil.rmtree(backup_dir, ignore_errors=True)
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug('[upload_plugin] 捕获异常后按降级路径继续: %s', _exc)
                 framework.plugin_loader.register_commands(plugin_name)
                 dep_info = framework.plugin_loader.get_missing_deps(plugin_name)
                 msg = f'插件 [{plugin_name}] 上传并加载成功'

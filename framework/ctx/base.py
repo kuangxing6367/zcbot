@@ -85,12 +85,14 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
         try:
             from framework.runtime import current_source_var
             source = current_source_var.get()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[actions] 捕获异常后按降级路径继续: %s', _exc)
             source = None
         if source:
             try:
                 adapter = services.adapter_for_source(source)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[actions] 捕获异常后按降级路径继续: %s', _exc)
                 adapter = None
             if adapter is not None:
                 # OneBot 来源：优先类型化 onebot_api（旧 ctx.onebot 写法）
@@ -136,7 +138,8 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
         try:
             from framework.runtime import current_source_var
             return current_source_var.get()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_current_bot] 捕获异常后按降级路径继续: %s', _exc)
             return None
 
     def get_data_dir(self) -> str:

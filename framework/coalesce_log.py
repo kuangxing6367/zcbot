@@ -21,6 +21,8 @@ import time
 import weakref
 from collections import OrderedDict
 
+logger = logging.getLogger('zcbot')
+
 _NUM_RE = re.compile(r'\d+')
 
 # 存活的合并器（弱引用）：解释器退出时统一停掉后台线程。
@@ -40,8 +42,8 @@ def _stop_all_coalescers():
     for c in list(_LIVE_COALESCERS):
         try:
             c.stop(timeout=1.0)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_stop_all_coalescers] 捕获异常后按降级路径继续: %s', _exc)
 
 
 class LogCoalescer(logging.Filter):
@@ -149,8 +151,8 @@ class LogCoalescer(logging.Filter):
             )
             summary._coalesce_skip = True
             self._root.handle(summary)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_emit_summary] 捕获异常后按降级路径继续: %s', _exc)
 
     # ---- 后台 flush ----
     def _flush_loop(self):

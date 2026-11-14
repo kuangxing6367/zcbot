@@ -93,7 +93,8 @@ class WebServer:
             from framework.api.security_levels import resolve as _resolve_security
             _hdr = _resolve_security(self.framework.config.get('security'))['headers']
             _ident = str(_hdr.get('server', '') or '') or 'web'
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_run] 捕获异常后按降级路径继续: %s', _exc)
             _ident = 'web'
         try:
             if self.ssl_context is not None:

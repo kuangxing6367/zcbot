@@ -11,8 +11,11 @@ allocator 三态：
   malloc   强制 malloc（追求最低内存地板，小对象分配略慢）。
   pymalloc 强制 pymalloc（默认行为，最高分配吞吐）。
 """
+import logging
 import os
 import sys
+
+logger = logging.getLogger('zcbot')
 
 
 def apply_allocator_policy():
@@ -29,7 +32,8 @@ def apply_allocator_policy():
             with open(cfg_path, 'r', encoding='utf-8') as f:
                 cfg = yaml.safe_load(f) or {}
             alloc = (cfg.get('memory') or {}).get('allocator', 'auto')
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[apply_allocator_policy] 捕获异常后按降级路径继续: %s', _exc)
         alloc = 'auto'
     alloc = str(alloc).strip().lower()
     if alloc == 'auto':

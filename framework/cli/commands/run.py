@@ -1,8 +1,11 @@
 """``zb run`` —— 运行机器人（可选热重载）。"""
+import logging
 import os
 import subprocess
 import sys
 import time
+
+logger = logging.getLogger('zcbot')
 
 
 def _spawn(python_path, file_path, working_dir):
@@ -47,8 +50,8 @@ def _packaged_entry():
         origin = getattr(spec, 'origin', None) if spec else None
         if origin and os.path.isfile(origin):
             return origin
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_packaged_entry] 捕获异常后按降级路径继续: %s', _exc)
     return None
 
 
@@ -89,7 +92,8 @@ def do_run(args, working_dir):
                 try:
                     proc.terminate()
                     proc.wait(timeout=5)
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[do_run] 捕获异常后按降级路径继续: %s', _exc)
                     proc.kill()
                 snap = _watch_files(working_dir, getattr(args, "reload_dirs", None))
                 proc = _spawn(python_path, file_path, working_dir)
@@ -97,7 +101,8 @@ def do_run(args, working_dir):
         try:
             proc.terminate()
             proc.wait(timeout=5)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[do_run] 捕获异常后按降级路径继续: %s', _exc)
             proc.kill()
         print()
         return 0

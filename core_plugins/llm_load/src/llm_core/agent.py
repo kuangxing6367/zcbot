@@ -17,12 +17,15 @@ Agent 循环（tool loop）
   而不是终止整个会话。
 """
 import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from .providers import Provider, ProviderError, ProviderReply
 from .tools import ToolRegistry
+
+logger = logging.getLogger('zcbot')
 
 __all__ = ['AgentResult', 'ToolLoopAgent']
 
@@ -241,6 +244,7 @@ class ToolLoopAgent:
         except ProviderError as e:
             result.error = str(e)
         except Exception as e:
+            logger.debug('[arun] 捕获异常后按降级路径继续: %s', e)
             result.error = f"对话异常：{e}"
         else:
             # 到这里说明始终收敛不了：去掉工具 + 显式收口提示再问一次，让它给结论
@@ -255,6 +259,7 @@ class ToolLoopAgent:
                     result.text = text
                     conversation.append({'role': 'assistant', 'content': text})
                 except Exception as e:
+                    logger.debug('[arun] 捕获异常后按降级路径继续: %s', e)
                     result.error = f"收口请求失败：{e}"
         finally:
             result.trace['total_ms'] = round((time.perf_counter() - _t0) * 1000, 2)

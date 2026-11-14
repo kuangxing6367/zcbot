@@ -250,7 +250,8 @@ class ConsoleServer:
                 return
             try:
                 msg = json.loads(line.decode('utf-8'))
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_serve] 捕获异常后按降级路径继续: %s', _exc)
                 self._send(f, {'ok': False, 'error': '协议错误'})
                 return
             if not hmac.compare_digest(str(msg.get('token', '')), self.token):
@@ -264,7 +265,8 @@ class ConsoleServer:
                     break
                 try:
                     msg = json.loads(line.decode('utf-8'))
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[_serve] 捕获异常后按降级路径继续: %s', _exc)
                     self._send(f, {'ok': False, 'error': 'JSON 解析失败'})
                     continue
                 if msg.get('close'):
@@ -301,6 +303,7 @@ class ConsoleServer:
         try:
             from framework.terminal import terminal_commands
         except Exception as e:
+            logger.debug('[run_command] 捕获异常后按降级路径继续: %s', e)
             return '终端命令不可用：%s' % e
         name = command.split()[0].lower()
         handler = terminal_commands.get(name)
@@ -313,6 +316,7 @@ class ConsoleServer:
             with contextlib.redirect_stdout(buf), remote_session():
                 handler(args)
         except Exception as e:
+            logger.debug('[run_command] 捕获异常后按降级路径继续: %s', e)
             buf.write('\n执行异常: %s' % e)
         return buf.getvalue()
 
@@ -339,6 +343,7 @@ class ConsoleServer:
             with remote_session():
                 final = svc.run(text, on_event=lambda k, p: events.append((k, p)))
         except Exception as e:
+            logger.debug('[run_agent] 捕获异常后按降级路径继续: %s', e)
             return '[错误] %s' % e
         out = []
         for k, p in events:

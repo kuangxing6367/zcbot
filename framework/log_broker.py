@@ -18,6 +18,8 @@ from typing import Optional
 # 只改日志字符串，事件原文与业务语义完全不动。
 from framework.security.hardening import sanitize_log_detail, sanitize_log_text
 
+logger = logging.getLogger('zcbot')
+
 MAX_CACHE = 2000  # 最大缓存条数
 MAX_ERROR_CACHE = 200  # ERROR/WARN 独立保留条数
 MAX_SSE_SUBSCRIBERS = 32  # SSE 订阅者上限（防资源耗尽）
@@ -211,8 +213,9 @@ class FrameworkLogHandler(logging.Handler):
                 return
 
             self._broker.log_framework(level, msg, source=source)
-        except Exception:
-            pass  # 日志系统不能抛异常
+        except Exception as _exc:
+            logger.debug('[emit] 捕获异常后按降级路径继续: %s', _exc)
+            # 日志系统不能抛异常
 
 
 # 全局单例

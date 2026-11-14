@@ -38,6 +38,7 @@ class IpcClient:
                                  authkey=self._authkey)
                 holder['conn'] = raw
             except Exception as e:
+                logger.debug('[_do] 捕获异常后按降级路径继续: %s', e)
                 holder['error'] = e
 
         t = threading.Thread(target=_do, daemon=True, name='ipc-connect')
@@ -98,7 +99,8 @@ class IpcClient:
             try:
                 if self.conn is not None:
                     self.conn.notify('ping', None)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_heartbeat_loop] 捕获异常后按降级路径继续: %s', _exc)
                 break
 
     @property
@@ -110,6 +112,6 @@ class IpcClient:
         if self.conn is not None:
             try:
                 self.conn.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
             self.conn = None

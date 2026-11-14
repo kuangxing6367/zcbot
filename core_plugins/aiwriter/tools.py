@@ -16,9 +16,12 @@ oldString 不同；命中多处需显式 replaceAll=True。匹配失败时做一
 （弯引号 / 破折号 / 不间断空格），给出更明确的报错，减少模型反复试错。
 """
 import fnmatch
+import logging
 import os
 import re
 import subprocess
+
+logger = logging.getLogger('zcbot')
 
 # 能力常量
 CAP_READ = 'read'
@@ -446,7 +449,8 @@ class ToolRegistry:
             raise ToolError("抓取失败：%s" % e)
         try:
             text = raw.decode(charset, 'replace')
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_t_webfetch] 捕获异常后按降级路径继续: %s', _exc)
             text = raw.decode('utf-8', 'replace')
         if 'html' in ctype:
             # 粗略转文本：脚本/样式整块去掉，其余标签换空格，实体解码

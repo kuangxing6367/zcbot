@@ -344,8 +344,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
                     _bb_record('load_ctx', plugin=plugin_name, fn=_e['kind'],
                                msg=_e['detail'][:120])
                 ctx._register_journal = []
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[register_commands] 捕获异常后按降级路径继续: %s', _exc)
 
         # 获取注册的命令和任务
         commands = ctx._get_commands()
@@ -396,8 +396,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         # 命令已写入 DB，让路由表立即重建（热路径内存快照要求一致）
         try:
             self.framework.router._invalidate_cache()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[register_commands] 捕获异常后按降级路径继续: %s', _exc)
         return True
 
     def _sync_commands(self, plugin_name: str, commands: list):
@@ -424,8 +424,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
                         # 键缺失/缺列投影 None（debug 引擎、旧库）不覆盖默认启用
                         'is_active': 1 if r.get('is_active') is None else r.get('is_active'),
                     }
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_sync_commands] 捕获异常后按降级路径继续: %s', _exc)
 
             # INSERT ... ON DUPLICATE KEY UPDATE 保持 ID 不变
             if commands:
@@ -494,7 +494,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
             return cached
         try:
             has = self.db.table_has_column('commands', 'require_perm')
-        except Exception:
+        except Exception as _exc:
+            logger.warning('[_commands_has_require_perm] 捕获异常后按降级路径继续: %s', _exc)
             has = False
         self._cmd_has_perm_col = has
         return has
@@ -533,7 +534,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
             row = self.db.query_one(
                 "SELECT is_active FROM plugins WHERE plugin_name = %s", (plugin_name,)
             )
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[is_plugin_active_in_db] 捕获异常后按降级路径继续: %s', _exc)
             return True
         if row is None:
             return True
@@ -555,8 +557,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         self.unload_plugin(plugin_name)
         try:
             self.framework.router._invalidate_cache()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[disable_plugin] 捕获异常后按降级路径继续: %s', _exc)
 
     def enable_plugin(self, plugin_name: str):
         """启用插件：标记 is_active=1 并加载注册（终端 enable 命令使用，与 WebUI toggle 同语义）"""
@@ -570,8 +572,8 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
             self.register_commands(plugin_name)
             try:
                 self.framework.router._invalidate_cache()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[enable_plugin] 捕获异常后按降级路径继续: %s', _exc)
             logger.info(f"[{plugin_name}] 已启用")
         else:
             logger.warning(f"[{plugin_name}] 启用后加载失败（文件可能损坏，将在修复后自动自愈）")

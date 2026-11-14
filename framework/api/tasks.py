@@ -172,8 +172,8 @@ def register(ctx):
                 task_key = f"plugin_{plugin_name}_{task_id}"
                 try:
                     scheduler.pause_task(task_key)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[delete_task] 捕获异常后按降级路径继续: %s', _exc)
 
             db.execute("DELETE FROM tasks WHERE id = %s", (task_id,))
             audit_log(admin['id'], admin['username'], 'delete_task', 'task', str(task_id),

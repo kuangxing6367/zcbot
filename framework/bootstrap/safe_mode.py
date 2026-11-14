@@ -1,5 +1,8 @@
 """安全模式（假启动）：启动崩溃达上限且守护进程持续重启时，不退出进程、不做事，仅挂起。"""
+import logging
 import os
+
+logger = logging.getLogger('zcbot')
 
 
 async def enter_safe_mode(stop_event, crash_cfg, root):
@@ -45,7 +48,7 @@ async def enter_safe_mode(stop_event, crash_cfg, root):
     try:
         from framework.crash_guard import fire_alert
         fire_alert(crash_cfg)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[enter_safe_mode] 捕获异常后按降级路径继续: %s', _exc)
     # 持有实例锁挂起，直到收到 SIGTERM/SIGINT 优雅退出
     await stop_event.wait()

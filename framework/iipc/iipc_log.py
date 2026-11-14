@@ -22,6 +22,8 @@ import os
 import sys
 import threading
 
+logger = logging.getLogger('zcbot')
+
 _LOCK = threading.Lock()
 _LOGGER = None
 _FILE_READY = False
@@ -38,7 +40,8 @@ def _load_log_config(project_root):
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f) or {}
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_load_log_config] 捕获异常后按降级路径继续: %s', _exc)
         cfg = {}
     log_cfg = cfg.get("log") or {}
     level = str(log_cfg.get("level", "INFO")).upper()
@@ -131,8 +134,9 @@ def emit(tag, level, msg):
     except Exception:
         try:
             print("%s %s [%s] %s" % (_now(), lv, tag, msg), flush=True)
-        except Exception:
-            pass  # 日志系统绝不能影响主流程
+        except Exception as _exc:
+            logger.debug('[emit] 捕获异常后按降级路径继续: %s', _exc)
+            # 日志系统绝不能影响主流程
 
 
 def _now():

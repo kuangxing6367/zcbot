@@ -173,7 +173,8 @@ def _extract_b64(data: str) -> str | None:
         try:
             base64.b64decode(s, validate=True)
             return s
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_extract_b64] 捕获异常后按降级路径继续: %s', _exc)
             return None
     return None
 
@@ -181,7 +182,8 @@ def _extract_b64(data: str) -> str | None:
 def _b64_to_bytes(b64: str) -> bytes | None:
     try:
         return base64.b64decode(re.sub(r'\s+', '', b64))
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_b64_to_bytes] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 
@@ -190,7 +192,8 @@ def _read_file_bytes(path: str) -> bytes | None:
     try:
         with open(path, 'rb') as f:
             return f.read()
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_read_file_bytes] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 
@@ -770,6 +773,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 resp = await asyncio.to_thread(
                     self._http.get, url, headers=headers, timeout=15)
             except Exception as e:
+                logger.debug('[_fetch_gateway] 捕获异常后按降级路径继续: %s', e)
                 last_exc = e
                 continue
             data = resp.json() if resp.content else {}
@@ -958,8 +962,8 @@ class QQOfficialAdapter(ProtocolAdapter):
             t.cancel()
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[_cancel_heartbeat] 捕获异常后按降级路径继续: %s', _exc)
 
     async def _connect_once(self):
         if not self.app_id or not self.app_secret:
@@ -1018,7 +1022,8 @@ class QQOfficialAdapter(ProtocolAdapter):
         while self._connected and not self._closing:
             try:
                 await ws.send(json.dumps({'op': 1, 'd': self._seq}))
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_heartbeat_loop] 捕获异常后按降级路径继续: %s', _exc)
                 return
             await asyncio.sleep(self._heartbeat_interval_ms / 1000.0)
 
@@ -1030,7 +1035,8 @@ class QQOfficialAdapter(ProtocolAdapter):
                 text = message.decode('utf-8', errors='replace') \
                     if isinstance(message, (bytes, bytearray)) else message
                 payload = json.loads(text)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_recv_loop] 捕获异常后按降级路径继续: %s', _exc)
                 continue
             if not isinstance(payload, dict):
                 continue
@@ -1040,8 +1046,8 @@ class QQOfficialAdapter(ProtocolAdapter):
             if op == 1:   # server heartbeat
                 try:
                     await ws.send(json.dumps({'op': 1, 'd': self._seq}))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_recv_loop] 捕获异常后按降级路径继续: %s', _exc)
                 continue
             if op == 7:   # reconnect
                 logger.info('qq_official 网关要求重连')
@@ -1187,20 +1193,20 @@ class QQOfficialAdapter(ProtocolAdapter):
         if ws is not None:
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         await self._cancel_heartbeat()
         if self._supervisor is not None and not self._supervisor.done():
             self._supervisor.cancel()
             try:
                 await self._supervisor
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         self._supervisor = None
         try:
             self._http.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
 
     # ── OpenAPI 出站 ───────────────────────────────────────────
 
@@ -1262,6 +1268,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                             data=data, timeout=timeout)
                 except Exception as e:
                     # 超时/连接类异常：小退避后重试（上限 2 次），其余直接抛
+                    logger.debug('[_api_request] 捕获异常后按降级路径继续: %s', e)
                     lowered = f'{type(e).__name__} {e}'.lower()
                     retryable = (('timeout' in lowered or 'connect' in lowered
                                   or 'connection' in lowered)
@@ -1287,7 +1294,8 @@ class QQOfficialAdapter(ProtocolAdapter):
                 if resp.content:
                     try:
                         body = json.loads(resp.content)
-                    except Exception:
+                    except Exception as _exc:
+                        logger.debug('[_api_request] 捕获异常后按降级路径继续: %s', _exc)
                         body = None
                 if resp.status_code < 400:
                     # HTTP 200 但 body 是业务错误（如 11244 token 失效）。
@@ -1513,6 +1521,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 uploaded = await self._upload_media(
                     openid, seg_type, seg_data, is_group)
             except Exception as e:
+                logger.debug('[_build_body] 捕获异常后按降级路径继续: %s', e)
                 return None, f'{seg_type} 上传失败: {e}'
             body['msg_type'] = _MSG_TYPE_MEDIA
             body['media'] = uploaded
@@ -2116,5 +2125,5 @@ def unregister():
         inst._connected = False
         try:
             inst._http.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)

@@ -16,8 +16,11 @@ Event 属性 37/方法 8），逐项记录 (name, ok, detail) 落库到 api_surf
   /surface-session create_session
 """
 import json
+import logging
 import os
 from typing import TYPE_CHECKING, cast
+
+logger = logging.getLogger('zcbot')
 
 if TYPE_CHECKING:
     from framework.iipc.py_sdk.sdk import PluginContext as PluginContext
@@ -49,7 +52,8 @@ _recv_ev = {}        # 广播接收验证：emit 后由 on 处理器回填
 def _short(v, n=400):
     try:
         s = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, default=str)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_short] 捕获异常后按降级路径继续: %s', _exc)
         s = str(v)
     return s[:n]
 
@@ -64,6 +68,7 @@ def register(ctx):
             r = fn()
             _save(ctx, name, True, _short(r))
         except Exception as e:
+            logger.debug('[_reg] 捕获异常后按降级路径继续: %s', e)
             _save(ctx, name, False, "%s: %s" % (type(e).__name__, e))
 
     _reg("ctx.command", lambda: bool(ctx.command("/surface", on_surface)))
@@ -92,8 +97,8 @@ def _save(ctx, name, ok, detail):
         ctx.db_execute(
             "INSERT OR REPLACE INTO api_surface_result(name, ok, detail) VALUES (%s,%s,%s)",
             (name, 1 if ok else 0, detail))
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[_save] 捕获异常后按降级路径继续: %s', _exc)
 
 
 def _t(ctx, name, fn):
@@ -103,6 +108,7 @@ def _t(ctx, name, fn):
         _save(ctx, name, True, _short(r))
         return r
     except Exception as e:
+        logger.debug('[_t] 捕获异常后按降级路径继续: %s', e)
         _save(ctx, name, False, "%s: %s" % (type(e).__name__, e))
         return None
 
@@ -210,6 +216,7 @@ def on_surface(event, match):
         _save(ctx, "call_async", True,
               _short(ctx.call_async(_coro_probe()).result(timeout=5)))
     except Exception as e:
+        logger.debug('[on_surface] 捕获异常后按降级路径继续: %s', e)
         _save(ctx, "call_async", False, "%s: %s" % (type(e).__name__, e))
 
     ctx.send_msg(user_id=int(_ADMIN), message="surface done")
@@ -294,6 +301,7 @@ def on_event_probe(event, match):
         try:
             _save(ctx, "event." + name, True, _short(fn()))
         except Exception as e:
+            logger.debug('[_p] 捕获异常后按降级路径继续: %s', e)
             _save(ctx, "event." + name, False, "%s: %s" % (type(e).__name__, e))
 
     _p("user_id", lambda: event.user_id)
@@ -370,9 +378,10 @@ def on_session(event, match):
         _save(ctx, "create_session", True, _short(getattr(s, "session_id", "")))
         try:
             s.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.warning('[on_session] 捕获异常后按降级路径继续: %s', _exc)
     except Exception as e:
+        logger.warning('[on_session] 捕获异常后按降级路径继续: %s', e)
         _save(ctx, "create_session", False, "%s: %s" % (type(e).__name__, e))
     ctx.send_msg(user_id=int(_ADMIN), message="session done")
 

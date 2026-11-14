@@ -27,7 +27,8 @@ def _get_host(url: str) -> str:
     try:
         from urllib.parse import urlparse
         return urlparse(url).hostname
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_get_host] 捕获异常后按降级路径继续: %s', _exc)
         return ''
 
 
@@ -130,6 +131,7 @@ def pip_install_requirements(pip_exec, req_file, timeout=300) -> dict:
             last_error = f"超时({timeout}s)"
             log.warning(f"requirements 安装超时（镜像 {mirror}）: {last_error}")
         except Exception as e:
+            logger.debug('[pip_install_requirements] 捕获异常后按降级路径继续: %s', e)
             last_error = str(e)
 
     return {'success': False, 'mirror': '', 'error': last_error}

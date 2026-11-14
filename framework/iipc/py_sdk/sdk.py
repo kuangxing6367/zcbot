@@ -17,6 +17,7 @@ import asyncio
 import importlib.util
 import inspect
 import json
+import logging
 import os
 import re
 import sys
@@ -27,6 +28,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from event import Event, _RoleCache
 from iipc_client import IIPCClient
+
+logger = logging.getLogger('zcbot')
 
 # 扩展面（服务注册表 / 插件间调用 / 共享 KV / 指标 / 依赖注入）
 try:
@@ -170,8 +173,8 @@ class IIPCLogger:
         try:
             if args:
                 msg = msg % args
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_emit] 捕获异常后按降级路径继续: %s', _exc)
         entry = {"level": level, "msg": str(msg), "logger": self._name}
         batch = None
         with self._lock:
@@ -232,8 +235,8 @@ class _FallbackLogger:
         try:
             if args:
                 msg = msg % args
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_p] 捕获异常后按降级路径继续: %s', _exc)
         print("[%s] %s %s" % (self._name, level, msg), file=sys.stderr, flush=True)
 
     def debug(self, msg, *args, **kwargs):
@@ -786,6 +789,7 @@ class PluginContext:
             # 关键：批次已从队列取出，失败即丢弃 = 消息永久消失。
             # 历史实现正是如此（只 print 一句到 stdout，基本不进日志系统），
             # 这是真正的"吞消息"。现改为放回队首等待重试，并按上限有界裁剪。
+            logger.debug('[_flush] 捕获异常后按降级路径继续: %s', e)
             self._retry_after = time.time() + self.RETRY_BACKOFF
             self._requeue(batch)
             _MSG_DROP.dropped(e, n=len(batch), action="已回队列待重试")
@@ -866,6 +870,7 @@ class PluginContext:
             # 降级方向是安全的（不提权），但此前完全无声：IPC 断连/DB 出错时
             # 管理员会被静默降权为 member，超管命令莫名失效且无任何线索。
             # 保留降级返回值以兼容插件，但必须留下可见痕迹。
+            logger.debug('[_fetch_role] 捕获异常后按降级路径继续: %s', e)
             _PERM_DROP.dropped(e, action="get_member_info 降级为 member")
             return {"role": "member"}
 
@@ -876,6 +881,7 @@ class PluginContext:
                 (group_id, user_id))
             return bool(row and row['role'] in ('owner', 'admin'))
         except Exception as e:
+            logger.debug('[is_group_admin] 捕获异常后按降级路径继续: %s', e)
             _PERM_DROP.dropped(e, action="is_group_admin 降级为 False")
             return False
 
@@ -886,6 +892,7 @@ class PluginContext:
                 (group_id, user_id))
             return bool(row and row['role'] == 'owner')
         except Exception as e:
+            logger.debug('[is_group_owner] 捕获异常后按降级路径继续: %s', e)
             _PERM_DROP.dropped(e, action="is_group_owner 降级为 False")
             return False
 
@@ -895,6 +902,7 @@ class PluginContext:
                 "SELECT role FROM users WHERE user_id=%s", (user_id,))
             return bool(row and row.get('role') == 'super')
         except Exception as e:
+            logger.debug('[is_superuser] 捕获异常后按降级路径继续: %s', e)
             _PERM_DROP.dropped(e, action="is_superuser 降级为 False")
             return False
 
@@ -904,6 +912,7 @@ class PluginContext:
                 "SELECT is_blacklist FROM users WHERE user_id=%s", (user_id,))
             return bool(row and int(row.get('is_blacklist') or 0) == 1)
         except Exception as e:
+            logger.debug('[is_blacklisted] 捕获异常后按降级路径继续: %s', e)
             _PERM_DROP.dropped(e, action="is_blacklisted 降级为 False")
             return False
 
@@ -1000,8 +1009,8 @@ class PluginContext:
         except Exception as e:
             try:
                 self.log("建表失败: %s" % e, level="error")
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[create_table] 捕获异常后按降级路径继续: %s', _exc)
             raise
 
     async def create_table_async(self, ddl: str, **kwargs):
@@ -1046,7 +1055,8 @@ class PluginContext:
                 decoded = value
             self._config_cache[cache_key] = (decoded, now)
             return decoded
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[get_config] 捕获异常后按降级路径继续: %s', _exc)
             return default
 
     def set_config(self, key, value):
@@ -1066,7 +1076,8 @@ class PluginContext:
                 except (json.JSONDecodeError, TypeError):
                     result[r['config_key']] = v
             return result
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[get_all_config] 捕获异常后按降级路径继续: %s', _exc)
             return {}
 
     # ---- 协议 API ----
@@ -1170,8 +1181,8 @@ class PluginContext:
             if self._data_dir:
                 try:
                     os.makedirs(self._data_dir, exist_ok=True)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[get_data_dir] 捕获异常后按降级路径继续: %s', _exc)
         return self._data_dir
 
     # ---- 多轮会话 ----
@@ -1205,7 +1216,8 @@ class PluginContext:
                 try:
                     if not handler(ev_raw):
                         continue
-                except Exception:
+                except Exception as _exc:
+                    logger.warning('[_session_wait] 捕获异常后按降级路径继续: %s', _exc)
                     continue
             return ev_raw
 
@@ -1600,14 +1612,14 @@ def _safe_call(fn, args):
             event = args[0] if args and isinstance(args[0], Event) else None
             try:
                 _run_mw_error(event, e, _current_ctx)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_safe_call] 捕获异常后按降级路径继续: %s', _exc)
         on_error = getattr(_current_module, 'on_error', None) if _current_module else None
         if callable(on_error):
             try:
                 on_error(*args, e)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_safe_call] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 

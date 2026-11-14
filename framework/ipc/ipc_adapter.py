@@ -110,7 +110,8 @@ class IpcAdapter(ProtocolAdapter):
     def get_connected_bots(self) -> list:
         try:
             return self._client.call('bots.list')
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[get_connected_bots] 捕获异常后按降级路径继续: %s', _exc)
             return []
 
     def start(self):
@@ -135,8 +136,9 @@ class IpcAdapter(ProtocolAdapter):
                 'text': text, 'user_id': user_id,
                 'group_id': group_id, 'source': source,
             })
-        except Exception:
+        except Exception as _exc:
             # 旧核心无 api.send_text 时回落通用 send_msg 动作
+            logger.debug('[send_text] 捕获异常后按降级路径继续: %s', _exc)
             if group_id:
                 return await self._api.acall('send_msg', group_id=group_id,
                                              message=text, bot=source)

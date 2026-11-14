@@ -94,8 +94,8 @@ def write_crash_log(cfg, root, exc=None, extra=None):
                 os.replace(path, f"{path}.1")
             except OSError:
                 pass
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[write_crash_log] 捕获异常后按降级路径继续: %s', _exc)
     try:
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
         lines = [f"=== ZCBOT 启动崩溃 {ts} ==="]
@@ -113,7 +113,8 @@ def _format_exc(exc):
     if exc is not None:
         try:
             return ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_format_exc] 捕获异常后按降级路径继续: %s', _exc)
             return f"{type(exc).__name__}: {exc}"
     return traceback.format_exc()
 
@@ -131,8 +132,8 @@ def clear_crash_markers(cfg, root):
             except OSError:
                 pass
             i += 1
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[clear_crash_markers] 捕获异常后按降级路径继续: %s', _exc)
 
 
 def fire_alert(cfg, exc=None):

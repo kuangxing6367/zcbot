@@ -264,8 +264,8 @@ class SqlSimEngine:
                 try:
                     if os.path.exists(tmp):
                         os.remove(tmp)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_flush_table] 捕获异常后按降级路径继续: %s', _exc)
                 logger.error(f"SQL 模拟表落盘失败 {table}: {e}")
                 return False
 
@@ -650,8 +650,9 @@ class SqlSimEngine:
                             break
                         j += 1
                 rows = rows[offset:offset + limit] if limit is not None else rows[offset:]
-            except Exception:
-                pass  # LIMIT 解析失败：返回未分页结果
+            except Exception as _exc:
+                logger.debug('[_exec_select] 捕获异常后按降级路径继续: %s', _exc)
+                # LIMIT 解析失败：返回未分页结果
         return rows
 
     @staticmethod

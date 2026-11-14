@@ -47,7 +47,8 @@ def register(ctx):
                 try:
                     row = db.query_one(f"SELECT COUNT(*) AS c FROM {_quote_ident(t)}")
                     cnt = row['c'] if row else 0
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[db_tables] 捕获异常后按降级路径继续: %s', _exc)
                     cnt = None
                 result.append({'name': t, 'rows': cnt})
             return jsonify({'code': 0, 'data': result})

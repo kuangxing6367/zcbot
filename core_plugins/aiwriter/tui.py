@@ -31,6 +31,8 @@ except ImportError:
     Agent = importlib.import_module(_PKG + '.agent').Agent
     LLMError = importlib.import_module(_PKG + '.llm').LLMError
 
+import logging
+
 from rich.text import Text  # textual 依赖自带 rich
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -47,6 +49,8 @@ from textual.widgets import (
     Static,
     TextArea,
 )
+
+logger = logging.getLogger('zcbot')
 
 _SETTINGS_FIELDS = [
     ('agent', '当前人格', 'str'),
@@ -159,6 +163,7 @@ class SettingsScreen(ModalScreen):
             self.plugin._rebuild_store(cfg)
             self.plugin._persist_cfg(self.plugin._FW, cfg)
         except Exception as e:
+            logger.debug('[_save] 捕获异常后按降级路径继续: %s', e)
             self.notify('保存失败：%s' % e, severity='error')
             return
         self.dismiss(True)
@@ -562,7 +567,8 @@ class AgentApp(App):
         try:
             turns = len(self.plugin._STORE.history(self.plugin._session_key())) // 2
             n_sess = len(self.plugin._sessions())
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_refresh_side] 捕获异常后按降级路径继续: %s', _exc)
             turns = n_sess = 0
         self.query_one('#status', Static).update(Text(
             '模型  %s\n模式  %s  (Tab 切换)\n工作区  %s\n会话  %s  (%d 轮 · 共 %d 个)\n状态  %s' % (
@@ -924,8 +930,8 @@ class AgentApp(App):
         try:
             self.query_one('#prompt', Input).placeholder = (
                 '[%s] 描述你的需求，回车交给智能体…（Tab 切模式 · /help 命令）' % mode)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_update_placeholder] 捕获异常后按降级路径继续: %s', _exc)
 
     # ── 智能体（工作线程）──────────────────────────────────────────────
     def _start(self, text):
@@ -941,8 +947,8 @@ class AgentApp(App):
             key = self.plugin._session_key()
             try:
                 self.plugin._maybe_compact(key)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_agent_job] 捕获异常后按降级路径继续: %s', _exc)
             system = self.plugin._system_prompt()
             messages = store.build_messages(key, system, text)
             agent = Agent(self.plugin._effective_cfg(), tools,
@@ -954,6 +960,7 @@ class AgentApp(App):
         except LLMError as e:
             self.call_from_thread(self._on_event, 'error', {'message': str(e)})
         except Exception as e:
+            logger.debug('[_agent_job] 捕获异常后按降级路径继续: %s', e)
             self.call_from_thread(self._on_event, 'error', {'message': '执行异常：%s' % e})
         finally:
             self.call_from_thread(self._on_done)

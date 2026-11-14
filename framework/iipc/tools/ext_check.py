@@ -31,8 +31,12 @@ IIPC = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(IIPC, "py_sdk"))
 sys.path.insert(0, HERE)
 
+import logging
+
 from iipc_client import IIPCClient, resolve_auth
 from portutil import pick_addr
+
+logger = logging.getLogger('zcbot')
 
 ADDR = pick_addr("ZCBOT_EXT_ADDR")
 AUTH = resolve_auth()  # 生成/继承高熵令牌并写入 os.environ，内核与客户端同源
@@ -143,8 +147,8 @@ def main():
         try:
             for line in kproc.stdout:
                 log_ref.append(line)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[pump] 捕获异常后按降级路径继续: %s', _exc)
     threading.Thread(target=pump, daemon=True).start()
 
     try:
@@ -170,7 +174,8 @@ def main():
             try:
                 r = cli.call("plugin.list", {}, timeout=3)
                 ids = [p["plugin_id"] for p in (r or {}).get("plugins", [])]
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
                 ids = []
             if "ext_provider" in ids and "ext_consumer" in ids:
                 break
@@ -200,15 +205,16 @@ def main():
         ok_resolve = False
         try:
             ok_resolve = bool(json.loads(resolve_res or "{}").get("found"))
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
         check("服务解析 service.resolve", ok_resolve, str(resolve_res)[:120])
 
         # 4) KV incr
         try:
             r = cli.call("kv.get", {"key": "check.counter"}, timeout=5)
             counter = (r or {}).get("value")
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
             counter = None
         check("共享 KV incr 累加", str(counter) in ("5", "5.0"), str(counter))
 
@@ -229,7 +235,8 @@ def main():
         try:
             r = cli.call("capability.query", {"cap": "text.translate"}, timeout=5)
             holders = (r or {}).get("plugins", [])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
             holders = []
         check("能力查询 capability.query", holders == ["ext_provider"], str(holders))
 
@@ -237,7 +244,8 @@ def main():
         try:
             r = cli.call("metric.snapshot", {}, timeout=5)
             metrics = (r or {}).get("metrics", {})
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
             metrics = {}
         check("指标 metric.snapshot", "provider.boot" in metrics, str(list(metrics)[:5]))
 
@@ -245,7 +253,8 @@ def main():
         try:
             r = cli.call("lifecycle.state", {}, timeout=5)
             nplug = (r or {}).get("plugins")
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
             nplug = None
         check("生命周期 lifecycle.state", isinstance(nplug, int) and nplug >= 2, str(nplug))
 
@@ -253,23 +262,25 @@ def main():
         try:
             r = cli.call("kv.keys", {"prefix": "check."}, timeout=5)
             keys = (r or {}).get("keys", [])
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
             keys = []
         check("KV 前缀列举", len(keys) >= 3, str(keys))
 
         try:
             cli.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
     finally:
         try:
             kproc.terminate()
             kproc.wait(timeout=10)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
             try:
                 kproc.kill()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
 
     ok = sum(1 for _, v, _ in results if v)
     bad = [n for n, v, _ in results if not v]
@@ -286,8 +297,8 @@ def _wait_kv(cli, key, timeout=20):
             r = cli.call("kv.get", {"key": key}, timeout=3)
             if r and r.get("found"):
                 return r.get("value")
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_wait_kv] 捕获异常后按降级路径继续: %s', _exc)
         time.sleep(0.4)
     return None
 

@@ -775,8 +775,8 @@ def load_config(config_path: str = None) -> dict:
                 import shutil
                 shutil.copy(config_path, backup)
                 _get_logger().warning(f"损坏的配置文件已备份到: {backup}")
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[load_config] 捕获异常后按降级路径继续: %s', _exc)
             _generate_default_config(config_path)
             with open(config_path, 'r', encoding='utf-8') as f2:
                 config = yaml.safe_load(f2)
@@ -827,7 +827,11 @@ def get_config() -> dict:
 # 注：支持环境变量 ZCBOT_CORE_PLUGINS_YAML 覆盖路径（黑盒测试启动器
 # tests/webui_blackbox_launcher.py 借此把插件配置指向一份隔离副本，
 # 从而在不改动真实仓库的前提下自定义 webui 监听端口等）。
+import logging
+
 from framework.paths import core_plugins_yaml_path as _core_plugins_yaml_path
+
+logger = logging.getLogger('zcbot')
 
 CORE_PLUGINS_YAML = _core_plugins_yaml_path()
 
@@ -1124,7 +1128,8 @@ def list_core_plugins_state():
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
             cps = data.get('core_plugins') if isinstance(data, dict) else {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[list_core_plugins_state] 捕获异常后按降级路径继续: %s', _exc)
             cps = {}
     out = []
     for name in sorted(installed):
@@ -1157,7 +1162,8 @@ def set_core_plugin_enabled(name: str, enabled: bool):
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[set_core_plugin_enabled] 捕获异常后按降级路径继续: %s', _exc)
             data = {}
     cps = data.get('core_plugins') if isinstance(data, dict) else {}
     if not isinstance(cps, dict):
@@ -1206,7 +1212,8 @@ def _core_plugin_desc(name: str):
         d = _ast.literal_eval(txt[j:end])
         if isinstance(d, dict):
             return (d.get('desc') or d.get('description') or '')
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_core_plugin_desc] 捕获异常后按降级路径继续: %s', _exc)
         return ''
     return ''
 

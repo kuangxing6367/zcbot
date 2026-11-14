@@ -177,7 +177,8 @@ def register(ctx):
                 stored = stored.encode('utf-8')
             if not bcrypt.checkpw(old_pwd.encode('utf-8'), stored):
                 return jsonify({'code': 401, 'msg': '旧密码错误'}), 401
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[change_password] 捕获异常后按降级路径继续: %s', _exc)
             return jsonify({'code': 500, 'msg': '密码验证失败'}), 500
 
         new_hash = bcrypt.hashpw(new_pwd.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')

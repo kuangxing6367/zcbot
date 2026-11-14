@@ -195,6 +195,7 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
                         skipped += 1
                         continue
                 except Exception as e:
+                    logger.debug('[_apply_init_sql] 捕获异常后按降级路径继续: %s', e)
                     failed.append((table, f"存在性检查失败: {e}"))
                     continue
             sql = transform(stmt) if transform else stmt
@@ -204,6 +205,7 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
                 if existing is not None:
                     existing.add(table)
             except Exception as e:
+                logger.debug('[_apply_init_sql] 捕获异常后按降级路径继续: %s', e)
                 failed.append((table, str(e)[:160]))
             continue
 
@@ -215,6 +217,7 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
         try:
             run(sql)
         except Exception as e:
+            logger.debug('[_apply_init_sql] 捕获异常后按降级路径继续: %s', e)
             failed.append((target or "seed", str(e)[:160]))
 
     # 结果化日志：0 张表建出来必须一眼可见，而不是埋在 info 的"完成"里
@@ -483,7 +486,8 @@ def _ensure_sqlite_indexes(database, sql_filename="init.sql") -> dict:
 
     try:
         existing_tables = {str(t).lower() for t in database.all_table_names()}
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_ensure_sqlite_indexes] 捕获异常后按降级路径继续: %s', _exc)
         existing_tables = set()
 
     created, failed = 0, []
@@ -496,6 +500,7 @@ def _ensure_sqlite_indexes(database, sql_filename="init.sql") -> dict:
             database.execute(ddl)
             created += 1
         except Exception as e:
+            logger.debug('[_ensure_sqlite_indexes] 捕获异常后按降级路径继续: %s', e)
             failed.append((ddl[:60], str(e)[:100]))
 
     if failed:

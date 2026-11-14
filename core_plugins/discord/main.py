@@ -131,7 +131,8 @@ def _extract_b64(data: str) -> str | None:
         try:
             base64.b64decode(s, validate=True)
             return s
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_extract_b64] 捕获异常后按降级路径继续: %s', _exc)
             return None
     return None
 
@@ -449,8 +450,8 @@ class DiscordAdapter(ProtocolAdapter):
             t.cancel()
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[_cancel_heartbeat] 捕获异常后按降级路径继续: %s', _exc)
 
     def _ws_url(self) -> str:
         base = self._resume_gateway or self.gateway_url
@@ -551,13 +552,14 @@ class DiscordAdapter(ProtocolAdapter):
                                '以 4000 关闭后重连')
                 try:
                     await ws.close(code=4000)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_heartbeat_loop] 捕获异常后按降级路径继续: %s', _exc)
                 return
             self._heartbeat_acked = False
             try:
                 await ws.send(json.dumps({'op': _OP_HEARTBEAT, 'd': self._seq}))
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_heartbeat_loop] 捕获异常后按降级路径继续: %s', _exc)
                 return
             await asyncio.sleep(self._heartbeat_interval_ms / 1000.0)
 
@@ -569,7 +571,8 @@ class DiscordAdapter(ProtocolAdapter):
                 text = message.decode('utf-8', errors='replace') \
                     if isinstance(message, (bytes, bytearray)) else message
                 payload = json.loads(text)
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[_recv_loop] 捕获异常后按降级路径继续: %s', _exc)
                 continue
             if not isinstance(payload, dict):
                 continue
@@ -581,8 +584,8 @@ class DiscordAdapter(ProtocolAdapter):
                 try:
                     await ws.send(json.dumps(
                         {'op': _OP_HEARTBEAT, 'd': self._seq}))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_recv_loop] 捕获异常后按降级路径继续: %s', _exc)
                 continue
             if op == _OP_RECONNECT:
                 logger.info('discord 网关要求重连')
@@ -633,20 +636,20 @@ class DiscordAdapter(ProtocolAdapter):
         if ws is not None:
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         await self._cancel_heartbeat()
         if self._supervisor is not None and not self._supervisor.done():
             self._supervisor.cancel()
             try:
                 await self._supervisor
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         self._supervisor = None
         try:
             self._http.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
 
     # ── REST 出站 ───────────────────────────────────────────────
 
@@ -661,7 +664,8 @@ class DiscordAdapter(ProtocolAdapter):
                 headers={'Content-Type': 'application/json'})
         try:
             body = resp.json() if resp.content else {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_rest_post] 捕获异常后按降级路径继续: %s', _exc)
             body = {'_status': resp.status_code, '_text': (resp.text or '')[:400]}
         if resp.status_code >= 400:
             # retcode 必须用框架约定值，不能直接透 HTTP 状态码：

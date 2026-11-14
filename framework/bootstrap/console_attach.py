@@ -1,8 +1,11 @@
 """调试控制台接入（attach）：连运行中的框架，无需 TTY / 无需重启。"""
 import argparse
+import logging
 import os
 
 from framework.paths import code_root, resolve_config_path
+
+logger = logging.getLogger('zcbot')
 
 _PROJECT_ROOT = code_root()
 
@@ -16,8 +19,8 @@ def resolve_db_config(config_path=None):
         with open(path, 'r', encoding='utf-8') as f:
             cfg = yaml.safe_load(f) or {}
         db = cfg.get('database')
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[resolve_db_config] 捕获异常后按降级路径继续: %s', _exc)
     if not db:
         db = {'type': 'sqlite', 'path': 'data/zcbot.db'}
     return db, _PROJECT_ROOT

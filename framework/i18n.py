@@ -52,7 +52,8 @@ from pathlib import Path
 try:
     import yaml
     _HAS_YAML = True
-except Exception:
+except Exception as _exc:
+    logger.debug('[<module>] 捕获异常后按降级路径继续: %s', _exc)
     yaml = None
     _HAS_YAML = False
 
@@ -170,6 +171,7 @@ def t(key: str, **kwargs) -> str:
     if kwargs:
         try:
             return text.format(**kwargs)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[t] 捕获异常后按降级路径继续: %s', _exc)
             return text
     return text

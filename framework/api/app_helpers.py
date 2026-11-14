@@ -57,7 +57,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         try:
             with open(os.path.join(_project_root(), 'VERSION'), 'r', encoding='utf-8') as f:
                 return f.read().strip()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_get_framework_local_version] 捕获异常后按降级路径继续: %s', _exc)
             return ''
 
     def _install_new_requirements():
@@ -132,7 +133,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
                 if best_t is None or tv > best_t:
                     best, best_t = t, tv
             return best
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_latest_release_tag] 捕获异常后按降级路径继续: %s', _exc)
             return ''
 
     def _data_dir() -> str:
@@ -163,7 +165,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 doc = yaml.safe_load(f) or {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_read_yaml_section] 捕获异常后按降级路径继续: %s', _exc)
             return {}
         return doc.get(section, {}) if isinstance(doc, dict) else {}
 
@@ -214,7 +217,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_update_yaml_section] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
         start = None
@@ -245,7 +249,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
             with open(path, 'w', encoding='utf-8') as f:
                 f.writelines(lines)
             return True
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_update_yaml_section] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def _read_market_sources_custom() -> list:
@@ -256,8 +261,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
                 parsed = json.loads(row['config_value'])
                 if isinstance(parsed, list):
                     return parsed
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_read_market_sources_custom] 捕获异常后按降级路径继续: %s', _exc)
         return []
 
     def _save_market_sources_custom(sources: list) -> None:
@@ -282,7 +287,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         try:
             proxy = str(framework.config.get('github_proxy', '') or '').strip().rstrip('/')
             return proxy or _DEFAULT_GITHUB_PROXY
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_github_proxy] 捕获异常后按降级路径继续: %s', _exc)
             return _DEFAULT_GITHUB_PROXY
 
     def _github_url_candidates(url: str) -> list:
@@ -332,8 +338,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
                 logger.warning(f"候选返回非 ZIP 内容，跳过: {url}")
                 try:
                     os.unlink(tmp.name)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_download_zip_file] 捕获异常后按降级路径继续: %s', _exc)
             except Exception as e:
                 logger.warning(f"ZIP 候选下载失败 {url}: {e}")
                 continue
@@ -367,7 +373,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
                         result.add(name)
             result.update(framework.plugin_loader.get_loaded_plugins().keys())
             return result
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_market_installed_set] 捕获异常后按降级路径继续: %s', _exc)
             return set()
 
     def _download_plugin_tree(repo: str, branch: str, sub_path: str, target_dir: str):
@@ -394,6 +401,7 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
                         break
                     api_err = f'空响应: {cand}'
                 except Exception as e:
+                    logger.debug('[_download_plugin_tree] 捕获异常后按降级路径继续: %s', e)
                     api_err = str(e)
                     continue
             if tree is None:
@@ -442,6 +450,7 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
                             break
                         last_err = f'HTTP {r.status_code}'
                     except Exception as e:
+                        logger.debug('[_download_plugin_tree] 捕获异常后按降级路径继续: %s', e)
                         last_err = str(e)
                 if not got:
                     return False, f'下载文件失败 {src_path}: {last_err}'
@@ -449,6 +458,7 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
             logger.info(f"已通过文件树下载插件 {repo}@{branch} 子目录 {sub or '/'}（{len(files)} 个文件）")
             return True, ''
         except Exception as e:
+            logger.debug('[_download_plugin_tree] 捕获异常后按降级路径继续: %s', e)
             return False, str(e)
 
     def _download_and_extract_plugin(repo: str, branch: str, sub_path: str, target_dir: str):
@@ -490,8 +500,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
             finally:
                 try:
                     os.unlink(plugin_zip)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_download_and_extract_plugin] 捕获异常后按降级路径继续: %s', _exc)
 
         ok, msg = _download_plugin_tree(repo, branch, sub_path, target_dir)
         if ok:
@@ -532,8 +542,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         finally:
             try:
                 os.unlink(tmp_zip)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_download_and_extract_plugin] 捕获异常后按降级路径继续: %s', _exc)
 
     return {
         '_project_root': _project_root,

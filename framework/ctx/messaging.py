@@ -1,4 +1,7 @@
 """PluginContext 协议中立快捷动作 / 身份判断 / 群级插件开关（自 ctx.py 剥离的 mixin）"""
+import logging
+
+logger = logging.getLogger('zcbot')
 
 class PluginMessagingMixin:
     """协议中立快捷动作 / 身份判断 / 群级插件开关"""
@@ -11,7 +14,8 @@ class PluginMessagingMixin:
         try:
             from framework.runtime import current_event_id_var as _eid_var
             _eid = _eid_var.get()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_bb_send] 捕获异常后按降级路径继续: %s', _exc)
             _eid = None
         _to = (f"群{group_id}" if group_id else f"私聊{user_id}")
         from framework.blackbox import record as _bb_record
@@ -24,7 +28,8 @@ class PluginMessagingMixin:
         try:
             from framework.runtime import current_event_id_var as _eid_var
             _eid = _eid_var.get()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_bb_send_fail] 捕获异常后按降级路径继续: %s', _exc)
             _eid = None
         _to = (f"群{group_id}" if group_id else f"私聊{user_id}")
         from framework.blackbox import record as _bb_record
@@ -141,7 +146,8 @@ class PluginMessagingMixin:
                 (group_id, user_id)
             )
             return row and row['role'] in ('owner', 'admin')
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[is_group_admin] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def is_group_owner(self, group_id: int, user_id: int) -> bool:
@@ -152,7 +158,8 @@ class PluginMessagingMixin:
                 (group_id, user_id)
             )
             return row and row['role'] == 'owner'
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[is_group_owner] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def is_superuser(self, user_id: int) -> bool:
@@ -165,7 +172,8 @@ class PluginMessagingMixin:
                 "SELECT role FROM users WHERE user_id=%s", (user_id,)
             )
             return row and row.get('role') == 'super'
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[is_superuser] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def is_blacklisted(self, user_id: int) -> bool:
@@ -175,7 +183,8 @@ class PluginMessagingMixin:
                 "SELECT is_blacklist FROM users WHERE user_id=%s", (user_id,)
             )
             return row and row.get('is_blacklist') == 1
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[is_blacklisted] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def get_user_role(self, group_id: int, user_id: int) -> str:

@@ -18,8 +18,11 @@ tool 消息导致下次请求格式不合法。
 旧格式（v1，``{"<key>": [messages]}``）在加载时自动迁移。
 """
 import json
+import logging
 import os
 import time
+
+logger = logging.getLogger('zcbot')
 
 
 class SessionStore:
@@ -45,7 +48,8 @@ class SessionStore:
             try:
                 with open(self.path, encoding='utf-8') as f:
                     raw = json.load(f) or {}
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[load] 捕获异常后按降级路径继续: %s', _exc)
                 raw = {}
         if not isinstance(raw, dict):
             raw = {}
@@ -209,8 +213,9 @@ class SessionStore:
         older = hist[:-self.keep_turns * 2]
         try:
             summary = summarize(older)
-        except Exception:
+        except Exception as _exc:
             # 摘要失败则退化为纯裁剪（丢最早部分），不阻断会话
+            logger.debug('[compact] 捕获异常后按降级路径继续: %s', _exc)
             rec['messages'] = keep
             return keep
         merged = [{'role': 'assistant',

@@ -11,9 +11,13 @@ ROOT = os.path.dirname(HERE)
 PYSIDE = os.path.dirname(ROOT)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "py_sdk"))
+import logging
+
 from adapter_e2e import free_port, wait_tcp
 from iipc_client import resolve_auth
 from onebot_fake import FakeOneBot, group_msg
+
+logger = logging.getLogger('zcbot')
 
 # 生成/继承共享令牌并写入 os.environ，供本脚本拉起的 kernel / rust 子进程继承。
 resolve_auth()
@@ -59,7 +63,8 @@ try:
     while time.time() - t0 < 20:
         try:
             v = ob.api_q.get(timeout=0.05)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[<module>] 捕获异常后按降级路径继续: %s', _exc)
             continue
         el = time.time() - t0
         print("[probe] +%6.2fs api.call action=%s params=%s"
@@ -71,7 +76,8 @@ try:
             while True:
                 try:
                     v2 = ob.api_q.get(timeout=0.2)
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[<module>] 捕获异常后按降级路径继续: %s', _exc)
                     break
                 print("[probe] +%6.2fs api.call action=%s params=%s"
                       % (time.time() - t0, v2.get("action"), v2.get("params")))

@@ -375,7 +375,8 @@ class MatrixAdapter(ProtocolAdapter):
             raise MatrixApiError('M_NETWORK', f'{type(e).__name__}: {e}')
         try:
             body = resp.json() if resp.content else {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_request] 捕获异常后按降级路径继续: %s', _exc)
             body = {}
         if resp.status_code >= 400:
             retry_after_ms = None
@@ -449,7 +450,8 @@ class MatrixAdapter(ProtocolAdapter):
             headers={'Content-Type': mime or 'application/octet-stream'})
         try:
             body = resp.json() if resp.content else {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[upload_media] 捕获异常后按降级路径继续: %s', _exc)
             body = {}
         if resp.status_code >= 400 or not body.get('content_uri'):
             raise MatrixApiError(
@@ -708,12 +710,12 @@ class MatrixAdapter(ProtocolAdapter):
             t.cancel()
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
-                pass
+            except (asyncio.CancelledError, Exception) as _exc:
+                logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
         try:
             self._http.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[stop] 捕获异常后按降级路径继续: %s', _exc)
 
 
 # ── 注册入口 ──────────────────────────────────────────────────

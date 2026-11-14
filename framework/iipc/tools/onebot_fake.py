@@ -15,11 +15,14 @@ IIPC 全链路：
 import base64
 import hashlib
 import json
+import logging
 import os
 import queue
 import socket
 import threading
 import time
+
+logger = logging.getLogger('zcbot')
 
 WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 OP_CONT, OP_TEXT, OP_BIN, OP_CLOSE, OP_PING, OP_PONG = 0, 1, 2, 8, 9, 0xA
@@ -212,8 +215,8 @@ class FakeOneBot:
         if old:
             try:
                 old.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[drop_conn] 捕获异常后按降级路径继续: %s', _exc)
 
     def _read_loop(self, conn):
         is_client = getattr(self, "is_client", False)
@@ -244,8 +247,8 @@ class FakeOneBot:
         finally:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_read_loop] 捕获异常后按降级路径继续: %s', _exc)
 
     def _on_api(self, v, conn=None):
         action = v.get("action", "")
@@ -312,12 +315,12 @@ class FakeOneBot:
             if self.sock:
                 ws_write_frame(self.sock, OP_CLOSE, is_client=self.is_client)
                 self.sock.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
         try:
             self.lsock.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
 
 
 def group_msg(gid, uid, text):

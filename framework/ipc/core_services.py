@@ -65,7 +65,8 @@ def register_core_handlers(server, framework):
             return []
         try:
             return pa.get_connected_bots()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_bots_list] 捕获异常后按降级路径继续: %s', _exc)
             return []
 
     srv.register('bots.list', _bots_list)
@@ -90,6 +91,7 @@ def make_remote_view(server, route_id):
             result = server.request_host(
                 'http.dispatch', {'route_id': route_id, 'params': params})
         except Exception as e:
+            logger.debug('[view] 捕获异常后按降级路径继续: %s', e)
             return flask.jsonify({'code': -1, 'error': f'远程路由执行失败: {e}'}), 503
 
         # 契约：dict → 200 JSON；(status, dict) → 指定状态码；(status, dict, headers)
@@ -133,6 +135,7 @@ def register_remote_route_handler(server, framework):
                                          auth=False, plugin=plugin_name)
             return {'ok': True}
         except Exception as e:
+            logger.debug('[_on_route_register] 捕获异常后按降级路径继续: %s', e)
             return {'ok': False, 'error': str(e)}
 
     def _on_route_unregister(plugin_name=None):
@@ -183,8 +186,8 @@ def register_host_log_relay(server):
                     'host', str(p.get('level', 'INFO')),
                     str(p.get('msg', '')),
                     {'source': str(p.get('logger', 'host'))})
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_on_host_log] 捕获异常后按降级路径继续: %s', _exc)
 
     server.on('log', _on_host_log)
 

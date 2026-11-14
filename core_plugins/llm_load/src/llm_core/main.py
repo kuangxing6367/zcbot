@@ -106,7 +106,8 @@ try:  # Flask 是可选依赖（启用 webui 插件时才安装）
     from flask import jsonify
     from flask import request as flask_request
     _HAS_FLASK = True
-except Exception:
+except Exception as _exc:
+    logger.debug('[<module>] 捕获异常后按降级路径继续: %s', _exc)
     jsonify = None
     flask_request = None
     flask_response = None
@@ -160,6 +161,7 @@ def calculator(expression: str):
             value = int(value)
         return f"{expr} = {value}"
     except Exception as e:
+        logger.debug('[calculator] 捕获异常后按降级路径继续: %s', e)
         return f"计算失败：{e}"
 
 
@@ -230,6 +232,7 @@ def knowledge_search(query: str) -> str:
     except EmbeddingError as e:
         return f"知识库检索出错：{e}"
     except Exception as e:
+        logger.debug('[knowledge_search] 捕获异常后按降级路径继续: %s', e)
         return f"知识库检索出错：{e}"
     if not hits:
         return "知识库里没有命中相关内容。"
@@ -254,7 +257,8 @@ def _cfg(key: str, default=None):
         return default
     try:
         return ctx.get_config(key, default)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_cfg] 捕获异常后按降级路径继续: %s', _exc)
         return default
 
 
@@ -328,7 +332,8 @@ def _current_conv():
             return None
         return _Svc.store.get(session_key(
             source, ev.group_id if ev.is_group else None, ev.user_id), create=False)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_current_conv] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 
@@ -519,7 +524,8 @@ def _caller_owner() -> str:
         # 本帧 → tool/deco → 调用者
         caller = frame.f_back.f_back if frame and frame.f_back else None
         return caller.f_globals.get('__name__', '') if caller else ''
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_caller_owner] 捕获异常后按降级路径继续: %s', _exc)
         return ''
 
 
@@ -597,8 +603,8 @@ async def handle_chat(event, match):
             'tools': [c['name'] for c in result.tool_calls],
             'chars': len(body), 'model': result.model,
         })
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[handle_chat] 捕获异常后按降级路径继续: %s', _exc)
 
 
 async def handle_reset(event, match):
@@ -866,6 +872,7 @@ def _view_kb_ingest():
     except EmbeddingError as e:
         return jsonify({'code': 1, 'msg': f'向量化失败：{e}'})
     except Exception as e:
+        logger.debug('[_view_kb_ingest] 捕获异常后按降级路径继续: %s', e)
         return jsonify({'code': 1, 'msg': f'入库失败：{e}'})
     return jsonify({'code': 0, 'data': {'doc_id': doc_id}})
 
@@ -900,6 +907,7 @@ def _view_kb_search():
     except EmbeddingError as e:
         return jsonify({'code': 1, 'msg': f'检索失败：{e}'})
     except Exception as e:
+        logger.debug('[_view_kb_search] 捕获异常后按降级路径继续: %s', e)
         return jsonify({'code': 1, 'msg': f'检索失败：{e}'})
     return jsonify({'code': 0, 'data': {'results': hits}})
 
@@ -1135,7 +1143,8 @@ def register(plugin_ctx):
     def _perm_check(user_id, node, context=None, role=None):
         try:
             return ctx.has_perm(user_id, node, context, role)
-        except Exception:
+        except Exception as _exc:
+            logger.warning('[_perm_check] 捕获异常后按降级路径继续: %s', _exc)
             return False
 
     def _pick_provider(_model=None):
@@ -1170,8 +1179,8 @@ def register(plugin_ctx):
     try:
         import sys
         sys.modules.setdefault('plugin_llm_core', sys.modules[__name__])
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[register] 捕获异常后按降级路径继续: %s', _exc)
 
     # 7. 命令
     trigger = _cfg('trigger', '/llm') or '/llm'
@@ -1239,14 +1248,14 @@ def unregister():
             services.remove('llm_core')
         elif hasattr(services, 'unregister'):
             services.unregister('llm_core')
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)
     if _Service is not None:
         # 把本插件注册的工具一并清干净，避免重载后重复登记
         try:
             _Service.unregister_by_owner('llm_core')
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[unregister] 捕获异常后按降级路径继续: %s', _exc)
     _Service = None
 
 
@@ -1275,7 +1284,8 @@ def _resolve_provider_for(event, text: str) -> Provider | None:
         return _Svc._providers.require()
     except ProviderError:
         raise
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_resolve_provider_for] 捕获异常后按降级路径继续: %s', _exc)
         return None
 
 
@@ -1293,7 +1303,8 @@ def _split_text(text: str, size: int = None) -> list[str]:
     if size is None:
         try:
             size = max(100, int(_cfg('max_reply_chars', _MAX_REPLY_CHARS)))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_split_text] 捕获异常后按降级路径继续: %s', _exc)
             size = _MAX_REPLY_CHARS
     if len(text) <= size:
         return [text]

@@ -12,8 +12,11 @@ CPython 默认用 pymalloc 管理小对象（<512B），pymalloc 向系统要来
            使 malloc_trim 能覆盖全部内存（小对象分配略慢，按需在部署时启用）。
 """
 import gc
+import logging
 import sys
 import threading
+
+logger = logging.getLogger('zcbot')
 
 _lock = threading.Lock()
 
@@ -54,7 +57,8 @@ def trim_memory() -> bool:
             libc.malloc_trim.argtypes = [ctypes.c_size_t]
             libc.malloc_trim(0)
             return True
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[trim_memory] 捕获异常后按降级路径继续: %s', _exc)
             return False
     if sys.platform == 'win32':
         try:
@@ -68,7 +72,8 @@ def trim_memory() -> bool:
             kernel32.SetProcessWorkingSetSize(
                 h, ctypes.c_size_t(-1), ctypes.c_size_t(-1))
             return True
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[trim_memory] 捕获异常后按降级路径继续: %s', _exc)
             return False
     return False
 
@@ -96,5 +101,5 @@ def log_malloc_hint(logger):
             logger.info(
                 f"[内存] 当前分配器={mode}。内存看门狗将在峰值回落后主动归还空闲内存。"
             )
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[log_malloc_hint] 捕获异常后按降级路径继续: %s', _exc)

@@ -375,6 +375,7 @@ def validate_adapter(adapter: Any) -> list[str]:
                 issues.append(f'{name}.normalize_incoming() 应返回 list，实际 '
                               f'{type(got).__name__}')
         except Exception as e:
+            logger.debug('[validate_adapter] 捕获异常后按降级路径继续: %s', e)
             issues.append(f'{name}.normalize_incoming() 抛异常: {e}')
 
     # 出站翻译
@@ -383,6 +384,7 @@ def validate_adapter(adapter: Any) -> list[str]:
         try:
             tn([{'type': SEG_TEXT, 'data': {'text': 'x'}}])
         except Exception as e:
+            logger.debug('[validate_adapter] 捕获异常后按降级路径继续: %s', e)
             issues.append(f'{name}.to_native() 抛异常: {e}')
 
     # 能力自述
@@ -393,6 +395,7 @@ def validate_adapter(adapter: Any) -> list[str]:
             if not parsed.outbound:
                 issues.append(f'{name}.capabilities() 未声明任何出站能力')
         except Exception as e:
+            logger.debug('[validate_adapter] 捕获异常后按降级路径继续: %s', e)
             issues.append(f'{name}.capabilities() 抛异常: {e}')
 
     # 连接自描述
@@ -403,6 +406,7 @@ def validate_adapter(adapter: Any) -> list[str]:
             if got is not None and (not isinstance(got, dict) or not got.get('id')):
                 issues.append(f'{name}.get_connection_info() 缺少 id 字段')
         except Exception as e:
+            logger.debug('[validate_adapter] 捕获异常后按降级路径继续: %s', e)
             issues.append(f'{name}.get_connection_info() 抛异常: {e}')
 
     return issues
@@ -415,15 +419,16 @@ def contract_report(adapter: Any) -> dict:
     if callable(fn):
         try:
             caps = as_capabilities(fn())
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[contract_report] 捕获异常后按降级路径继续: %s', _exc)
     info = {}
     fn = getattr(adapter, 'get_connection_info', None)
     if callable(fn):
         try:
             got = fn()
             info = got if isinstance(got, dict) else {}
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[contract_report] 捕获异常后按降级路径继续: %s', _exc)
             info = {}
     return {
         'id': info.get('id') or getattr(adapter, 'adapter_id', '') or type(adapter).__name__,

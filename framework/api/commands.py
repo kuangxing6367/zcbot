@@ -62,8 +62,8 @@ def register(ctx):
             router = getattr(framework, 'router', None)
             if router is not None:
                 router._invalidate_cache()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_refresh_router_keywords] 捕获异常后按降级路径继续: %s', _exc)
 
     def _validate_keyword_payload(data: dict, partial: bool = False) -> tuple:
         """校验关键词回复参数，返回 (error_msg_or_None, cleaned_dict)"""
@@ -245,8 +245,9 @@ def register(ctx):
                     (alias if alias else None, description if description else None,
                      require_level, require_perm, cmd_id)
                 )
-            except Exception:
+            except Exception as _exc:
                 # 极老库无 require_perm 列 → 只用旧三列更新
+                logger.debug('[update_command_alias] 捕获异常后按降级路径继续: %s', _exc)
                 db.execute(
                     "UPDATE commands SET alias = %s, description = %s, require_level = %s WHERE id = %s",
                     (alias if alias else None, description if description else None,

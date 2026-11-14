@@ -78,7 +78,8 @@ class FrameworkDispatchMixin:
         try:
             from framework.runtime import current_event_id_var
             _eid = current_event_id_var.get()
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[reply_text] 捕获异常后按降级路径继续: %s', _exc)
             _eid = None
         _to = (f"群{group_id}" if group_id else f"私聊{user_id}")
         _bb_record('send', plugin='dispatch', fn='reply_text',
@@ -100,7 +101,8 @@ class FrameworkDispatchMixin:
         adapter = None
         try:
             adapter = self.services.adapter_for_source(source)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[reply_text] 捕获异常后按降级路径继续: %s', _exc)
             adapter = None
         if adapter is None:
             adapter = self.services.get('protocol_adapter')
@@ -248,7 +250,8 @@ class FrameworkDispatchMixin:
             queue_summary = (f"L1={bs.get('l1_items')}/{self._event_buffer.l1_max_items}"
                              f" L3={bs.get('l3_items')} L2={bs.get('l2_pending')}"
                              f" drop={bs.get('dropped')}")
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[dispatch_event] 捕获异常后按降级路径继续: %s', _exc)
             waiting = False
             queue_summary = ''
         _bb_record('enqueue', plugin='dispatch', fn='dispatch_event',
@@ -311,7 +314,8 @@ class FrameworkDispatchMixin:
                 try:
                     bs = self._event_buffer.stats()
                     remain = bs.get('l1_items', 0) + bs.get('l3_items', 0) + bs.get('l2_pending', 0)
-                except Exception:
+                except Exception as _exc:
+                    logger.debug('[_event_worker_loop] 捕获异常后按降级路径继续: %s', _exc)
                     remain = None
                 _bb_record('dequeue', plugin='dispatch', fn='worker',
                            event_id=event.get('_bb_eid'), msg=f"worker={worker_id} 层={source} 在途≈{remain}")

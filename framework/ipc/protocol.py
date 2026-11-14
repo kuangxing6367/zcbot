@@ -137,14 +137,14 @@ class JsonRpcConnection:
         self._fail_all_pending("IPC 通道已关闭")
         try:
             self._outbox.put_nowait(_WRITER_STOP)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
         # 给 writer 短时间把已入队帧（如日志最后一批）写出
         self._writer_thread.join(timeout=0.3)
         try:
             self._conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[close] 捕获异常后按降级路径继续: %s', _exc)
         self._executor.shutdown(wait=False)
 
     # ---- 内部 ----
@@ -168,8 +168,8 @@ class JsonRpcConnection:
             return
         try:
             self._outbox.put_nowait(msg)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[_safe_send] 捕获异常后按降级路径继续: %s', _exc)
 
     def _fail_all_pending(self, reason):
         """唤醒所有等待中的调用方：同步 call 用 Event + _results，异步 acall 用 Future。
@@ -187,8 +187,8 @@ class JsonRpcConnection:
                         w.set_exception(RemoteError(r))
                 try:
                     waiter.get_loop().call_soon_threadsafe(_resolve)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[_fail_all_pending] 捕获异常后按降级路径继续: %s', _exc)
 
     def _write_loop(self):
         """独立 writer 线程：串行 pickle + socket 写（multiprocessing.Connection.send 非线程安全）。
@@ -203,6 +203,7 @@ class JsonRpcConnection:
             try:
                 self._conn.send(msg)
             except Exception as e:
+                logger.debug('[_write_loop] 捕获异常后按降级路径继续: %s', e)
                 self._closed = True
                 # 发送失败：唤醒所有等待中的调用方，避免干等超时
                 self._fail_all_pending(f"IPC 发送失败: {e}")
@@ -264,8 +265,8 @@ class JsonRpcConnection:
                     w.set_exception(RemoteError(v))
             try:
                 waiter.get_loop().call_soon_threadsafe(_resolve)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_handle_res] 捕获异常后按降级路径继续: %s', _exc)
 
     def _handle_event(self, msg):
         handlers = self._events.get(msg.get('channel'), [])
@@ -287,6 +288,7 @@ class JsonRpcConnection:
                 except RemoteError as e:
                     result = {'t': 'res', 'id': msg['id'], 'error': str(e)}
                 except Exception as e:
+                    logger.debug('[_on_done] 捕获异常后按降级路径继续: %s', e)
                     result = {'t': 'res', 'id': msg['id'], 'error': str(e)}
                 else:
                     result = {'t': 'res', 'id': msg['id'], 'result': result}
@@ -319,5 +321,6 @@ class JsonRpcConnection:
                     r = asyncio.run(r)
                 result = {'t': 'res', 'id': msg['id'], 'result': r}
         except Exception as e:
+            logger.debug('[_exec_req_sync] 捕获异常后按降级路径继续: %s', e)
             result = {'t': 'res', 'id': msg['id'], 'error': str(e)}
         self._safe_send(result)

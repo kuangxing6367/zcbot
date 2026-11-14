@@ -11,8 +11,11 @@ require_superuser、async handler、裸 ctx、users 表超管兜底）一字未�
 验证点：MySQL 风格 DDL（VARCHAR/TEXT 无 DEFAULT）在 SQLite 侧的兼容、
 正则命令 + require_superuser 权限链路、async handler、ctx.get_config。
 """
+import logging
 import time
 from typing import TYPE_CHECKING, cast
+
+logger = logging.getLogger('zcbot')
 
 if TYPE_CHECKING:
     from framework.iipc.py_sdk.sdk import PluginContext as PluginContext
@@ -55,8 +58,8 @@ def register(ctx):
     if not _wire_chat_gate():
         try:
             ctx.on("system.plugin.loaded", _wire_chat_gate)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug('[register] 捕获异常后按降级路径继续: %s', _exc)
 
     ctx.command(r"^/插件拉黑\s+(\d+)\s*(.*)$", handle_add, priority=55,
                 require_superuser=True,
@@ -77,7 +80,8 @@ def _make_gate():
         try:
             row = ctx.db_query_one(
                 "SELECT 1 FROM llm_blacklist WHERE user_id=%s", (str(user_id),))
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[gate] 捕获异常后按降级路径继续: %s', _exc)
             return None  # 数据库故障不拦截对话
         if row:
             return str(_get_config("blacklist_tip", "") or "你已被拉黑，无法使用 LLM 对话。")
@@ -98,7 +102,8 @@ def _wire_chat_gate(*_args):
 def _get_config(key, default=None):
     try:
         return ctx.get_config(key, default)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_get_config] 捕获异常后按降级路径继续: %s', _exc)
         return default
 
 # ===================== 工具函数 =====================
@@ -127,14 +132,16 @@ def _is_super(event):
             (str(event.user_id),),
         ) or []
         return bool(rows)
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_is_super] 捕获异常后按降级路径继续: %s', _exc)
         return False
 
 
 def _fmt_time(ts):
     try:
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ts or 0)))
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[_fmt_time] 捕获异常后按降级路径继续: %s', _exc)
         return "-"
 
 
@@ -201,7 +208,8 @@ async def handle_remove(event, match):
     try:
         still = ctx.db_query_one(
             "SELECT 1 FROM llm_blacklist WHERE user_id=%s", (uid,))
-    except Exception:
+    except Exception as _exc:
+        logger.debug('[handle_remove] 捕获异常后按降级路径继续: %s', _exc)
         still = None
     if still:
         await _reply(event, f"❌ 解除失败：{uid} 仍在黑名单中，请重试。")

@@ -6,8 +6,11 @@
 能不能用 Bearer + {"messages": [...]} 说话）。
 """
 import json
+import logging
 import urllib.error
 import urllib.request
+
+logger = logging.getLogger('zcbot')
 
 
 class LLMError(Exception):
@@ -71,7 +74,8 @@ def _sse_stream(cfg, messages, tools):
             break
         try:
             obj = json.loads(chunk)
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[_sse_stream] 捕获异常后按降级路径继续: %s', _exc)
             continue
         if not obj.get("choices"):
             continue

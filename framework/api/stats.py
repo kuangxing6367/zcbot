@@ -62,7 +62,8 @@ def register(ctx):
                 'days': day_rows,
                 'total': sum(r['cnt'] for r in day_rows) if day_rows else 0,
             }})
-        except Exception:
+        except Exception as _exc:
+            logger.debug('[stats_messages] 捕获异常后按降级路径继续: %s', _exc)
             return jsonify({'code': 0, 'data': {'days': [], 'total': 0}})
 
     # ---- 环境信息 ----
@@ -95,14 +96,15 @@ def register(ctx):
                     if pkg.key in ('pip', 'setuptools', 'wheel'):
                         continue
                     packages.append({'name': pkg.key, 'version': pkg.version})
-            except Exception:
+            except Exception as _exc:
+                logger.debug('[envinfo] 捕获异常后按降级路径继续: %s', _exc)
                 try:
                     import importlib.metadata as im
                     for dist in im.distributions():
                         if dist.metadata['Name'] and dist.metadata['Name'] not in ('pip', 'setuptools', 'wheel'):
                             packages.append({'name': dist.metadata['Name'], 'version': dist.version})
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug('[envinfo] 捕获异常后按降级路径继续: %s', _exc)
 
             return jsonify({'code': 0, 'data': {
                 'os': {

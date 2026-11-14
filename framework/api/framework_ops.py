@@ -65,8 +65,8 @@ def register(ctx):
                     fut.result(timeout=15)
                 else:
                     asyncio.run(framework.stop())
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug('[_do_restart] 捕获异常后按降级路径继续: %s', _exc)
             # os.execv 用当前 Python 解释器重载唯一入口 startup.py，原地替换进程
             from framework.paths import code_root
             python = sys.executable
@@ -118,6 +118,7 @@ def register(ctx):
             with contextlib.redirect_stdout(output_buffer), remote_session():
                 handler(args)
         except Exception as e:
+            logger.debug('[terminal_exec] 捕获异常后按降级路径继续: %s', e)
             output_buffer.write(f"\n执行异常: {e}")
 
         output = output_buffer.getvalue()

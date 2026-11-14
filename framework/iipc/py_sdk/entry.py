@@ -10,10 +10,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug('[<module>] 捕获异常后按降级路径继续: %s', _exc)
+
+import logging
 
 from sdk import run_plugin
+
+logger = logging.getLogger('zcbot')
 
 
 def main():
