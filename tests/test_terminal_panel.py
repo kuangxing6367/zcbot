@@ -372,45 +372,56 @@ def test_ensure_utf8_console_returns_bool_without_side_effect():
                 pass
 
 
-def test_align_and_restore_stdio_no_raise():
+def _fake_stdio(encoding="utf-8"):
+    """stdio 替身：记录 reconfigure 调用，不碰真实流。"""
+    class _Fake:
+        def __init__(self):
+            self.encoding = encoding
+            self.calls = []
+
+        def reconfigure(self, **kw):
+            self.calls.append(kw)
+            self.encoding = kw.get("encoding", self.encoding)
+
+    return _Fake()
+
+
+def test_align_and_restore_stdio_no_raise(monkeypatch):
+    """编码对齐只许作用在替身流上。
+
+    【踩坑保佑】v1.22.0 修测试隔离
+    坑：本用例原先直接调用 align_stdio_to_console()。在 Windows + 控制台代码页
+    936 的环境（Git Bash）下，它会把 pytest 的全局捕获缓冲区（CaptureIO）
+    reconfigure 成 cp936——此后任何中文输出都按 GBK 编码写进缓冲区，pytest 在
+    读取捕获内容时按 UTF-8 解码 → UnicodeDecodeError。报错点还落在后面完全
+    无关的用例上（实测报在 tests/test_watchdog_stack.py），看起来像看门狗的 bug。
+    修法：用替身流 + 伪造代码页，验证逻辑而不动真实 stdio。
+    """
     from framework.terminal import encoding as enc
+    fake_out, fake_in = _fake_stdio(), _fake_stdio()
+    monkeypatch.setattr(sys, "stdout", fake_out)
+    monkeypatch.setattr(sys, "stdin", fake_in)
+    monkeypatch.setattr(enc, "console_codepages", lambda: (936, 936))
+
     saved = enc.align_stdio_to_console()
-    assert isinstance(saved, dict)
+    assert saved == {"stdout": "utf-8", "stdin": "utf-8"}
+    assert fake_out.encoding == "cp936"
+    assert fake_in.encoding == "cp936"
+
     enc.restore_stdio(saved)          # 幂等、不抛
+    assert fake_out.encoding == "utf-8"
     enc.restore_stdio(None)
+    enc.restore_stdio(saved)
 
 
-# ── 终端编码对齐（framework/terminal/encoding.py）────────────────────────
-
-def test_console_codepages_shape():
+def test_align_stdio_untouched_when_codepage_unknown(monkeypatch):
+    """拿不到控制台代码页时不得改动 stdio（无控制台的环境必须零副作用）。"""
     from framework.terminal import encoding as enc
-    out_cp, in_cp = enc.console_codepages()
-    if os.name == 'nt':
-        assert isinstance(out_cp, int) and isinstance(in_cp, int)
-    else:
-        assert out_cp is None and in_cp is None
+    fake_out = _fake_stdio()
+    monkeypatch.setattr(sys, "stdout", fake_out)
+    monkeypatch.setattr(enc, "console_codepages", lambda: (None, None))
 
-
-def test_ensure_utf8_console_returns_bool_without_side_effect():
-    """ensure_utf8_console() 返回布尔；测试后还原控制台代码页，避免污染后续输出。"""
-    from framework.terminal import encoding as enc
-    before = enc.console_codepages()
-    try:
-        assert isinstance(enc.ensure_utf8_console(), bool)
-    finally:
-        if os.name == 'nt' and before[0]:
-            try:
-                import ctypes
-                k = ctypes.windll.kernel32
-                k.SetConsoleOutputCP(before[0])
-                k.SetConsoleCP(before[1])
-            except Exception:
-                pass
-
-
-def test_align_and_restore_stdio_no_raise():
-    from framework.terminal import encoding as enc
-    saved = enc.align_stdio_to_console()
-    assert isinstance(saved, dict)
-    enc.restore_stdio(saved)          # 幂等、不抛
+    assert enc.align_stdio_to_console() == {}
+    assert fake_out.calls == []
+    assert fake_out.encoding == "utf-8"
     enc.restore_stdio(None)

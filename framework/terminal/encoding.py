@@ -67,7 +67,13 @@ def align_stdio_to_console():
         s = getattr(__import__('sys'), name, None)
         if s is None or not hasattr(s, 'reconfigure'):
             continue
-        saved[name] = getattr(s, 'encoding', None)
+        cur = getattr(s, 'encoding', None)
+        if not cur:
+            # 取不到原编码就不动它：reconfigure 成功却记不下原值，
+            # restore_stdio 的 `if enc` 会跳过回滚，等于把进程级 stdio
+            # 永久改成 cp936（pytest 捕获缓冲区会因此写入 GBK 字节）。
+            continue
+        saved[name] = cur
         try:
             s.reconfigure(encoding='cp%d' % cp, errors='replace')
         except Exception:
