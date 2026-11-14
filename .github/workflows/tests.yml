@@ -111,7 +111,9 @@ jobs:
   # 但会把失败清单打成 annotation 并上传完整日志，便于定位后再转硬门禁。
   windows-smoke:
     runs-on: windows-latest
-    continue-on-error: true
+    # 不整作业 continue-on-error：装不上 / 起不来 / 脚本式回归挂 -> 直接红。
+    # 只有「全量 pytest」这一步是观察项（步骤级 continue-on-error），
+    # 因为 Windows 与 Linux 的差异需要先观察再做硬约束。
     # Windows runner 的 stdio 默认是 cp1252，而本项目的日志与测试输出含中文，
     # 直接 print 就会 UnicodeEncodeError（Linux 上 UTF-8 默认，所以从没暴露）。
     # PYTHONUTF8 同时把文件读写默认编码拉到 UTF-8，避免 GBK/CP1252 来回转。
@@ -162,9 +164,11 @@ jobs:
         shell: bash
         run: python tools/run_script_tests.py
 
-      # 观察项：全量 pytest。失败不阻塞，但把 FAILED/ERROR 逐条打成 annotation，
-      # 并把完整日志作为 artifact 上传——Windows 与 Linux 的差异要能看到才好修。
+      # 观察项：全量 pytest。失败不阻塞作业，但把 FAILED/ERROR 逐条打成
+      # annotation，并把完整日志作为 artifact 上传——Windows 与 Linux 的差异
+      # 要能看到才好修。这一轮（6f981ec）已跑通，再观察一版即可转硬。
       - name: Full pytest suite (observing)
+        continue-on-error: true
         shell: bash
         run: |
           set +e

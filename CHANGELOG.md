@@ -63,6 +63,32 @@
 CI 开始归档 `coverage.xml`（仅 3.12 版本）。当前语句覆盖率约 50%（38,652 行 / 233 个文件，
 11 个模块零覆盖）。先沉淀历史曲线，水位稳定后再上 ratchet（只许升不许降）。
 
+### 修复：测试隔离污染（stdio 编码）与重复定义的测试块
+
+干净树全量跑暴露 `3 error / 1 failed`，报错是 `UnicodeDecodeError` 却指向
+`test_watchdog_stack`——实际根因在 `test_terminal_panel`：
+
+- `test_align_and_restore_stdio_no_raise` 直接调用 `align_stdio_to_console()`。
+  在 Windows + 控制台代码页 936 的环境下，它把 pytest 的全局捕获缓冲区
+  （`CaptureIO`）`reconfigure` 成 cp936，此后中文输出写成 GBK 字节，
+  pytest 读取捕获内容时按 UTF-8 解码即崩。改为替身流 + 伪造代码页，
+  验证逻辑不碰真实 stdio。
+- 同文件「终端编码对齐」测试块被整段复制了一遍，3 个函数重名、后者覆盖前者
+  （pytest 只跑最后一份定义）。删掉重复块。
+- `align_stdio_to_console` 取不到原编码时不再 `reconfigure`：原实现会记下
+  `None`，而 `restore_stdio` 的 `if enc` 跳过回滚，等于把进程级 stdio
+  永久改成 cp936。
+
+### 修复：Windows CI 的 stdio 编码
+
+GitHub 的 Windows runner 默认 stdio 是 cp1252，而冒烟脚本与框架日志都输出中文。
+`PYTHONIOENCODING=cp1252` 可在本地稳定复现：`UnicodeEncodeError: 'charmap' codec
+can't encode characters`，位置在 `test_smoke.py` 的 `print`。`windows-smoke`
+作业级加 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8` 后恢复。
+
+> 遗留：Windows 下把输出重定向到非 UTF-8 流时的编码兜底属产品侧问题，单列待办，
+> 不在本次 CI 修复范围内。
+
 ### 其他
 
 - `pyproject.toml` dev 组补 `pytest-cov`，并把 `pytest-asyncio` 锁到 `<1.0`，
