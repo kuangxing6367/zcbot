@@ -112,6 +112,12 @@ jobs:
   windows-smoke:
     runs-on: windows-latest
     continue-on-error: true
+    # Windows runner 的 stdio 默认是 cp1252，而本项目的日志与测试输出含中文，
+    # 直接 print 就会 UnicodeEncodeError（Linux 上 UTF-8 默认，所以从没暴露）。
+    # PYTHONUTF8 同时把文件读写默认编码拉到 UTF-8，避免 GBK/CP1252 来回转。
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -136,9 +142,20 @@ jobs:
           fi
 
       # 硬门禁 1：启动冒烟（装得上、起得来、能派发一轮）
+      # 失败时把末尾 30 行打成 annotation——Windows 的失败大多来自编码/路径，
+      # 没有这段输出就只能去网页翻日志。
       - name: Startup smoke (script-style)
         shell: bash
-        run: python tests/test_smoke.py
+        run: |
+          set +e
+          python tests/test_smoke.py > smoke-win.log 2>&1
+          rc=$?
+          tail -60 smoke-win.log
+          if [ "$rc" -ne 0 ]; then
+            tail -30 smoke-win.log \
+              | while IFS= read -r line; do echo "::error title=windows-smoke::$line"; done
+          fi
+          exit $rc
 
       # 硬门禁 2：脚本式回归（断言在 check() 里、失败 sys.exit 的那批）
       - name: Script-style regressions
@@ -167,12 +184,14 @@ jobs:
           tail -3 pytest-win.log
           exit $rc
 
-      - name: Upload windows pytest log
+      - name: Upload windows logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-pytest-log
-          path: pytest-win.log
+          name: windows-logs
+          path: |
+            pytest-win.log
+            smoke-win.log
           retention-days: 14
           if-no-files-found: warn
 
