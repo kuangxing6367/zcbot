@@ -107,8 +107,8 @@ jobs:
 
   # ── Windows 冒烟 ────────────────────────────────────────────────────
   # 此前 CI 全部跑在 ubuntu-latest，而本项目的主要使用与开发平台是 Windows
-  # （宝塔外的裸机部署、桌面托盘、.pyd 原生扩展）。先在 Windows 上跑一轮全量
-  # 观察，失败不阻塞主干；稳定后转为硬门禁。
+  # （裸机部署、桌面托盘、.pyd 原生扩展）。这里是观察期：失败不阻塞主干，
+  # 但会把失败清单打成 annotation 并上传完整日志，便于定位后再转硬门禁。
   windows-smoke:
     runs-on: windows-latest
     continue-on-error: true
@@ -117,23 +117,64 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Install dependencies
         shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # 部分插件的可选依赖在 Windows 上需预编译轮子（如 rust_accel），
-          # 缺失时跳过该插件即可，不让安装失败中断冒烟。
+          # 记录装不上的插件依赖（例如需要本地编译的原生扩展），
+          # 它们会导致对应插件的测试 ImportError —— 打出来比静默跳过好。
+          failed=""
           for f in core_plugins/*/requirements.txt; do
-            [ -f "$f" ] && pip install -r "$f" || echo "skip: $f"
+            [ -f "$f" ] || continue
+            pip install -r "$f" || failed="$failed $f"
           done
           pip install pytest "pytest-asyncio>=0.21,<1.0" pytest-timeout
+          if [ -n "$failed" ]; then
+            echo "::warning title=插件依赖安装失败::未装成功:$failed"
+          fi
+
+      # 硬门禁 1：启动冒烟（装得上、起得来、能派发一轮）
       - name: Startup smoke (script-style)
         shell: bash
         run: python tests/test_smoke.py
-      - name: Full pytest suite
+
+      # 硬门禁 2：脚本式回归（断言在 check() 里、失败 sys.exit 的那批）
+      - name: Script-style regressions
         shell: bash
-        run: python -m pytest tests --ignore=tests/db_conformance -q --timeout=240
+        run: python tools/run_script_tests.py
+
+      # 观察项：全量 pytest。失败不阻塞，但把 FAILED/ERROR 逐条打成 annotation，
+      # 并把完整日志作为 artifact 上传——Windows 与 Linux 的差异要能看到才好修。
+      - name: Full pytest suite (observing)
+        shell: bash
+        run: |
+          set +e
+          python -m pytest tests --ignore=tests/db_conformance -q --timeout=240 \
+            --tb=no -rf > pytest-win.log 2>&1
+          rc=$?
+          echo "----- 失败清单（前 25 条）-----"
+          fail_lines=$(grep -E "^(FAILED|ERROR)" pytest-win.log | head -25)
+          if [ -z "$fail_lines" ]; then
+            echo "(无 FAILED/ERROR 行)"
+          else
+            echo "$fail_lines"
+            echo "$fail_lines" \
+              | while IFS= read -r line; do echo "::error title=windows-full::$line"; done
+          fi
+          echo "----- 汇总 -----"
+          tail -3 pytest-win.log
+          exit $rc
+
+      - name: Upload windows pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pytest-log
+          path: pytest-win.log
+          retention-days: 14
+          if-no-files-found: warn
 
   # ── 静态契约门禁 ────────────────────────────────────────────────────
   # 插件模块级 ctx 是加载期注入的（module.ctx = ctx），静态检查天生看不见。
