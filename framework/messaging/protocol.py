@@ -60,7 +60,7 @@ class ProtocolAdapter(ABC):
     adapter_id: str = ''
 
     @abstractmethod
-    async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
+    async def handle_event(self, raw_event: dict, bot_name: str) -> dict | None:
         """
         将原始协议事件转换为框架内部事件格式
         :return: 内部事件 dict，或 None 表示丢弃
@@ -157,7 +157,7 @@ class ProtocolAdapter(ABC):
     # 内核不再写死任何具体协议的字段/文案。
     # ─────────────────────────────────────────────────────────────
 
-    def get_connection_info(self) -> Optional[dict]:
+    def get_connection_info(self) -> dict | None:
         """
         返回本接入端的连接描述；None 表示无可配置端点。
 
@@ -324,11 +324,11 @@ class ServiceRegistry:
     """
 
     def __init__(self):
-        self._services: Dict[str, Any] = {}
-        self._adapters: Dict[str, ProtocolAdapter] = {}
+        self._services: dict[str, Any] = {}
+        self._adapters: dict[str, ProtocolAdapter] = {}
         # 服务就绪回调（一次性）：name -> [handle, ...]
         # handle 为不透明 dict：{'name', 'callback', 'state'}
-        self._ready_callbacks: Dict[str, list] = {}
+        self._ready_callbacks: dict[str, list] = {}
         self._ready_lock = threading.Lock()
         # 适配器注册回调（多平台接入）：每注册一个协议适配器即触发一次，
         # 由 Framework 注入，负责把适配器登记进 drive 表并绑定稳定 uuid。
@@ -457,7 +457,7 @@ class ServiceRegistry:
             logger.error(
                 f"服务 [{handle.get('name')}] 就绪回调异常: {e}", exc_info=True)
 
-    def protocol_adapters(self) -> Dict[str, ProtocolAdapter]:
+    def protocol_adapters(self) -> dict[str, ProtocolAdapter]:
         """全部已注册协议适配器 {adapter_id: adapter}（连接页/状态聚合用）"""
         out = dict(self._adapters)
         # protocol_adapter 键上的当前主适配器兜底（未走过 register 的场景）
@@ -466,17 +466,17 @@ class ServiceRegistry:
             out.setdefault(primary._connection_id(), primary)
         return out
 
-    def adapter_contracts(self) -> Dict[str, dict]:
+    def adapter_contracts(self) -> dict[str, dict]:
         """全部接入端的契约摘要 {adapter_id: 能力/翻译器/问题}，面板与排错用"""
         return {aid: contract_report(ad)
                 for aid, ad in self.protocol_adapters().items()}
 
-    def primary_adapter(self) -> Optional[ProtocolAdapter]:
+    def primary_adapter(self) -> ProtocolAdapter | None:
         """当前主接入端（services['protocol_adapter']）"""
         primary = self._services.get('protocol_adapter')
         return primary if isinstance(primary, ProtocolAdapter) else None
 
-    def adapter_for_source(self, source: Optional[str]) -> Optional[ProtocolAdapter]:
+    def adapter_for_source(self, source: str | None) -> ProtocolAdapter | None:
         """
         按事件来源名（event.bot_name / current_source_var）找到对应适配器。
         多接入端并存时，自动回复/ctx.actions 应走事件来源那一侧，避免串线。

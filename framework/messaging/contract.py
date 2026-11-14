@@ -345,7 +345,7 @@ def _normalize_message_fields(event: dict, adapter: Any) -> None:
 # 契约自检
 # ─────────────────────────────────────────────────────────────
 
-def validate_adapter(adapter: Any) -> List[str]:
+def validate_adapter(adapter: Any) -> list[str]:
     """
     接入端契约自检，返回问题列表（空列表=合规）。
 
@@ -355,7 +355,7 @@ def validate_adapter(adapter: Any) -> List[str]:
     - `capabilities()` 能否解析
     - `get_connection_info()` 形状（若提供）
     """
-    issues: List[str] = []
+    issues: list[str] = []
     if adapter is None:
         return ['适配器为空']
     name = type(adapter).__name__

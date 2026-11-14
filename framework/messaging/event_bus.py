@@ -67,8 +67,8 @@ class EventBus:
     """轻量级事件总线"""
 
     def __init__(self):
-        self._subscribers: Dict[str, List[dict]] = {}  # event_name -> [{plugin_name, handler}]
-        self._snapshots: Dict[str, tuple] = {}         # event_name -> ((plugin_name, handler), ...)，写时复制
+        self._subscribers: dict[str, list[dict]] = {}  # event_name -> [{plugin_name, handler}]
+        self._snapshots: dict[str, tuple] = {}         # event_name -> ((plugin_name, handler), ...)，写时复制
         self._lock = threading.Lock()
         self._dead_letters = deque(maxlen=_DLQ_MAX)
         self._pending_tasks = set()   # 保存 emit() fire-and-forget 任务引用，防被 GC

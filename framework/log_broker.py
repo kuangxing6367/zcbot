@@ -72,7 +72,7 @@ class LogBroker:
                 pass  # 订阅者消费太慢则丢弃
 
     def log_message(self, bot_name: str, message_type: str, user_id: int,
-                    group_id: Optional[int], raw_message: str, message_id: int = None):
+                    group_id: int | None, raw_message: str, message_id: int = None):
         """记录 OneBot 上报的消息"""
         source = f"群{group_id}" if group_id else f"私聊{user_id}"
         self.log('message', 'INFO',
@@ -123,7 +123,7 @@ class LogBroker:
             if q in self._subscribers:
                 self._subscribers.remove(q)
 
-    def get_logs(self, category: Optional[str] = None, level: Optional[str] = None,
+    def get_logs(self, category: str | None = None, level: str | None = None,
                  keyword: str = None, limit: int = 100, after_seq: int = 0) -> list:
         """
         查询日志

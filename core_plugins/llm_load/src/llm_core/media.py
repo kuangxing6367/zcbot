@@ -97,7 +97,7 @@ def _guess_mime(path: str, default: str = 'image/png') -> str:
     return mime or default
 
 
-def _read_as_data_uri(path: str) -> Optional[str]:
+def _read_as_data_uri(path: str) -> str | None:
     """本地文件 → data URI。读不出来返回 None（不让它污染整条消息）。"""
     try:
         if not os.path.isfile(path):
@@ -129,7 +129,7 @@ def _normalize_file(value: str) -> str:
     return value
 
 
-def _pick_source(data: Dict[str, Any]) -> Optional[Dict[str, str]]:
+def _pick_source(data: dict[str, Any]) -> dict[str, str] | None:
     """从图片段里挑出可用来源，返回 {'kind': 'url'|'base64'|'file', 'value': ...}"""
     if not isinstance(data, dict):
         return None
@@ -149,12 +149,12 @@ def _pick_source(data: Dict[str, Any]) -> Optional[Dict[str, str]]:
     return None
 
 
-def extract_images(raw_event: dict) -> List[Dict[str, str]]:
+def extract_images(raw_event: dict) -> list[dict[str, str]]:
     """从原始消息事件里抠出图片来源列表。
 
     只看消息段数组（不同接入端字段名略有出入，这里按常见约定取值）。
     """
-    found: List[Dict[str, str]] = []
+    found: list[dict[str, str]] = []
     if not isinstance(raw_event, dict):
         return found
     segments = raw_event.get('message')
@@ -175,7 +175,7 @@ def extract_images(raw_event: dict) -> List[Dict[str, str]]:
     return found
 
 
-def image_part(source: Dict[str, str]) -> Optional[dict]:
+def image_part(source: dict[str, str]) -> dict | None:
     """把一种来源转成 OpenAI 视觉输入的内容块"""
     if not source:
         return None
@@ -203,7 +203,7 @@ def image_part(source: Dict[str, str]) -> Optional[dict]:
     return None
 
 
-def build_user_content(text: str, images: List[Dict[str, str]] = None,
+def build_user_content(text: str, images: list[dict[str, str]] = None,
                        vision_supported: bool = False) -> Any:
     """构造 user 消息内容。
 
@@ -213,7 +213,7 @@ def build_user_content(text: str, images: List[Dict[str, str]] = None,
     text = text or ''
     if not images or not vision_supported:
         return text
-    parts: List[dict] = []
+    parts: list[dict] = []
     if text:
         parts.append({'type': 'text', 'text': text})
     for src in images[:_MAX_IMAGE_SEGMENTS]:
@@ -239,9 +239,9 @@ class MediaCache:
     def __init__(self, ttl: int = 300, capacity: int = 200):
         self._ttl = ttl
         self._capacity = capacity
-        self._data: 'OrderedDict[Tuple[str, str, str], tuple]' = _new_ordered()
+        self._data: 'OrderedDict[tuple[str, str, str], tuple]' = _new_ordered()
 
-    def put(self, source: str, group_id, user_id, images: List[Dict[str, str]]) -> None:
+    def put(self, source: str, group_id, user_id, images: list[dict[str, str]]) -> None:
         if not images:
             return
         key = _key(source, group_id, user_id)
@@ -251,7 +251,7 @@ class MediaCache:
         while len(self._data) > self._capacity:
             self._data.popitem(last=False)
 
-    def take(self, source: str, group_id, user_id) -> List[Dict[str, str]]:
+    def take(self, source: str, group_id, user_id) -> list[dict[str, str]]:
         """取出并清空该会话暂存的图片"""
         key = _key(source, group_id, user_id)
         item = self._data.pop(key, None)
@@ -275,5 +275,5 @@ def _new_ordered():
     return OrderedDict()
 
 
-def _key(source: str, group_id, user_id) -> Tuple[str, str, str]:
+def _key(source: str, group_id, user_id) -> tuple[str, str, str]:
     return (str(source or '-'), str(group_id or 'private'), str(user_id or 0))

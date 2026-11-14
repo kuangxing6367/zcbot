@@ -145,7 +145,7 @@ def build_segments(d: dict) -> list:
     return segs
 
 
-def normalize_event(d: dict, bot_name: str, self_id: str = '') -> Optional[dict]:
+def normalize_event(d: dict, bot_name: str, self_id: str = '') -> dict | None:
     """KOOK 消息体 → 内部事件 dict。"""
     if not isinstance(d, dict):
         return None
@@ -656,7 +656,7 @@ class KookAdapter(ProtocolAdapter):
         return normalize_message(raw_message)
 
     async def handle_event(self, raw_event: dict,
-                           bot_name: str) -> Optional[dict]:
+                           bot_name: str) -> dict | None:
         return normalize_event(raw_event, bot_name or self.bot_name,
                                self._self_id)
 

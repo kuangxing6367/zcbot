@@ -165,7 +165,7 @@ class RouterMatchMixin:
         """判断 pattern 是否包含正则特殊字符"""
         return any(c in self._REGEX_CHARS for c in pattern)
     @staticmethod
-    def _match_simple(pattern: str, message: str) -> Optional[SimpleMatch]:
+    def _match_simple(pattern: str, message: str) -> SimpleMatch | None:
         """
         纯字符串前缀匹配（不使用 re）
         支持：
@@ -173,7 +173,7 @@ class RouterMatchMixin:
         - pattern 不带 /（如 "mc-command"）同时匹配 "mc-command arg" 和 "/mc-command arg"
         返回 SimpleMatch 或 None；SimpleMatch.group(0) 永远是原始消息全文
         """
-        def _try(msg: str) -> Optional[SimpleMatch]:
+        def _try(msg: str) -> SimpleMatch | None:
             """尝试用 msg 匹配 pattern，返回 SimpleMatch（_full 用原始 message）"""
             if msg == pattern:
                 return SimpleMatch(message, '')
@@ -200,7 +200,7 @@ class RouterMatchMixin:
                 return result
         return None
     @staticmethod
-    def _regex_search(rx: re.Pattern, message: str) -> Optional[re.Match]:
+    def _regex_search(rx: re.Pattern, message: str) -> re.Match | None:
         """编译后的正则搜索，自动处理 / 前缀"""
         match = rx.search(message)
         if match:

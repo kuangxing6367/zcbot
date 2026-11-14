@@ -150,7 +150,7 @@ class SqlSimEngine:
     degraded = False        # 用户显式配置的调试模式，不是故障降级
     debug_mode = True       # 标志：本地 SQL 模拟（低性能模式）
 
-    def __init__(self, config: Optional[dict] = None):
+    def __init__(self, config: dict | None = None):
         # 自包含初始化（不依赖外部基类）：仅取目录与锁，
         # 不再打印「降级为文件存储」的误导警告（debug 是显式调试模式，非故障降级）
         config = config or {}
@@ -171,8 +171,8 @@ class SqlSimEngine:
         # ── 内存行集缓冲 ──
         # 表数据缓存：table -> {'schema','rows','next_id'}（脏表不因 mtime 校验
         # 被逐出；外部改文件按 mtime 失效重读）；_dirty 为待落盘表集合
-        self._cache: Dict[str, dict] = {}
-        self._mtimes: Dict[str, Optional[float]] = {}
+        self._cache: dict[str, dict] = {}
+        self._mtimes: dict[str, float | None] = {}
         self._dirty: set = set()
         # debug_flush_ms：缓冲落盘间隔（毫秒）。>0 → 写入先进内存，后台线程
         # 按该间隔合并落盘（close/atexit 兜底）；0 → 每次写同步立即落盘（旧行为）

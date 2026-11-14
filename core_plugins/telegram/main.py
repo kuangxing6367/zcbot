@@ -135,7 +135,7 @@ def _split_text(text: str, limit: int) -> list:
     return [c for c in chunks if c] or ['']
 
 
-def _extract_b64(data: str) -> Optional[str]:
+def _extract_b64(data: str) -> str | None:
     if not isinstance(data, str):
         return None
     m = _B64_RE.match(data.strip())
@@ -220,7 +220,7 @@ def _message_to_text(message) -> str:
     return str(message)
 
 
-def _first_image(message) -> Optional[dict]:
+def _first_image(message) -> dict | None:
     if isinstance(message, str):
         message = normalize_message(message)
     if not isinstance(message, list):
@@ -249,7 +249,7 @@ def build_segments(msg: dict) -> list:
     """
     if not isinstance(msg, dict):
         return []
-    segs: List[dict] = []
+    segs: list[dict] = []
 
     reply = msg.get('reply_to_message')
     if isinstance(reply, dict) and reply.get('message_id') is not None:
@@ -284,7 +284,7 @@ def build_segments(msg: dict) -> list:
     return segs
 
 
-def normalize_event(update: dict, bot_name: str) -> Optional[dict]:
+def normalize_event(update: dict, bot_name: str) -> dict | None:
     """Telegram Update → 内部事件 dict。"""
     if not isinstance(update, dict):
         return None
@@ -918,7 +918,7 @@ class TelegramAdapter(ProtocolAdapter):
 
     # ── ProtocolAdapter 契约 ────────────────────────────────────
 
-    async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
+    async def handle_event(self, raw_event: dict, bot_name: str) -> dict | None:
         return normalize_event(raw_event, bot_name or self.bot_name)
 
     async def call_api(self, action, bot=None, **params) -> dict:

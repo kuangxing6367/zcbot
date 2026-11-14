@@ -120,7 +120,7 @@ def _split_content(text: str, limit: int = _MAX_CONTENT_LEN) -> list:
     return [c for c in chunks if c] or ['']
 
 
-def _extract_b64(data: str) -> Optional[str]:
+def _extract_b64(data: str) -> str | None:
     if not isinstance(data, str):
         return None
     m = _B64_RE.match(data.strip())
@@ -205,7 +205,7 @@ def _message_to_text(message) -> str:
     return str(message)
 
 
-def _first_image(message) -> Optional[dict]:
+def _first_image(message) -> dict | None:
     if isinstance(message, str):
         message = normalize_message(message)
     if not isinstance(message, list):
@@ -276,7 +276,7 @@ def build_segments(d: dict) -> list:
 
 
 def normalize_event(d: dict, bot_name: str,
-                    self_id: str = '') -> Optional[dict]:
+                    self_id: str = '') -> dict | None:
     """Discord MESSAGE_CREATE d → 内部事件 dict。"""
     if not isinstance(d, dict):
         return None
@@ -826,7 +826,7 @@ class DiscordAdapter(ProtocolAdapter):
 
     # ── ProtocolAdapter 契约 ────────────────────────────────────
 
-    async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
+    async def handle_event(self, raw_event: dict, bot_name: str) -> dict | None:
         return normalize_event(raw_event, bot_name or self.bot_name,
                                self._self_id)
 

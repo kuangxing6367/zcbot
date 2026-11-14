@@ -139,7 +139,7 @@ class KeywordReplyMixin:
         return result or None
 
 
-    def _match_keyword(self, message: str) -> Optional[_KeywordRule]:
+    def _match_keyword(self, message: str) -> _KeywordRule | None:
         """系统关键词自动回复匹配（动态命令，热路径纯内存）"""
         for r in self._keyword_rules:
             mt = r.match_type

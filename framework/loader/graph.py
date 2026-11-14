@@ -70,7 +70,7 @@ def parse_meta_literal(main_file: str) -> dict:
     return {}
 
 
-def normalize_requires(raw) -> List[str]:
+def normalize_requires(raw) -> list[str]:
     """把 requires 的各种写法归一为去重的插件名列表。
 
     支持：list/tuple/set、逗号或空白分隔的字符串、{'name': '>=1.0'} 形式的 dict。
@@ -103,7 +103,7 @@ class PluginGraphMixin:
     """
 
     # ── 静态读取 ─────────────────────────────────────────────
-    def _meta_cache(self) -> Dict[str, tuple]:
+    def _meta_cache(self) -> dict[str, tuple]:
         cache = getattr(self, '_declared_meta_cache', None)
         if cache is None:
             cache = {}
@@ -137,7 +137,7 @@ class PluginGraphMixin:
             cache[plugin_name] = (mtime, meta)
         return meta
 
-    def declared_requires(self, plugin_name: str, plugin_path: str = None) -> List[str]:
+    def declared_requires(self, plugin_name: str, plugin_path: str = None) -> list[str]:
         """读取插件声明的必需插件列表（规范化后）"""
         try:
             meta = self.declared_meta(plugin_name, plugin_path)
@@ -146,7 +146,7 @@ class PluginGraphMixin:
         return normalize_requires(meta.get('requires'))
 
     # ── 运行时校验 ───────────────────────────────────────────
-    def check_requires(self, plugin_name: str, plugin_path: str = None) -> List[str]:
+    def check_requires(self, plugin_name: str, plugin_path: str = None) -> list[str]:
         """返回**尚未满足**的依赖插件名列表（空列表=全部满足或未声明）"""
         requires = self.declared_requires(plugin_name, plugin_path)
         if not requires:
@@ -169,7 +169,7 @@ class PluginGraphMixin:
             self._dep_errors.pop(plugin_name, None)
 
     # ── 排序 ────────────────────────────────────────────────
-    def resolve_load_order(self, names: List[str]) -> Tuple[List[str], Dict[str, str]]:
+    def resolve_load_order(self, names: list[str]) -> tuple[list[str], dict[str, str]]:
         """按依赖关系给出加载顺序。
 
         :return: (可加载顺序, {被拒绝的插件名: 原因})
@@ -180,8 +180,8 @@ class PluginGraphMixin:
         with self._lock:
             loaded = set(self._loaded_plugins.keys())
 
-        deps: Dict[str, List[str]] = {}
-        problems: Dict[str, str] = {}
+        deps: dict[str, list[str]] = {}
+        problems: dict[str, str] = {}
         for name in names:
             try:
                 declared = [d for d in self.declared_requires(name) if d != name]
@@ -207,7 +207,7 @@ class PluginGraphMixin:
 
         # Kahn 拓扑排序（保持声明顺序稳定，便于日志可读）
         pending = [n for n in names if n not in problems]
-        order: List[str] = []
+        order: list[str] = []
         while pending:
             progressed = False
             for name in list(pending):

@@ -162,7 +162,7 @@ _CQ_IMAGE_RE = re.compile(
     r'\[CQ:image,file=([^\],]+)(?:,([^\]]*))?\]', re.IGNORECASE)
 
 
-def _extract_b64(data: str) -> Optional[str]:
+def _extract_b64(data: str) -> str | None:
     if not isinstance(data, str):
         return None
     m = _B64_RE.match(data.strip())
@@ -178,14 +178,14 @@ def _extract_b64(data: str) -> Optional[str]:
     return None
 
 
-def _b64_to_bytes(b64: str) -> Optional[bytes]:
+def _b64_to_bytes(b64: str) -> bytes | None:
     try:
         return base64.b64decode(re.sub(r'\s+', '', b64))
     except Exception:
         return None
 
 
-def _read_file_bytes(path: str) -> Optional[bytes]:
+def _read_file_bytes(path: str) -> bytes | None:
     """线程池内读文件（async 路径避免阻塞事件循环）"""
     try:
         with open(path, 'rb') as f:
@@ -313,7 +313,7 @@ def _message_to_text(message) -> str:
     return str(message)
 
 
-def _first_image(message) -> Optional[dict]:
+def _first_image(message) -> dict | None:
     """取出第一个 image 段（含 CQ 码转段后的）。"""
     if isinstance(message, str):
         message = normalize_message(message)
@@ -409,7 +409,7 @@ def _check_tuwen_card(content: dict) -> str:
     return ''
 
 
-def build_keyboard(buttons) -> Optional[dict]:
+def build_keyboard(buttons) -> dict | None:
     """把简洁按钮定义翻成 QQ InlineKeyboard 结构。
 
     入参形态（两种都收）：
@@ -493,7 +493,7 @@ def _media_name(seg_type: str, mime: str, filename: str = '') -> str:
     return f'file.{_MEDIA_EXT.get(seg_type, "bin")}'
 
 
-def normalize_interaction(raw: dict, bot_name: str) -> Optional[dict]:
+def normalize_interaction(raw: dict, bot_name: str) -> dict | None:
     """INTERACTION_CREATE（按钮回调等）→ 内部 notice 事件 dict。
 
     回调体：d.id 为 interaction_id（同时是被动回复用的 event_id），
@@ -531,7 +531,7 @@ def normalize_interaction(raw: dict, bot_name: str) -> Optional[dict]:
 
 
 def normalize_notice(raw: dict, bot_name: str, notice_type: str,
-                     event_t: str) -> Optional[dict]:
+                     event_t: str) -> dict | None:
     """QQ 生命周期事件 → 内部 notice 事件 dict（走框架的 notice.* 事件总线）。"""
     if not isinstance(raw, dict):
         return None
@@ -555,7 +555,7 @@ def normalize_notice(raw: dict, bot_name: str, notice_type: str,
     }
 
 
-def normalize_event(raw: dict, bot_name: str) -> Optional[dict]:
+def normalize_event(raw: dict, bot_name: str) -> dict | None:
     """QQ 官方 Dispatch d → 框架内部事件 dict。"""
     if not isinstance(raw, dict):
         return None
@@ -1725,7 +1725,7 @@ class QQOfficialAdapter(ProtocolAdapter):
 
     # ── ProtocolAdapter 契约 ────────────────────────────────────
 
-    async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
+    async def handle_event(self, raw_event: dict, bot_name: str) -> dict | None:
         return normalize_event(raw_event, bot_name or self.bot_name)
 
     async def call_api(self, action, bot=None, **params) -> dict:

@@ -71,7 +71,7 @@ def is_internal_ip(ip: str) -> bool:
 class DualRequestAuthSystem:
     """双请求防破解认证系统核心"""
 
-    def __init__(self, config: Optional[dict] = None, db=None):
+    def __init__(self, config: dict | None = None, db=None):
         sec = config or {}
         self.fake_token_len = int(sec.get("fake_token_len", 8))
         self.real_token_len = int(sec.get("real_token_len", 8192))
@@ -305,7 +305,7 @@ class DualRequestAuthSystem:
             logger.warning(f"[双请求认证] IP 已加入永久黑名单: {ip} ({reason})")
 
     @staticmethod
-    def _fmt_expires(expires_at) -> Optional[str]:
+    def _fmt_expires(expires_at) -> str | None:
         """epoch 秒 → 数据库时间字符串；None 原样返回"""
         if expires_at is None:
             return None
@@ -341,7 +341,7 @@ class DualRequestAuthSystem:
     # 核心处理
     # ------------------------------------------------------------------
 
-    def handle_request(self, ip: str, token, nonce) -> Tuple[int, dict]:
+    def handle_request(self, ip: str, token, nonce) -> tuple[int, dict]:
         """
         处理 /api/auth 请求，返回 (http_status, response_dict)
         :param ip: 客户端 IP
@@ -379,7 +379,7 @@ class DualRequestAuthSystem:
         self.blacklist(ip, f"Token 长度异常: {token_len}")
         return 403, {"code": 403, "msg": "恶意请求，IP 已被封禁"}
 
-    def _handle_probe(self, ip: str) -> Tuple[int, dict]:
+    def _handle_probe(self, ip: str) -> tuple[int, dict]:
         """处理探针请求：下发 nonce 并标记风险 IP"""
         nonce = self._gen_nonce()
         with self._lock:
@@ -397,7 +397,7 @@ class DualRequestAuthSystem:
             "expires_in": self.nonce_expiry,
         }
 
-    def _handle_auth(self, ip: str, nonce) -> Tuple[int, dict]:
+    def _handle_auth(self, ip: str, nonce) -> tuple[int, dict]:
         """处理真实认证请求：校验 nonce（一次性）与 IP 绑定"""
         valid = False
         with self._lock:

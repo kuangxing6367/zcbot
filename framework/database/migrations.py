@@ -220,7 +220,7 @@ class MigrationContext:
     extra: dict = field(default_factory=dict)
 
     @classmethod
-    def from_config(cls, source: str, config: Optional[dict] = None,
+    def from_config(cls, source: str, config: dict | None = None,
                     **overrides) -> 'MigrationContext':
         """按 database.migrations 配置段构造（缺项取安全默认值）"""
         cfg = (config or {}).get('migrations') or {}
@@ -246,7 +246,7 @@ class MigrationContext:
 
 # ── 校验和 ────────────────────────────────────────────────────
 
-_checksum_cache: Dict[int, str] = {}
+_checksum_cache: dict[int, str] = {}
 
 
 def checksum_of(migration: Migration) -> str:
@@ -344,7 +344,7 @@ def ensure_runs(database) -> bool:
         return False
 
 
-def _ledger_rows(database) -> Dict[int, dict]:
+def _ledger_rows(database) -> dict[int, dict]:
     """读取账本：version -> row（失败返回空表，调用方按「全未应用」处理）
 
     用 ``SELECT *`` 而不是列清单：老版本的账本表没有 level/operator 等列，
@@ -380,7 +380,7 @@ def _ledger_rows(database) -> Dict[int, dict]:
 
 def _write_record(database, migration: Migration, checksum: str, duration_ms: int,
                   success: bool, note: str = '', origin: str = ORIGIN_RUN,
-                  context: Optional[MigrationContext] = None) -> None:
+                  context: MigrationContext | None = None) -> None:
     """写/覆盖账本里的「当前状态」（同版本重试时覆盖上一次的失败记录）"""
     ctx = context or MigrationContext()
     now = str(int(time.time()))
@@ -406,7 +406,7 @@ def _write_record(database, migration: Migration, checksum: str, duration_ms: in
             vals + (migration.version,))
 
 
-def _record_run(database, migration: Optional[Migration], context: MigrationContext,
+def _record_run(database, migration: Migration | None, context: MigrationContext,
                 started_at: str, duration_ms: int, success: bool,
                 error: str = '', backup: str = '') -> None:
     """写一条执行流水（append-only）。失败只告警，绝不影响迁移结果。"""
@@ -434,7 +434,7 @@ def _record_run(database, migration: Optional[Migration], context: MigrationCont
         logger.debug("数据库迁移: 写执行流水失败（不影响迁移）: %s", e)
 
 
-def runs(database, limit: int = 100) -> List[dict]:
+def runs(database, limit: int = 100) -> list[dict]:
     """最近 N 条执行流水（新的在前），供接口与 CLI 取证"""
     try:
         if not database.table_exists(RUNS_TABLE):
@@ -566,7 +566,7 @@ def _prune_backups(out_dir: str, keep: int) -> None:
 
 # ── 注册表校验 ────────────────────────────────────────────────
 
-def _sorted_registry(registry: Sequence[Migration]) -> List[Migration]:
+def _sorted_registry(registry: Sequence[Migration]) -> list[Migration]:
     """按版本排序并校验：版本必须为正整数且不重复"""
     seen = set()
     for m in registry:
@@ -583,7 +583,7 @@ def _sorted_registry(registry: Sequence[Migration]) -> List[Migration]:
     return sorted(registry, key=lambda m: m.version)
 
 
-def latest_version(registry: Sequence[Migration]) -> Optional[int]:
+def latest_version(registry: Sequence[Migration]) -> int | None:
     reg = list(registry)
     return max((m.version for m in reg), default=None)
 
@@ -758,7 +758,7 @@ def _empty_report(database, registry) -> dict:
 
 
 def plan(database, registry: Sequence[Migration],
-         context: Optional[MigrationContext] = None) -> dict:
+         context: MigrationContext | None = None) -> dict:
     """干跑（dry run）：列出「将要执行什么、是否需要授权、会不会备份」。
 
     不执行任何迁移体、不写账本，供上线前评审与 CI 使用。
@@ -803,7 +803,7 @@ def plan(database, registry: Sequence[Migration],
 
 
 def run_pending(database, registry: Sequence[Migration],
-                context: Optional[MigrationContext] = None,
+                context: MigrationContext | None = None,
                 lock_timeout: int = 30) -> dict:
     """把注册表里尚未成功应用、且已获授权的迁移按序执行，返回执行报告。
 
@@ -1051,7 +1051,7 @@ def run_pending(database, registry: Sequence[Migration],
 
 
 def status(database, registry: Sequence[Migration],
-           context: Optional[MigrationContext] = None,
+           context: MigrationContext | None = None,
            run_limit: int = 20) -> dict:
     """只读状态：当前版本 / 待应用（含级别与授权要求）/ 漂移 / 历史 / 流水"""
     ctx = context or MigrationContext(source='status')
@@ -1112,7 +1112,7 @@ def status(database, registry: Sequence[Migration],
 
 
 def verify(database, registry: Sequence[Migration],
-           context: Optional[MigrationContext] = None) -> dict:
+           context: MigrationContext | None = None) -> dict:
     """变更后自检（post-implementation review）：结构是否真的到位。
 
     三查：账本版本 vs 代码版本、必需的框架表是否齐全、是否还有未授权迁移。
@@ -1142,7 +1142,7 @@ def verify(database, registry: Sequence[Migration],
 
 
 def stamp(database, registry: Sequence[Migration], version: int,
-          context: Optional[MigrationContext] = None) -> dict:
+          context: MigrationContext | None = None) -> dict:
     """基线认定：把 1..version 记为已应用（不执行迁移体）
 
     用途只有一个 —— 接管一个「schema 早已是目标状态、但没有账本」的老库，

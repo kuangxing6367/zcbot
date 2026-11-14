@@ -93,7 +93,7 @@ ALL_TYPES = frozenset({
 
 #: 各协议叫法 → 规范类型。接入端只要产出规范名，别名表只是为了兼容历史写法
 #: 与第三方实现（比如老插件仍在用 OneBot 的 `record` 表示语音）。
-_TYPE_ALIASES: Dict[str, str] = {
+_TYPE_ALIASES: dict[str, str] = {
     # 语音：OneBot 叫 record，QQ 官方/Telegram 叫 audio/voice
     'record': SEG_VOICE, 'audio': SEG_VOICE, 'voice': SEG_VOICE,
     'sound': SEG_VOICE, 'ptt': SEG_VOICE,
@@ -187,7 +187,7 @@ def is_media(segment: dict) -> bool:
     return bool(segment) and canonical_type(segment.get('type')) in MEDIA_TYPES
 
 
-def seg(type_name: str, data: Optional[dict] = None) -> dict:
+def seg(type_name: str, data: dict | None = None) -> dict:
     """构造一个规范段（自动做类型别名归一）"""
     return {'type': canonical_type(type_name), 'data': dict(data or {})}
 
@@ -238,7 +238,7 @@ def face(face_id) -> dict:
 
 
 def _media_data(file, url: str, base64: str, extra: dict) -> dict:
-    data: Dict[str, Any] = {}
+    data: dict[str, Any] = {}
     if file:
         data['file'] = str(file)
     if url:
@@ -296,7 +296,7 @@ def _unescape_cq(value: str) -> str:
     return value
 
 
-def parse_cq(raw: str) -> List[dict]:
+def parse_cq(raw: str) -> list[dict]:
     """
     解析 OneBot CQ 码字符串为规范段（用于兼容字符串格式的历史消息）。
 
@@ -306,7 +306,7 @@ def parse_cq(raw: str) -> List[dict]:
         return []
     if len(raw) > _MAX_CQ_INPUT_CHARS:
         raw = raw[:_MAX_CQ_INPUT_CHARS]
-    out: List[dict] = []
+    out: list[dict] = []
     last = 0
     for m in _CQ_RE.finditer(raw):
         if len(out) >= _MAX_CQ_SEGMENTS:
@@ -316,7 +316,7 @@ def parse_cq(raw: str) -> List[dict]:
             out.append(text(head))
         last = m.end()
         cq_type = canonical_type(m.group(1))
-        data: Dict[str, Any] = {}
+        data: dict[str, Any] = {}
         params = 0
         for pair in (m.group(2) or '').split(','):
             if params >= _MAX_CQ_PARAMS:
@@ -336,7 +336,7 @@ def parse_cq(raw: str) -> List[dict]:
     return out
 
 
-def normalize_segment(segment: Any) -> Optional[dict]:
+def normalize_segment(segment: Any) -> dict | None:
     """单个段的规范化；无法识别返回 None。"""
     if isinstance(segment, str):
         if not segment:
@@ -360,7 +360,7 @@ def normalize_segment(segment: Any) -> Optional[dict]:
     return {'type': stype, 'data': data}
 
 
-def normalize_message(message: Any, parse_string_cq: bool = True) -> List[dict]:
+def normalize_message(message: Any, parse_string_cq: bool = True) -> list[dict]:
     """
     把任意形态的消息归一化成规范段列表。
 
@@ -391,7 +391,7 @@ def normalize_message(message: Any, parse_string_cq: bool = True) -> List[dict]:
     return [text(str(message))]
 
 
-def segments_to_text(segments: List[dict], at_as_text: bool = True,
+def segments_to_text(segments: list[dict], at_as_text: bool = True,
                      media_hint: bool = False) -> str:
     """
     规范段 → 纯文本（命令匹配 / 关键词 / 日志用）。
@@ -403,7 +403,7 @@ def segments_to_text(segments: List[dict], at_as_text: bool = True,
     """
     if isinstance(segments, str):
         return segments
-    parts: List[str] = []
+    parts: list[str] = []
     for s in segments or []:
         if not isinstance(s, dict):
             continue
@@ -430,34 +430,34 @@ def segments_to_text(segments: List[dict], at_as_text: bool = True,
     return ''.join(parts)
 
 
-def pick(segments: List[dict], *types: str) -> List[dict]:
+def pick(segments: list[dict], *types: str) -> list[dict]:
     """按规范类型挑段（类型名会先做别名归一）"""
     wanted = {canonical_type(t) for t in types}
     return [s for s in segments or []
             if isinstance(s, dict) and canonical_type(s.get('type')) in wanted]
 
 
-def data_list(segments: List[dict], type_name: str) -> List[dict]:
+def data_list(segments: list[dict], type_name: str) -> list[dict]:
     """取某类型的所有 data（如 `data_list(ev.segments,'voice')`）"""
     return [s.get('data') or {} for s in pick(segments, type_name)]
 
 
-def first(segments: List[dict], type_name: str) -> dict:
+def first(segments: list[dict], type_name: str) -> dict:
     """取某类型的第一个 data；没有返回空 dict"""
     got = pick(segments, type_name)
     return (got[0].get('data') or {}) if got else {}
 
 
-def has(segments: List[dict], *types: str) -> bool:
+def has(segments: list[dict], *types: str) -> bool:
     return bool(pick(segments, *types))
 
 
-def media_segments(segments: List[dict]) -> List[dict]:
+def media_segments(segments: list[dict]) -> list[dict]:
     """所有内容型段（图片/语音/视频/文件/贴纸）"""
     return [s for s in segments or [] if is_media(s)]
 
 
-def is_media_only(segments: List[dict]) -> bool:
+def is_media_only(segments: list[dict]) -> bool:
     """是否"只有媒体没有文字"（纯图片/纯语音消息常见）"""
     segs = [s for s in segments or [] if isinstance(s, dict)]
     if not segs:

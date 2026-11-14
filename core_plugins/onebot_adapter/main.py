@@ -83,7 +83,7 @@ def _should_log_sent_message() -> bool:
 
 # ── 内部事件格式 ────────────────────────────────────────────────
 
-def normalize_event(raw: dict, bot_name: str) -> Optional[dict]:
+def normalize_event(raw: dict, bot_name: str) -> dict | None:
     """将 OneBot 11 事件转换为框架内部格式"""
     # 【踩坑保佑】v1.7.3 分发层字节闸门
     # 坑：条数闸门挡不住数MB单条payload吃光内存  →  normalize_event
@@ -700,7 +700,7 @@ class OneBotAdapter(ProtocolAdapter):
             self.config, self._on_raw_event, self.api_caller, ssl_context=ssl_context)
         self._onebot_api = OneBotAPI(self.api_caller)
 
-    def get_connection_info(self) -> Optional[dict]:
+    def get_connection_info(self) -> dict | None:
         """连接自描述：供 WebUI /api/connection 动态渲染（内核不写死 OneBot 字段）"""
         host = self.config.get('listen_host', '0.0.0.0')
         port = self.config.get('listen_port', 6830)
@@ -754,7 +754,7 @@ class OneBotAdapter(ProtocolAdapter):
             actions=[CAP_RECALL, CAP_GROUP_ADMIN],
         )
 
-    async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
+    async def handle_event(self, raw_event: dict, bot_name: str) -> dict | None:
         return normalize_event(raw_event, bot_name)
 
     async def call_api(self, action: str, bot: str = None, **params) -> dict:

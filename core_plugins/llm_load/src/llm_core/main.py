@@ -57,14 +57,14 @@ logger = logging.getLogger('zcbot.llm_core')
 
 # 模块级状态：register() 时填充，命令/view 函数通过它们拿到当前实例
 _Svc: Optional['LLMCoreService'] = None
-_Agent: Optional[ToolLoopAgent] = None
-_Media: Optional[MediaCache] = None
-_Store: Optional[ConversationStore] = None
+_Agent: ToolLoopAgent | None = None
+_Media: MediaCache | None = None
+_Store: ConversationStore | None = None
 _Service: Optional['LLMCoreService'] = None
 
 # 调用链追踪历史（供 /api/llm_core/trace 暴露）。索引 0 为最新一次，最多保留 _TRACE_MAX 条
 _TRACE_MAX = 30
-_TRACE_HISTORY: List[dict] = []
+_TRACE_HISTORY: list[dict] = []
 
 
 def _record_trace(trace: dict) -> None:
@@ -75,11 +75,11 @@ def _record_trace(trace: dict) -> None:
     del _TRACE_HISTORY[_TRACE_MAX:]
 
 # 本地知识库（RAG）实例：register() 里按需初始化；未配置时保持 None
-_KB: Optional[KnowledgeBase] = None
+_KB: KnowledgeBase | None = None
 
 # 对话闸门：外部插件（如黑名单管理）注册的准入检查。
 # gate(user_id) -> 拒绝时返回提示文本，放行返回 None。任一闸门拒绝即拒绝。
-_CHAT_GATES: List[Any] = []
+_CHAT_GATES: list[Any] = []
 
 __plugin_meta__ = {
     "name": "LLM 对话核心",
@@ -258,7 +258,7 @@ def _cfg(key: str, default=None):
         return default
 
 
-def _cfg_list(key: str) -> List[Any]:
+def _cfg_list(key: str) -> list[Any]:
     """结构化配置：支持列表，也支持面板里写成 JSON 字符串"""
     value = _cfg(key, None)
     if value is None:
@@ -277,7 +277,7 @@ def _cfg_list(key: str) -> List[Any]:
     return list(value or [])
 
 
-def _providers_config() -> List[dict]:
+def _providers_config() -> list[dict]:
     """构造 provider 配置列表。
 
     密钥支持两种落法，都是「不进仓库」的：
@@ -297,7 +297,7 @@ def _providers_config() -> List[dict]:
     return out
 
 
-def _personas_config() -> Dict[str, dict]:
+def _personas_config() -> dict[str, dict]:
     """人格列表：[{id, name, prompt}]，id 做命令参数，name 做展示。返回 {id: 项}"""
     out = {}
     for item in _cfg_list('personas'):
@@ -441,7 +441,7 @@ class LLMCoreService:
     def unregister_by_owner(self, owner: str) -> int:
         return self._registry.unregister_by_owner(owner)
 
-    def list_tools(self, enabled_only: bool = False) -> List[FunctionTool]:
+    def list_tools(self, enabled_only: bool = False) -> list[FunctionTool]:
         return self._registry.list_tools(enabled_only)
 
     def set_tool_enabled(self, name: str, enabled: bool) -> bool:
@@ -471,10 +471,10 @@ class LLMCoreService:
     def unregister_provider(self, provider_id: str) -> bool:
         return self._providers.unregister(provider_id)
 
-    def get_provider(self, provider_id: str = None) -> Optional[Provider]:
+    def get_provider(self, provider_id: str = None) -> Provider | None:
         return self._providers.get(provider_id)
 
-    def list_providers(self) -> List[Provider]:
+    def list_providers(self) -> list[Provider]:
         return self._providers.list_providers()
 
     # ---- 会话与对话 ----
@@ -490,7 +490,7 @@ class LLMCoreService:
     def registry(self) -> ToolRegistry:
         return self._registry
 
-    async def achat(self, text: str, event=None, images: List[dict] = None,
+    async def achat(self, text: str, event=None, images: list[dict] = None,
                     source: str = '', provider_id: str = None) -> AgentResult:
         """在自己的插件里触发一次对话（自动带上工具调用闭环）。"""
         key = session_key(source, event.group_id if event and event.is_group else None,
@@ -525,7 +525,7 @@ def _caller_owner() -> str:
 
 # ── 命令处理器 ────────────────────────────────────────────────
 
-def _check_chat_gates(user_id) -> Optional[str]:
+def _check_chat_gates(user_id) -> str | None:
     """跑一遍对话闸门，返回第一个拒绝提示；全放行返回 None"""
     for gate in _CHAT_GATES:
         try:
@@ -1261,7 +1261,7 @@ def _any_api_key() -> bool:
     return False
 
 
-def _resolve_provider_for(event, text: str) -> Optional[Provider]:
+def _resolve_provider_for(event, text: str) -> Provider | None:
     """按消息内容挑选 provider（支持在消息里临时 @ 模型名，如 /llm @gpt-4o 你好）"""
     try:
         import re
@@ -1282,7 +1282,7 @@ def _resolve_provider_for(event, text: str) -> Optional[Provider]:
 _SENT_SPLIT = re.compile(r'[^。！？!?\n…]*[。！？!?\n…]+|[^。！？!?\n…]+$')
 
 
-def _split_text(text: str, size: int = None) -> List[str]:
+def _split_text(text: str, size: int = None) -> list[str]:
     """按句子边界分段（标点后断句），段落超过上限才退回硬切。
 
     比固定字符数硬切自然得多：模型一段话通常带多个句号，硬切会把
@@ -1298,7 +1298,7 @@ def _split_text(text: str, size: int = None) -> List[str]:
     if len(text) <= size:
         return [text]
 
-    chunks: List[str] = []
+    chunks: list[str] = []
     buf = ''
     for sent in _SENT_SPLIT.findall(text):
         if not sent:

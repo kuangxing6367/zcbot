@@ -101,7 +101,7 @@ def _json_type_of(annotation: Any) -> str:
     return 'string'
 
 
-def _first_line(doc: Optional[str]) -> str:
+def _first_line(doc: str | None) -> str:
     """取 docstring 第一行作为默认描述"""
     if not doc:
         return ''
@@ -113,9 +113,9 @@ def _first_line(doc: Optional[str]) -> str:
 
 
 def schema_from_callable(func: Callable,
-                         descriptions: Optional[Dict[str, str]] = None,
-                         required: Optional[List[str]] = None,
-                         properties: Optional[Dict[str, dict]] = None) -> dict:
+                         descriptions: dict[str, str] | None = None,
+                         required: list[str] | None = None,
+                         properties: dict[str, dict] | None = None) -> dict:
     """从 Python 函数推导 OpenAI 兼容的 parameters schema。
 
     推导顺序：显式 properties > 类型注解 > 按 string 兜底。
@@ -132,7 +132,7 @@ def schema_from_callable(func: Callable,
     except (TypeError, ValueError):
         sig = None
 
-    inferred_required: List[str] = []
+    inferred_required: list[str] = []
     if sig is not None:
         for pname, param in sig.parameters.items():
             if pname in ('self', 'cls', 'event'):
@@ -210,8 +210,8 @@ class FunctionTool:
 
 
 def llm_function(name: str = None, description: str = None,
-                 parameters: dict = None, required: List[str] = None,
-                 param_descriptions: Dict[str, str] = None,
+                 parameters: dict = None, required: list[str] = None,
+                 param_descriptions: dict[str, str] = None,
                  timeout: float = 20.0, require_perm: str = '',
                  enabled: bool = True):
     """把普通函数登记成可被模型调用的函数。
@@ -246,7 +246,7 @@ class ToolRegistry:
     """
 
     def __init__(self, logger_name: str = 'llm_core'):
-        self._tools: Dict[str, FunctionTool] = {}
+        self._tools: dict[str, FunctionTool] = {}
         self._log = logging.getLogger(f'zcbot.{logger_name}')
 
     # ---- 登记 ----
@@ -271,7 +271,7 @@ class ToolRegistry:
             self._tools.pop(k, None)
         return len(victims)
 
-    def collect(self, module) -> List[FunctionTool]:
+    def collect(self, module) -> list[FunctionTool]:
         """扫描模块里所有带 __llm_tool__ 标记的函数并入库。返回本次入库的工具列表。"""
         got = []
         for _attr in dir(module):
@@ -285,16 +285,16 @@ class ToolRegistry:
 
     # ---- 查询 ----
 
-    def get(self, name: str) -> Optional[FunctionTool]:
+    def get(self, name: str) -> FunctionTool | None:
         return self._tools.get(name)
 
-    def list_tools(self, enabled_only: bool = False) -> List[FunctionTool]:
+    def list_tools(self, enabled_only: bool = False) -> list[FunctionTool]:
         items = list(self._tools.values())
         if enabled_only:
             items = [t for t in items if t.enabled]
         return sorted(items, key=lambda t: (t.source != 'builtin', t.name))
 
-    def names(self, enabled_only: bool = True) -> List[str]:
+    def names(self, enabled_only: bool = True) -> list[str]:
         return [t.name for t in self.list_tools(enabled_only)]
 
     def set_enabled(self, name: str, enabled: bool) -> bool:
@@ -309,7 +309,7 @@ class ToolRegistry:
             t.enabled = bool(enabled)
         return len(self._tools)
 
-    def to_openai_tools(self, only: Optional[List[str]] = None) -> List[dict]:
+    def to_openai_tools(self, only: list[str] | None = None) -> list[dict]:
         """导出请求体里的 tools 字段。不传只会导出启用的工具。"""
         pool = [t for t in self._tools.values() if t.enabled]
         if only is not None:
@@ -425,7 +425,7 @@ def _type_ok(value: Any, want: str) -> bool:
     return True
 
 
-def _stringify(result: Any) -> Optional[str]:
+def _stringify(result: Any) -> str | None:
     """把工具返回值变成回灌给模型的文本。
 
     None 保持为 None（约定：不进上下文）；其余走 str()，

@@ -137,7 +137,7 @@ def _mxc_to_http(mxc_url: str, homeserver: str) -> str:
 
 
 def normalize_event(event: dict, room_id: str, bot_name: str,
-                    self_id: str = '') -> Optional[dict]:
+                    self_id: str = '') -> dict | None:
     """Matrix room event → 内部事件 dict。"""
     if not isinstance(event, dict):
         return None
@@ -556,7 +556,7 @@ class MatrixAdapter(ProtocolAdapter):
         return normalize_message(raw_message)
 
     async def handle_event(self, raw_event: dict,
-                           bot_name: str) -> Optional[dict]:
+                           bot_name: str) -> dict | None:
         room_id = raw_event.get('room_id') or raw_event.get('group_id') or ''
         event = normalize_event(raw_event, room_id,
                                 bot_name or self.bot_name, self.user_id)

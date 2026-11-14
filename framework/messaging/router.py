@@ -403,7 +403,7 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
             self._plugin_order = order
             self._keyword_rules = keyword_rules
 
-    def _compile_command(self, c: dict) -> Optional[_RouteCommand]:
+    def _compile_command(self, c: dict) -> _RouteCommand | None:
         """预编译单条命令：正则编译 + 别名预解析"""
         try:
             pattern = c['pattern'] or ''

@@ -105,28 +105,28 @@ def _as_bool(value) -> bool:
 class RustAccelService:
     """Rust 加速层服务：子进程管理 + IPC 桥接 + 监控观测"""
 
-    def __init__(self, framework, config: Optional[dict] = None):
+    def __init__(self, framework, config: dict | None = None):
         self.framework = framework
         self.cfg: dict = {**_DEFAULTS, **(config or {})}
-        self.proc: Optional[subprocess.Popen] = None
-        self.ipc_port: Optional[int] = None
+        self.proc: subprocess.Popen | None = None
+        self.ipc_port: int | None = None
         self.ws_host: str = str(self.cfg.get('ws_host') or '0.0.0.0')
-        self.ws_port: Optional[int] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._task: Optional[asyncio.Task] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
+        self.ws_port: int | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task | None = None
+        self._writer: asyncio.StreamWriter | None = None
         self._next_id = itertools.count(1)
-        self._pending: Dict[str, asyncio.Future] = {}
-        self._bots: Dict[str, float] = {}
-        self._last_stats: Optional[dict] = None
-        self._started_at: Optional[float] = None
+        self._pending: dict[str, asyncio.Future] = {}
+        self._bots: dict[str, float] = {}
+        self._last_stats: dict | None = None
+        self._started_at: float | None = None
         self._stopping = False
         self._reconnects = 0
         self._dispatch_tasks = set()
 
     # ── 进程生命周期 ──────────────────────────────────────────
 
-    def _locate_binary(self) -> Optional[str]:
+    def _locate_binary(self) -> str | None:
         p = str(self.cfg.get('binary_path') or '').strip()
         if p and os.path.isfile(p):
             return p
@@ -254,7 +254,7 @@ class RustAccelService:
         self._loop = asyncio.get_running_loop()
         self._task = asyncio.create_task(self._ipc_loop(), name='rust-ipc')
 
-    def _read_hello(self, proc: subprocess.Popen) -> Optional[dict]:
+    def _read_hello(self, proc: subprocess.Popen) -> dict | None:
         result = {}
 
         def _reader():
@@ -551,7 +551,7 @@ class RustAccelService:
     def get_connected_bots(self) -> list:
         return list(self._bots.keys())
 
-    def get_stats(self) -> Optional[dict]:
+    def get_stats(self) -> dict | None:
         return self._last_stats
 
     @property

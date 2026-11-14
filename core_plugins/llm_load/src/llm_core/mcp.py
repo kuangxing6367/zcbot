@@ -48,7 +48,7 @@ class MCPTransportError(Exception):
 class _StdioTransport:
     """本地子进程传输：一行一个 JSON-RPC 对象。"""
 
-    def __init__(self, command: str, args: List[str] = None, env: dict = None,
+    def __init__(self, command: str, args: list[str] = None, env: dict = None,
                  cwd: str = None):
         if not command:
             raise MCPTransportError("MCP stdio 传输缺少 command")
@@ -189,7 +189,7 @@ class MCPClient:
 
     # ---- 工具 ----
 
-    def list_tools(self) -> List[dict]:
+    def list_tools(self) -> list[dict]:
         result = self._rpc('tools/list')
         return list(result.get('tools') or [])
 
@@ -210,7 +210,7 @@ class MCPClient:
             pass
 
 
-def bind_mcp_tools(registry, servers: List[dict]) -> Dict[str, int]:
+def bind_mcp_tools(registry, servers: list[dict]) -> dict[str, int]:
     """把配置里的 MCP server 全部拉起，把它们的工具注册进总线。
 
     :param registry: ToolRegistry
@@ -218,7 +218,7 @@ def bind_mcp_tools(registry, servers: List[dict]) -> Dict[str, int]:
                       "command": "npx", "args": [...], "enabled": true}, ...]
     :return: {server 名: 注册了多少个工具}
     """
-    summary: Dict[str, int] = {}
+    summary: dict[str, int] = {}
     for cfg in servers or []:
         if not isinstance(cfg, dict) or cfg.get('enabled') is False:
             continue

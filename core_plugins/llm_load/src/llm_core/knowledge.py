@@ -37,17 +37,17 @@ except Exception:  # noqa: BLE001
     _HAS_NUMPY = False
 
 
-def _vec_blob(vec: List[float]) -> bytes:
+def _vec_blob(vec: list[float]) -> bytes:
     """把向量打包成 sqlite-vec 需要的 float 二进制 blob。"""
     return struct.pack(f"{len(vec)}f", *vec)
 
 
-def _split_text(text: str, size: int = 400, overlap: int = 80) -> List[str]:
+def _split_text(text: str, size: int = 400, overlap: int = 80) -> list[str]:
     """按段落优先、再按长度滑窗切分，保证碎片不丢上下文。"""
     text = (text or '').strip()
     if not text:
         return []
-    chunks: List[str] = []
+    chunks: list[str] = []
     buf = ''
     step = max(1, size - overlap)
     for para in text.split('\n'):
@@ -73,7 +73,7 @@ def _split_text(text: str, size: int = 400, overlap: int = 80) -> List[str]:
     return [c.strip() for c in chunks if c.strip()]
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     if _HAS_NUMPY:
         a = np.asarray(a, dtype=np.float32)
         b = np.asarray(b, dtype=np.float32)
@@ -85,9 +85,9 @@ def _cosine(a: List[float], b: List[float]) -> float:
     return 0.0 if (na == 0 or nb == 0) else dot / (na * nb)
 
 
-def _rrf(rank_lists: List[List], k: int = 60) -> Dict[int, float]:
+def _rrf(rank_lists: list[list], k: int = 60) -> dict[int, float]:
     """倒数排名融合：每个有序列表按 1/(k+rank) 累加，返回 {id: score}。"""
-    scores: Dict[int, float] = {}
+    scores: dict[int, float] = {}
     for lst in rank_lists:
         for rank, item in enumerate(lst):
             cid = item[0] if isinstance(item, (list, tuple)) else item
@@ -96,7 +96,7 @@ def _rrf(rank_lists: List[List], k: int = 60) -> Dict[int, float]:
 
 
 class KnowledgeBase:
-    def __init__(self, db_path, embed: Callable[[List[str]], List[List[float]]],
+    def __init__(self, db_path, embed: Callable[[list[str]], list[list[float]]],
                  dims: int = 0, chunk_size: int = 400, chunk_overlap: int = 80,
                  backend: str = 'auto'):
         self.db_path = db_path
@@ -209,7 +209,7 @@ class KnowledgeBase:
         return self.add_text(title or (source or path).split('/')[-1], text, source=source or path)
 
     # ── 检索 ─────────────────────────────────────────────────
-    def search(self, query: str, top_k: int = 5) -> List[Dict]:
+    def search(self, query: str, top_k: int = 5) -> list[dict]:
         from .embeddings import EmbeddingError
         query = (query or '').strip()
         if not query:
@@ -225,7 +225,7 @@ class KnowledgeBase:
                     if (self._has_fts and len(query) >= 3) else [])
         fused = _rrf([vec_rank, fts_rank])
         ordered = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
-        out: List[Dict] = []
+        out: list[dict] = []
         for cid, score in ordered:
             row = self._conn.execute(
                 "SELECT c.text, c.doc_id, c.idx, d.title, d.source "
@@ -239,7 +239,7 @@ class KnowledgeBase:
                 })
         return out
 
-    def _vector_search(self, qvec, limit) -> List:
+    def _vector_search(self, qvec, limit) -> list:
         if self.backend == 'sqlite_vec' and self._vec_ready:
             try:
                 rows = self._conn.execute(
@@ -253,7 +253,7 @@ class KnowledgeBase:
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:limit]
 
-    def _fts_search(self, query, limit) -> List:
+    def _fts_search(self, query, limit) -> list:
         q = '"' + query.replace('"', '') + '"'
         rows = self._conn.execute(
             "SELECT rowid FROM kb_fts WHERE kb_fts MATCH ? ORDER BY rank LIMIT ?",
@@ -261,7 +261,7 @@ class KnowledgeBase:
         return [r['rowid'] for r in rows]
 
     # ── 管理 ─────────────────────────────────────────────────
-    def list_docs(self) -> List[Dict]:
+    def list_docs(self) -> list[dict]:
         rows = self._conn.execute(
             "SELECT d.id, d.title, d.source, d.created_at, "
             "(SELECT COUNT(*) FROM kb_chunks c WHERE c.doc_id=d.id) AS chunks "
@@ -291,12 +291,12 @@ class KnowledgeBase:
         c.commit()
         return True
 
-    def count(self) -> Dict[str, int]:
+    def count(self) -> dict[str, int]:
         docs = self._conn.execute("SELECT COUNT(*) FROM kb_docs").fetchone()[0]
         chunks = self._conn.execute("SELECT COUNT(*) FROM kb_chunks").fetchone()[0]
         return {'docs': docs, 'chunks': chunks}
 
-    def clear(self) -> Dict[str, int]:
+    def clear(self) -> dict[str, int]:
         c = self._conn
         before = self.count()
         c.execute("DELETE FROM kb_chunks")

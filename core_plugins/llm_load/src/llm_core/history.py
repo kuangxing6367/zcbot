@@ -55,13 +55,13 @@ def content_text(content) -> str:
     return ''
 
 
-def _search_text(messages: List[dict]) -> str:
+def _search_text(messages: list[dict]) -> str:
     parts = [content_text(m.get('content')) for m in messages or [] if isinstance(m, dict)]
     text = '\n'.join(p for p in parts if p)
     return text[:_SEARCH_TEXT_LIMIT]
 
 
-def estimate_tokens(messages: List[dict]) -> int:
+def estimate_tokens(messages: list[dict]) -> int:
     """粗略估算 token 数。
 
     中文按 1 字 ≈ 1 token，西文按 4 字符 ≈ 1 token。不求精确，只为了在没有
@@ -122,7 +122,7 @@ class Conversation:
         self.system_prompt = system_prompt or ''
         self.max_turns = max(1, int(max_turns))
         self.max_items = max(10, int(max_items))
-        self._messages: List[dict] = []
+        self._messages: list[dict] = []
         self.created_at = time.time()
         self.updated_at = time.time()
         self.compressed_times = 0
@@ -142,7 +142,7 @@ class Conversation:
     # ---- 读写 ----
 
     @property
-    def messages(self) -> List[dict]:
+    def messages(self) -> list[dict]:
         return list(self._messages)
 
     @property
@@ -156,7 +156,7 @@ class Conversation:
         self._enforce_limits()
         self._persist()
 
-    def extend(self, messages: List[dict]) -> None:
+    def extend(self, messages: list[dict]) -> None:
         self._messages.extend(messages or [])
         self.updated_at = time.time()
         self._enforce_limits()
@@ -173,9 +173,9 @@ class Conversation:
         """实际生效的系统提示词：会话人格优先，全局兜底"""
         return self.persona or self.system_prompt
 
-    def as_request(self) -> List[dict]:
+    def as_request(self) -> list[dict]:
         """导出给 provider 的消息数组（system 排头）"""
-        out: List[dict] = []
+        out: list[dict] = []
         if self.effective_prompt:
             out.append({'role': 'system', 'content': self.effective_prompt})
         out.extend(self._drop_dangling_tool_calls(self._messages))
@@ -193,7 +193,7 @@ class Conversation:
             self._messages = self._trim_by_turns(self._messages, drop)
 
     @staticmethod
-    def _trim_by_turns(messages: List[dict], rounds: int) -> List[dict]:
+    def _trim_by_turns(messages: list[dict], rounds: int) -> list[dict]:
         """砍掉最老的 N 轮 user 及其后续消息（含工具结果）。"""
         result = list(messages)
         dropped = 0
@@ -212,7 +212,7 @@ class Conversation:
         return result
 
     @staticmethod
-    def _drop_dangling_tool_calls(messages: List[dict]) -> List[dict]:
+    def _drop_dangling_tool_calls(messages: list[dict]) -> list[dict]:
         """清理「有 tool_calls 但没有对应 tool 结果」的 assistant 消息。
 
         这类孤儿会在历史被截断后出现，服务端（尤其 OpenAI 官方）会直接 400。
@@ -232,10 +232,10 @@ class Conversation:
         return out
 
     @staticmethod
-    def _safe_head(messages: List[dict], size: int) -> List[dict]:
+    def _safe_head(messages: list[dict], size: int) -> list[dict]:
         return list(messages[-size:])
 
-    def replace_history(self, messages: List[dict]) -> None:
+    def replace_history(self, messages: list[dict]) -> None:
         """压缩后整体替换（summary 策略用）"""
         self._messages = list(messages or [])
         self.compressed_times += 1
@@ -291,7 +291,7 @@ class SessionPersist:
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[history] 会话保存失败 {conv.key}: {e}")
 
-    def load(self, key: str) -> Optional[dict]:
+    def load(self, key: str) -> dict | None:
         try:
             with open(self._path(key), 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -308,9 +308,9 @@ class SessionPersist:
         except OSError:
             return False
 
-    def iter_records(self) -> List[dict]:
+    def iter_records(self) -> list[dict]:
         """读出磁盘上所有会话文件。重启后内存是空的，面板要靠这个看到历史会话。"""
-        out: List[dict] = []
+        out: list[dict] = []
         try:
             names = os.listdir(self._dir)
         except OSError:
@@ -363,7 +363,7 @@ class ConversationStore:
 
     def __init__(self, system_prompt: str = '', max_turns: int = 20,
                  max_items: int = 200, capacity: int = 500, ttl: int = 3600 * 6,
-                 persist: Optional[SessionPersist] = None):
+                 persist: SessionPersist | None = None):
         self._system_prompt = system_prompt
         self._max_turns = max_turns
         self._max_items = max_items
@@ -385,7 +385,7 @@ class ConversationStore:
         if max_items is not None:
             self._max_items = max(10, int(max_items))
 
-    def get(self, key: str, create: bool = True) -> Optional[Conversation]:
+    def get(self, key: str, create: bool = True) -> Conversation | None:
         self._gc()
         conv = self._sessions.get(key)
         if conv is not None:
@@ -430,13 +430,13 @@ class ConversationStore:
             self._persist.clear()
         return n
 
-    def list_sessions(self) -> List[dict]:
+    def list_sessions(self) -> list[dict]:
         """内存 ∪ 磁盘 的会话概览，按最近活跃倒序。
 
         内存里的会话是唯一真相（可能比磁盘新）；只在磁盘上有的说明还没被
         LRU 捞回来或刚重启，同样列出来，否则面板在重启后是空的。
         """
-        items: List[dict] = [conv.summary() for conv in self._sessions.values()]
+        items: list[dict] = [conv.summary() for conv in self._sessions.values()]
         seen = {it['key'] for it in items}
         if self._persist is not None:
             for rec in self._persist.iter_records():
@@ -467,7 +467,7 @@ class ConversationStore:
             'search_text': _search_text(messages),
         }
 
-    def detail(self, key: str) -> Optional[dict]:
+    def detail(self, key: str) -> dict | None:
         """单个会话的完整消息，供面板查看；不落盘的会话只在内存里"""
         conv = self._sessions.get(key)
         if conv is not None:
@@ -481,10 +481,10 @@ class ConversationStore:
         return {'key': key, 'persona': str(rec.get('persona') or ''),
                 'messages': [m for m in rec['messages'] if isinstance(m, dict)]}
 
-    def keys(self) -> List[str]:
+    def keys(self) -> list[str]:
         return list(self._sessions.keys())
 
-    def stats(self) -> Dict[str, object]:
+    def stats(self) -> dict[str, object]:
         total_tokens = 0
         for conv in self._sessions.values():
             total_tokens += estimate_tokens(conv.as_request())

@@ -56,7 +56,7 @@ _CQ_IMAGE_RE = re.compile(
     r'\[CQ:image,file=([^\],]+)(?:,([^\]]*))?\]', re.IGNORECASE)
 
 
-def _extract_b64(data: str) -> Optional[str]:
+def _extract_b64(data: str) -> str | None:
     """把 base64://... 归一成不带前缀的纯 base64（失败返回 None）"""
     if not isinstance(data, str):
         return None
@@ -144,7 +144,7 @@ def normalize_message(message):
     return parts
 
 
-def normalize_event(raw: dict, bot_name: str) -> Optional[dict]:
+def normalize_event(raw: dict, bot_name: str) -> dict | None:
     """远端 JSON → 框架内部事件 dict（与 http_inject 同形状约定）"""
     if not isinstance(raw, dict):
         return None
@@ -378,7 +378,7 @@ class WsClientAdapter(ProtocolAdapter):
 
     # ── ProtocolAdapter 契约 ────────────────────────────────────
 
-    async def handle_event(self, raw_event: dict, bot_name: str) -> Optional[dict]:
+    async def handle_event(self, raw_event: dict, bot_name: str) -> dict | None:
         return normalize_event(raw_event, bot_name or self.bot_name)
 
     async def call_api(self, action, bot=None, **params) -> dict:

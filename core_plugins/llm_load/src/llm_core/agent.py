@@ -38,10 +38,10 @@ class AgentResult:
     text: str = ''
     error: str = ''
     turns: int = 0
-    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
-    usage: Dict[str, Any] = field(default_factory=dict)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    usage: dict[str, Any] = field(default_factory=dict)
     model: str = ''
-    trace: Dict[str, Any] = field(default_factory=dict)
+    trace: dict[str, Any] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -83,7 +83,7 @@ class ToolLoopAgent:
     def __init__(self,
                  registry: ToolRegistry,
                  provider: Provider = None,
-                 provider_getter: Callable[[Optional[str]], Provider] = None,
+                 provider_getter: Callable[[str | None], Provider] = None,
                  max_turns: int = 6,
                  perm_check: Callable = None,
                  logger=None):
@@ -116,15 +116,15 @@ class ToolLoopAgent:
         if self.log is not None:
             self.log.debug(f"[agent] {msg}")
 
-    async def _call_provider(self, provider: Provider, messages: List[dict],
-                             tools: Optional[List[dict]], temperature: float,
+    async def _call_provider(self, provider: Provider, messages: list[dict],
+                             tools: list[dict] | None, temperature: float,
                              max_tokens: int) -> ProviderReply:
         """把同步 HTTP 请求丢到线程池，不阻塞事件循环"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None, lambda: provider.chat(messages, tools, temperature, max_tokens))
 
-    def _tool_decls(self, last_round: bool, allow_tools: bool = True) -> Optional[List[dict]]:
+    def _tool_decls(self, last_round: bool, allow_tools: bool = True) -> list[dict] | None:
         """本轮携带的工具声明。最后一轮不带工具，逼模型收口。
 
         allow_tools=False 只影响本轮调用（如提供商不支持函数调用），
@@ -263,7 +263,7 @@ class ToolLoopAgent:
         return result
 
 
-def _summarize_tool_outputs(calls: List[Dict[str, Any]]) -> str:
+def _summarize_tool_outputs(calls: list[dict[str, Any]]) -> str:
     """模型一直不出结论时，把它已经拿到的工具结果兜底整理给用户。
 
     比甩一句「处理失败」有用得多：多数情况下工具结果里已经有答案了，

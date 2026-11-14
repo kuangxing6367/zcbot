@@ -51,7 +51,7 @@ class EmbeddingClient:
     def dims(self):
         return self._dims
 
-    def embed(self, texts) -> List[List[float]]:
+    def embed(self, texts) -> list[list[float]]:
         """把一段或多段文本变成向量。返回与输入同序的向量列表。"""
         import requests
 
@@ -80,7 +80,7 @@ class EmbeddingClient:
             self._dims = len(vecs[0])
         return vecs
 
-    async def aembed(self, texts) -> List[List[float]]:
+    async def aembed(self, texts) -> list[list[float]]:
         import asyncio
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.embed, texts)

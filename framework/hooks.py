@@ -133,7 +133,7 @@ class HookRegistry:
         """失效指定扩展点快照（注册/注销后调用）"""
         self._snapshots.pop(point, None)
 
-    def _snapshot(self, point: str) -> Tuple:
+    def _snapshot(self, point: str) -> tuple:
         """读取扩展点处理器快照（无锁热路径；变更方负责失效重建）"""
         snap = self._snapshots.get(point)
         if snap is not None:

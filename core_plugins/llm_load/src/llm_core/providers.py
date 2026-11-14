@@ -64,7 +64,7 @@ class ToolCall:
 
     id: str
     name: str
-    arguments: Dict[str, Any] = field(default_factory=dict)
+    arguments: dict[str, Any] = field(default_factory=dict)
     raw_arguments: str = ''
 
     def __repr__(self) -> str:
@@ -75,9 +75,9 @@ class ToolCall:
 class ProviderReply:
     """模型的一轮回复。文本和工具调用二选一，也可以都没有（模型在思考）。"""
 
-    content: Optional[str] = None
-    tool_calls: List[ToolCall] = field(default_factory=list)
-    usage: Dict[str, Any] = field(default_factory=dict)
+    content: str | None = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: dict[str, Any] = field(default_factory=dict)
     model: str = ''
 
     @property
@@ -91,7 +91,7 @@ class Provider:
     id: str = 'abstract'
     label: str = ''
     model: str = ''
-    models: List[str] = []
+    models: list[str] = []
 
     supports_tools: bool = True
     supports_vision: bool = False
@@ -110,11 +110,11 @@ class Provider:
 
     # ---- 子类实现 ----
 
-    def chat(self, messages: List[dict], tools: Optional[List[dict]] = None,
+    def chat(self, messages: list[dict], tools: list[dict] | None = None,
              temperature: float = 0.7, max_tokens: int = 1024) -> ProviderReply:
         raise NotImplementedError
 
-    def list_models(self) -> List[str]:
+    def list_models(self) -> list[str]:
         """本机可用的模型名；远端拉不到时返回配置里写死的那几个"""
         return list(self.models or ([self.model] if self.model else []))
 
@@ -164,7 +164,7 @@ class OpenAICompatProvider(Provider):
         if not api_key:
             raise ProviderError("未配置 api_key")
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             'model': self.model,
             'messages': messages,
             'temperature': temperature,
@@ -245,8 +245,8 @@ class ProviderRegistry:
     _BUILTIN = {'openai': OpenAICompatProvider, 'openai_compat': OpenAICompatProvider}
 
     def __init__(self):
-        self._providers: Dict[str, Provider] = {}
-        self._default_id: Optional[str] = None
+        self._providers: dict[str, Provider] = {}
+        self._default_id: str | None = None
 
     @classmethod
     def build(cls, configs: Sequence[dict]) -> 'ProviderRegistry':
@@ -267,7 +267,7 @@ class ProviderRegistry:
                 logger.error(f"构造模型提供商 [{cfg.get('id')}] 失败: {e}")
         return reg
 
-    def add_from_config(self, cfg: dict) -> Optional[Provider]:
+    def add_from_config(self, cfg: dict) -> Provider | None:
         kind = (cfg.get('type') or 'openai').lower()
         cls = self._BUILTIN.get(kind)
         if cls is None:
@@ -293,7 +293,7 @@ class ProviderRegistry:
             self._default_id = next(iter(self._providers), None)
         return existed
 
-    def get(self, provider_id: str = None) -> Optional[Provider]:
+    def get(self, provider_id: str = None) -> Provider | None:
         pid = provider_id or self._default_id
         return self._providers.get(pid) if pid else None
 
@@ -304,18 +304,18 @@ class ProviderRegistry:
                 "没有可用的模型提供商，请先在配置里填好 base_url / api_key / model")
         return provider
 
-    def resolve(self, model: str) -> Optional[Provider]:
+    def resolve(self, model: str) -> Provider | None:
         """按模型名找到能 serve 它的 provider"""
         for provider in self._providers.values():
             if provider.serves(model):
                 return provider
         return None
 
-    def list_providers(self) -> List[Provider]:
+    def list_providers(self) -> list[Provider]:
         return list(self._providers.values())
 
     @property
-    def default_id(self) -> Optional[str]:
+    def default_id(self) -> str | None:
         return self._default_id
 
 

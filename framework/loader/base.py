@@ -112,16 +112,16 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         )
         self.framework = framework
         self.db = framework.db
-        self._loaded_plugins: Dict[str, dict] = {}  # plugin_name -> {module, register_func, ...}
+        self._loaded_plugins: dict[str, dict] = {}  # plugin_name -> {module, register_func, ...}
         self._lock = threading.Lock()
         self._override_webui: str = None  # 接管整个前端的插件名（None 表示用框架默认前端）
-        self._missing_deps: Dict[str, list] = {}   # plugin_name -> [缺失的包列表]
-        self._conflict_deps: Dict[str, list] = {}  # plugin_name -> [{name, required, installed}, ...]
+        self._missing_deps: dict[str, list] = {}   # plugin_name -> [缺失的包列表]
+        self._conflict_deps: dict[str, list] = {}  # plugin_name -> [{name, required, installed}, ...]
         self._isolated_plugins: set = set()         # plugin_name -> 已启用隔离环境的插件
         self._memory_monitor_running = False
         self._memory_monitor_stop = threading.Event()   # 可唤醒采样等待，停机时置位
         self._memory_monitor_thread = None
-        self._memory_violations: Dict[str, int] = {}  # plugin_name -> 连续超限次数
+        self._memory_violations: dict[str, int] = {}  # plugin_name -> 连续超限次数
 
         # ── 群级插件开关缓存 {group_id: {plugin_name: enabled}} ──
         self._group_plugin_cache = {}
@@ -129,14 +129,14 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         self._group_cache_ttl = 30  # 缓存 30 秒
 
 # ── 插件文件 mtime 快照（心跳增量注册用）──
-        self._plugin_mtimes: Dict[str, float] = {}
+        self._plugin_mtimes: dict[str, float] = {}
         # ── 加载失败插件自愈：失败插件名 → 失败时文件快照（mtime 变化后心跳自动重试加载）──
-        self._failed_mtimes: Dict[str, float] = {}
+        self._failed_mtimes: dict[str, float] = {}
 
         # ── 声明式依赖（__plugin_meta__['requires']）──
         # 静态 meta 缓存：plugin_name -> (mtime, meta)；依赖拦截原因：plugin_name -> reason
-        self._declared_meta_cache: Dict[str, tuple] = {}
-        self._dep_errors: Dict[str, str] = {}
+        self._declared_meta_cache: dict[str, tuple] = {}
+        self._dep_errors: dict[str, str] = {}
         self._graph_lock = threading.Lock()
 
     # ── 依赖检查 / 自动安装 / 隔离 venv ──────────────────────
@@ -607,7 +607,7 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         self._start_memory_monitor()
         return success
 
-    def get_loaded_plugins(self) -> Dict[str, dict]:
+    def get_loaded_plugins(self) -> dict[str, dict]:
         """获取已加载插件列表"""
         with self._lock:
             return {

@@ -17,17 +17,17 @@ class ApiContext:
     app: Any = None                    # Flask app
     framework: Any = None              # Framework 实例
     db: Any = None                     # Database 实例
-    config: Dict = field(default_factory=dict)  # framework.config
+    config: dict = field(default_factory=dict)  # framework.config
     plugins_dir: str = ''
-    web_cfg: Dict = field(default_factory=dict)
+    web_cfg: dict = field(default_factory=dict)
     # 鉴权 / 安全（由 create_web_app 注入，供自定义路由复用）
-    require_auth: Optional[Callable] = None
-    require_super: Optional[Callable] = None
+    require_auth: Callable | None = None
+    require_super: Callable | None = None
     # 限速 / 登录防爆破（S4 迁移时使用）
-    login_failures: Dict = field(default_factory=dict)
-    rate_buckets: Dict = field(default_factory=dict)
+    login_failures: dict = field(default_factory=dict)
+    rate_buckets: dict = field(default_factory=dict)
     # 任意插件/模块扩展挂载点（避免为每个新状态改构造）
-    extras: Dict = field(default_factory=dict)
+    extras: dict = field(default_factory=dict)
 
     def get(self, key: str, default=None):
         """从 framework.config 取配置"""
