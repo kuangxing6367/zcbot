@@ -28,7 +28,35 @@
 
 ## 开发中
 
-> 暂无未发布的在研变化。
+> 主题：**把官方插件（含协议适配器）的启停从「手改 core_plugins.yaml」搬进 WebUI，并即时生效**。
+
+### 修复：WebUI 开关官方插件的三处断点
+
+长期以来的死结：官方适配器的启停只认 `core_plugins.yaml` 的 `enabled`，而插件页那个
+「启用/禁用」按钮走的是 `/api/plugins/<name>/toggle`（只改数据库 `plugins.is_active`，
+管的是已加载插件的命令启停）——对 `enabled:false` 的官方适配器完全无效：
+界面显示已启用，重启又被 yaml 挡回。
+
+后端 `/api/config/core-plugins` GET/PUT 其实早就在，但有三个断点，这次一并修掉：
+
+- **写回冲掉注释**：`set_core_plugin_enabled` 用 `yaml.safe_dump` 全量重写，用户手写的
+  注释、键顺序、未知字段一次清空。改为复用 `cli.utils` 的按行原地替换：只换 `enabled`
+  的值，行尾注释（`# 关着，等部署后再开`）也保留；插件块缺失时按行补 schema 默认键，
+  且补在**目标块内**而不是文件末尾（否则会漏进下一个插件块）。
+- **改了不即时**：写回后同步内存 `config['core_plugins'][name]['enabled']`，紧接着
+  同进程 `_load_core_plugins(only={name})` 即时加载；失败不回滚落盘值（yaml 已是权威，
+  下次启动仍按新值加载），只在响应里提示重启。
+- **禁用后端口还在监听**：`unload_plugin` 只调 `on_unload()`，而官方适配器定义的是
+  `unregister()`（停 WS 监听 / 断长连接）——名字对不上，禁用后机器人还在收消息。
+  改为两个钩子都调、各自 try 隔离；抽成 `_call_unload_hooks` 便于单测。
+
+前端插件页顶部新增「官方插件 / 协议适配器」开关区（走 `/api/config/core-plugins`），
+适配器带「适配器」标签；官方插件在下方旧列表里隐藏无效的 `is_active` 按钮，
+改显示「见上方官方插件开关」，消除「点启用、重启又被挡回」的假象。
+
+验证：`tests/test_webui_adapter_switch.py` 10 例（保注释、内存同步、缺口补键位置、
+双卸载钩子、API 即时生效与非法名拒绝）；相关回归 58 例；前端生产构建通过、
+Edge headless 首页无白屏、产物引用与 JS 语法全通过。
 
 ---
 

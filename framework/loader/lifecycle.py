@@ -669,6 +669,22 @@ class PluginLifecycleMixin:
         _purge_plugin_cache_for(self.framework, plugin_name)
         return removed
 
+    def _call_unload_hooks(self, plugin_name: str, module) -> None:
+        """调用插件的卸载钩子。
+
+        官方适配器用 unregister() 收尾（停 WS 监听 / 断长连接），用户插件用
+        on_unload()。历史只调 on_unload，导致「WebUI 禁用适配器后端口仍在监听、
+        机器人还在收消息」。两者都调、各自 try 隔离：模块只实现其中一个也能生效，
+        任一钩子抛错不影响另一个，更不会中断整条卸载流程。
+        """
+        for hook in ('on_unload', 'unregister'):
+            try:
+                fn = getattr(module, hook, None)
+                if callable(fn):
+                    fn()
+            except Exception as e:
+                logger.warning(f"[{plugin_name}] {hook} 异常: {e}")
+
     def unload_plugin(self, plugin_name: str):
         """卸载插件"""
         with self._lock:
@@ -682,13 +698,7 @@ class PluginLifecycleMixin:
                 self._release_plugin_api_routes(plugin_name)
                 return
 
-        try:
-            # 调用 on_unload（如果存在）
-            module = info['module']
-            if hasattr(module, 'on_unload') and callable(module.on_unload):
-                module.on_unload()
-        except Exception as e:
-            logger.warning(f"[{plugin_name}] on_unload 异常: {e}")
+        self._call_unload_hooks(plugin_name, info['module'])
 
         # 清理调度器中的定时任务。先摘 job（阻止新触发），再等在途任务真正
         # 结束：旧实现 remove_job 后立刻清 sys.modules / gc.collect()，而超时

@@ -1167,41 +1167,130 @@ def list_core_plugins_state():
     return out
 
 
-def set_core_plugin_enabled(name: str, enabled: bool):
-    """切换官方插件开关并回写 core_plugins.yaml（需重启框架生效）。
+def set_core_plugin_enabled(name: str, enabled: bool, config: dict = None):
+    """切换官方插件开关并回写 core_plugins.yaml。
 
     返回 (ok, needs_restart)。plugin 不存在返回 (False, False)。
+
+    写回走 cli.utils 的按行原地替换：保留 yaml 里的注释、键顺序与未知字段。
+    旧实现用 ``yaml.safe_dump`` 全量重写，会把用户手写的注释和排版一次性冲掉，
+    是「WebUI 点一下开关，配置文件就被格式化」的根因。
+
+    :param config: 可选。传入时同步内存 ``config['core_plugins'][name]['enabled']``，
+        使同进程内紧接着的 ``_load_core_plugins(only={name})`` 能读到新值，
+        从而实现「不重启即时生效」。不传则只落盘（保持 CLI 调用方行为不变）。
     """
     installed = _scan_core_plugins()
     if name not in installed:
         return False, False
+
+    from framework.cli.utils import set_core_plugin_enabled as _patch_yaml
+
     yaml_path = CORE_PLUGINS_YAML
-    data = {}
-    if os.path.isfile(yaml_path):
-        try:
-            with open(yaml_path, 'r', encoding='utf-8') as f:
-                data = yaml.safe_load(f) or {}
-        except Exception as _exc:
-            logger.debug('[set_core_plugin_enabled] 捕获异常后按降级路径继续: %s', _exc)
-            data = {}
-    cps = data.get('core_plugins') if isinstance(data, dict) else {}
-    if not isinstance(cps, dict):
-        cps = {}
-    blk = cps.get(name)
-    if not isinstance(blk, dict):
-        blk = dict(_CORE_PLUGIN_SCHEMA.get(name, {}))
-        blk['enabled'] = bool(enabled)
-        cps[name] = blk
-    else:
-        blk['enabled'] = bool(enabled)
-    data['core_plugins'] = cps
+    ok, detail = _patch_yaml(yaml_path, name, bool(enabled))
+    if not ok:
+        _get_logger().warning(f"写回 core_plugins.yaml 失败: {detail}")
+        return False, False
+
+    # 块此前不存在时，按行工具只补了 enabled 一行；这里补齐 schema 默认值，
+    # 与 _autoload_core_plugins 的「发现即补块」口径一致，避免私有键缺失。
+    try:
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f) or {}
+        cps = data.get('core_plugins') if isinstance(data, dict) else {}
+        blk = cps.get(name) if isinstance(cps, dict) else None
+        if isinstance(blk, dict):
+            defaults = _CORE_PLUGIN_SCHEMA.get(name, {})
+            missing = {k: v for k, v in defaults.items() if k not in blk}
+            if missing:
+                for k, v in missing.items():
+                    _patch_yaml_key(yaml_path, name, k, v)
+    except Exception as _exc:
+        _get_logger().debug('[set_core_plugin_enabled] 补默认键失败（不影响开关）: %s', _exc)
+
+    # 同步内存：让即时生效分支读到的 enabled 与落盘值一致
+    if isinstance(config, dict):
+        cc = config.setdefault('core_plugins', {})
+        if isinstance(cc.get(name), dict):
+            cc[name]['enabled'] = bool(enabled)
+
+    return True, True
+
+
+def _patch_yaml_key(yaml_path: str, plugin_id: str, key: str, value) -> bool:
+    """在 core_plugins.<plugin_id> 块内按行补一个缺失的标量键（保注释）。
+
+    只处理标量（str/int/float/bool/None/list-of-scalars）；复杂结构不在这里补，
+    交给启动时的 _autoload_core_plugins。返回是否真的写入。
+    """
+    from framework.cli.utils import read_file
+
+    if not os.path.isfile(yaml_path):
+        return False
+    lines = read_file(yaml_path).splitlines()
+    out = []
+    i, n = 0, len(lines)
+    in_top = in_block = False
+    placed = False
+
+    def _fmt(v):
+        if v is None:
+            return "null"
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        if isinstance(v, (int, float)):
+            return str(v)
+        if isinstance(v, list):
+            if not v:
+                return "[]"
+            if all(isinstance(x, (str, int, float, bool)) for x in v):
+                return "[" + ", ".join(_fmt(x) for x in v) + "]"
+            return None
+        s = str(v)
+        return "'" + s.replace("'", "''") + "'"
+
+    rendered = _fmt(value)
+    if rendered is None:
+        return False
+
+    while i < n:
+        line = lines[i]
+        if not in_top:
+            out.append(line)
+            if line.strip() == 'core_plugins:':
+                in_top = True
+            i += 1
+            continue
+        m = re.match(r"^  ([A-Za-z0-9_]+):", line)
+        if m:
+            if in_block:
+                # 上一个目标块结束，仍未找到 key：在块尾插入
+                if not placed:
+                    out.append("    %s: %s" % (key, rendered))
+                    placed = True
+            in_block = (m.group(1) == plugin_id)
+            out.append(line)
+            i += 1
+            continue
+        if in_block and re.match(r"^    %s\s*:" % re.escape(key), line):
+            out.append(line)  # 已存在，不动
+            placed = True
+            i += 1
+            continue
+        out.append(line)
+        i += 1
+    if in_block and not placed:
+        out.append("    %s: %s" % (key, rendered))
+        placed = True
+    if not placed:
+        return False
     try:
         with open(yaml_path, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-        return True, True
+            f.write("\n".join(out).rstrip() + "\n")
+        return True
     except Exception as e:
-        _get_logger().warning(f"写回 core_plugins.yaml 失败: {e}")
-        return False, False
+        _get_logger().debug('[_patch_yaml_key] 写入失败: %s', e)
+        return False
 
 
 def _core_plugin_desc(name: str):

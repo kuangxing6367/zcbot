@@ -244,7 +244,12 @@ def set_core_plugin_enabled(yaml_path, plugin_id, enabled):
                 for bl in block:
                     em = re.match(r"^    enabled\s*:\s*", bl)
                     if em:
-                        out.append("    enabled: %s" % ("true" if enabled else "false"))
+                        # 保留行尾注释（"enabled: false  # 说明" → 只换值，不吞注释）。
+                        # 只认 # 前有空白的情况，避免误伤 token: 'a#b' 这类值内井号。
+                        cm = re.search(r"\s+#.*$", bl)
+                        comment = cm.group(0) if cm else ""
+                        out.append("    enabled: %s%s" % (
+                            "true" if enabled else "false", comment))
                         found = True
                     else:
                         out.append(bl)

@@ -507,17 +507,46 @@ def register(ctx):
     @app.route('/api/config/core-plugins', methods=['PUT'])
     @require_super
     def toggle_core_plugin():
-        """切换官方插件开关（写回 core_plugins.yaml，需重启生效）"""
+        """切换官方插件开关：写回 core_plugins.yaml 并尝试同进程即时生效。
+
+        写回保注释；同步内存 config 后立即 load/unload 该官方插件，免去重启。
+        即时生效失败（如依赖缺失、事件循环未起）不回滚配置——落盘值已是权威，
+        下次启动仍会按新值加载，只是本次需提示重启。
+        """
         admin = request.admin
         data = request.get_json(silent=True) or {}
         name = data.get('name')
         enabled = data.get('enabled')
         if not name or enabled is None:
             return jsonify({'code': 400, 'msg': '缺少 name 或 enabled'}), 400
-        ok, needs_restart = set_core_plugin_enabled(name, bool(enabled))
+        if not name.replace('_', '').replace('-', '').isalnum():
+            return jsonify({'code': 400, 'msg': '非法插件名'}), 400
+
+        ok, _ = set_core_plugin_enabled(name, bool(enabled), framework.config)
         if not ok:
             return jsonify({'code': 404, 'msg': f'未知官方插件: {name}'}), 404
+
+        applied = False
+        apply_err = ''
+        try:
+            loader = framework.plugin_loader
+            if not enabled:
+                loader.unload_plugin(name)
+                applied = True
+            else:
+                # _load_core_plugins 会检查 _loaded_plugins 幂等并重新 register
+                framework._load_core_plugins(only={name})
+                applied = name in loader._loaded_plugins
+            framework.router._invalidate_cache()
+        except Exception as e:
+            apply_err = str(e)
+            logger.warning(f"[toggle_core_plugin] {name} 即时生效失败，重启后按新配置加载: {e}")
+
         audit_log(admin['id'], admin['username'], 'toggle_core_plugin', 'core_plugin',
-                  name, {'enabled': enabled})
-        return jsonify({'code': 0, 'msg': f'[{name}] 已{"启用" if enabled else "禁用"}'
-                                      f'，{"重启框架后生效" if needs_restart else ""}'})
+                  name, {'enabled': enabled, 'applied': applied})
+        msg = f'[{name}] 已{"启用" if enabled else "禁用"}'
+        if applied:
+            msg += '（已即时生效）'
+        else:
+            msg += f'（重启框架后生效{": " + apply_err if apply_err else ""}）'
+        return jsonify({'code': 0, 'msg': msg, 'applied': applied})
