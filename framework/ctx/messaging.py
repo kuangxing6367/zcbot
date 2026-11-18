@@ -72,6 +72,110 @@ class PluginMessagingMixin:
             self._bb_send_fail(user_id, group_id, bot, e)
             raise
 
+    def recall(self, message_id, bot: str = None):
+        """
+        撤回消息（底层 `delete_msg`）。
+
+        平台侧一般只允许撤回自己发出的消息，且有时限（QQ 约 2 分钟）；
+        超时或无权撤回时返回 `retcode=-1`，不抛异常。
+        """
+        act = self.actions
+        # onebot_api 上有显式的 delete_msg；ActionProxy 只有 __getattr__ 动态
+        # 生成的同名方法，签名是 (bot=None, **params)。若对代理用位置传参，
+        # message_id 会被当成 bot 发出去——静默发错目标，比报错更难查。
+        if hasattr(type(act), 'delete_msg'):
+            return act.delete_msg(message_id, bot=bot)
+        return act.call('delete_msg', bot=bot, message_id=message_id)
+
+    async def arecall(self, message_id, bot: str = None):
+        """异步撤回消息（async handler 推荐，不阻塞事件循环）"""
+        # 两种动作面的 acall 签名一致（action, bot=None, **params），可统一走
+        return await self.actions.acall('delete_msg', bot=bot, message_id=message_id)
+
+    def download_media(self, segment, dest_dir: str = None, filename: str = None,
+                       max_bytes: int = None, timeout: float = 30,
+                       bot: str = None) -> dict:
+        """
+        把消息里的媒体落到本地，返回 `{'status','path','size','ref','msg'}`。
+
+        `segment` 可以是规范段（`ev.first_image` 之类）或裸引用字符串。
+        支持 http(s) / base64 / file:// / 本地路径；`file_id` 会交给接入端
+        换取真实地址（拿不到就是拿不到，不猜）。
+
+        落盘规则：先按引用种类预检长度，再流式写入 `.part`，写完转正；
+        任何一步失败都删掉半成品。超限返回 `status='failed'`，不会截断保存。
+        """
+        from framework.messaging.media_io import (
+            DEFAULT_MAX_BYTES,
+            segment_file_id,
+        )
+        from framework.messaging.media_io import (
+            download as _download,
+        )
+
+        try:
+            limit = DEFAULT_MAX_BYTES if max_bytes is None else int(max_bytes)
+        except (TypeError, ValueError):
+            return {'status': 'failed', 'path': '', 'size': 0, 'ref': '',
+                    'msg': f'max_bytes 不是整数: {max_bytes!r}'}
+
+        opts = {'dest_dir': dest_dir, 'filename': filename,
+                'max_bytes': limit, 'timeout': timeout}
+        res = _download(segment, **opts)
+        if res.get('status') != 'needs_adapter':
+            return res
+
+        # file_id：向接入端换一次真实地址。只换一次，不递归追问——
+        # 若换回来的还是 file_id，说明这个接入端没有可用的下载动作。
+        file_id = segment_file_id(segment)
+        if not file_id:
+            return {**res, 'status': 'unsupported',
+                    'msg': '该段只有 file_id / file_info，但取不出可用标识'}
+        act = self.actions
+        for action, params in (('get_image', {'file': file_id}),
+                               ('get_record', {'file': file_id, 'out_format': 'mp3'})):
+            try:
+                raw = getattr(act, action)(bot=bot, **params)
+            except Exception as e:
+                logger.debug('[download_media] %s 不可用: %s', action, e)
+                continue
+            real = self._media_ref_from_action(raw)
+            if real:
+                again = _download(real, **opts)
+                if again.get('status') != 'needs_adapter':
+                    return again
+                break
+        return {**res, 'status': 'unsupported',
+                'msg': '该接入端未能把 file_id 换成可下载地址'}
+
+    async def adownload_media(self, segment, dest_dir: str = None,
+                              filename: str = None, max_bytes: int = None,
+                              timeout: float = 30, bot: str = None) -> dict:
+        """
+        `download_media` 的异步版本。
+
+        下载是网络 IO，同步版本会占住事件循环——定时任务和别的插件都得等
+        它下完。async handler 里请用这个。
+        """
+        import asyncio
+        return await asyncio.to_thread(
+            self.download_media, segment, dest_dir=dest_dir, filename=filename,
+            max_bytes=max_bytes, timeout=timeout, bot=bot)
+
+    @staticmethod
+    def _media_ref_from_action(raw):
+        """从接入端动作返回值里挖出可下载的地址（各端字段不一致）。"""
+        if not isinstance(raw, dict):
+            return ''
+        data = raw.get('data')
+        if not isinstance(data, dict):
+            return ''
+        for key in ('file', 'url', 'path'):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        return ''
+
     def ban(self, group_id: int, user_id: int, duration: int = 600, bot: str = None):
         """快捷禁言群成员（duration=0 解禁）（同步桥接）"""
         return self.actions.set_group_ban(group_id, user_id, duration=duration, bot=bot)

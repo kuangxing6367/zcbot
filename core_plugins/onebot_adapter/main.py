@@ -817,7 +817,49 @@ class OneBotAdapter(ProtocolAdapter):
         return normalize_event(raw_event, bot_name)
 
     async def call_api(self, action: str, bot: str = None, **params) -> dict:
+        # 发送类动作先把消息翻成 OneBot 原生段。不翻的话，插件按规范段写
+        # `image(url=...)` 会被原样透传——OneBot 发送只认 `file` 键，`url` 是
+        # 入站只读字段，结果是"调用成功但图没发出去"，最难查的那类失败。
+        if action in ('send_msg', 'send_private_msg', 'send_group_msg') \
+                and 'message' in params and not params.get('auto_escape'):
+            params['message'] = self.outgoing(params['message'])
         return await self.api_caller.acall(action, bot=bot, **params)
+
+    def to_native(self, segments: list):
+        """
+        规范段 → OneBot 11 段数组。
+
+        两件事必须做，否则消息静默走样：
+
+        1. **文件引用挪进 `file`**：规范段允许 `url` / `path` / `base64`，
+           OneBot 发送只认 `file`（URL 或 `base64://...` 都行）。
+        2. **`voice` 反向映射回 `record`**：规范名是 voice，OneBot 的段名是
+           record。直接用规范名发出去，NapCat 等实现会当未知段忽略。
+        """
+        from framework.messaging.segments import MEDIA_TYPES, canonical_type
+
+        out = []
+        for s in segments or []:
+            if not isinstance(s, dict):
+                continue
+            stype = canonical_type(s.get('type'))
+            data = dict(s.get('data') or {})
+            # 空文本段没有任何意义，发出去只会让 OneBot 返回业务错误
+            if stype == 'text' and not str(data.get('text') or ''):
+                continue
+            if stype in MEDIA_TYPES and not data.get('file'):
+                for key in ('url', 'path'):
+                    val = data.get(key)
+                    if isinstance(val, str) and val.strip():
+                        data['file'] = val.strip()
+                        break
+                base64_val = data.get('base64')
+                if not data.get('file') and isinstance(base64_val, str) \
+                        and base64_val.strip():
+                    data['file'] = f'base64://{base64_val.strip()}'
+            out.append({'type': 'record' if stype == 'voice' else stype,
+                        'data': data})
+        return out
 
     async def send_text(self, text: str, *, user_id=None, group_id=None,
                         source: str = None) -> dict:

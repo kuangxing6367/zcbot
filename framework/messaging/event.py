@@ -543,6 +543,11 @@ class Event:
         return bool(pick(self.segments, 'sticker'))
 
     @property
+    def has_video_note(self) -> bool:
+        """消息是否包含视频便签（圆形短视频）"""
+        return bool(pick(self.segments, 'video_note'))
+
+    @property
     def has_face(self) -> bool:
         """消息是否包含表情"""
         return bool(pick(self.segments, 'face'))
@@ -603,7 +608,14 @@ class Event:
 
     @property
     def voices(self) -> list:
-        """获取消息中所有语音的 data（跨协议统一，OneBot 的 record 也在此列）"""
+        """
+        获取消息中所有语音的 data（跨协议统一）。
+
+        OneBot 的 `record`、Telegram / KOOK 的 `voice`、以及 `audio`
+        （音频文件）在归一阶段都映射到 `voice`，所以这里拿到的是
+        **全部音频类段**。要区分"语音消息"与"音频文件"，按 `self.adapter`
+        分支读原始事件，或看段里的 `duration` / `name` 字段。
+        """
         return data_list(self.segments, 'voice')
 
     @property
@@ -620,6 +632,16 @@ class Event:
     def stickers(self) -> list:
         """获取消息中所有贴纸的 data（Telegram / Discord）"""
         return data_list(self.segments, 'sticker')
+
+    @property
+    def video_notes(self) -> list:
+        """
+        获取消息中所有视频便签（圆形短视频，Telegram `video_note`）的 data。
+
+        与 `videos` 分开：视频便签没有缩略图也没有文件名，本质是自拍留言，
+        混进普通视频里会让按 `videos` 处理的插件把两种东西当成一种。
+        """
+        return data_list(self.segments, 'video_note')
 
     @property
     def first_image(self) -> dict:
@@ -643,6 +665,12 @@ class Event:
     def first_file(self) -> dict:
         """获取第一个文件的数据（没有返回空 dict）"""
         got = self.files
+        return got[0] if got else {}
+
+    @property
+    def first_video_note(self) -> dict:
+        """获取第一条视频便签的数据（没有返回空 dict）"""
+        got = self.video_notes
         return got[0] if got else {}
 
     def media_url(self, segment: dict) -> str:

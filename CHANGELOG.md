@@ -26,6 +26,62 @@
 
 ---
 
+## [1.27.0] - 2026-11-18
+
+> 主题：**富媒体与群操作，从「只有纯文本的说明」补成一套完整文档**。
+> 报告的原话是「没看到这方面的说明，只有单纯的文本消息」。核实下来代码能力
+> 远比文档多：34 种规范段、21 个群操作方法、6 个接入端各自能发媒体——文档里
+> 却只有三行 CQ 码例子和一行群管示例。这一版把说明书补全，顺手堵掉了补文档
+> 过程中暴露的四个真实缺口。
+
+1. **重写《对接 IM 平台》的操作章节**（252 → 576 行）—— 新增「富媒体：怎么读」
+   「富媒体：怎么发」「落盘」「群操作」「撤回」五节，含 34 种段类型总表、
+   `data` 约定字段表、各接入端能力矩阵，以及每个接入端的发送前提与坑
+   （QQ 官方一条只带一个媒体、Discord 远程 URL 当不了附件、Matrix 不吃 http、
+   KOOK 一条只有一种 type）。
+2. **修正一处文档错误** —— 原文写「KOOK / Matrix 暂只发文本」，实际两者在
+   `call_api` 里各自实现了 `send_media`（KOOK 还认自家 CDN 地址免重传）。
+   照原文判断会白白放弃两个接入端的媒体能力。
+3. **公开四个「保留名」** —— `audio` / `animation` / `card` / `quote` 四种段类型
+   在归一阶段分别并入 `voice` / `video` / `json` / `reply`，**永远不会以本体出现**。
+   实测 `ALL_TYPES` 34 个类型里只有 30 个可达。这件事以前只写在别名表的注释里，
+   写插件的人踩到只会觉得「属性坏了」。现在进文档，并用两例回归锁住行为。
+4. **新增 `ev.video_notes` / `first_video_note` / `has_video_note`** ——
+   视频便签（Telegram 圆形短视频）此前只能自己 `pick()`。它是可达类型，
+   与 `audio` / `animation` 不同，补属性才不会落空。
+5. **新增 `ctx.recall` / `ctx.arecall`** —— 撤回以前要写 `ctx.onebot.delete_msg`，
+   纯 OneBot 写法。两种动作面的签名差异在这里会**静默**出错：`ActionProxy`
+   的动态方法签名是 `(bot=None, **params)`，位置传参会把 `message_id` 当 `bot`
+   发出去——没有异常、没有日志，就是没撤回。实现按「类上是否有显式方法」
+   分支，两种面都走关键字。
+6. **新增 `ctx.download_media` / `ctx.adownload_media` + `framework/messaging/media_io.py`**
+   —— 统一把媒体引用（http / base64 / `file://` / 本地路径 / `file_id`）落盘。
+   `file_id` 由接入端换地址（`get_image` → `get_record` 兜底），换不出就明确报
+   `unsupported`，不猜也不试。安全顺序固定为**预检 → 流式写 `.part` → 复核转正**：
+   - base64 按长度估算，超限不进解码器（否则内存峰值翻倍）；
+   - HTTP 先看 `Content-Length`，服务端不给就边写边累计，越线立刻停；
+   - 文件名强净化（切分隔符、去控制字符、改写 Windows 保留名），落盘前再验一次
+     没越出目标目录；`../../config.yaml` 是普通输入而不是攻击尝试；
+   - 任何失败都删半成品，不留看着正常的残文件；同名不覆盖，加序号。
+7. **补 OneBot 出站段转换** —— 这是个会白写文档的坑：`image(url=...)` 在
+   Telegram / Discord / KOOK / Matrix / QQ 官方都能用（它们都读 `media_ref`），
+   唯独 OneBot 是原样透传，而 OneBot **发送只认 `file` 键**，`url` 是入站只读
+   字段。照新文档写，在默认接入端上就是「调用成功但图没发出去」。现在
+   `to_native` 把 `url` / `path` / `base64` 挪进 `file`，并把规范名 `voice`
+   反向映射回 `record`（发 `voice` 出去会被 NapCat 当未知段忽略）。
+   `auto_escape=True` 时不做这套转换——那是「当纯文本」的显式约定。
+8. **顺带修一个 Windows 才暴露的清理 bug** —— HTTP 超限分支原本在 `with open()`
+   块内 `unlink` 半成品，句柄还开着，Windows 上删不掉，`.part` 就留在磁盘上了。
+   改成抛异常到块外清理。这个 bug 只有在「超限 + Windows」同时成立时才现形，
+   是新写的用例逼出来的。
+
+验证：全量 `1310 passed, 1 skipped`（JUnit XML 复核 `tests=1311 failures=0 errors=0`）；
+新增 `tests/test_media_io.py` 74 例（目录穿越 / Windows 保留名 / NUL / 控制字符 /
+截断 base64 / 超限预检 / 流式越线 / 非 2xx / 空 body / 残留 `.part` 归零）、
+`tests/test_ctx_media.py` 37 例（两种动作面的撤回 / `file_id` 换地址与兜底 /
+四种畸形 `name` / OneBot 段转换与 `auto_escape`）；
+`tools/run_script_tests.py` 20 个脚本式文件全 PASS；`ruff` 同 CI 口径 select 0 error。
+
 ## [1.26.0] - 2026-11-18
 
 > 主题：**数据库自动备份**。以前的备份只服务「迁移前留个回退点」，跑完就没人管；
