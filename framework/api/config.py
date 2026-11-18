@@ -211,6 +211,40 @@ def register(ctx):
                 allowed['listen_port'] = int(allowed['listen_port'])
             except (TypeError, ValueError):
                 return jsonify({'code': 400, 'msg': 'listen_port 必须是整数'}), 400
+        # 多实例：只接受「对象列表」，端口逐项校验；空列表表示回退单实例
+        if 'instances' in allowed:
+            inst = allowed['instances']
+            if inst in (None, '', []):
+                allowed['instances'] = []
+            elif not isinstance(inst, list) or any(not isinstance(x, dict) for x in inst):
+                return jsonify({'code': 400, 'msg': 'instances 必须是对象列表'}), 400
+            else:
+                cleaned = []
+                for i, item in enumerate(inst, 1):
+                    row = {}
+                    for k in ('listen_host', 'access_token', 'bot_name_prefix'):
+                        if item.get(k) not in (None, ''):
+                            row[k] = str(item[k]).strip()
+                    port = item.get('listen_port')
+                    if port not in (None, ''):
+                        try:
+                            port = int(port)
+                        except (TypeError, ValueError):
+                            return jsonify({'code': 400,
+                                            'msg': f'第 {i} 个实例的 listen_port 必须是整数'}), 400
+                        if not 1 <= port <= 65535:
+                            return jsonify({'code': 400,
+                                            'msg': f'第 {i} 个实例的 listen_port 超出 1..65535'}), 400
+                        row['listen_port'] = port
+                    if row:
+                        cleaned.append(row)
+                allowed['instances'] = cleaned
+        if 'ssl_enabled' in allowed:
+            v = allowed['ssl_enabled']
+            allowed['ssl_enabled'] = v if isinstance(v, bool) else str(v).lower() in ('1', 'true', 'yes', 'on')
+        for k in ('wss_cert', 'wss_key'):
+            if k in allowed and allowed[k] is not None:
+                allowed[k] = str(allowed[k]).strip()
 
         merged = dict(_read_yaml_section(section))
         merged.update(allowed)

@@ -780,6 +780,7 @@ def create_web_app(framework) -> Flask:
         auth,
         commands,
         config,
+        console,
         dashboard,
         db_gateway,
         files,
@@ -806,6 +807,7 @@ def create_web_app(framework) -> Flask:
     tasks.register(ctx)
     logs.register(ctx)
     config.register(ctx)
+    console.register(ctx)
     # 健康探针 / 指标：必须早于蜜罐注册 —— 蜜罐的 /healthz /readyz /metrics 诱饵
     # 只在没有真实路由时才生效（其注册时自行跳过已被占用的路径）。
     observability.register(ctx)

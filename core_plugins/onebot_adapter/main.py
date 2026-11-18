@@ -706,16 +706,42 @@ class OneBotAdapter(ProtocolAdapter):
         else:
             self.api_caller = ApiCaller()
             self.api_caller.on_message_sent = self._on_message_sent
-        # SSL：与 Web 后台共用 config['ssl']；启用后反向 WS 走 wss
-        ssl_context = None
+        # SSL：适配器自带证书优先（ssl_enabled + wss_cert/wss_key），否则沿用全局 config['ssl']
+        self._ssl_source = None
+        self.ssl_context = self._build_ssl_context()
+        self.ws_server = OneBotWebSocketServer(
+            self.config, self._on_raw_event, self.api_caller, ssl_context=self.ssl_context)
+        self._onebot_api = OneBotAPI(self.api_caller)
+
+    def _build_ssl_context(self):
+        """构建反向 WS 的 TLS 上下文。
+
+        优先级：本适配器 `ssl_enabled` + `wss_cert`/`wss_key` → 全局 `config['ssl']` → 不加密。
+        做成分级而不是只有一个全局开关，是因为同一台机器上常有「后台走 HTTPS、
+        机器人接入还留在内网 ws」的部署；强制共用一个开关会逼人二选一。
+        """
+        if self.config.get('ssl_enabled'):
+            cert = str(self.config.get('wss_cert') or '').strip()
+            key = str(self.config.get('wss_key') or '').strip()
+            if cert and key:
+                try:
+                    import ssl as _ssl
+                    ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+                    ctx.load_cert_chain(cert, key)
+                    self._ssl_source = 'adapter'
+                    logger.info(f"OneBot 反向 WS 启用适配器证书: {cert}")
+                    return ctx
+                except Exception as e:
+                    logger.error(f"适配器 WSS 证书加载失败，回退全局 SSL 配置: {e}")
+            else:
+                logger.warning("onebot.ssl_enabled 已开启但缺少 wss_cert / wss_key，回退全局 SSL 配置")
         try:
-            ssl_context = framework.build_ssl_context()
+            ctx = self.framework.build_ssl_context()
         except Exception as e:
             logger.error(f"SSL 配置无效，OneBot 反向 WS 回退为 ws: {e}")
-        self.ssl_context = ssl_context
-        self.ws_server = OneBotWebSocketServer(
-            self.config, self._on_raw_event, self.api_caller, ssl_context=ssl_context)
-        self._onebot_api = OneBotAPI(self.api_caller)
+            ctx = None
+        self._ssl_source = 'global' if ctx else None
+        return ctx
 
     def get_connection_info(self) -> dict | None:
         """连接自描述：供 WebUI /api/connection 动态渲染（内核不写死 OneBot 字段）"""
@@ -738,17 +764,23 @@ class OneBotAdapter(ProtocolAdapter):
                 {'key': 'listen_port', 'label': '监听端口', 'type': 'number'},
                 {'key': 'access_token', 'label': 'Access Token', 'type': 'password'},
                 {'key': 'bot_name_prefix', 'label': '实例名前缀(多实例隔离用)', 'type': 'string'},
+                {'key': 'ssl_enabled', 'label': '本适配器启用 WSS', 'type': 'boolean'},
+                {'key': 'wss_cert', 'label': 'WSS 证书路径', 'type': 'string'},
+                {'key': 'wss_key', 'label': 'WSS 私钥路径', 'type': 'string'},
+                {'key': 'instances', 'label': '多实例（端口 / Token）', 'type': 'instances'},
                 {'key': 'max_pending_events', 'label': '分发积压上限(条)', 'type': 'number'},
                 {'key': 'max_pending_bytes', 'label': '分发层字节上限(字节)', 'type': 'number'},
                 {'key': 'max_frame_size', 'label': 'WS 单帧上限(字节)', 'type': 'number'},
             ],
-            # instances[] 改动需重启（涉及增删监听端口，不做热增删）
-            'restart_keys': ['listen_host', 'listen_port', 'max_frame_size', 'instances'],
+            # instances[] / ssl 改动需重启（涉及增删监听端口与重建 TLS 上下文）
+            'restart_keys': ['listen_host', 'listen_port', 'max_frame_size', 'instances',
+                             'ssl_enabled', 'wss_cert', 'wss_key'],
             'endpoint_hint': endpoints[0] if endpoints else f"{scheme}://{host}:{port}/ws",
             'endpoints': endpoints,
             'guide': 'OneBot 客户端（NapCat / Lagrange / LLOneBot 等）添加「反向 WebSocket」连接，'
                      '填写反向 WS 服务端地址即可接入。需要一份配置多端口监听时，在 onebot.instances 列表中追加实例。',
-            'status_extra': {'ws_port': port, 'instance_count': len(inst_cfgs)},
+            'status_extra': {'ws_port': port, 'instance_count': len(inst_cfgs),
+                             'ssl_source': getattr(self, '_ssl_source', None)},
         }
 
     # ── 消息契约 ────────────────────────────────────────────────
