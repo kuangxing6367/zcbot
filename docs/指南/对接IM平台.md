@@ -220,6 +220,22 @@ async def raw_handler(raw_event, bot_name):
 
 多个原始处理器按插件 `priority` 升序执行，单个异常不影响别人。
 
+### 能力边界（哪些跨协议、哪些只对 OneBot 有效）
+
+写插件时最容易踩的坑是「在 OneBot 上测通了，换 Telegram 就不工作」。当前承诺的范围：
+
+| 能力 | 跨协议可用 | 说明 |
+|---|---|---|
+| 收文本 / 发文本 | ✅ 全部接入端 | `send_msg` / `ev.text`，接口不变 |
+| 读入站富媒体 | ✅ 全部接入端 | `ev.images` / `ev.voices` / `ev.videos` / `ev.files` 统一成规范消息段；拿不到的非文本段以 `unknown` 保留，不丢事件 |
+| 发图片 / @ / 引用 | ⚠️ 仅 OneBot 系 | 走 CQ 码或 `ctx.onebot`；其它平台按各自 API 自行封装 |
+| 群管（禁言 / 踢人 / 全员禁言 / 成员列表） | ⚠️ 仅 OneBot 系（`qq_official` 部分支持） | `ctx.ban` / `ctx.kick` / `ctx.mute_all` / `ctx.get_member_list` 底层是 OneBot action |
+| 任意平台扩展 action | ⚠️ 各自接入端 | `ctx.onebot.*` 只对 OneBot 生效；其它平台用其原生 SDK 自己封装 |
+
+原则是：**入站尽量归一，出站只承诺文本**。富媒体的发送语法天然是平台私有的，
+框架不假装统一——真要跨平台发图，请在插件里按 `ev.adapter`（消息来源接入端名）
+分支处理。
+
 ---
 
 ## 安全须知

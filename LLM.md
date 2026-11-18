@@ -13,6 +13,9 @@
 - **三条启动路径并存**:单进程(默认) / `dual_process` 双 Python 进程 / **`python startup.py --iipc`**
   (IIPC:Go 内核 + Rust 协议端 + 独立进程插件)。后两者**不是一回事**,别混:IIPC 内核是 Go 进程,
   DB 在 Go 侧执行不占 GIL;不带 `--iipc` 时主框架行为完全不变
+- **IIPC 已搁置**:新功能只在主框架落地,IIPC 侧不跟进(见 [docs/速查/IIPC内核链路.md](docs/速查/IIPC内核链路.md) 顶部)
+- Web 终端与 AI 智能体:`/api/console/{commands,exec,agent}` 直接复用 `ConsoleServer.run_command` / `run_agent`,
+  超管专用 + 审计 + 超时;不要再写第二套执行器
 
 ## 内核设计哲学
 

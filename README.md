@@ -11,7 +11,7 @@
 [![PyPI](https://img.shields.io/badge/PyPI-zcbot-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/zcbot/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#开源协议)
-[![Release](https://img.shields.io/badge/release-v1.23.0-orange)](https://gitee.com/liquanfeng123/zcbot/releases)
+[![Release](https://img.shields.io/badge/release-v1.24.0-orange)](https://gitee.com/liquanfeng123/zcbot/releases)
 
 <br>
 
@@ -35,7 +35,8 @@ ZCBOT 是一个**不绑定任何聊天协议**的机器人框架。内核只负�
 2. 🔌 **可插拔接入端** —— 内置 OneBot 11、QQ 官方、Telegram、Discord、出站 WS、HTTP 注入 / HTTP API。
 3. 🪝 **扩展点（Hook）系统** —— 可挂到启动 / 关闭、Web 请求、事件分发、命令执行、协议动作等几乎每一个运行环节。
 4. 🔥 **插件热加载** —— 放进 `plugins/` 即生效；用装饰器声明命令、权限、定时任务。
-5. 🖥️ **Web 管理后台** —— Vue 3 + Element Plus；插件、用户、权限、日志、数据库一站管理。
+5. 🖥️ **Web 管理后台** —— Vue 3 + Element Plus；插件、用户、权限、日志、数据库一站管理，
+   内置 **Web 终端**（与运维终端同一套命令表）与 **AI 智能体**（aiwriter）对话入口。
 6. 🔐 **权限与令牌** —— 节点式权限引擎 + 接口令牌（API Key），细粒度控制到命令级。
 7. ⏱️ **多轮会话 / 定时任务** —— 会话状态与调度器均为官方插件，按需启用。
 8. 🗄️ **双方言数据库** —— SQLite 零配置开箱即用，大环境一键切 MySQL。
