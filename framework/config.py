@@ -83,9 +83,9 @@ database:
     initial_delay_minutes: 5   # 启动后等 5 分钟再跑首次；0 = 启动不跑
     keep: 2                    # 最多保留 2 份
     compress: true             # 超过下面的阈值就打包 zip
-    compress_threshold_kb: 100 # 快照大于 100KB 才压缩（不压就只是复制）
+    compress_threshold_mb: 100 # 快照大于 100MB 才压缩（不压就只是复制）
     compress_level: 1          # 1 档：压缩时尽量不抢 CPU，不卡事件处理
-    refuse_above_mb: 100       # 超过 100MB 暂停备份并提示，等人确认
+    refuse_above_mb: 100       # 压缩后仍超 100MB 才暂停备份，等人确认
     allow_large: false         # true = 无视上面的上限（确认库体积正常后再开）
     min_free_after_mb: 0.5     # 空间探测写到只剩 512KB 就停手并清理
     headroom_ratio: 1.10       # 预留空间 = 库体积 × 该系数
@@ -608,7 +608,7 @@ _CONFIG_SCHEMA = {
                     'initial_delay_minutes': {'float': True, 'min': 0},
                     'keep': {'int': True, 'min': 1, 'max': 100},
                     'compress': {'bool': True},
-                    'compress_threshold_kb': {'float': True, 'min': 0},
+                    'compress_threshold_mb': {'float': True, 'min': 0},
                     'compress_level': {'int': True, 'min': 0, 'max': 9},
                     'refuse_above_mb': {'float': True, 'min': 0},
                     'allow_large': {'bool': True},

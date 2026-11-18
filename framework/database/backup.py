@@ -18,9 +18,10 @@
 - **弹性探测只探不收**：写满到 ``min_free_after``（默认 512KB）立刻停手并删除
   探针文件。这不是「填满磁盘」，是「探到边界就撤」——真填满会让正在跑的
   数据库/日志写入失败，那比没有备份更糟。
-- **超过 ``refuse_above_mb`` 就停下来问人**，不自动删、不自动截断。库突然从
-  几 MB 涨到几百 MB 通常意味着出了事（日志表爆炸 / 循环写入），这时候悄悄
-  备份反而是掩盖问题。
+- **先压再判上限**：``refuse_above_mb``（默认 100MB）是**目标上限**，不是
+  原始快照的死线。超过 ``compress_threshold_mb`` 就先打包 zip 把体积压下来，
+  压完仍超上限才停下来问人，不自动删、不自动截断。库突然从几 MB 涨到几百 MB
+  通常意味着出了事（日志表爆炸 / 循环写入），这时候悄悄备份反而是掩盖问题。
 """
 import logging
 import os
@@ -48,10 +49,12 @@ DEFAULTS = {
     # 保留份数。用户拍板：与迁移前备份统一都是 2 份。
     'keep': 2,
     'compress': True,
-    # 「默认不大于 100KB」：超过这个体积就打包压缩试试，而不是硬拒绝。
-    'compress_threshold_kb': 100,
+    # 「默认不大于 100MB」：超过这个体积就打包压缩试试，而不是硬拒绝。
+    # 注意单位是 MB —— 曾经的 compress_threshold_kb（100KB）是读错了手写稿，
+    # 100KB 这个量级下任何真实库都必然触发压缩，等于压缩开关恒等于开。
+    'compress_threshold_mb': 100,
     'compress_level': 1,
-    # 超过 100MB 就不备份了，提示人去确认（除非配置放开）。
+    # 压缩之后仍超过 100MB 才不备份，提示人去确认（除非配置放开）。
     'refuse_above_mb': 100,
     'allow_large': False,
     # 探针停手线：写到只剩这么点就收。
@@ -85,6 +88,29 @@ def _num(cfg, key, default=None, cast=float, minimum=None, maximum=None):
     return val
 
 
+_LEGACY_WARNED = False
+
+
+def _threshold_mb(cfg) -> float:
+    """取压缩阈值（单位 MB），兼容早期读错单位的 ``compress_threshold_kb``。
+
+    老键不静默丢弃：用户在配置里显式写过的值，哪怕单位是错的，也按换算后
+    生效并喊一声，而不是默默换成默认的 100MB。
+    """
+    global _LEGACY_WARNED
+    if 'compress_threshold_mb' in cfg:
+        return _num(cfg, 'compress_threshold_mb', minimum=0)
+    if 'compress_threshold_kb' in cfg:
+        kb = _num(cfg, 'compress_threshold_kb', minimum=0)
+        if not _LEGACY_WARNED:
+            _LEGACY_WARNED = True
+            logger.warning(
+                '备份配置 compress_threshold_kb=%r 已废弃（阈值单位是 MB），'
+                '本次按 %.3f MB 处理；请改用 compress_threshold_mb', kb, kb / 1024.0)
+        return kb / 1024.0
+    return float(DEFAULTS['compress_threshold_mb'])
+
+
 def load_config(cfg=None) -> dict:
     """把 ``database.backup`` 归一成可直接用的 dict（含钳制）。"""
     cfg = cfg or {}
@@ -96,7 +122,7 @@ def load_config(cfg=None) -> dict:
         'initial_delay_minutes': _num(cfg, 'initial_delay_minutes', minimum=0),
         'keep': int(_num(cfg, 'keep', minimum=1, maximum=100)),
         'compress': bool(cfg.get('compress', DEFAULTS['compress'])),
-        'compress_threshold_kb': _num(cfg, 'compress_threshold_kb', minimum=0),
+        'compress_threshold_mb': _threshold_mb(cfg),
         'compress_level': int(_num(cfg, 'compress_level', minimum=0, maximum=9)),
         'refuse_above_mb': _num(cfg, 'refuse_above_mb', minimum=0),
         'allow_large': bool(cfg.get('allow_large', DEFAULTS['allow_large'])),
@@ -107,8 +133,9 @@ def load_config(cfg=None) -> dict:
         'verify': bool(cfg.get('verify', DEFAULTS['verify'])),
         'verify_sqlite': bool(cfg.get('verify_sqlite', DEFAULTS['verify_sqlite'])),
     }
-    if not out['compress']:
-        out['compress_threshold_kb'] = float('inf')
+    # 不再把阈值改成 inf：``compress=false`` 时下面「压缩」那一段本来就会跳过，
+    # 而 inf 会被原样写回 config.yaml（``compress_threshold_mb: .inf``），
+    # 那份配置下次读回来还得再绕一次。
     return out
 
 
@@ -585,22 +612,14 @@ def run_backup(database, cfg: dict = None, reason: str = 'auto',
             logger.debug('[run_backup] 清理失败快照失败: %s', _exc)
         return _finish('failed', False, '快照失败（%s: %s）' % (type(e).__name__, e))
 
-    # ── 体积上限：太大不备份，先问人 ──
-    limit = int(conf['refuse_above_mb'] * 1048576)
-    if limit and size > limit and not conf['allow_large']:
-        try:
-            os.remove(part)
-        except OSError as _exc:
-            logger.debug('[run_backup] 清理超限快照失败: %s', _exc)
-        return _finish(
-            'refused', False,
-            '快照 %s 超过上限 %s，已暂停备份。确认库体积正常后可调大 '
-            'database.backup.refuse_above_mb，或临时置 allow_large=true。'
-            % (_mb(size), _mb(limit)), size=size)
-
     # ── 压缩（超过阈值才压） ──
+    # 顺序很关键：压缩必须在「判上限」之前。手写稿里 100MB 既是压缩阈值又是
+    # 拒绝线——先判拒绝的话，超过 100MB 的库根本没机会被压下来，压缩分支
+    # 永远走不到（等于这个功能白写）。
+    raw_size = size
+    threshold = int(conf['compress_threshold_mb'] * 1048576)
     compressed = False
-    if conf['compress'] and size > conf['compress_threshold_kb'] * 1024:
+    if conf['compress'] and size > threshold:
         zpath = os.path.join(directory, base + '.zip' + PART_SUFFIX)
         res = compress_zip(part, zpath, level=conf['compress_level'])
         if res.get('ok'):
@@ -613,7 +632,24 @@ def run_backup(database, cfg: dict = None, reason: str = 'auto',
                         _mb(res['bytes_in']), _mb(res['bytes_out']),
                         100.0 * res['bytes_out'] / max(1, res['bytes_in']))
         else:
+            # 压缩没成，part 仍是原始快照；继续往下走，让上限检查按原始体积判
             logger.warning('备份压缩未生效：%s', res.get('note'))
+
+    # ── 压完还超上限：不备份，先问人 ──
+    limit = int(conf['refuse_above_mb'] * 1048576)
+    if limit and size > limit and not conf['allow_large']:
+        try:
+            os.remove(part)
+        except OSError as _exc:
+            logger.debug('[run_backup] 清理超限快照失败: %s', _exc)
+        return _finish(
+            'refused', False,
+            '快照 %s%s 超过上限 %s，已暂停备份。确认库体积正常后可调大 '
+            'database.backup.refuse_above_mb，或临时置 allow_large=true。'
+            % (_mb(raw_size),
+               '（压缩后 %s）' % _mb(size) if compressed else '',
+               _mb(limit)),
+            size=size, raw_size=raw_size)
 
     # ── 读回复核，过了才改名转正 ──
     if conf['verify']:

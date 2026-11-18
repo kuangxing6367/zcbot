@@ -21,7 +21,7 @@ TUNABLE = {
     'enabled': bool,
     'interval_hours': float,
     'keep': int,
-    'compress_threshold_kb': float,
+    'compress_threshold_mb': float,
     'compress_level': int,
     'refuse_above_mb': float,
     'allow_large': bool,

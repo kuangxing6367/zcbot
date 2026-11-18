@@ -69,10 +69,11 @@ def _files(out):
 def test_backup_ok_compresses_and_rotates(workdir):
     """连跑三次只留 2 份，且文件名唯一（同一秒内不能撞名覆盖）。"""
     db = FakeDB(workdir['db'])
+    # 阈值钉在 100KB：默认的 100MB 之下这个测试库（约 300KB）根本不会触发压缩
     for _ in range(3):
-        r = bk.run_backup(db, {'keep': 2}, reason='auto')
+        r = bk.run_backup(db, {'keep': 2, 'compress_threshold_mb': 0.1}, reason='auto')
         assert r['status'] == 'ok', r['note']
-        assert r['compressed'] is True  # 默认 100KB 阈值，这个库压得动
+        assert r['compressed'] is True
         assert (r.get('verify') or {}).get('kind') == 'zip-crc'
 
     files = [n for n in _files(workdir['out']) if not n.endswith('.part')]
@@ -82,13 +83,23 @@ def test_backup_ok_compresses_and_rotates(workdir):
 
 
 def test_small_db_below_threshold_is_not_compressed(workdir):
-    """阈值之上的才压；把阈值调到 10MB，这个库就该原样留 .db。"""
+    """阈值之上的才压；阈值调到 10MB，这个库就该原样留 .db。"""
     r = bk.run_backup(FakeDB(workdir['db']),
-                      {'compress_threshold_kb': 10240, 'keep': 2}, reason='auto')
+                      {'compress_threshold_mb': 10, 'keep': 2}, reason='auto')
     assert r['status'] == 'ok'
     assert r['compressed'] is False
     assert r['path'].endswith('.db')
     assert (r.get('verify') or {}).get('kind') == 'sqlite'
+
+
+def test_default_threshold_is_100mb_not_kb(workdir):
+    """默认阈值必须是 100MB —— 100KB 那版等于「压缩开关恒等于开」。"""
+    assert bk.DEFAULTS['compress_threshold_mb'] == 100
+    assert 'compress_threshold_kb' not in bk.DEFAULTS
+    # 默认配置下这个 300KB 的库不该被压
+    r = bk.run_backup(FakeDB(workdir['db']), {'keep': 2}, reason='auto')
+    assert r['status'] == 'ok'
+    assert r['compressed'] is False
 
 
 def test_previous_parts_are_cleaned(workdir):
@@ -238,6 +249,46 @@ def test_allow_large_overrides_limit(workdir):
     assert r['status'] == 'ok'
 
 
+def test_compress_runs_before_limit_check(workdir):
+    """先压再判上限：原始快照超线，压下来不超就该正常备份。
+
+    这是手写稿两条同时成立的关键——100MB 既是压缩阈值又是拒绝线。
+    先把顺序写反（先判拒绝），这里就会拿到 refused。
+    """
+    r = bk.run_backup(
+        FakeDB(workdir['db']),
+        {'keep': 2, 'compress_threshold_mb': 0.1, 'refuse_above_mb': 0.05},
+        reason='auto')
+    assert r['status'] == 'ok', r['note']
+    assert r['compressed'] is True
+    # 压缩后必须真的落到上限之下，否则上面那条 ok 是碰巧
+    assert r['size'] <= int(0.05 * 1048576), r['size']
+
+
+def test_refuse_judges_size_after_compression(workdir):
+    """压完仍超线才拒绝，且提示里要说清「压缩后」是多少。"""
+    r = bk.run_backup(
+        FakeDB(workdir['db']),
+        {'compress_threshold_mb': 0.1, 'refuse_above_mb': 0.00002},
+        reason='auto')
+    assert r['status'] == 'refused'
+    assert '上限' in r['note']
+    assert '压缩后' in r['note']
+    assert r['raw_size'] > r['size']  # 报告里两个体积都在，别只给一个
+    assert [n for n in _files(workdir['out'])] == []
+
+
+def test_compress_disabled_still_refuses_by_raw_size(workdir):
+    """关掉压缩就没有「压下来」这回事，按原始体积判，不假装压过。"""
+    r = bk.run_backup(
+        FakeDB(workdir['db']),
+        {'compress': False, 'refuse_above_mb': 0.0001},
+        reason='auto')
+    assert r['status'] == 'refused'
+    assert '压缩后' not in r['note']
+    assert [n for n in _files(workdir['out'])] == []
+
+
 # ── 校验 ──────────────────────────────────────────────────────
 
 def test_verify_failure_discards_backup(workdir, monkeypatch):
@@ -279,6 +330,21 @@ def test_config_bad_type_falls_back_to_default():
     conf = bk.load_config({'keep': '很多', 'interval_hours': 'abc'})
     assert conf['keep'] == bk.DEFAULTS['keep']
     assert conf['interval_hours'] == bk.DEFAULTS['interval_hours']
+
+
+def test_legacy_kb_key_is_converted_not_ignored():
+    """老键 compress_threshold_kb 按 KB ÷ 1024 换算，不能静默丢弃。"""
+    assert bk.load_config({'compress_threshold_kb': 10240})['compress_threshold_mb'] == 10.0
+    # 新键存在时以新键为准，老键不再参与
+    conf = bk.load_config({'compress_threshold_mb': 50, 'compress_threshold_kb': 10240})
+    assert conf['compress_threshold_mb'] == 50.0
+
+
+def test_compress_disabled_never_yields_inf():
+    """关压缩不该把阈值改成 inf —— 那会被原样写回 config.yaml。"""
+    conf = bk.load_config({'compress': False})
+    assert conf['compress_threshold_mb'] == bk.DEFAULTS['compress_threshold_mb']
+    assert conf['compress_threshold_mb'] != float('inf')
 
 
 def test_disabled_and_mysql_are_skipped(workdir):
