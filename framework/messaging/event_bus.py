@@ -290,11 +290,13 @@ class EventBus:
         finally:
             _CAUSAL_VAR.reset(token)
 
-    def emit(self, event_name: str, payload: dict = None):
+    def emit(self, event_name: str, payload: dict = None, parallel: bool = False,
+             allow: Callable = None):
         """
         同步桥接发布事件
         - 主事件循环内调用 → fire-and-forget 调度
         - 其他线程调用 → 用临时事件循环执行
+        - allow / parallel 与 aemit 同义，便于插件侧同步桥接也能定向投递
         """
         try:
             loop = asyncio.get_running_loop()
@@ -305,10 +307,11 @@ class EventBus:
             try:
                 # Python 官方文档明确要求保存 task 引用，否则任务可能被 GC
                 # 中途回收；原来的裸 create_task 没有引用。
-                task = loop.create_task(self.aemit(event_name, payload))
+                task = loop.create_task(
+                    self.aemit(event_name, payload, parallel=parallel, allow=allow))
                 self._pending_tasks.add(task)
                 task.add_done_callback(self._pending_tasks.discard)
                 return
             except RuntimeError:
                 pass
-        asyncio.run(self.aemit(event_name, payload))
+        asyncio.run(self.aemit(event_name, payload, parallel=parallel, allow=allow))

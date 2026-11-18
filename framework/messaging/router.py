@@ -317,13 +317,18 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
 
         try:
             rows = self.db.query(
+                "SELECT plugin_name, COALESCE(priority_override, priority) AS priority, "
+                "created_at FROM plugins "
+                "WHERE is_active = 1 AND has_register = 1 AND status = 'running' "
+                "ORDER BY priority ASC, created_at ASC"
+            )
+        except Exception:
+            # 迁移前老库：还没有 priority_override 列，按声明值排序
+            rows = self.db.query(
                 "SELECT plugin_name, priority, created_at FROM plugins "
                 "WHERE is_active = 1 AND has_register = 1 AND status = 'running' "
                 "ORDER BY priority ASC, created_at ASC"
             )
-        except Exception as e:
-            logger.error(f"构建路由表失败（插件排序）: {e}")
-            return
 
         # 合并排序来源：
         #  - 用户插件：plugins 表（含 is_active/has_register/status 过滤），带真实 priority/created_at

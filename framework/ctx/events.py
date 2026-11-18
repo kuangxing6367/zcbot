@@ -183,9 +183,29 @@ class PluginEventsMixin:
         self._raw_message_handlers.append(handler)
         self._journal('on_raw_message', handler.__name__)
 
-    def emit(self, event_name: str, payload: dict = None):
-        """发布事件（同步桥接，供旧插件使用）"""
-        self._framework.event_bus.emit(event_name, payload)
+    def emit(self, event_name: str, payload: dict = None, targets=None,
+             parallel: bool = False):
+        """发布事件给所有订阅者（同步桥接，兼容旧插件）。
+
+        :param targets: 可选，指定插件名（str 或可迭代）做定向投递；不传=广播给全部。
+        :param parallel: True 时并发执行互不依赖的订阅者，默认串行保序。
+        """
+        allow = None
+        if targets is not None:
+            names = {targets} if isinstance(targets, str) else set(targets)
+            allow = lambda plugin_name: plugin_name in names
+        self._framework.event_bus.emit(
+            event_name, payload, parallel=parallel, allow=allow)
+
+    async def aemit(self, event_name: str, payload: dict = None, targets=None,
+                    parallel: bool = False):
+        """发布事件的异步版本；返回是否有订阅者返回 True。targets 语义同 emit。"""
+        allow = None
+        if targets is not None:
+            names = {targets} if isinstance(targets, str) else set(targets)
+            allow = lambda plugin_name: plugin_name in names
+        return await self._framework.event_bus.aemit(
+            event_name, payload, parallel=parallel, allow=allow)
 
     # ---- 扩展点（内核契约：把行为挂到内核的任意运行环节）----
 
@@ -230,10 +250,6 @@ class PluginEventsMixin:
         name = f"{self._plugin_name}:{point}"
         self._framework.hooks.unregister(point, name)
         return True
-
-    async def aemit(self, event_name: str, payload: dict = None):
-        """异步发布事件（推荐 async handler 使用，不阻塞事件循环）"""
-        await self._framework.event_bus.aemit(event_name, payload)
 
     # ---- 统一 API 入口 ----
 

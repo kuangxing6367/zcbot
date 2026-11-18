@@ -746,6 +746,31 @@ def _migrate_api_tokens_hash(database):
                     "（存量 Key 仍可正常使用）", migrated)
 
 
+def _migrate_plugins_priority_override(database):
+    """v12：plugins 表增加 priority_override（WebUI 拖拽排序的 DB 覆盖值）。
+
+    priority 仍是插件声明值，由每次 register 心跳刷新；覆盖值单独存一列，
+    NULL = 未覆盖，回落声明值。这样插件升级改了声明优先级也不会冲掉用户在
+    面板上排好的顺序，清空覆盖即可回到声明值。
+    """
+    try:
+        if database.table_exists('plugins') and \
+           not database.table_has_column('plugins', 'priority_override'):
+            if database.db_type == 'sqlite':
+                database.execute(
+                    "ALTER TABLE plugins ADD COLUMN priority_override INTEGER DEFAULT NULL"
+                )
+            else:
+                database.execute(
+                    "ALTER TABLE plugins ADD COLUMN priority_override INT DEFAULT NULL "
+                    "COMMENT 'WebUI 优先级覆盖(NULL=使用插件声明值)'"
+                )
+            logger.info("数据库迁移: plugins 表添加 priority_override 列")
+    except Exception as e:
+        logger.warning("数据库迁移 plugins.priority_override 失败: %s", e)
+        raise
+
+
 # ── 迁移注册表 ────────────────────────────────────────────────
 #
 # 铁律：
@@ -792,5 +817,8 @@ MIGRATIONS = (
               level=LEVEL_ADDITIVE),
     Migration(11, 'api_tokens.hash', _migrate_api_tokens_hash,
               'api_tokens 明文 API Key 原地收敛为 sha256 摘要（存量 Key 不失效）',
+              level=LEVEL_ADDITIVE),
+    Migration(12, 'plugins.priority_override', _migrate_plugins_priority_override,
+              'plugins 表增加 priority_override（WebUI 排序覆盖，NULL=回落声明值）',
               level=LEVEL_ADDITIVE),
 )

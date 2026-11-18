@@ -49,13 +49,26 @@ def register(ctx):
     def list_plugins():
         """获取插件列表（含命令/任务计数）"""
         try:
-            rows = db.query(
-                "SELECT id, plugin_name, version, author, description, priority, "
-                "status, is_active, has_register, loaded_at, created_at "
-                "FROM plugins ORDER BY priority ASC, created_at ASC"
-            )
+            try:
+                rows = db.query(
+                    "SELECT id, plugin_name, version, author, description, "
+                    "COALESCE(priority_override, priority) AS priority, "
+                    "priority AS priority_declared, priority_override, "
+                    "status, is_active, has_register, loaded_at, created_at "
+                    "FROM plugins ORDER BY priority ASC, created_at ASC"
+                )
+            except Exception:
+                # 迁移前的老库：还没有 priority_override 列，按声明值展示
+                rows = db.query(
+                    "SELECT id, plugin_name, version, author, description, priority, "
+                    "priority AS priority_declared, NULL AS priority_override, "
+                    "status, is_active, has_register, loaded_at, created_at "
+                    "FROM plugins ORDER BY priority ASC, created_at ASC"
+                )
             loaded = framework.plugin_loader.get_loaded_plugins()
             for r in rows:
+                r['priority_source'] = (
+                    'override' if r.get('priority_override') is not None else 'declared')
                 r['is_loaded'] = r['plugin_name'] in loaded
                 # 核心插件/服务型插件不参与心跳，status 会一直停在初始 stopped；
                 # 只要实际已加载就按运行中显示（error/oom 等异常状态仍原样保留）
@@ -97,7 +110,7 @@ def register(ctx):
                 except Exception as _exc:
                     logger.debug('[list_plugins] 捕获异常后按降级路径继续: %s', _exc)
                     r['task_count'] = 0
-            return jsonify({'code': 0, 'data': rows})
+                return jsonify({'code': 0, 'data': rows})
         except Exception as e:
             logger.error(f"获取插件列表失败: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
@@ -317,6 +330,57 @@ def register(ctx):
             return jsonify({'code': 0, 'msg': f'插件已{"启用" if is_active else "禁用"}'})
         except Exception as e:
             logger.error(f"toggle_plugin 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+    @app.route('/api/plugins/<plugin_name>/priority', methods=['PUT'])
+    @require_super
+    def set_plugin_priority(plugin_name):
+        """设置/清除插件优先级覆盖（WebUI 拖拽排序的数据基础）。
+
+        body: {"priority": 20} 设置覆盖；{"reset": true} 清空覆盖回落声明值。
+        priority 越小越优先；只允许 -1000..1000，避免脏值污染排序。
+        """
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        reset = bool(data.get('reset'))
+        raw = data.get('priority')
+        if not reset:
+            try:
+                priority = int(raw)
+            except (TypeError, ValueError):
+                return jsonify({'code': 400, 'msg': 'priority 必须是整数'}), 400
+            if not -1000 <= priority <= 1000:
+                return jsonify({'code': 400, 'msg': 'priority 必须在 -1000..1000 之间'}), 400
+        else:
+            priority = None
+
+        try:
+            row = db.query_one(
+                "SELECT id, priority AS priority_declared, priority_override "
+                "FROM plugins WHERE plugin_name = %s", (plugin_name,))
+            if not row:
+                return jsonify({'code': 404, 'msg': '插件不存在'}), 404
+            db.execute(
+                "UPDATE plugins SET priority_override = %s WHERE plugin_name = %s",
+                (priority, plugin_name))
+            framework.router._invalidate_cache()
+            audit_log(admin['id'], admin['username'], 'set_plugin_priority',
+                      'plugin', plugin_name,
+                      {'priority': priority, 'reset': reset})
+            effective = priority if priority is not None else row['priority_declared']
+            return jsonify({
+                'code': 0,
+                'msg': '已清除优先级覆盖' if reset else '优先级已更新',
+                'data': {
+                    'plugin_name': plugin_name,
+                    'priority': effective,
+                    'priority_declared': row['priority_declared'],
+                    'priority_override': priority,
+                    'priority_source': 'declared' if reset else 'override',
+                },
+            })
+        except Exception as e:
+            logger.error(f"set_plugin_priority 内部错误: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
     @app.route('/api/plugins/<plugin_name>', methods=['DELETE'])

@@ -30,6 +30,19 @@
 
 > 主题：**把官方插件（含协议适配器）的启停搬进 WebUI，补上 OneBot 多实例与多源去重，并把几个「用户视角找不到」的入口摆到明面上**。
 
+### 新增：插件优先级 DB 覆盖 + 定向广播
+
+`plugins.priority` 继续作为插件声明值由心跳刷新，另加 `priority_override` 列存 WebUI 排序覆盖值；
+实际路由与插件列表都按 `COALESCE(priority_override, priority)` 取有效优先级——插件升级
+不会冲掉用户排好的顺序，`{"reset": true}` 可一键回落声明值。新增迁移 v12，
+`PUT /api/plugins/<name>/priority` 只接受 -1000..1000，写入后路由表立即失效重建。
+
+事件总线此前已有 `allow` 过滤器但插件侧没暴露：现在 `ctx.emit()` / `ctx.aemit()`
+支持 `targets`（插件名或列表）做定向投递、`parallel=True` 并发派发，默认仍是广播 + 串行保序。
+
+`tests/test_plugin_priority_and_broadcast.py` 6 例覆盖迁移幂等、覆盖回落、路由排序真的读覆盖值、
+API 设置/重置/声明值刷新不覆盖、广播与多插件定向投递。
+
 ### 新增：配置凭据加密（`enc:v1:`，不引外部依赖）
 
 设置 `ZCBOT_TOKEN_KEY`（兼容 `ZCBOT_CONFIG_SECRET`）后，`access_token` / `app_secret` /
@@ -108,7 +121,8 @@ WSS 本来属于全局 `ssl` 段，不是单个适配器的字段，但连接页
 
 验证：阶段 1 首批定向 56 例（多实例 12、多源 9、配置 schema 12、入站守卫 13、WebUI 开关 10）；
 凭据加密批定向 31 例（secretbox 9、配置 schema 12、WebUI 开关 10）；
-全量 `1114 passed, 1 skipped`（余下 `Logging error` 是测试收尾时日志流已关闭的已知噪声）。
+优先级/广播批定向 6 例；
+全量 `1120 passed, 1 skipped`（余下 `Logging error` 是测试收尾时日志流已关闭的已知噪声）。
 前端生产构建通过，Edge headless 首屏渲染出登录页、无白屏；新增 chunk 的 JS 语法校验通过。
 
 ---
