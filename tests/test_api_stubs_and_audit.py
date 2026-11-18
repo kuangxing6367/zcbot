@@ -146,11 +146,18 @@ def test_plugin_status_requires_auth(env):
 
 
 def test_unknown_api_still_goes_to_decoy(env):
-    """兜底诱饵没被废掉：真未知路径仍按攻击处理。"""
+    """兜底诱饵没被废掉：**未登录**的未知路径仍按攻击处理。
+
+    已登录管理员访问未知接口属于「界面兼容」（旧 chunk 调了本构建没有的接口），
+    走良性 404、不进威胁画像 —— 那条路径由
+    `test_honeypot_ban_threshold.py::test_authenticated_admin_unknown_api_is_benign` 锁住。
+    """
     from framework.api import honeypot
 
+    # 全新 client：不带登录后的 cookie，模拟真正的未认证探测
+    anon = env['app'].test_client()
     before = honeypot._stats['total_hits']
-    env['client'].get('/api/definitely-not-a-route-xyz')
+    anon.get('/api/definitely-not-a-route-xyz')
     assert honeypot._stats['total_hits'] == before + 1
 
 

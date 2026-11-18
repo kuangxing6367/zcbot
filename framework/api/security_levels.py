@@ -68,6 +68,8 @@ _PRESETS = {
             'tarpit_ms': 0,
             'blacklist': False,
             'blacklist_ttl': 0,
+            'ban_threshold': 5,          # 弱证据命中：窗口内累计到该次数才拉黑
+            'ban_window': 60,
             'log_body': False,
             'max_body_log': 1024,
             'unknown_api_decoy': False,
@@ -102,6 +104,8 @@ _PRESETS = {
             'tarpit_ms': 200,
             'blacklist': False,           # 只记录不封禁，适合还在调参的阶段
             'blacklist_ttl': 0,
+            'ban_threshold': 5,          # 弱证据命中：窗口内累计到该次数才拉黑
+            'ban_window': 60,
             'log_body': False,
             'max_body_log': 1024,
             'unknown_api_decoy': True,
@@ -136,6 +140,8 @@ _PRESETS = {
             'tarpit_ms': 600,
             'blacklist': True,
             'blacklist_ttl': 3600,        # 1 小时后自动解封
+            'ban_threshold': 5,          # 弱证据命中：窗口内累计到该次数才拉黑
+            'ban_window': 60,
             'log_body': True,
             'max_body_log': 2048,
             'unknown_api_decoy': True,
@@ -170,6 +176,8 @@ _PRESETS = {
             'tarpit_ms': 1500,
             'blacklist': True,
             'blacklist_ttl': 86400,       # 24 小时
+            'ban_threshold': 5,          # 弱证据命中：窗口内累计到该次数才拉黑
+            'ban_window': 60,
             'log_body': True,
             'max_body_log': 4096,
             'unknown_api_decoy': True,
@@ -204,6 +212,8 @@ _PRESETS = {
             'tarpit_ms': 3000,
             'blacklist': True,
             'blacklist_ttl': 0,           # 0 = 永久封禁
+            'ban_threshold': 5,          # 弱证据命中：窗口内累计到该次数才拉黑
+            'ban_window': 60,
             'log_body': True,
             'max_body_log': 8192,
             'unknown_api_decoy': True,

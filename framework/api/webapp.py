@@ -338,6 +338,9 @@ def create_web_app(framework) -> Flask:
 
     # ---- 双请求防破解认证系统 ----
     dual_auth = DualRequestAuthSystem(framework.config.get('security', {}), db=db)
+    # 挂到 app 上：运维脚本 / 测试需要直接解封 IP 或查黑名单，此前只能绕过 HTTP，
+    # 内部测试因此拿不到这个实例（封了 127.0.0.1 后无法自解）。
+    app.dual_auth = dual_auth
 
     @app.before_request
     def _global_blacklist_guard():

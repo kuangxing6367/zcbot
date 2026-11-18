@@ -56,6 +56,38 @@ _tarpit_lock = threading.Lock()
 _MAX_CONCURRENT_TARPIT = 16
 
 
+# ---------------------------------------------------------------------------
+# 弱证据命中计数（避免「一次 /health 就封一小时」）
+# ---------------------------------------------------------------------------
+# 强证据（读 .env / 备份 / git / 陷阱 / 绕过手法）单次即封；
+# 弱证据（未知路径、噪声路径）只在窗口内累计到阈值才封：
+# 浏览器预取、监控探针、发版后仍在跑的旧缓存 chunk 都会打这些路径，
+# 单发即封会把运维和正常用户一起打进黑名单。
+_strike_lock = threading.Lock()
+_strikes = {}                 # ip -> [timestamp, ...]
+_MAX_STRIKE_IPS = 4096
+
+
+def _bump_strike(ip: str, window: int) -> int:
+    """记录一次弱证据命中，返回窗口内的累计次数"""
+    now = time.time()
+    with _strike_lock:
+        arr = _strikes.get(ip)
+        if arr is None:
+            arr = _strikes[ip] = []
+        arr[:] = [t for t in arr if now - t <= window]
+        arr.append(now)
+        if len(_strikes) > _MAX_STRIKE_IPS:
+            for k in list(_strikes)[: len(_strikes) // 2]:
+                _strikes.pop(k, None)
+        return len(arr)
+
+
+def _clear_strikes(ip: str):
+    with _strike_lock:
+        _strikes.pop(ip, None)
+
+
 def tarpit(ms: int):
     """随机延迟 0~ms 毫秒；并发超过闸门上限时跳过延迟，避免拖垮工作线程"""
     if not ms or ms <= 0:
@@ -1388,6 +1420,15 @@ def body_fe_debug_config() -> Response:
 
 _DEBUG_FILE = 'local.debug.js'
 
+# 弱证据命中的 reason 集合：单次只计数，窗口内累计到阈值才拉黑。
+# 这些路径正常用户/监控也会打（/health、旧缓存 chunk、界面里已下线的接口），
+# 「碰一下就封」等于给自家运维挖坑。
+_WEAK_REASONS = frozenset({
+    '噪声诱饵探测',
+    '未知 API 路径探测',
+    '未知路径探测',
+})
+
 # 受控诱饵内容：陷阱**只能**返回这段内置的假凭据。
 # 旧实现会先回读产物目录里真实的 local.debug.js 并原样返回——一旦部署时有人
 # 把该文件换成真配置，蜜罐就变成凭据泄露端点。诱饵必须由这里硬编码，不碰磁盘。
@@ -1405,6 +1446,10 @@ def register(ctx):
     dual_auth = ctx.dual_auth
     get_client_ip = ctx.get_client_ip
     audit_log = ctx.audit_log
+    # 已登录管理员访问未知路径时按「界面兼容」放行：能拿出有效 token 的人已经在里面了，
+    # 再按扫描器封掉只会把自家人锁在门外（典型误封来源：发版后浏览器还跑着旧 chunk）
+    _extract_token = getattr(ctx, '_extract_token', None)
+    _verify_token = getattr(ctx, '_verify_token', None)
 
     from framework.api.security_levels import resolve
     sec = resolve(framework.config.get('security'))
@@ -1426,6 +1471,22 @@ def register(ctx):
     evasion_detect = bool(hp.get('evasion_detect', True))
     fake_404 = bool(hp.get('fake_404', True))
     decoy_set = str(hp.get('decoy_set', 'full') or 'full')
+    # 弱证据阈值：同一 IP 在 ban_window 秒内累计 ban_threshold 次才拉黑
+    ban_threshold = max(1, int(hp.get('ban_threshold', 5) or 1))
+    ban_window = max(1, int(hp.get('ban_window', 60) or 60))
+
+    def _authenticated_admin():
+        """当前请求是否携带有效管理员凭据（无效/异常一律视为未登录）"""
+        if not _extract_token or not _verify_token:
+            return None
+        try:
+            token = _extract_token(request)
+            if not token:
+                return None
+            return _verify_token(token)
+        except Exception as _exc:
+            logger.debug('[_authenticated_admin] 凭据校验失败，按未登录处理: %s', _exc)
+            return None
 
     def _tarpit():
         tarpit(tarpit_ms)
@@ -1534,18 +1595,27 @@ def register(ctx):
             if exempt:
                 logger.debug(f"[蜜罐] 内网/白名单 IP 豁免拉黑: {ip}")
             else:
-                try:
-                    # 绕过手法属于「已上钩」，加重处置：拉黑时长翻倍
-                    ttl = blacklist_ttl
-                    if evasion and ttl > 0:
-                        ttl *= 2
-                    expires_at = (time.time() + ttl) if ttl > 0 else None
-                    tag = f'蜜罐命中({evasion}): {path}' if evasion else f'蜜罐命中: {path}'
-                    dual_auth.blacklist(ip, reason=tag, source='honeypot', expires_at=expires_at)
-                    with _stats_lock:
-                        _stats['blacklisted'] += 1
-                except Exception as e:
-                    logger.warning(f"[蜜罐] 拉黑失败: {e}")
+                # 弱证据先计数：达到阈值才真正拉黑，避免一发 /health 就把监控封死
+                need = ban_threshold if reason in _WEAK_REASONS else 1
+                hits = 1 if need <= 1 else _bump_strike(ip, ban_window)
+                if hits < need:
+                    logger.debug(
+                        f"[蜜罐] 弱证据计数 {hits}/{need}（{ban_window}s 窗口）: {ip} {path}")
+                else:
+                    try:
+                        # 绕过手法属于「已上钩」，加重处置：拉黑时长翻倍
+                        ttl = blacklist_ttl
+                        if evasion and ttl > 0:
+                            ttl *= 2
+                        expires_at = (time.time() + ttl) if ttl > 0 else None
+                        tag = f'蜜罐命中({evasion}): {path}' if evasion else f'蜜罐命中: {path}'
+                        dual_auth.blacklist(ip, reason=tag, source='honeypot', expires_at=expires_at)
+                        _clear_strikes(ip)
+                        with _stats_lock:
+                            _stats['blacklisted'] += 1
+                        logger.warning(f"[蜜罐] 已拉黑 {ip}（{hits} 次命中，{ban_window}s 内）")
+                    except Exception as e:
+                        logger.warning(f"[蜜罐] 拉黑失败: {e}")
 
     def _make_handler(path, builder, reason):
         def _handler():
@@ -1722,6 +1792,11 @@ def register(ctx):
                 # 不发 canary、不写审计、不拉黑
                 _hit(full_path, '功能未启用(前端探测)', benign=True, ban=False)
                 return jsonify({'code': 404, 'msg': 'Not Found'}), 404
+            # 已登录管理员：界面里调了一个本构建没有的接口（旧缓存/灰度差异），
+            # 这是前端兼容问题而不是攻击，绝不能把管理员 IP 封掉。
+            if _authenticated_admin():
+                _hit(full_path, '已登录管理员访问未知接口(界面兼容)', benign=True, ban=False)
+                return jsonify({'code': 404, 'msg': 'Not Found'}), 404
             evasion = detect_evasion() if evasion_detect else ''
             canary = _new_canary() if canary_enabled else None
             if canary:
@@ -1752,6 +1827,10 @@ def register(ctx):
         base = low.rsplit('/', 1)[-1]
         if low.startswith(_BENIGN_PREFIX) or base in _BENIGN_NAME or base.endswith(_BENIGN_EXT):
             return body_generic_text()
+        # 已登录管理员访问前端深链（/dashboard、书签、刷新后残留路径）同样按兼容放行
+        if _authenticated_admin():
+            _hit('/' + (subpath or ''), '已登录管理员访问未知页面(界面兼容)', benign=True, ban=False)
+            return body_generic_text()
         evasion = detect_evasion() if evasion_detect else ''
         canary = _new_canary() if canary_enabled else None
         if canary:
@@ -1777,4 +1856,5 @@ def register(ctx):
     logger.info(
         f"[蜜罐] 安全等级={level}({sec['level_label']})，已注册 {registered} 个诱饵端点"
         f"（诱饵集={decoy_set}, tarpit={tarpit_ms}ms, 拉黑={do_blacklist}, "
-        f"ttl={blacklist_ttl}s, canary={canary_enabled}, 绕过检测={evasion_detect}）")
+        f"ttl={blacklist_ttl}s, 弱证据阈值={ban_threshold}/{ban_window}s, "
+        f"canary={canary_enabled}, 绕过检测={evasion_detect}）")

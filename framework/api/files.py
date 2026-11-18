@@ -35,6 +35,8 @@ def register(ctx):
 
     def _safe_file_path(relative_path: str) -> str:
         """将路径解析为绝对路径，并检查是否在允许的根目录内（解析符号链接防穿越）"""
+        if not isinstance(relative_path, str) or not relative_path.strip():
+            return None
         roots = _get_file_browser_roots()
         # 如果已经是绝对路径，直接规范化
         if os.path.isabs(relative_path):
@@ -49,10 +51,14 @@ def register(ctx):
             abs_real = abs_path
         # 检查是否在任意允许的根目录下
         for root in roots:
-            root_norm = os.path.normpath(root)
-            root_real = os.path.realpath(root_norm)
-            if os.path.commonpath([root_real, abs_real]) == root_real:
-                return abs_path
+            root_real = os.path.realpath(os.path.normpath(root))
+            try:
+                # Windows 上跨盘符（C: 与 D:）会抛 ValueError，这是「不在允许根内」而不是服务端故障；
+                # 同理 Linux 上混入相对路径也会抛，一并按拒绝处理。
+                if os.path.commonpath([root_real, abs_real]) == root_real:
+                    return abs_path
+            except ValueError:
+                continue
         return None
 
     # 允许根目录包含整个项目根，而写文件路由是 @require_super。
@@ -73,9 +79,10 @@ def register(ctx):
             return True
         if os.path.splitext(name)[1] in _SENSITIVE_EXTS:
             return True
+        # 统一成 / 分隔再做子串判断，Windows 的反斜杠路径同样命中
         norm = abs_path.replace('\\', '/').lower()
         # 降级后 JSON 行集与系统配置落在这里，同样含全量登录态
-        return '/data/db/' in norm or '/plugins_dat/' in norm and name.endswith('.json')
+        return ('/data/db/' in norm) or ('/plugins_dat/' in norm and name.endswith('.json'))
 
     @app.route('/api/files/list', methods=['GET'])
     @require_auth
@@ -100,13 +107,17 @@ def register(ctx):
             entries = []
             for name in sorted(os.listdir(abs_path)):
                 fpath = os.path.join(abs_path, name)
-                is_dir = os.path.isdir(fpath)
-                # 跳过隐藏文件和 .venv
-                if name.startswith('.') and name != '.':
+                # 跳过隐藏文件（Windows 上 startswith('.') 对普通文件无影响）
+                if name.startswith('.'):
+                    continue
+                try:
+                    is_dir = os.path.isdir(fpath)
+                    stat = os.stat(fpath)
+                except OSError:
+                    # 断链的符号链接、无权限项：跳过而不是让整页 500
                     continue
                 if name == '.venv' and is_dir:
                     continue
-                stat = os.stat(fpath)
                 entries.append({
                     'name': name,
                     'path': fpath,
@@ -114,8 +125,15 @@ def register(ctx):
                     'size': stat.st_size if not is_dir else 0,
                     'mtime': stat.st_mtime,
                 })
+            # 目录在前、同名按字典序，和资源管理器一致
+            entries.sort(key=lambda e: (not e['is_dir'], e['name'].lower()))
+            parent = os.path.dirname(abs_path.rstrip('\\/')) or None
+            if parent and not _safe_file_path(parent):
+                parent = None
             return jsonify({'code': 0, 'data': {
                 'current_path': abs_path,
+                'parent': parent,
+                'sep': os.sep,
                 'entries': entries,
             }})
         except Exception as e:
@@ -142,6 +160,9 @@ def register(ctx):
                 return jsonify({'code': 400, 'msg': '不支持预览二进制文件'}), 400
             with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
+            # 扩展名不可靠（无后缀的二进制、被改名的图片）：读到 NUL 就直接拒绝预览
+            if '\x00' in content:
+                return jsonify({'code': 400, 'msg': '不支持预览二进制文件'}), 400
             return jsonify({'code': 0, 'data': {
                 'path': abs_path,
                 'content': content,
@@ -283,8 +304,12 @@ def register(ctx):
         abs_path = _safe_file_path(path)
         if not abs_path or not os.path.exists(abs_path):
             return jsonify({'code': 400, 'msg': '文件不存在'}), 400
-        if os.path.abspath(abs_path) == os.path.normpath(_project_root()):
-            return jsonify({'code': 400, 'msg': '禁止删除项目根目录'}), 400
+        # 允许根目录本身（项目根 / 数据目录）一律不许删：删掉数据目录等于清库。
+        # Windows 路径大小写不敏感，必须用 normcase 比较，否则 C:\FOO 能绕过 C:\foo 的保护。
+        target_norm = os.path.normcase(os.path.realpath(abs_path))
+        for root in _get_file_browser_roots():
+            if target_norm == os.path.normcase(os.path.realpath(os.path.normpath(root))):
+                return jsonify({'code': 400, 'msg': '禁止删除根目录'}), 400
         try:
             if os.path.isdir(abs_path):
                 shutil.rmtree(abs_path)
@@ -312,7 +337,10 @@ def register(ctx):
             return jsonify({'code': 400, 'msg': '未选择文件'}), 400
         saved, failed = [], []
         for f in files:
-            name = os.path.basename(f.filename or '')
+            # 浏览器在不同平台可能带上完整路径（老版 IE 的 C:\dir\x.txt），
+            # 统一把反斜杠换成斜杠再取 basename，否则 Linux 下会把整个路径当文件名。
+            raw_name = (f.filename or '').replace('\\', '/')
+            name = os.path.basename(raw_name)
             if not name or name in ('.', '..'):
                 failed.append({'name': f.filename, 'err': '非法文件名'})
                 continue
