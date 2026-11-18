@@ -26,6 +26,28 @@
 
 ---
 
+## [1.25.1] - 2026-11-18
+
+> 主题：**补一处漏掉的 error 日志**，以及把「本地怎么验收」补齐。功能未动。
+
+1. **`framework/api/aiwriter.py` 的 500 分支补 `logger.error`**：会话历史读失败时
+   直接回了 500，没有日志。`tests/test_security_hardening.py` 的静态检查
+   （`except Exception as e:` 紧跟 `return jsonify(... 500` 且无 logger）会红——
+   这条检查是 1.24.x 之前就有的，拦得对：500 没有日志，线上就无从排查。
+2. **用例数护栏上调 1000 → 1100**（实测收集 1175）。留 75 余量是刻意的：
+   `tests/test_aiwriter.py` 在缺 `rich`（可选依赖）的环境里整模块 skip，那 56 例
+   不进收集数；卡到 1175 会让「没装可选依赖」伪装成「测试被删了」。
+
+> 这是第三次「本地 `pytest` 绿、CI 红」。前两次是 `ruff --select I001` 与
+> 一条 script-style 断言，这次是 script-style 的静态检查。共同点：**CI 的
+> script-style 步骤不是 pytest**，`pytest tests` 全绿根本不会跑到它。
+> 从这版起本地验收跑三件事：`pytest tests`、`python tools/run_script_tests.py`、
+> `ruff`（同 CI 的 select 口径）。
+
+验证：全量 `1174 passed, 1 skipped`（JUnit XML 复核 `tests=1175 failures=0 errors=0`）；
+`python tools/run_script_tests.py` → 20 个脚本式文件全 PASS，收集数 1175 ≥ 1100；
+`python tests/test_security_hardening.py` → 23 passed / 0 failed；`ruff` 全仓 0 error。
+
 ## [1.25.0] - 2026-11-18
 
 > 主题：**AI 改完能审查、能退回去**。补上需求地图里 09 号「与 dsh 对齐」剩下的那一半：

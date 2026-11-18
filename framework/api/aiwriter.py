@@ -86,6 +86,7 @@ def register(ctx):
         try:
             msgs = svc.history(key) or []
         except Exception as e:
+            logger.error('[aiwriter] 读取会话历史失败 %s: %s', key, e)
             return jsonify({'code': 500, 'msg': '读取会话历史失败: %s' % e}), 500
         return jsonify({'code': 0, 'data': {
             'key': key,
@@ -153,6 +154,7 @@ def register(ctx):
         try:
             return jsonify({'code': 0, 'data': svc.change(change_id)})
         except Exception as e:
+            logger.warning('[aiwriter] 读取改动记录失败 %s: %s', change_id, e)
             return jsonify({'code': 404, 'msg': str(e)}), 404
 
     @app.route('/api/aiwriter/changes/<change_id>/rollback', methods=['POST'])
