@@ -26,6 +26,28 @@
 
 ---
 
+## [1.24.1] - 2026-11-18
+
+> 主题：**修 1.24.0 的 CI 红**。功能一行没动，只有 lint 排序、一处测试断言的写法，
+> 以及版本号。1.24.0 已发布到 PyPI 且不可覆盖，因此不回改 tag，按补丁版发出。
+
+1. **Lint gate 回绿**：5 处 import 块未排序 + 1 处多余的 `return None`，`ruff --fix`
+   自动修，改动只有空行与导入顺序（`framework/config.py`、`tests/plugin_test/conftest.py`、
+   两个多实例/优先级用例、`tests/test_webui_adapter_switch.py`）。
+2. **安全自检不再按变量名断言**：`test_safe_file_path_realpath` 原来写死
+   `os.path.realpath(root_norm)`，而 `_safe_file_path` 改成对每个允许根逐个 realpath
+   并加了跨盘符容错后，变量名变了就假红。改为断言语义——目标与根都先 realpath、
+   `commonpath` 拿的是 realpath 后的值。1.24.0 的代码本身没问题，红的是断言。
+
+> 说明：这两处都是「本地 `pytest` 绿、CI 红」的类型——本地只跑 pytest 不会触发
+> `ruff --select I001` 与 script-style 回归，所以漏到了发版之后。CI 口径才是准绳。
+
+验证：`python tests/test_security_hardening.py` → 23 passed / 0 failed；
+`ruff` 同口径 select 全仓 0 error。CI 侧以 tag `v1.24.1` 的 `tests` 工作流
+（3.10–3.14 + windows-smoke + static-contract）为准，不再只看本地 pytest。
+
+---
+
 ## [1.24.0] - 2026-11-18
 
 > 主题：**把官方插件（含协议适配器）的启停搬进 WebUI，补上 OneBot 多实例与多源去重，
