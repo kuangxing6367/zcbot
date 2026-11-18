@@ -399,6 +399,9 @@ class OneBotWebSocketServer:
         self.host = config.get('listen_host', '0.0.0.0')
         self.port = config.get('listen_port', 6830)
         self.access_token = config.get('access_token', '')
+        # 多实例可选前缀：两个实例连同一个 self_id 时，默认 bot_name 会撞车，
+        # 导致 api_caller 的连接互相覆盖。配置 bot_name_prefix 可隔离。
+        self.bot_name_prefix = str(config.get('bot_name_prefix', '') or '')
         self.on_event_callback = on_event_callback
         self.api_caller = api_caller
         self._max_pending_events = max(
@@ -526,6 +529,8 @@ class OneBotWebSocketServer:
             with self._lock:
                 self._conn_counter += 1
                 bot_name = f"bot_{self._conn_counter}"
+        if self.bot_name_prefix:
+            bot_name = f"{self.bot_name_prefix}:{bot_name}"
         with self._lock:
             self._connections[bot_name] = ws
 
@@ -690,11 +695,17 @@ class OneBotAdapter(ProtocolAdapter):
 
     adapter_id = 'onebot'
 
-    def __init__(self, framework):
+    def __init__(self, framework, config=None, api_caller=None):
+        # config / api_caller 可注入：多实例时每个实例一份 config（独立端口/token），
+        # 但共享同一个 api_caller（它本就按 bot_name 路由，天然支持多 bot）。
+        # 单实例时两个参数都不传，行为与旧版完全一致。
         self.framework = framework
-        self.config = framework.config.get('onebot', {})
-        self.api_caller = ApiCaller()
-        self.api_caller.on_message_sent = self._on_message_sent
+        self.config = config if config is not None else framework.config.get('onebot', {})
+        if api_caller is not None:
+            self.api_caller = api_caller
+        else:
+            self.api_caller = ApiCaller()
+            self.api_caller.on_message_sent = self._on_message_sent
         # SSL：与 Web 后台共用 config['ssl']；启用后反向 WS 走 wss
         ssl_context = None
         try:
@@ -711,6 +722,13 @@ class OneBotAdapter(ProtocolAdapter):
         host = self.config.get('listen_host', '0.0.0.0')
         port = self.config.get('listen_port', 6830)
         scheme = 'wss' if getattr(self, 'ssl_context', None) else 'ws'
+        # 多实例：从主配置展开全部端点，供连接页一次看清
+        base = self.framework.config.get('onebot', {}) if self.framework else {}
+        inst_cfgs = _build_instance_configs(base)
+        endpoints = [
+            f"{scheme}://{c.get('listen_host', '0.0.0.0')}:{c.get('listen_port', 6830)}/ws"
+            for c in inst_cfgs
+        ]
         return {
             'id': 'onebot',
             'name': 'OneBot 11 反向 WS',
@@ -719,15 +737,18 @@ class OneBotAdapter(ProtocolAdapter):
                 {'key': 'listen_host', 'label': '监听地址', 'type': 'string'},
                 {'key': 'listen_port', 'label': '监听端口', 'type': 'number'},
                 {'key': 'access_token', 'label': 'Access Token', 'type': 'password'},
+                {'key': 'bot_name_prefix', 'label': '实例名前缀(多实例隔离用)', 'type': 'string'},
                 {'key': 'max_pending_events', 'label': '分发积压上限(条)', 'type': 'number'},
                 {'key': 'max_pending_bytes', 'label': '分发层字节上限(字节)', 'type': 'number'},
                 {'key': 'max_frame_size', 'label': 'WS 单帧上限(字节)', 'type': 'number'},
             ],
-            'restart_keys': ['listen_host', 'listen_port', 'max_frame_size'],
-            'endpoint_hint': f"{scheme}://{host}:{port}/ws",
+            # instances[] 改动需重启（涉及增删监听端口，不做热增删）
+            'restart_keys': ['listen_host', 'listen_port', 'max_frame_size', 'instances'],
+            'endpoint_hint': endpoints[0] if endpoints else f"{scheme}://{host}:{port}/ws",
+            'endpoints': endpoints,
             'guide': 'OneBot 客户端（NapCat / Lagrange / LLOneBot 等）添加「反向 WebSocket」连接，'
-                     '填写反向 WS 服务端地址即可接入。',
-            'status_extra': {'ws_port': port},
+                     '填写反向 WS 服务端地址即可接入。需要一份配置多端口监听时，在 onebot.instances 列表中追加实例。',
+            'status_extra': {'ws_port': port, 'instance_count': len(inst_cfgs)},
         }
 
     # ── 消息契约 ────────────────────────────────────────────────
@@ -806,12 +827,36 @@ class OneBotAdapter(ProtocolAdapter):
 
 # ── 插件注册入口 ──────────────────────────────────────────────
 
-_adapter_instance = None
+_adapter_instance = None       # 主实例（单实例时即唯一实例）；保持向后兼容
+_adapter_instances = []        # 全部实例（多实例时 N 个）
+
+
+def _build_instance_configs(base: dict) -> list[dict]:
+    """把 onebot 配置展开为每实例配置列表。
+
+    ``instances[]`` 是可选增强：每项可覆盖任意主配置键（典型是
+    listen_port / access_token / bot_name_prefix）。未配置 instances 时返回
+    单份主配置——这是绝大多数部署的路径，行为与旧版逐字节一致。
+
+    每项都继承主配置的全部键（含 token、上限、ssl），因此实例只需写差异键。
+    """
+    instances = base.get('instances')
+    if not isinstance(instances, list) or not instances:
+        return [dict(base)]
+    out = []
+    for item in instances:
+        if not isinstance(item, dict):
+            continue
+        merged = dict(base)
+        merged.pop('instances', None)
+        merged.update(item)
+        out.append(merged)
+    return out or [dict(base)]
 
 
 def register(ctx):
-    """注册 OneBot 适配器为官方插件"""
-    global _adapter_instance, _log_sent_message
+    """注册 OneBot 适配器为官方插件（支持 instances[] 多实例）"""
+    global _adapter_instance, _adapter_instances, _log_sent_message
     fw = ctx._framework
 
     # 检查配置是否启用
@@ -823,13 +868,24 @@ def register(ctx):
     # 日志开关：是否记录发送到 OneBot11 的消息内容
     _log_sent_message = fw.config.get('log', {}).get('log_sent_message', True)
 
-    _adapter_instance = OneBotAdapter(fw)
+    configs = _build_instance_configs(onebot_cfg)
+    # 多实例共享一个 api_caller：它按 bot_name 路由连接，各实例的客户端互不串扰；
+    # 单实例时各自新建，行为如旧。
+    shared_caller = ApiCaller() if len(configs) > 1 else None
+    _adapter_instances = []
+    for cfg in configs:
+        inst = OneBotAdapter(fw, config=cfg, api_caller=shared_caller)
+        if shared_caller is not None and not getattr(shared_caller, 'on_message_sent', None):
+            shared_caller.on_message_sent = inst._on_message_sent
+        _adapter_instances.append(inst)
+    _adapter_instance = _adapter_instances[0]
 
-    # 注册为协议适配器服务
-    fw.services.register('protocol_adapter', _adapter_instance)
-    fw.services.register('api_caller', _adapter_instance.api_caller)
-    fw.services.register('onebot_api', _adapter_instance._onebot_api)
-    fw.services.register('ws_server', _adapter_instance.ws_server)
+    # 注册为协议适配器服务（指向主实例，服务消费方 API 不变）
+    main = _adapter_instance
+    fw.services.register('protocol_adapter', main)
+    fw.services.register('api_caller', main.api_caller)
+    fw.services.register('onebot_api', main._onebot_api)
+    fw.services.register('ws_server', main.ws_server)
 
     # OneBot 专属安全提示（框架核心不再假设具体协议，故由本适配器自行提示）
     web_host = fw.config.get('web', {}).get('host', '0.0.0.0')
@@ -839,19 +895,24 @@ def register(ctx):
             "公网部署存在被接管风险。请设置 onebot.access_token，并将 web.host 改为 127.0.0.1。"
         )
 
-    # 启动 WebSocket 服务
-    _adapter_instance.start()
+    # 启动全部 WebSocket 服务
+    for inst in _adapter_instances:
+        inst.start()
 
-    _scheme = 'wss' if getattr(_adapter_instance, 'ssl_context', None) else 'ws'
-    ctx.log(f"OneBot 适配器已启动 ({_scheme}://{_adapter_instance.config.get('listen_host', '0.0.0.0')}:{_adapter_instance.config.get('listen_port', 6830)})")
+    _scheme = 'wss' if getattr(main, 'ssl_context', None) else 'ws'
+    endpoints = ", ".join(
+        f"{_scheme}://{i.config.get('listen_host', '0.0.0.0')}:{i.config.get('listen_port', 6830)}"
+        for i in _adapter_instances)
+    ctx.log(f"OneBot 适配器已启动 {len(_adapter_instances)} 个实例 ({endpoints})")
 
 
 def unregister():
-    """卸载时停止"""
-    global _adapter_instance
-    if _adapter_instance:
-        inst = _adapter_instance
-        _adapter_instance = None
-        loop = getattr(inst.framework, 'loop', None)
-        if loop is not None and loop.is_running():
+    """卸载时停止全部实例"""
+    global _adapter_instance, _adapter_instances
+    insts = _adapter_instances or ([_adapter_instance] if _adapter_instance else [])
+    _adapter_instance = None
+    _adapter_instances = []
+    loop = getattr(insts[0].framework, 'loop', None) if insts else None
+    if loop is not None and loop.is_running():
+        for inst in insts:
             asyncio.run_coroutine_threadsafe(inst.stop(), loop)

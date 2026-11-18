@@ -8,6 +8,9 @@
 - 去重（dedup）：WebSocket 断线重连、客户端升级重推，同一 message_id 会被重复
   推送。在事件入队前用 (bot, message_id) 滑动窗口拦掉重放，避免对同一条消息
   回复两次 / 重复触发业务。notice / meta / request 类事件本身幂等，不做去重。
+- 多源去重（multisource_dedup，默认关）：一份适配器配多实例 / 多个 bot 收到同一条
+  真实消息时，是否按「内容 + 发送者 + 群」合并。与上面的重放去重正交；默认关，
+  因为内容相同的两条消息完全可能是两次独立真实发送，误判会静默丢真实消息。
 - 限流（rate_limit）：per-user / per-group / global 三级滑动窗口，挡住刷屏与
   DoS。可配置 skip（静默丢弃）或 notify（每窗口至多回复一条限流提示）。
 
@@ -15,9 +18,10 @@
 - 纯内存、零依赖、线程安全（适配器线程与 worker 协程都会调用）。
 - 入队前执行：被拦掉的事件不占用分层缓冲槽。
 - 失败安全：守卫自身异常绝不能让事件丢失——外层 try 包住，异常时放行。
-- 配置缺省安全：去重默认开（dedup_window=300，纯收益）；限流默认关
-  （阈值带业务属性，由部署方按场景开启）。
+- 配置缺省安全：重放去重默认开（dedup_window=300，纯收益）；多源去重默认关
+  （会按内容猜重，有误伤）；限流默认关（阈值带业务属性，由部署方按场景开启）。
 """
+import hashlib
 import threading
 import time
 from collections import deque
@@ -59,6 +63,18 @@ class InboundGuard:
         dedup = cfg.get('dedup_window', 300)
         self.dedup_window = int(dedup) if dedup else 0
 
+        # 多源去重：与上面的「同 bot 重放去重」正交、默认关。
+        # 场景：一份适配器配多实例 / 多个 bot 收到同一条真实消息时，是否合并成一条。
+        # 默认逐个处理（关），因为内容相同的两条消息完全可能是两个用户各自真实发出的，
+        # 误判会静默丢弃真实消息。开启前务必读 docs/进阶/可靠性与限流.md 的风险说明。
+        ms = cfg.get('multisource_dedup') or {}
+        if not isinstance(ms, dict):
+            ms = {}
+        self.ms_enabled = bool(ms.get('enabled', False))
+        msw = ms.get('window', 5)
+        self.ms_window = max(0, int(msw)) if msw is not None else 5
+        self.ms_include_sender = bool(ms.get('include_sender', True))
+
         rl = cfg.get('rate_limit') or {}
         self.rl_enabled = bool(rl.get('enabled', False))
         self.rl_window = int(rl.get('window', 60)) or 60
@@ -74,6 +90,7 @@ class InboundGuard:
         # 与 _seen 是两份完全独立的状态，互不读写、各自有容量上限与清理逻辑。
         self._hits = {}          # ('global',) 或 (bot, kind, ident) -> deque(timestamps)
         self._notified = {}      # ('notify',) + bucket -> expire_at
+        self._ms_seen = {}       # 多源去重：内容指纹 -> expire_at（跨 bot，独立表）
 
     # ── 主入口 ───────────────────────────────────────────────
     def check(self, event: dict, bot_name: str = 'default'):
@@ -145,12 +162,76 @@ class InboundGuard:
 
         return (True, '', False)
 
+    # ── 多源去重（可选、默认关、跨 bot）────────────────────────
+    def multisource_fingerprint(self, event: dict):
+        """构造跨实例/跨 bot 的内容指纹；无法可靠构造时返回 None（放行）。
+
+        只用消息内容 + 可选 sender/group，**刻意不含 bot_name / message_id**：
+        多源场景正是同一条消息被不同配置/不同 bot 各收到一次，message_id 往往不同。
+
+        内容先归一化再取 16 字节 blake2b：既能稳定比较，又避免一条超长消息把
+        内存去重表按字符串整体撑大。缺 sender 且要求包含 sender 时返回 None——
+        宁可漏去重，也不把「身份不明的两条消息」误判成同一条。
+        """
+        if event.get('post_type') != 'message':
+            return None
+        text = event.get('raw_message')
+        if text is None:
+            text = event.get('message')
+        if text is None:
+            return None
+        text = str(text).strip()
+        if not text:
+            return None
+        parts = [text]
+        if self.ms_include_sender:
+            uid = event.get('user_id')
+            sender = event.get('sender')
+            if uid is None and isinstance(sender, dict):
+                uid = sender.get('user_id')
+            if not uid:
+                return None
+            parts.append('u:' + str(uid))
+        gid = event.get('group_id')
+        parts.append('g:' + str(gid) if gid else 'direct')
+        payload = '\x1f'.join(parts).encode('utf-8', 'replace')
+        return hashlib.blake2b(payload, digest_size=16).digest()
+
+    def check_multisource(self, event: dict):
+        """多源去重检查：返回 True=放行，False=重复丢弃。
+
+        默认关（ms_enabled=False）时恒放行。失败安全：任何异常都放行。
+        """
+        if not self.ms_enabled or self.ms_window <= 0:
+            return True
+        try:
+            fp = self.multisource_fingerprint(event)
+            if fp is None:
+                return True
+            now = time.time()
+            with self._lock:
+                exp = self._ms_seen.get(fp)
+                if exp is not None and exp > now:
+                    return False
+                self._ms_seen[fp] = now + self.ms_window
+                if len(self._ms_seen) > self._SEEN_CAP:
+                    expired = [k for k, v in self._ms_seen.items() if v <= now]
+                    for k in expired:
+                        self._ms_seen.pop(k, None)
+                    while len(self._ms_seen) > self._SEEN_CAP:
+                        self._ms_seen.pop(next(iter(self._ms_seen)), None)
+            return True
+        except Exception:
+            return True
+
     # ── 周期清理（可选，由框架在空闲时调用；不调用也靠惰性淘汰兜底）──
     def sweep(self):
         now = time.time()
         with self._lock:
             self._sweep_seen(now)
             self._sweep_hits(now)
+            for _k in [k for k, v in self._ms_seen.items() if v <= now]:
+                self._ms_seen.pop(_k, None)
 
     def _sweep_seen(self, now):
         expired = [k for k, v in self._seen.items() if v <= now]

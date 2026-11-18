@@ -101,6 +101,17 @@ event_queue:
 onebot:
   listen_port: 6830
   access_token: ""           # 必须设置！留空则不校验 token，任何客户端都能接入
+  # ── 多实例（可选）：一份适配器同时监听多个端口 ────────────────
+  # 不配 instances 即单实例（默认，行为不变）。配置后每个实例监听独立端口/token，
+  # 共享同一套事件分发；每项可覆盖上面的任意键，只需写差异部分。
+  # bot_name_prefix 用于在多个实例连同一个机器人时隔离连接名，避免互相覆盖。
+  # instances:
+  #   - listen_port: 6830
+  #     access_token: "token-of-instance-a"
+  #     bot_name_prefix: "a"
+  #   - listen_port: 6831
+  #     access_token: "token-of-instance-b"
+  #     bot_name_prefix: "b"
 
 # ── Web UI 管理后台 ─────────────────────────────────────────
 web:
@@ -137,6 +148,14 @@ reliability:
   dedup_window: 300            # 入站消息去重窗口（秒）：断线重连 / 客户端重推的同一 message_id
                               # 只处理首条，后续静默跳过；0=禁用。仅对 message 类事件生效，
                               # notice/meta/request 本身幂等，不去重。
+  # 多源去重（可选，默认关）：一份适配器配多实例 / 多个 bot 收到同一条消息时是否合并。
+  # ⚠ 风险：指纹是「内容 + 发送者(可关) + 群」。同一发送者在窗口内连发两条完全相同
+  #   的内容，或关掉 include_sender 后不同人发相同内容，都会被静默丢弃真实消息。
+  #   默认逐个处理最安全；确需开启时把 window 调小，并保留 include_sender: true。
+  multisource_dedup:
+    enabled: false             # 默认关：默认每条消息都独立处理
+    window: 5                  # 去重窗口（秒）：窗口内内容指纹相同者只处理首条
+    include_sender: true       # 指纹是否含发送者；关掉后「不同人发相同内容」也会被去重（更危险）
   rate_limit:
     enabled: false             # 默认关闭：阈值带业务属性（群规模/活跃度），由部署方按场景开启
     window: 60                 # 滑动窗口（秒）
@@ -595,6 +614,14 @@ _CONFIG_SCHEMA = {
         'type': dict,
         'keys': {
             'dedup_window': {'int': True, 'min': 0},
+            'multisource_dedup': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'window': {'int': True, 'min': 0},
+                    'include_sender': {'bool': True},
+                },
+            },
             'rate_limit': {
                 'type': dict,
                 'keys': {

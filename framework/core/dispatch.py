@@ -213,6 +213,21 @@ class FrameworkDispatchMixin:
         except Exception as e:
             logger.error("入站可靠性守卫异常，已放行事件: %s", e)
 
+        # 多源去重：与上面的重放去重正交、默认关。开启后，同一条消息被多份配置/
+        # 多个 bot 各收到一次时只处理首条；默认逐个处理，绝不误伤。
+        # 只登记「已通过重放去重与限流」的事件，语义上只对真正要处理的消息去重。
+        # 风险见 docs/进阶/可靠性与限流.md（内容相同的真实消息可能被误判丢弃）。
+        try:
+            _ms_guard = getattr(self, '_inbound_guard', None)
+            if _ms_guard is not None and not _ms_guard.check_multisource(event):
+                logger.warning(
+                    "多源去重：丢弃跨实例重复事件（bot=%s, message_id=%s）。"
+                    "若这是两条不同用户发的相同内容，请关闭 reliability.multisource_dedup.enabled",
+                    bot_name, event.get('message_id'))
+                return
+        except Exception as e:
+            logger.error("多源去重异常，已放行事件: %s", e)
+
         # 事件进入内核前的扩展点（任何 handler 返回 False 即丢弃该事件）
         try:
             if False in (await self.hooks.trigger_async(

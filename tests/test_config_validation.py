@@ -86,6 +86,23 @@ def test_nested_rate_limit():
           any('reliability.rate_limit.enabled' in i for i in issues), str(issues))
 
 
+def test_nested_multisource_dedup_bad_bool():
+    cfg = _default_config()
+    cfg['reliability']['multisource_dedup']['enabled'] = 'maybe'
+    issues = validate_config(cfg)
+    check('嵌套 multisource_dedup 布尔错误被检出',
+          any('reliability.multisource_dedup.enabled' in i for i in issues), str(issues))
+
+
+def test_multisource_window_range():
+    cfg = _default_config()
+    cfg['reliability']['multisource_dedup']['window'] = -1
+    issues = validate_config(cfg)
+    check('multisource_dedup.window 负值被检出',
+          any('reliability.multisource_dedup.window' in i and '下限' in i for i in issues),
+          str(issues))
+
+
 def test_mysql_missing_conn():
     cfg = _default_config()
     cfg['database']['type'] = 'mysql'
@@ -110,9 +127,11 @@ def run_all():
     test_wrong_type_bool()
     test_bool_string_accepted()
     test_nested_rate_limit()
+    test_nested_multisource_dedup_bad_bool()
+    test_multisource_window_range()
     test_mysql_missing_conn()
     test_section_not_dict()
-    print('\n全部通过：配置 schema 校验 10 组')
+    print('\n全部通过：配置 schema 校验 12 组')
 
 
 if __name__ == '__main__':
