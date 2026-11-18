@@ -45,16 +45,49 @@ def test_roundtrip_is_random_and_authenticated(monkeypatch):
     assert secretbox.decrypt_value(b) == 'my-token-1234'
 
 
+def _flip(body, idx):
+    """把 base64url 正文第 idx 个字符换成另一个合法字符。"""
+    out = list(body)
+    out[idx] = 'A' if out[idx] != 'A' else 'B'
+    return ''.join(out)
+
+
 def test_tamper_and_wrong_key_fail_closed(monkeypatch):
     _set_key(monkeypatch)
     cipher = secretbox.encrypt_value('real-token')
-    # 改动最后一个字符（base64url 合法字符），认证必须失败
-    flipped = ('A' if cipher[-1] != 'A' else 'B')
-    tampered = cipher[:-1] + flipped
+    # 必须改「有意义的位」：base64 每 3 字节出 4 个字符，长度不是 3 的倍数时
+    # 末位字符带 2 个填充位，而 b64decode 不校验填充位 —— 改末位有 1/4 概率
+    # 解码出的字节完全不变，那不是篡改，只是同一份密文的另一种写法。
+    # 正文中点一定落在有效位区间，改它必须认证失败。
+    body = cipher[len(secretbox.PREFIX):]
+    mid = len(body) // 2
+    tampered = cipher[:len(secretbox.PREFIX)] + _flip(body, mid)
+    assert tampered != cipher
     assert secretbox.decrypt_value(tampered) == tampered
 
     _set_key(monkeypatch, 'a-totally-different-key')
     assert secretbox.decrypt_value(cipher) == cipher
+
+
+def test_no_position_yields_a_forged_plaintext(monkeypatch):
+    """逐位篡改的不变量：要么被拒（返回密文），要么只是等价编码。
+
+    这条把 base64 填充位的真实行为钉住 —— 允许「换一种写法解出同一明文」，
+    绝不允许「换出别的明文」。反过来若哪天实现丢了认证校验，改中间位就会
+    解出乱码而不是原样返回，这里会立刻红。
+    """
+    _set_key(monkeypatch)
+    plain = 'real-token'
+    cipher = secretbox.encrypt_value(plain)
+    body = cipher[len(secretbox.PREFIX):]
+    head = cipher[:len(secretbox.PREFIX)]
+    for idx in range(len(body)):
+        got = secretbox.decrypt_value(head + _flip(body, idx))
+        assert got in (head + _flip(body, idx), plain), (
+            '第 %d 位篡改后解出了第三种结果：%r' % (idx, got))
+    # 至少有一个位置必须被拒，否则说明认证标签根本没起作用
+    assert any(secretbox.decrypt_value(head + _flip(body, i)) != plain
+               for i in range(len(body)))
 
 
 def test_placeholders_and_masks_are_not_encrypted(monkeypatch):
