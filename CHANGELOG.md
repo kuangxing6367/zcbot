@@ -26,6 +26,51 @@
 
 ---
 
+## [1.26.0] - 2026-11-18
+
+> 主题：**数据库自动备份**。以前的备份只服务「迁移前留个回退点」，跑完就没人管；
+> 这版补上长期无人值守的那一层：按间隔自动跑、压缩、轮转、空间探测、写完校验。
+
+1. **自动备份线程**（`framework/database/backup.py`）—— 默认每 6 小时一次，保留 2 份。
+   用独立守护线程而不是调度器：备份可能跑几分钟（几百 MB 的库），塞进 scheduler 会
+   占住 worker 并受 `task_timeout` 约束——超时只是「不再等待」，线程还在跑，下一轮
+   就两个线程同时 `VACUUM`。宿主进程不启动（双进程下库在另一侧）。
+2. **弹性空间探测** —— 需要 `库体积 × headroom_ratio` 的空间；不够时先真写一遍，
+   因为云盘薄 provisioning / 配额 / overlay 上层报出来的 free 可能是假的。
+   **按「当前可用 − 停手线 − 余量」切片写，写到只剩 512KB 立刻停手并删除探针**；
+   起始可用已低于停手线时一个字节都不写。缓冲区固定 64KB 复用，不按配置块长分配
+   ——否则 `probe_chunk_kb: 4096` 会先吃 4GB 内存。探针在 `finally` 删除，删不掉会告警。
+3. **压缩与让出** —— 快照超过 `compress_threshold_kb`（默认 100KB）才打包 zip，
+   `compress_level` 默认 1，分块写并周期性 `sleep(1ms)` 让出 GIL，不卡事件处理。
+   压缩失败保留未压缩文件并记 warn，不假装压缩成功。
+4. **校验后转正** —— 先写 `.part`，读回复核（zip 走 CRC、db 走 `quick_check`）通过
+   才 `os.replace` 成正式文件。有些环境写文件「报成功但内容不对」，不校验等于把
+   坏文件当备份用。在 `.part` 上校验按「去掉 `.part` 的扩展名」判断格式——直接
+   `endswith('.zip')` 会落到「只比体积」分支，CRC 被静默跳过。
+5. **100MB 暂停线** —— 快照超过 `refuse_above_mb` 就停下来提示，不自动删也不截断。
+   库从几 MB 突然涨到几百 MB 通常意味着出了事（日志表爆炸、循环写入），这时候
+   悄悄备份反而是掩盖问题。确认正常后调大上限或 `allow_large: true`。
+6. **轮转与命名** —— 只留 `keep` 份（默认 2），文件名带毫秒并对已存在名字加序号。
+   时间戳只到秒的话，同一秒连跑两次会互相覆盖，表现是「备份了但翻来覆去只有一份」。
+7. **迁移前备份统一 2 份** —— `migrations.keep_backups` 默认 5 → 2，与自动备份同口径。
+   两套靠文件名前缀（`zcbot-backup-` / `zcbot-schema-`）分开数份数。
+8. **WebUI「数据库备份」面板** —— 看上次结果（含 `refused` / `failed` 的原因）、现有备份、
+   生效配置；可改保留份数 / 间隔 / 各阈值并写回 `config.yaml`；一键立即备份。
+   `state.json` 落盘，进程重启后仍能看到上次结果。
+9. **接口** —— `GET /api/db-backup`（状态，`require_auth`）、`POST /api/db-backup/run`
+   （超管 + 审计）、`POST /api/db-backup/config`（超管，写回 YAML 保注释）。
+10. **配置校验补 `float`** —— 原来 `_validate_keys` 只认 `int`，`interval_hours: 1.5`
+    这类写法会被当未知类型放过。新增 `float` 分支，越界直接报错。
+
+> 之所以不碰 MySQL：`mysqldump` 会长时间锁表、体积不可控，`run_backup` 对
+> `db_type == 'mysql'` 直接返回 `skipped`。迁移前的 binlog 位点记录仍然保留。
+
+验证：全量 `1199 passed, 1 skipped`（JUnit XML 复核 `failures=0 errors=0`）；
+定向 `tests/test_db_backup.py` 19 例（含「已低于停手线不写一个字节」「切片不越线」
+「块长配成 4GB 也不爆内存」「校验失败不转正」）、`tests/test_db_backup_api.py` 6 例；
+`tools/run_script_tests.py` 20 个脚本式文件全 PASS；`ruff` 同 CI 口径 select 全仓 0 error；
+前端生产构建 + 产物同步（保留 4 个手工 js）。
+
 ## [1.25.1] - 2026-11-18
 
 > 主题：**补一处漏掉的 error 日志**，以及把「本地怎么验收」补齐。功能未动。

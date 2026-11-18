@@ -147,6 +147,19 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 "SQL 语义可用但性能低、无真实事务，仅限开发调试，生产请用 sqlite/mysql"
             )
 
+        # 自动备份服务：按 database.backup.interval_hours 跑（默认每 6 小时）。
+        # 用独立守护线程而非 scheduler：备份可能跑几分钟（几百 MB 的库），
+        # 塞进调度器会占住 worker 并受 task_timeout 约束（超时只是不再等待，
+        # 线程还在跑，下一轮就会两个线程同时 VACUUM）。
+        # 这里只构造不启动 —— start() 里才起线程，避免只构造 Framework 的
+        # 测试/工具脚本凭空多出一个后台线程。
+        try:
+            from framework.database.backup import BackupService
+            self.backup_service = BackupService(self)
+        except Exception as e:
+            self.backup_service = None
+            logger.warning("自动备份服务初始化失败（备份功能不可用）: %s", e)
+
         # 多平台接入：适配器注册表（drive 表 ↔ 稳定 uuid 映射）。
         # 必须在 services.on_adapter_registered 回调设置前建立，回调触发时会用到。
         from framework.messaging.adapter_registry import AdapterRegistry
@@ -543,6 +556,16 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             self.terminal.start()
         self.start_console_server()
 
+        # 7.5 自动备份线程。宿主进程跳过：双进程模式下库在另一侧，
+        #     两个进程各备一份会互相抢 VACUUM 且浪费磁盘。
+        if getattr(self, '_role', 'standard') != 'host':
+            try:
+                svc = getattr(self, 'backup_service', None)
+                if svc is not None:
+                    svc.start()
+            except Exception as e:
+                logger.warning("自动备份线程启动失败（不影响主流程）: %s", e)
+
         # 8. 插件加载：wait_ready=True 同步等待（原行为）；False 后台异步执行不阻塞启动
         if wait_ready:
             loaded = await asyncio.to_thread(self._load_plugins_sync)
@@ -714,6 +737,14 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         """停止框架（异步）"""
         logger.info(i18n.t('framework.stopping'))
         self._running = False
+
+        # 先停备份线程：它可能正在 VACUUM/压缩，晚停会跟库关闭抢文件句柄。
+        try:
+            svc = getattr(self, 'backup_service', None)
+            if svc is not None:
+                svc.stop(timeout=5.0)
+        except Exception as e:
+            logger.debug("自动备份线程停止异常: %s", e)
 
         # 取消异步启动模式下仍在进行的后台插件加载任务
         if self._startup_load_task:

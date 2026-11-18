@@ -779,6 +779,7 @@ def create_web_app(framework) -> Flask:
         aiwriter,
         apikeys,
         auth,
+        backup,
         commands,
         config,
         console,
@@ -801,6 +802,7 @@ def create_web_app(framework) -> Flask:
     auth.register(ctx)
     admins.register(ctx)
     apikeys.register(ctx)
+    backup.register(ctx)
     dashboard.register(ctx)
     plugins.register(ctx)
     commands.register(ctx)

@@ -36,7 +36,7 @@ def migrations_context(database, source='boot', **overrides) -> MigrationContext
           migrations:
             auto_apply_destructive: false   # destructive 是否允许开机自动执行
             backup_before_rewrite: true     # rewrite/destructive 前自动备份
-            keep_backups: 5                 # SQLite 备份保留份数
+            keep_backups: 2                 # SQLite 备份保留份数
             operator: ""                    # 记录到流水的操作人
 
     启动场景恒为 source='boot' 且默认不允许 destructive —— 开机流程不能

@@ -20,6 +20,16 @@
   经 `ToolRegistry` 落到 changeset(写前快照 → diff → 整轮回滚),别在别处另记一份、
   也别绕过 `ToolRegistry` 直接 `open(...,'w')`——那样这轮改动就退不回去
 - 会话与改动的 Web 入口在 `framework/api/aiwriter.py`(只做 HTTP + 权限 + 审计,逻辑在 aiwriter 服务里)
+- **数据库自动备份只有一处实现**:`framework/database/backup.py`(`run_backup` 全流程 +
+  `BackupService` 守护线程,默认每 6 小时)。`framework/api/backup.py` 只做 HTTP 适配。
+  别在别处另写快照/压缩/轮转——迁移前备份(`migrations.backup_snapshot`)共用同一套
+  路径解析(`backup.resolve_db_path`)与「保留 2 份」口径,改一处即可
+- **空间探测是「探到边界就撤」,不是「填满磁盘」**:`elastic_probe` 写到可用空间只剩
+  `min_free_after_mb`(默认 512KB)立刻停手并在 `finally` 里删探针。任何「把盘写满」
+  的改法都是错的——正在跑的数据库会直接写不进去
+- **备份先写 `.part`,校验通过才 rename**:在 `.part` 上校验时按「去掉 `.part` 后的逻辑
+  扩展名」判断格式,否则 CRC/quick_check 会被静默跳过(看起来验过,其实只比了体积)
+- MySQL 不走文件快照(锁表 + 体积不可控),`run_backup` 直接返回 `skipped`
 
 ## 内核设计哲学
 

@@ -214,7 +214,7 @@ class MigrationContext:
     reason            : 变更原因（人读）
     allow_destructive : 是否允许执行 destructive 迁移（默认否）
     backup            : 执行 rewrite/destructive 前是否备份（默认是）
-    keep_backups      : SQLite 保留最近几份备份（默认 5）
+    keep_backups      : SQLite 保留最近几份备份（默认 2）
     """
     source: str = 'unknown'
     operator: str = ''
@@ -223,7 +223,7 @@ class MigrationContext:
     allow_destructive: bool = False
     first_run: bool = False
     backup: bool = True
-    keep_backups: int = 5
+    keep_backups: int = 2
     extra: dict = field(default_factory=dict)
 
     @classmethod
@@ -240,7 +240,7 @@ class MigrationContext:
             'reason': str(cfg.get('reason') or ''),
             'allow_destructive': bool(cfg.get('auto_apply_destructive', False)),
             'backup': bool(cfg.get('backup_before_rewrite', True)),
-            'keep_backups': int(cfg.get('keep_backups', 5) or 5),
+            'keep_backups': int(cfg.get('keep_backups', 2) or 2),
         }
         kwargs.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**kwargs)

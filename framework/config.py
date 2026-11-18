@@ -73,8 +73,24 @@ database:
   migrations:
     auto_apply_destructive: false   # 生产环境保持 false：开机流程不能兼任批准人
     backup_before_rewrite: true     # rewrite/destructive 前自动备份（SQLite 在线快照）
-    keep_backups: 5                 # 备份保留份数，避免占满磁盘
+    keep_backups: 2                 # 备份保留份数，避免占满磁盘
     # operator: ""                  # 记录到执行流水里的操作人；默认取系统登录名
+  # ── 自动备份（与迁移前备份共用 data/backups/，靠文件名前缀区分） ──
+  # 全部阈值可改。改完重启生效（WebUI「数据库备份」页也读这段配置）。
+  backup:
+    enabled: true
+    interval_hours: 6          # 每 6 小时一次
+    initial_delay_minutes: 5   # 启动后等 5 分钟再跑首次；0 = 启动不跑
+    keep: 2                    # 最多保留 2 份
+    compress: true             # 超过下面的阈值就打包 zip
+    compress_threshold_kb: 100 # 快照大于 100KB 才压缩（不压就只是复制）
+    compress_level: 1          # 1 档：压缩时尽量不抢 CPU，不卡事件处理
+    refuse_above_mb: 100       # 超过 100MB 暂停备份并提示，等人确认
+    allow_large: false         # true = 无视上面的上限（确认库体积正常后再开）
+    min_free_after_mb: 0.5     # 空间探测写到只剩 512KB 就停手并清理
+    headroom_ratio: 1.10       # 预留空间 = 库体积 × 该系数
+    probe_max_mb: 4096         # 探测硬上限，防止算出天文数字时写爆磁盘
+    verify: true               # 写完读回复核，过了才转正
   # ── MySQL 连接保活/自动重连（type: mysql 时生效） ──
   # 数据库断开（wait_timeout/服务重启/网络中断）后自动重连，不再卡死
   # ping_interval: 5        # 连接空闲超过该秒数后自动 ping 检测存活
@@ -582,6 +598,28 @@ _CONFIG_SCHEMA = {
         'type': dict,
         'keys': {
             'type': {'allowed': ('sqlite', 'mysql')},
+            # 自动备份：全部阈值可改。类型写错时这里就拦下，
+            # 而不是等到半夜备份线程跑到一半才发现 interval 是个字符串。
+            'backup': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'interval_hours': {'float': True, 'min': 0.05, 'max': 720},
+                    'initial_delay_minutes': {'float': True, 'min': 0},
+                    'keep': {'int': True, 'min': 1, 'max': 100},
+                    'compress': {'bool': True},
+                    'compress_threshold_kb': {'float': True, 'min': 0},
+                    'compress_level': {'int': True, 'min': 0, 'max': 9},
+                    'refuse_above_mb': {'float': True, 'min': 0},
+                    'allow_large': {'bool': True},
+                    'min_free_after_mb': {'float': True, 'min': 0.05},
+                    'headroom_ratio': {'float': True, 'min': 1.0, 'max': 10.0},
+                    'probe_chunk_kb': {'float': True, 'min': 64},
+                    'probe_max_mb': {'float': True, 'min': 1},
+                    'verify': {'bool': True},
+                    'verify_sqlite': {'bool': True},
+                },
+            },
         },
     },
     'event_queue': {
@@ -721,6 +759,24 @@ def _coerce_int(v):
     return None
 
 
+def _coerce_float(v):
+    """宽松浮点判定：接受 int / float / 可解析为数字的字符串。
+
+    与 ``_coerce_int`` 分开是为了让 ``interval_hours: 6.5`` 这种写法能过——
+    「每 6 小时」被写死成整数的话，想调成 1.5 小时就得改代码。
+    """
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _validate_keys(path: str, node: dict, spec: dict, issues: list) -> None:
     for key, kspec in spec.items():
         full = f"{path}.{key}"
@@ -756,6 +812,15 @@ def _validate_keys(path: str, node: dict, spec: dict, issues: list) -> None:
                 issues.append(f"配置项 [{full}]={iv} 小于下限 {kspec['min']}")
             elif 'max' in kspec and iv > kspec['max']:
                 issues.append(f"配置项 [{full}]={iv} 大于上限 {kspec['max']}")
+            continue
+        if kspec.get('float'):
+            fv = _coerce_float(v)
+            if fv is None:
+                issues.append(f"配置项 [{full}] 应是数字（或数字字符串），实际为 {type(v).__name__}：{v!r}")
+            elif 'min' in kspec and fv < kspec['min']:
+                issues.append(f"配置项 [{full}]={fv} 小于下限 {kspec['min']}")
+            elif 'max' in kspec and fv > kspec['max']:
+                issues.append(f"配置项 [{full}]={fv} 大于上限 {kspec['max']}")
             continue
         if 'allowed' in kspec:
             if v not in kspec['allowed']:
