@@ -525,6 +525,11 @@ def run_backup(database, cfg: dict = None, reason: str = 'auto',
         # MySQL 不在这一层 dump：mysqldump 会长时间锁表，体积也不可控。
         return _finish('skipped', False,
                        'MySQL 不走文件快照（请用实例级备份 / binlog 恢复点）')
+    if db_type and db_type != 'sqlite':
+        # debug / 降级模式没有真实库文件。不在这里拦的话，每 6 小时报一次
+        # 「库文件不存在」，日志里全是噪声，真出问题时反而看不见。
+        return _finish('skipped', False,
+                       '当前数据库类型 %s 没有库文件，跳过文件备份' % db_type)
 
     db_path = resolve_db_path(database)
     if not db_path or not os.path.exists(db_path):

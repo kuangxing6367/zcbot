@@ -292,6 +292,13 @@ def test_disabled_and_mysql_are_skipped(workdir):
     assert r2['status'] == 'skipped'
     assert 'MySQL' in r2['note']
 
+    class DebugDB(FakeDB):
+        db_type = 'debug'
+
+    r3 = bk.run_backup(DebugDB(workdir['db']), {})
+    assert r3['status'] == 'skipped'
+    assert '没有库文件' in r3['note']
+
 
 # ── 服务层 ────────────────────────────────────────────────────
 
