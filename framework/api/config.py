@@ -387,6 +387,12 @@ def register(ctx):
             with open(path, 'r', encoding='utf-8') as f:
                 doc = yaml.safe_load(f) or {}
             doc = _merged_core_sections(doc)
+            # 落盘是密文：超管看明文需要先解密；普通管理员随后仍会被脱敏。
+            try:
+                from framework import secretbox
+                secretbox.decrypt_config_secrets(doc)
+            except Exception as exc:
+                logger.warning(f"配置页凭据解密失败（按原值显示）: {exc}")
             masked = not _is_super()
             if masked:
                 doc = _mask_sensitive(doc)
@@ -423,7 +429,9 @@ def register(ctx):
         from framework import hotapply
         applied = hotapply.apply_section(framework, section, values)
 
-        audit_log(admin['id'], admin['username'], 'update_yaml_config', 'config', section, values)
+        # 审计日志不能把刚提交的 token 原文写进库
+        audit_log(admin['id'], admin['username'], 'update_yaml_config', 'config',
+                  section, _mask_sensitive(values))
         msg = f'配置段 [{section}] 已保存'
         if applied.get('notes'):
             msg += '，' + '；'.join(applied['notes'])

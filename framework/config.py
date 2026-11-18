@@ -25,6 +25,9 @@ _DEFAULT_CONFIG = """\
 # ZCBOT 事件驱动 IM 平台 配置文件
 # 首次启动自动生成，可按需修改后重启
 # ============================================================
+# 凭据加密：设置环境变量 ZCBOT_TOKEN_KEY 后，access_token / app_secret / api_key
+# 等凭据会被一次性加密写回本文件（enc:v1: 前缀），启动时自动解密成运行时明文。
+# 未设置密钥时保持旧明文行为；${VAR} 占位符不会被加密，仍由环境变量实时替换。
 
 # ── 界面语言 ────────────────────────────────────────────────
 # 面向用户的提示文案语言（启动 / 停止等日志）
@@ -829,8 +832,27 @@ def load_config(config_path: str = None) -> dict:
     if config is None:
         config = {}
 
+    # 凭据加密：有密钥就把明文 token 一次性加密写回（保留注释），内存字典同步加密；
+    # 没有密钥时旧明文配置照常加载，只提示一次，绝不阻断启动。
+    try:
+        from framework import secretbox as _secretbox
+        _secretbox.warn_if_no_key()
+        if _secretbox.available():
+            _migrated = _secretbox.migrate_file_and_config(config_path, config)
+            if _migrated:
+                _get_logger().info("已将 %d 处明文凭据加密写回 %s", _migrated, config_path)
+    except Exception as e:
+        _get_logger().warning(f"凭据加密迁移跳过（按原配置继续）: {e}")
+
     # 环境变量替换
     config = _env_replace(config)
+
+    # 环境变量替换后再解密：密文本身不含 ${}，顺序互换会让占位符失效。
+    try:
+        from framework import secretbox as _secretbox
+        _secretbox.decrypt_config_secrets(config)
+    except Exception as e:
+        _get_logger().warning(f"凭据解密跳过（按原配置继续）: {e}")
 
     # 官方插件配置中心：自动扫描 core_plugins/ 同步 core_plugins.yaml，并合并进 config
     _autoload_core_plugins(config)
@@ -1079,6 +1101,16 @@ def _autoload_core_plugins(config: dict) -> dict:
     cps = cps if isinstance(cps, dict) else {}
 
     changed = False
+    # core_plugins.yaml 也可能残留 access_token / token 等凭据：同样一次性加密落盘。
+    # 内存里先保持密文，等最后合并进主 config 前再解密成运行时明文。
+    try:
+        from framework import secretbox as _secretbox
+        if _secretbox.available() and _secretbox.encrypt_config_secrets(data):
+            _secretbox.rewrite_secret_file(yaml_path)
+            changed = True
+    except Exception as e:
+        _get_logger().warning(f"core_plugins.yaml 凭据加密跳过: {e}")
+
     # 2. 已安装缺失插件 → 补默认配置块（enabled 强制 False：发现即禁用，
     #    需用户/扫描工具显式启用后才加载）；并迁移主 config 对应段已有值
     for name in installed:
@@ -1143,8 +1175,18 @@ def _autoload_core_plugins(config: dict) -> dict:
     # 5. 合并进主 config：enabled → core_plugins 段；配置块 → 对应 section
     #    优先级：config.yaml 的同名段为准（它是部署参数的权威，WebUI 面板也写这里），
     #    core_plugins.yaml 只补 config.yaml 里没有的键。
+    #    注意：cps 在内存里仍是密文；这里复制一份解密，避免解密后的值被上面的
+    #    safe_dump 回写又变成明文。
     core_cfg = {}
-    for name, blk in cps.items():
+    try:
+        import copy
+        from framework import secretbox as _secretbox
+        cps_plain = copy.deepcopy(cps)
+        _secretbox.decrypt_config_secrets(cps_plain)
+    except Exception as e:
+        _get_logger().warning(f"core_plugins.yaml 凭据解密跳过: {e}")
+        cps_plain = cps
+    for name, blk in cps_plain.items():
         if not isinstance(blk, dict):
             continue
         section = _CORE_PLUGIN_SECTION.get(name, name)

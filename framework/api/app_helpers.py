@@ -242,6 +242,12 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
 
         merged = dict(_read_yaml_section(section))
         merged.update(values or {})
+        # WebUI 提交的是明文凭据，落盘前加密；已加密值 / ${VAR} / 脱敏占位符会自动跳过。
+        try:
+            from framework import secretbox
+            secretbox.encrypt_config_secrets(merged)
+        except Exception as _exc:
+            logger.debug('[_update_yaml_section] 凭据加密跳过: %s', _exc)
 
         new_lines = [f"{section}:\n"] + _yaml_block_lines(merged, indent=2, level=1)
         lines[start:end] = new_lines
