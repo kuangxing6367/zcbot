@@ -250,6 +250,7 @@ def test_toggle_api_rejects_bad_name(tmp_path, monkeypatch):
     pytest = __import__('pytest')
     pytest.importorskip('flask')
     from flask import Flask, request
+
     import framework.api.config as cfg_api
 
     def _auth(fn):

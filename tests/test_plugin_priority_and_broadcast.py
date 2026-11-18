@@ -112,8 +112,8 @@ def _passthrough(fn):
 
 
 def _api_client(db, monkeypatch):
-    from framework.api import plugins as plugins_api
     from framework.api import plugin_market, plugin_meta
+    from framework.api import plugins as plugins_api
     monkeypatch.setattr(plugin_market, 'register', lambda ctx: None)
     monkeypatch.setattr(plugin_meta, 'register', lambda ctx: None)
 

@@ -1180,6 +1180,7 @@ def _autoload_core_plugins(config: dict) -> dict:
     core_cfg = {}
     try:
         import copy
+
         from framework import secretbox as _secretbox
         cps_plain = copy.deepcopy(cps)
         _secretbox.decrypt_config_secrets(cps_plain)

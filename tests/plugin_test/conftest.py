@@ -56,7 +56,6 @@ class RecordingCtx:
 
         def record(*args, **kwargs):
             self.calls.append((item, args, kwargs))
-            return None
 
         return record
 

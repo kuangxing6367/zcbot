@@ -105,8 +105,8 @@ def test_bot_name_prefix_applied_to_connection(monkeypatch):
     """两实例连同一 self_id 时，前缀让 bot_name 不撞车。"""
     import asyncio
 
-    from core_plugins.onebot_adapter.main import ApiCaller, OneBotWebSocketServer
     import core_plugins.onebot_adapter.main as mod
+    from core_plugins.onebot_adapter.main import ApiCaller, OneBotWebSocketServer
 
     caller = ApiCaller()
     server_a = OneBotWebSocketServer(

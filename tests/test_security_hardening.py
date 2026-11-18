@@ -156,10 +156,15 @@ def test_zip_traversal_checks():
 
 def test_safe_file_path_realpath():
     src = read_api('files.py')
-    check("_safe_file_path 使用 os.path.realpath 解析真实路径",
-          "os.path.realpath(abs_path)" in src and "os.path.realpath(root_norm)" in src)
+    # 断言的是「语义」不是「变量名」：真正要防的是拿原始路径去判前缀，
+    # 那样 symlink 逃逸能直接绕过。目标与允许根两边都必须先 realpath，
+    # 再交给 commonpath 比较。变量叫什么无所谓，少做一次解析才是漏洞。
+    check("_safe_file_path 对目标路径解析 realpath",
+          'os.path.realpath(abs_path)' in src)
+    check("_safe_file_path 对允许根解析 realpath",
+          re.search(r'os\.path\.realpath\(\s*os\.path\.normpath\(root\)', src) is not None)
     check("校验基于 realpath 后路径而非原始路径",
-          "os.path.commonpath([root_real, abs_real])" in src)
+          'os.path.commonpath([root_real, abs_real])' in src)
 
 
 if __name__ == '__main__':
