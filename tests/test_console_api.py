@@ -19,6 +19,8 @@ import pytest
 class FakeServer:
     def __init__(self):
         self.calls = []
+        # 与真实 ConsoleServer 对齐：run_agent 后由调用方读这个属性拿改动编号
+        self.last_agent_change = None
 
     def run_command(self, command):
         self.calls.append(('cmd', command))
@@ -26,8 +28,9 @@ class FakeServer:
             raise RuntimeError('炸了')
         return f'output of {command}\n'
 
-    def run_agent(self, text):
-        self.calls.append(('agent', text))
+    def run_agent(self, text, session=None):
+        self.calls.append(('agent', text, session))
+        self.last_agent_change = 'cs-test-0001'
         return '[tool] read({"path": "a.py"})\n  -> ok: 12 bytes\n已改好 a.py'
 
 
@@ -122,11 +125,24 @@ def test_exec_exception_becomes_json_error(env):
 
 
 def test_agent_returns_tool_trace(env):
-    env['fw'].console_server = FakeServer()
+    srv = FakeServer()
+    env['fw'].console_server = srv
     r = env['sup'].post('/api/console/agent', json={'text': '改一下 a.py'})
     assert r.status_code == 200
-    out = r.get_json()['data']['output']
-    assert '[tool] read(' in out and '已改好' in out
+    body = r.get_json()['data']
+    assert '[tool] read(' in body['output'] and '已改好' in body['output']
+    # 本轮改动编号要回给前端，否则「改完自动摊开 diff」无从触发
+    assert body['change'] == 'cs-test-0001'
+
+
+def test_agent_passes_session_through(env):
+    """指定会话必须传到底层服务——否则「在哪个会话里说」形同虚设。"""
+    srv = FakeServer()
+    env['fw'].console_server = srv
+    r = env['sup'].post('/api/console/agent', json={'text': '继续', 'session': '写个插件'})
+    assert r.status_code == 200
+    assert srv.calls[-1] == ('agent', '继续', '写个插件')
+    assert r.get_json()['data']['session'] == '写个插件'
 
 
 def test_requires_super(env):

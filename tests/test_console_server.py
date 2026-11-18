@@ -69,6 +69,36 @@ class _FakeAgent:
         return '答复：%s' % text
 
 
+class _SessionAwareAgent:
+    """支持 session 的实现（aiwriter 的真实形态）。"""
+
+    def __init__(self):
+        self.seen = []
+
+    def run(self, text, on_event=None, session=None):
+        self.seen.append(session)
+        return '在 %s 里答复：%s' % (session, text)
+
+
+def test_agent_session_is_forwarded_only_when_supported():
+    """控制台按签名适配：支持 session 就传，不支持就退回旧调用。
+
+    硬传关键字参数会把「这个服务没有会话概念」变成 500——那是控制台在逼
+    被调用方改签名，而不是兼容它。
+    """
+    from framework.console_server import ConsoleServer
+    assert ConsoleServer._agent_accepts_session(_SessionAwareAgent()) is True
+    assert ConsoleServer._agent_accepts_session(_FakeAgent()) is False
+
+    srv = ConsoleServer.__new__(ConsoleServer)   # 只测方法，不建服务
+    aware = _SessionAwareAgent()
+    assert srv._call_agent(aware, 'hi', None, '会话A') == '在 会话A 里答复：hi'
+    assert aware.seen == ['会话A']
+
+    plain = _FakeAgent()
+    assert srv._call_agent(plain, 'hi', None, '会话A') == '答复：hi'
+
+
 # ── 1. 方言修复 ────────────────────────────────────────────────────────
 
 def test_dialect_keeps_primary_key_check():

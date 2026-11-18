@@ -16,6 +16,10 @@
 - **IIPC 已搁置**:新功能只在主框架落地,IIPC 侧不跟进(见 [docs/速查/IIPC内核链路.md](docs/速查/IIPC内核链路.md) 顶部)
 - Web 终端与 AI 智能体:`/api/console/{commands,exec,agent}` 直接复用 `ConsoleServer.run_command` / `run_agent`,
   超管专用 + 审计 + 超时;不要再写第二套执行器
+- **文件改动只有一个记账点**:`core_plugins/aiwriter/changeset.py`。智能体的 `write`/`edit`/`plugin_new`
+  经 `ToolRegistry` 落到 changeset(写前快照 → diff → 整轮回滚),别在别处另记一份、
+  也别绕过 `ToolRegistry` 直接 `open(...,'w')`——那样这轮改动就退不回去
+- 会话与改动的 Web 入口在 `framework/api/aiwriter.py`(只做 HTTP + 权限 + 审计,逻辑在 aiwriter 服务里)
 
 ## 内核设计哲学
 

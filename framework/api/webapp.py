@@ -776,6 +776,7 @@ def create_web_app(framework) -> Flask:
     # ---- 按功能域注册路由（各模块 import 后调用 register(ctx)）----
     from framework.api import (
         admins,
+        aiwriter,
         apikeys,
         auth,
         commands,
@@ -808,6 +809,7 @@ def create_web_app(framework) -> Flask:
     logs.register(ctx)
     config.register(ctx)
     console.register(ctx)
+    aiwriter.register(ctx)
     # 健康探针 / 指标：必须早于蜜罐注册 —— 蜜罐的 /healthz /readyz /metrics 诱饵
     # 只在没有真实路由时才生效（其注册时自行跳过已被占用的路径）。
     observability.register(ctx)

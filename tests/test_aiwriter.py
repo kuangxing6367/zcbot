@@ -1175,6 +1175,57 @@ def test_app_agent_add_quick():
         restore()
 
 
+# ── 改动账本接入服务层 ─────────────────────────────────────────────────
+
+class _WriteAgent:
+    """替身 Agent：跑一轮、写一个文件，用来验「服务层有没有真的记账」。"""
+
+    def __init__(self, cfg, tools, on_event=None):
+        self.tools = tools
+        self.events = on_event or (lambda k, p=None: None)
+
+    def run(self, messages):
+        self.tools.call('write', {'path': 'a.py', 'content': 'AI 写的新内容\n'})
+        self.events('tool_end', {'name': 'write', 'ok': True, 'result': 'ok'})
+        return '改好了'
+
+
+def test_service_run_records_changeset_and_rollback(monkeypatch):
+    """`_AgentService.run` 必须为这一轮开一个 changeset，且能整轮退回去。
+
+    这条锁的是「接线」：journal 有没有真的挂到 tools 副本上、save 有没有落盘、
+    last_change_id 有没有回给调用方。工具集细节由 test_aiwriter_changeset 覆盖。
+    """
+    ws = tempfile.mkdtemp(prefix='aiwriter_chg_ws_')
+    with open(os.path.join(ws, 'a.py'), 'w', encoding='utf-8', newline='') as f:
+        f.write('原始内容\n')
+    ctx, data_dir = _register({'aiwriter': {'api_key': 'sk', 'workspace': ws,
+                                            'session_key': '测试会话'}})
+    old_agent = aw_main.Agent
+    aw_main.Agent = _WriteAgent
+    try:
+        svc = aw_main._AgentService()
+        final = svc.run('改一下 a.py', on_event=lambda k, p: None)
+        assert final == '改好了'
+        assert svc.last_change_id, '这一轮动了文件，却没有产生改动编号'
+
+        with open(os.path.join(ws, 'a.py'), encoding='utf-8') as f:
+            assert f.read() == 'AI 写的新内容\n'
+
+        from core_plugins.aiwriter import changeset
+        rows = changeset.list_changes(os.path.join(data_dir, 'changes'))
+        assert [r['id'] for r in rows] == [svc.last_change_id]
+        assert rows[0]['paths'] == ['a.py']
+        assert rows[0]['session'] == '测试会话'
+
+        result = svc.rollback(svc.last_change_id)
+        assert result['status'] == changeset.STATUS_ROLLED_BACK
+        with open(os.path.join(ws, 'a.py'), encoding='utf-8') as f:
+            assert f.read() == '原始内容\n'
+    finally:
+        aw_main.Agent = old_agent
+        aw_main.unregister()
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

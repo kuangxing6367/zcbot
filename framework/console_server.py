@@ -65,6 +65,8 @@ class ConsoleServer:
         self._sock = None
         self._thread = None
         self._stop = False
+        # 最近一轮智能体产生的改动编号（aiwriter changeset），供接口层回给前端
+        self.last_agent_change = None
 
     # ── 凭证（端口 + token）────────────────────────────────────────────
     def _db(self):
@@ -320,12 +322,36 @@ class ConsoleServer:
             buf.write('\n执行异常: %s' % e)
         return buf.getvalue()
 
-    def run_agent(self, text: str) -> str:
+    @staticmethod
+    def _agent_accepts_session(svc) -> bool:
+        """服务是否支持 `run(..., session=...)`。
+
+        控制台不该绑死某个服务的签名：aiwriter 支持会话，别人替的实现可能只认
+        `(text, on_event)`。硬传一个新关键字参数会把「不支持会话」变成 500，
+        所以按签名判断，不支持就退回旧调用。
+        """
+        import inspect
+        try:
+            params = inspect.signature(svc.run).parameters
+        except (TypeError, ValueError):
+            return False
+        return 'session' in params or any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    def _call_agent(self, svc, text, on_event, session):
+        if session and self._agent_accepts_session(svc):
+            return svc.run(text, on_event=on_event, session=session)
+        return svc.run(text, on_event=on_event)
+
+    def run_agent(self, text: str, session: str = None) -> str:
         """把一句话交给智能体（aiwriter 服务），返回「工具过程 + 最终答复」。
 
         无 TTY 的文本通道也能用智能体——不必起全屏界面。
+        `session` 指定会话（None 用服务当前会话）；本轮产生的改动编号记在
+        `self.last_agent_change`，供调用方回给前端「去看哪一条改动」。
         """
         text = (text or '').strip()
+        self.last_agent_change = None
         if not text:
             return '（空）'
         svc = None
@@ -341,10 +367,12 @@ class ConsoleServer:
         try:
             from framework.terminal.context import remote_session
             with remote_session():
-                final = svc.run(text, on_event=lambda k, p: events.append((k, p)))
+                final = self._call_agent(svc, text,
+                                         lambda k, p: events.append((k, p)), session)
         except Exception as e:
             logger.debug('[run_agent] 捕获异常后按降级路径继续: %s', e)
             return '[错误] %s' % e
+        self.last_agent_change = getattr(svc, 'last_change_id', None)
         out = []
         for k, p in events:
             if k == 'tool_start':
@@ -352,6 +380,9 @@ class ConsoleServer:
             elif k == 'tool_end':
                 out.append('  -> %s: %s' % ('ok' if p.get('ok') else 'fail',
                                             _brief(p.get('result'))))
+            elif k == 'changes':
+                out.append('[changes] 本轮改动 %s 个文件（编号 %s）'
+                           % (p.get('files'), p.get('id')))
         if final:
             out.append(final)
         return '\n'.join(out) or '（无输出）'

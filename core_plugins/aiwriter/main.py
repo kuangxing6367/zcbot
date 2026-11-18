@@ -19,7 +19,9 @@
   tools.py    工作区工具集（智能体的「手」）+ 权限
   agent.py    工具调用闭环（流式事件）
   session.py  会话存储与上下文压缩
+  changeset.py 改动账本（写前快照 / diff / 整轮回滚）
 """
+import copy
 import json
 import logging
 import os
@@ -34,6 +36,7 @@ logger = logging.getLogger('zcbot')
 # 同名模块（如 plugins/llm_core/agent.py）在 sys.modules 里撞车。
 _PKG = None
 try:  # 包导入（测试 / 包内引用）
+    from . import changeset
     from . import prompt as prompt_mod
     from .agent import Agent
     from .llm import LLMError, stream_chat
@@ -52,6 +55,7 @@ except ImportError:  # 兜底：加载器未把本模块建成包（老加载路
     _PKG = __name__
     # 用 importlib 显式按包名导入子模块（不用 from .x 语法，避免 __package__ 与
     # __spec__.parent 不一致的 DeprecationWarning）
+    changeset = importlib.import_module(__name__ + '.changeset')
     _llm = importlib.import_module(__name__ + '.llm')
     LLMError, stream_chat = _llm.LLMError, _llm.stream_chat
     ToolRegistry = importlib.import_module(__name__ + '.tools').ToolRegistry
@@ -132,6 +136,11 @@ def _load_cfg(fw):
 
 def _data_dir():
     return _CTX.get_data_dir() if _CTX is not None else os.getcwd()
+
+
+def _changes_dir():
+    """改动账本目录（changes/<id>.json）。"""
+    return os.path.join(_data_dir(), "changes")
 
 
 def _workspace_dir(cfg=None):
@@ -878,19 +887,42 @@ def run_cli(config_path=None):
 
 
 class _AgentService:
-    """把智能体暴露为框架服务：`svc.run(text, on_event=None) -> 最终文本`（同步阻塞）。
+    """把智能体暴露为框架服务：`svc.run(text, on_event=None, session=None) -> 最终文本`。
 
     供调试控制台等「无 TTY 的文本通道」调用——那样也能跟智能体对话，
     而不必起全屏界面。
+
+    每轮执行都会开一个 **changeset**（改动账本）：模型这一轮动了哪些文件、
+    各自 diff、能不能退回去，都记在 `changes/` 下。审查与回滚都是「整轮」语义，
+    对应界面上的「这一轮改了什么 / 撤销这一轮」。
     """
 
-    def run(self, text, on_event=None):
-        key = _session_key()
+    def __init__(self):
+        # 最近一轮产生的改动编号；接口层据此告诉前端「去看哪一条」
+        self.last_change_id = None
+
+    def run(self, text, on_event=None, session=None):
+        key = (session or '').strip() or _session_key()
+        if _STORE is not None and not _STORE.exists(key):
+            _STORE.ensure(key, name=key)
+            _STORE.save()
         try:
             _maybe_compact(key)
         except Exception as _exc:
             logger.debug('[run] 捕获异常后按降级路径继续: %s', _exc)
         tools = _TOOLS
+        journal = None
+        try:
+            journal = changeset.ChangeJournal(
+                _changes_dir(), root=getattr(_TOOLS, 'root', os.getcwd()),
+                session=key, note=(text or '')[:200])
+            # 浅拷贝一份再挂账本：模块级 _TOOLS 是共享单例，直接改属性会让并发的
+            # 两轮把改动混进同一个 changeset。
+            tools = copy.copy(_TOOLS)
+            tools.journal = journal
+        except Exception as _exc:
+            logger.warning('改动账本初始化失败，本轮改动不会记录：%s', _exc)
+            journal, tools = None, _TOOLS
         system = _system_prompt()
         messages = _STORE.build_messages(key, system, text)
         agent = Agent(_effective_cfg(), tools, on_event=on_event)
@@ -898,7 +930,58 @@ class _AgentService:
         _STORE.append_turn(key, text, final)
         _STORE.save()
         _archive_turn(text, final)
+        self.last_change_id = None
+        if journal is not None:
+            try:
+                self.last_change_id = journal.save()
+            except Exception as _exc:
+                logger.warning('改动账本落盘失败：%s', _exc)
+            if self.last_change_id and on_event:
+                try:
+                    on_event('changes', {'id': self.last_change_id,
+                                         'files': len(journal.entries),
+                                         'session': key})
+                except Exception as _exc:
+                    logger.debug('[run] 改动事件回调失败: %s', _exc)
         return final
+
+    # ── 会话（供 Web 界面：列 / 切 / 新建 / 改名 / 删）──────────────────
+    def workspace(self):
+        return getattr(_TOOLS, 'root', '')
+
+    def active_session(self):
+        return _session_key()
+
+    def sessions(self):
+        return _sessions()
+
+    def history(self, key):
+        return _STORE.history(key) if _STORE is not None else []
+
+    def new_session(self, name=None):
+        return _new_session(name)
+
+    def set_session(self, key):
+        return _set_session(key)
+
+    def rename_session(self, key, name):
+        return _rename_session(key, name)
+
+    def delete_session(self, key):
+        return _delete_session(key)
+
+    # ── 改动（供 Web 界面：列 / 看 diff / 整轮回滚）────────────────────
+    def changes(self, limit=50):
+        return changeset.list_changes(_changes_dir(), limit=limit)
+
+    def change(self, cid):
+        return changeset.load_change(_changes_dir(), cid)
+
+    def rollback(self, cid):
+        result = changeset.rollback(_changes_dir(), cid)
+        logger.info('改动已回滚：%s（还原 %d，跳过 %d）',
+                    cid, len(result.get('restored') or []), len(result.get('skipped') or []))
+        return result
 
 
 # ── 注册 / 注销（bot 内）───────────────────────────────────────────────

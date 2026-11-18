@@ -23,6 +23,13 @@ import subprocess
 
 logger = logging.getLogger('zcbot')
 
+try:  # 包导入（测试 / 包内引用）
+    from . import changeset as _changeset
+except ImportError:  # 框架 loader 以「顶层模块」加载本插件：无父包，退回同目录绝对导入
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import changeset as _changeset
+
 # 能力常量
 CAP_READ = 'read'
 CAP_WRITE = 'write'
@@ -61,7 +68,7 @@ class ToolRegistry:
 
     def __init__(self, root, mode='workspace', allow_exec=False,
                  max_output=8000, shell_timeout=60, host=None,
-                 python_timeout=60, net_timeout=20):
+                 python_timeout=60, net_timeout=20, journal=None):
         self.root = os.path.abspath(root)
         self.mode = mode
         self.allow_exec = bool(allow_exec)
@@ -71,6 +78,10 @@ class ToolRegistry:
         self.net_timeout = float(net_timeout)
         # 宿主桥：提供 db / 插件管理等框架侧能力（独立 CLI 下可为 None）
         self.host = host
+        # 改动账本（changeset.ChangeJournal）：为 None 时只写不记，行为与旧版一致。
+        # 每次智能体执行用 `copy.copy(registry)` 拿一份带 journal 的副本再注入，
+        # 不改共享单例——否则并发两轮会把改动混进同一个 changeset。
+        self.journal = journal
 
     # ── 权限 ───────────────────────────────────────────────────────────
     def allowed_caps(self) -> set:
@@ -347,14 +358,41 @@ class ToolRegistry:
         return "\n".join(hits) if hits else "无匹配"
 
     # ---- 写入 ----
+    def _snapshot(self, path):
+        """写前快照：返回 (原文, 无法快照的原因)。未挂 journal 时直接返回 (None, None)。"""
+        if self.journal is None:
+            return None, None
+        if not os.path.isfile(path):
+            return None, None
+        return _changeset.read_text(path)
+
+    def _note(self, path, op, before, after, why=None):
+        """写后记账。无法回滚的情况如实标注，不假装记过。"""
+        if self.journal is None:
+            return
+        try:
+            if why:
+                self.journal.mark_unrollbackable(path, op, why)
+            elif self.journal.over_budget(len((after or '').encode('utf-8', 'replace'))):
+                self.journal.mark_unrollbackable(path, op, '本轮改动总量超过上限，只记录路径')
+            else:
+                self.journal.record(path, op, before, after)
+        except Exception as _exc:
+            # 记账失败不能把已经落盘的改动说成失败——那是更坏的谎报
+            logger.warning('改动记录失败（文件已写入）：%s', _exc)
+
     def _t_write(self, a):
         if 'path' not in a:
             raise ToolError("write 需要 path")
         p = self._resolve(a['path'])
+        existed = os.path.isfile(p)
+        before, why = self._snapshot(p)
         os.makedirs(os.path.dirname(p) or self.root, exist_ok=True)
         content = a.get('content', '')
         with open(p, 'w', encoding='utf-8', newline='') as f:
             f.write(content)
+        self._note(p, _changeset.OP_WRITE if existed else _changeset.OP_CREATE,
+                   before, content, why)
         return "已写入 %s（%d 字节）" % (a['path'], len(content.encode('utf-8')))
 
     def _t_edit(self, a):
@@ -368,6 +406,7 @@ class ToolRegistry:
         p = self._resolve(path)
         if not os.path.isfile(p):
             raise ToolError("文件不存在：%s" % path)
+        _cached, why = self._snapshot(p)
         with open(p, encoding='utf-8', errors='replace') as f:
             content = f.read()
 
@@ -385,6 +424,8 @@ class ToolRegistry:
         new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
         with open(p, 'w', encoding='utf-8', newline='') as f:
             f.write(new_content)
+        # edit 读进来的是文本（二进制文件走 replace，内容已失真，故用 why 标注不可回滚）
+        self._note(p, _changeset.OP_EDIT, content, new_content, why)
         return "已编辑 %s（替换 %d 处）" % (path, count if replace_all else 1)
 
     # ---- 执行 ----
@@ -604,4 +645,24 @@ class ToolRegistry:
         ok, msg = self._host().plugin_new(name)
         if not ok:
             raise ToolError(msg)
+        self._note_scaffold(name)
         return msg
+
+    def _note_scaffold(self, name):
+        """把脚手架生成的文件也记进改动，否则回滚后目录里会留下一半的东西。
+
+        脚手架由宿主侧写到框架根的 `plugins/`（不是 `aiwriter.workspace`）。
+        工作区指到别处时这里会越界，那就跳过——记不了的东西不能假装记过。
+        """
+        if self.journal is None:
+            return
+        for fn in ('main.py', 'README.md'):
+            try:
+                p = self._resolve(os.path.join('plugins', name, fn))
+            except ToolError:
+                return
+            if not os.path.isfile(p):
+                continue
+            text, why = _changeset.read_text(p)
+            self._note(p, _changeset.OP_CREATE, None, text, why)
+

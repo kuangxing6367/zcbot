@@ -34,11 +34,15 @@ def register(ctx):
     def _server():
         return getattr(framework, 'console_server', None)
 
-    def _run(fn, arg, timeout):
-        """在独立线程里跑，带超时；异常统一转成错误文本。"""
+    def _run(fn, args, timeout):
+        """在独立线程里跑，带超时；异常统一转成错误文本。
+
+        `args` 是位置参数元组——智能体要区分「说什么」和「在哪个会话里说」，
+        单参数版本早晚要改成可变参数，不如一开始就说清。
+        """
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            fut = pool.submit(fn, arg)
+            fut = pool.submit(fn, *(args or ()))
             return fut.result(timeout=timeout), None
         except concurrent.futures.TimeoutError:
             return None, f'执行超时（>{timeout}s）：任务仍在后台线程继续，可稍后查看日志'
@@ -75,7 +79,7 @@ def register(ctx):
         if srv is None:
             return jsonify({'code': 503, 'msg': '调试控制台未启动，无法在 Web 执行命令'}), 503
 
-        output, err = _run(srv.run_command, command, CMD_TIMEOUT)
+        output, err = _run(srv.run_command, (command,), CMD_TIMEOUT)
         try:
             audit_log(admin['id'], admin['username'], 'console_exec', 'console',
                       command[:512], {'ok': err is None})
@@ -88,22 +92,30 @@ def register(ctx):
     @app.route('/api/console/agent', methods=['POST'])
     @require_super
     def console_agent():
-        """把一句话交给 aiwriter 智能体，返回「工具过程 + 最终答复」。"""
+        """把一句话交给 aiwriter 智能体，返回「工具过程 + 最终答复」。
+
+        可选 `session`：指定在哪个会话里说。不传则用服务当前会话——
+        与运维终端里 `code` 打开的界面共享同一份历史。
+        """
         admin = request.admin
         data = request.get_json(silent=True) or {}
         text = str(data.get('text') or '').strip()
+        session = str(data.get('session') or '').strip() or None
         if not text:
             return jsonify({'code': 400, 'msg': '内容不能为空'}), 400
         srv = _server()
         if srv is None:
             return jsonify({'code': 503, 'msg': '调试控制台未启动，智能体不可用'}), 503
 
-        output, err = _run(srv.run_agent, text, AGENT_TIMEOUT)
+        output, err = _run(srv.run_agent, (text, session), AGENT_TIMEOUT)
+        change_id = getattr(srv, 'last_agent_change', None)
         try:
             audit_log(admin['id'], admin['username'], 'console_agent', 'console',
-                      text[:512], {'ok': err is None})
+                      text[:512], {'ok': err is None, 'session': session,
+                                   'change': change_id})
         except Exception as _exc:
             logger.debug('[console] 审计写入失败: %s', _exc)
         if err:
             return jsonify({'code': 500, 'msg': err}), 500
-        return jsonify({'code': 0, 'data': {'text': text, 'output': output or ''}})
+        return jsonify({'code': 0, 'data': {'text': text, 'output': output or '',
+                                            'session': session, 'change': change_id}})
