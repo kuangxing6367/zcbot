@@ -10,6 +10,8 @@ import threading
 import time
 from contextlib import suppress
 
+from .sqlite_compat import ensure_registered
+
 # MySQL 连接断开类错误码（触发自动重连）——定义在此避免 db↔db_conn 循环
 _MYSQL_RECONNECT_ERRORS = {2006, 2013, 2055, 1927, 1040}
 # 连接断开类错误关键字（用于兜底判断）
@@ -202,6 +204,8 @@ class DatabaseConnMixin:
         """获取 SQLite 连接（线程本地）"""
         conn = getattr(self._local, 'conn', None)
         if conn is None:
+            # 显式日期适配器：跨 Python 3.11/3.12/3.13 行为一致，不吃弃用默认项
+            ensure_registered()
             conn = sqlite3.connect(
                 self._db_path,
                 check_same_thread=False,

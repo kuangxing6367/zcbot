@@ -139,8 +139,79 @@ def write_crash_report(report: dict, home=None, log_dir=None) -> str:
         raise
 
 
+CGROUP_V2_MEM_MAX = '/sys/fs/cgroup/memory.max'
+CGROUP_V1_MEM_LIMIT = '/sys/fs/cgroup/memory/memory.limit_in_bytes'
+PROC_MEMINFO = '/proc/meminfo'
+_CGROUP_UNLIMITED = 1 << 62
+
+
+def _read_first_line(path):
+    try:
+        with open(path, encoding='utf-8', errors='ignore') as f:
+            return f.readline().strip()
+    except OSError:
+        return ''
+
+
+def _cgroup_memory_limit():
+    """容器内存上限：cgroup v2 的 memory.max，回退 v1 的 limit_in_bytes。"""
+    for path in (CGROUP_V2_MEM_MAX, CGROUP_V1_MEM_LIMIT):
+        raw = _read_first_line(path)
+        if not raw or raw == 'max':
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if 0 < value < _CGROUP_UNLIMITED:
+            return value
+    return None
+
+
+def _memory_usage():
+    """(总内存, 可用内存)，字节；平台不识别返回 (None, None)。"""
+    system = platform.system()
+    if system == 'Linux':
+        total = available = None
+        try:
+            with open(PROC_MEMINFO, encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    if line.startswith('MemTotal:'):
+                        total = int(line.split()[1]) * 1024
+                    elif line.startswith('MemAvailable:'):
+                        available = int(line.split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            return None, None
+        return total, available
+    if system == 'Windows':
+        try:
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ('dwLength', ctypes.c_ulong),
+                    ('dwMemoryLoad', ctypes.c_ulong),
+                    ('ullTotalPhys', ctypes.c_ulonglong),
+                    ('ullAvailPhys', ctypes.c_ulonglong),
+                    ('ullTotalPageFile', ctypes.c_ulonglong),
+                    ('ullAvailPageFile', ctypes.c_ulonglong),
+                    ('ullTotalVirtual', ctypes.c_ulonglong),
+                    ('ullAvailVirtual', ctypes.c_ulonglong),
+                    ('ullAvailExtendedVirtual', ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return None, None
+            return stat.ullTotalPhys, stat.ullAvailPhys
+        except Exception:
+            return None, None
+    return None, None
+
+
 def environment_info(db_path=None) -> dict:
-    """把排障最常问的三类事实一次性记下来：系统、容器、容量。"""
+    """把排障最常问的事实一次性记下来：系统、容器、内存、容量。"""
     cgroup = ''
     for candidate in ('/proc/1/cgroup', '/proc/self/cgroup'):
         try:
@@ -164,11 +235,22 @@ def environment_info(db_path=None) -> dict:
     }
     try:
         target = os.path.dirname(os.path.abspath(db_path)) if db_path else state_dir()
-        info['free_bytes'] = shutil.disk_usage(target).free
+        disk = shutil.disk_usage(target)
+        info['free_bytes'] = disk.free
+        info['total_bytes'] = disk.total
         info['target'] = target
     except OSError as e:
         info['free_bytes'] = -1
+        info['total_bytes'] = -1
         info['free_error'] = str(e)
+    mem_total, mem_available = _memory_usage()
+    if mem_total is not None:
+        info['mem_total_bytes'] = mem_total
+    if mem_available is not None:
+        info['mem_available_bytes'] = mem_available
+    cgroup_limit = _cgroup_memory_limit()
+    if cgroup_limit is not None:
+        info['cgroup_mem_limit_bytes'] = cgroup_limit
     if db_path and os.path.isfile(db_path):
         try:
             info['db_bytes'] = os.path.getsize(db_path)

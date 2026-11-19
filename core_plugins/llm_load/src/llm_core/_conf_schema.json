@@ -120,5 +120,11 @@
     "type": "number",
     "default": 5,
     "hint": "每次 knowledge_search 返回的命中片段上限"
+  },
+  "automation_timeout": {
+    "description": "自动化任务超时（秒）",
+    "type": "number",
+    "default": 300,
+    "hint": "Web 侧提交自动化任务后等待模型结果的最长时间；群聊总结、每日抓取推送这类任务建议留足"
   }
 }

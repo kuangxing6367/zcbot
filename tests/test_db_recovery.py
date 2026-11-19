@@ -375,10 +375,56 @@ def test_runtime_corruption_enters_recovery(db, monkeypatch, method, source):
 def test_environment_info_fields(db):
     info = rc.environment_info(db)
     for key in ('system', 'python', 'sqlite', 'in_lxc', 'in_docker',
-                'in_venv', 'free_bytes', 'db_bytes'):
+                'in_venv', 'free_bytes', 'total_bytes', 'db_bytes'):
         assert key in info, key
     assert info['db_bytes'] == os.path.getsize(db)
+    assert info['total_bytes'] >= info['free_bytes'] >= 0
     assert isinstance(info['in_venv'], bool)
+
+
+def test_environment_info_records_memory_and_cgroup(db, monkeypatch, tmp_path):
+    """手写稿要求：内存配置、可用内存、cgroup 上限都进 error.log。"""
+    proc = tmp_path / 'meminfo'
+    proc.write_text('MemTotal:       16384 kB\nMemAvailable:    8192 kB\n', encoding='utf-8')
+    v2 = tmp_path / 'memory.max'
+    v2.write_text('2147483648\n', encoding='utf-8')
+    monkeypatch.setattr(rc, 'PROC_MEMINFO', str(proc))
+    monkeypatch.setattr(rc, 'CGROUP_V2_MEM_MAX', str(v2))
+    monkeypatch.setattr(rc, 'CGROUP_V1_MEM_LIMIT', str(tmp_path / 'missing'))
+    monkeypatch.setattr(rc.platform, 'system', lambda: 'Linux')
+    info = rc.environment_info(db)
+    assert info['mem_total_bytes'] == 16384 * 1024
+    assert info['mem_available_bytes'] == 8192 * 1024
+    assert info['cgroup_mem_limit_bytes'] == 2147483648
+
+
+def test_cgroup_v1_fallback_and_unlimited(tmp_path, monkeypatch):
+    v2 = tmp_path / 'memory.max'
+    v2.write_text('max\n', encoding='utf-8')
+    v1 = tmp_path / 'memory.limit_in_bytes'
+    v1.write_text('9223372036854771712\n', encoding='utf-8')  # cgroup v1 的"无限制"
+    monkeypatch.setattr(rc, 'CGROUP_V2_MEM_MAX', str(v2))
+    monkeypatch.setattr(rc, 'CGROUP_V1_MEM_LIMIT', str(v1))
+    assert rc._cgroup_memory_limit() is None
+    v1.write_text('1073741824\n', encoding='utf-8')
+    assert rc._cgroup_memory_limit() == 1073741824
+
+
+def test_memory_usage_unknown_platform(monkeypatch):
+    monkeypatch.setattr(rc.platform, 'system', lambda: 'Plan9')
+    assert rc._memory_usage() == (None, None)
+
+
+def test_crash_log_carries_full_environment(crash_dir, monkeypatch, tmp_path):
+    proc = tmp_path / 'meminfo'
+    proc.write_text('MemTotal:       16384 kB\nMemAvailable:    8192 kB\n', encoding='utf-8')
+    monkeypatch.setattr(rc, 'PROC_MEMINFO', str(proc))
+    monkeypatch.setattr(rc.platform, 'system', lambda: 'Linux')
+    path = rc.write_crash_report({'status': 'failed', 'ok': False}, log_dir=crash_dir)
+    text = _crash_text(crash_dir)
+    assert 'mem_total_bytes' in text
+    assert 'total_bytes' in text
+    assert os.path.basename(path) == 'error.log'
 
 
 def test_module_has_no_emoji():

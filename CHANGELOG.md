@@ -26,6 +26,34 @@
 
 ---
 
+## [1.28.1] - 2026-11-19
+
+> 主题：手写稿剩余项落地。WebUIplus 补上消息查看/发送与布局主题；
+> LLM_core 给自动化任务一个专用保留身份；跨 Python/SQLite 版本漂移与环境
+> 探测一次性补齐。版本号按约定只打补丁号（1.27.3 → 1.28.1 是按用户指定，
+> 期间误打的 1.28.0 已作废）。
+
+### 新增
+
+1. **WebUIplus 官方插件**（默认关闭，`core_plugins.yaml` 中启用）——依赖 WebUI：
+   自定义布局与别名、WebUI 查看文字与图片消息、从 WebUI 发消息到 IM、
+   主题切换（跟随/浅/深）、全局磨砂、首屏动画、卡片/队列显示切换。
+   配置与消息落 `data/plugins_dat/webuiplus/`，图片走已有的媒体落盘闸门。
+2. **LLM_core 自动化专用身份** —— 保留用户 `__zcbot_automation__` + 独立
+   `automation` 来源，群聊总结、每日抓取推送这类任务不占真人会话、不被聊天
+   闸门拦。`aautomation()` 服务接口与 `POST /api/llm_core/automation` 支持按
+   `task` 隔离上下文并投递结果；`GET /automation/sessions` 只看自动化会话。
+3. **SQLite 跨版本兼容层** —— 显式注册 datetime/date 适配器与转换器，消除
+   Python 3.12 起默认转换器弃用带来的 3.11→3.13 行为漂移；提供 SQLite 能力
+   标记供备份/恢复分支判定。
+4. **恢复环境探测补全** —— `error.log` 额外记录磁盘总量、内存总量/可用量与
+   cgroup v1/v2 内存上限，覆盖 Linux/Windows，排障不必再问对方机器配置。
+
+### 验证
+
+主 pytest、DB conformance、script-style、用例数护栏、ruff 两道门禁全绿；
+llm_core 载荷重打包后 src↔zip 哈希一致。
+
 ## [1.27.3] - 2026-11-19
 
 > 主题：**数据库损坏恢复收口**。上一版留下的哨兵方案要用户理解一套新状态

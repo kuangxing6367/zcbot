@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebUIplus</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="glass-shell" id="shell">
+  <header class="topbar">
+    <div class="brand"><span class="glyph">◇</span> WebUIplus</div>
+    <div class="toolbar">
+      <button id="toggle-display" type="button">切换为队列</button>
+      <button id="toggle-theme" type="button">主题：跟随</button>
+      <button id="toggle-glass" type="button">磨砂：开</button>
+    </div>
+  </header>
+
+  <section class="composer">
+    <label>发送目标</label>
+    <input id="target" type="text" placeholder="群号或 QQ 号，群聊请加 g: 前缀，例如 g:123456">
+    <textarea id="message" rows="2" placeholder="输入要发送到 IM 的消息"></textarea>
+    <button id="send" type="button">发送</button>
+    <span id="send-status" class="status"></span>
+  </section>
+
+  <section class="settings">
+    <details>
+      <summary>布局与别名</summary>
+      <label>显示字段（逗号分隔，顺序生效：time,sender,text,images,group）</label>
+      <input id="layout" type="text">
+      <label>别名（每行一条：ID=显示名）</label>
+      <textarea id="aliases" rows="4" placeholder="123456=运营群"></textarea>
+      <button id="save-settings" type="button">保存配置</button>
+      <span id="settings-status" class="status"></span>
+    </details>
+  </section>
+
+  <main id="messages" class="messages"></main>
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>

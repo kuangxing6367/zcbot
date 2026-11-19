@@ -141,6 +141,32 @@ vLLM / Ollama / One-API 这类说同一种方言的服务——只差一个 `bas
 会话键是 `来源:群号(或 private):用户号`，三段都参与——**群聊同样按人隔离**，
 所以同一个群里两个人各有各的上下文，面板上也是两行。
 
+## 7. 自动化任务（保留用户）
+
+群聊定时总结、每日抓取消息推送这类任务不该占用真人的会话，也不该被聊天
+闸门拦。框架内置一个保留身份：
+
+- 用户号：`__zcbot_automation__`（字符串，不可能与真实 IM 数字 ID 冲突）；
+- 来源：`automation`；会话键形如 `automation:<任务名>:__zcbot_automation__`，
+  不同 `task` 的上下文彼此独立，但都出现在会话列表里，可单独查看/清理。
+
+服务接口（供定时任务 / 其它插件直接调，拿到结果后自己决定发到哪里）：
+
+```python
+svc = fw.services.get('llm_core')
+result = await svc.aautomation('总结最近 100 条群消息', task='群总结')
+conv = svc.automation_conversation('群总结')  # 需要直接读/清历史时用
+```
+
+Web 接口（走框架鉴权）：
+
+- `POST /api/llm_core/automation`：`text` 必填，`task` 区分任务会话；
+  `user_id` / `group_id` 可选，填了就把结果分段投递到该目标，不填只返回文本。
+  `bot` 可指定接入端；`provider_id` 可指定模型。
+- `GET /api/llm_core/automation/sessions`：只看自动化会话，不与真人会话混在一起。
+
+`automation_timeout` 控制 Web 侧等待上限（默认 300 秒）。
+
 ## 改源码的正确姿势
 
 ```bash

@@ -92,7 +92,14 @@ __plugin_meta__ = {
 # 版本号仅用于 /llmstatus 展示与日志；llm_load 重新释放/重启是按 manifest 里
 # 每个文件的 md5 比对触发的（改了源码重新打包即可，见 tools/build_llm_payload.py），
 # 不依赖这个号是否递增。改动源码后照常 --write 重打包即可生效。
-__version__ = '1.1.4'
+__version__ = '1.1.5'
+
+# 自动化任务专用「保留用户」。手写稿要点：群聊总结、每日抓取推送这类任务
+# 不该占用真人用户的会话，也不该被聊天闸门当成真人拦掉。用一个不可能与
+# 真实 QQ/Telegram 数字 ID 冲突的字符串 ID + 独立 source 把两者彻底分开：
+# 会话列表里能看到、能单独清理，但 /llm人格 之类按人走的命令不会碰到它。
+AUTOMATION_USER_ID = '__zcbot_automation__'
+AUTOMATION_SOURCE = 'automation'
 
 _DEFAULT_SYSTEM_PROMPT = (
     "你是跑在聊天软件里的助手。回答要用口语，别写小作文，"
@@ -515,6 +522,42 @@ class LLMCoreService:
         result = await self.achat(text, event=event)
         return result.text or result.error
 
+    # ---- 自动化任务（保留用户）----
+
+    def automation_conversation(self, task: str = 'default'):
+        """自动化专用会话，task 用于区分不同任务，彼此不共享历史。"""
+        task_id = _automation_task_id(task)
+        return self._store.get(session_key(AUTOMATION_SOURCE, task_id,
+                                           AUTOMATION_USER_ID))
+
+    async def aautomation(self, text: str, task: str = 'default', images: list[dict] = None,
+                          provider_id: str = None) -> AgentResult:
+        """跑一次自动化任务，使用保留用户身份，不经过真人聊天闸门。
+
+        调用方（定时任务 / Web API / 别的插件）拿返回的 ``result.text`` 自己
+        决定发到哪里；这里不负责发消息，避免把「模型回答」和「投递目标」
+        绑死——同一个总结可以发群、发私聊、也可以只写日志。
+        """
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError('自动化任务文本不能为空')
+        task_id = _automation_task_id(task)
+        key = session_key(AUTOMATION_SOURCE, task_id, AUTOMATION_USER_ID)
+        conv = self._store.get(key)
+        provider = self._providers.get(provider_id)
+        conv.append({'role': 'user',
+                     'content': build_user_content(
+                         text.strip(), images or [],
+                         bool(provider and provider.supports_vision))})
+        result = await self._agent.arun(conv, provider=provider, event=None)
+        _record_trace(result.trace)
+        return result
+
+
+def _automation_task_id(task) -> str:
+    """把任务名收敛成会话键的一段：非空、无分隔符、长度有界。"""
+    raw = str(task or 'default').strip().replace(':', '_')
+    return (raw or 'default')[:80]
+
 
 def _caller_owner() -> str:
     """猜出调用方所属插件模块名（用于工具归属，卸载时可整批清理）"""
@@ -856,6 +899,67 @@ def _view_clear_sessions():
 
 
 # ── 知识库（RAG）管理接口 ──────────────────────────────────
+def _view_automation():
+    """自动化任务：用保留用户身份跑一次模型，可指定结果投递目标。
+
+    POST JSON: text 必填；task 区分任务会话；user_id / group_id 指定把结果
+    发到哪里（都不填则只返回文本，由调用方自行处理）；bot 指定接入端。
+    """
+    if _Svc is None:
+        return jsonify({'code': 1, 'msg': 'LLM 核心未初始化'})
+    body = (flask_request.get_json(silent=True) or {}) if flask_request else {}
+    text = body.get('text')
+    if not isinstance(text, str) or not text.strip():
+        return jsonify({'code': 1, 'msg': 'text 不能为空'})
+    if len(text) > 20000:
+        return jsonify({'code': 1, 'msg': 'text 不能超过 20000 字符'})
+    task = str(body.get('task') or 'default')
+    user_id, group_id = body.get('user_id'), body.get('group_id')
+    if user_id is not None:
+        try:
+            user_id = int(user_id)
+        except (TypeError, ValueError):
+            return jsonify({'code': 1, 'msg': 'user_id 必须是整数'})
+    if group_id is not None:
+        try:
+            group_id = int(group_id)
+        except (TypeError, ValueError):
+            return jsonify({'code': 1, 'msg': 'group_id 必须是整数'})
+    try:
+        fut = ctx.call_async(_Svc.aautomation(
+            text, task=task, provider_id=body.get('provider_id')))
+        result = fut.result(timeout=int(_cfg('automation_timeout', 300)))
+    except Exception as e:
+        logger.warning(f'[automation] 执行失败: {e}')
+        return jsonify({'code': 1, 'msg': f'执行失败: {e}'})
+    body_out = result.text or result.error or '（模型没有给出任何内容）'
+    delivered = False
+    if user_id is not None or group_id is not None:
+        try:
+            for chunk in _split_text(body_out):
+                ctx.send_msg(user_id=user_id, group_id=group_id, message=chunk,
+                             bot=body.get('bot') or None)
+            delivered = True
+        except Exception as e:
+            logger.warning(f'[automation] 投递失败: {e}')
+            return jsonify({'code': 1, 'msg': f'回答已生成但投递失败: {e}',
+                            'data': {'text': body_out, 'task': task}})
+    return jsonify({'code': 0, 'data': {
+        'text': body_out, 'task': task, 'delivered': delivered,
+        'ok': result.ok, 'model': result.model,
+    }})
+
+
+def _view_automation_sessions():
+    """自动化会话列表：与真人会话同库，但 source 固定为 automation。"""
+    rows = []
+    for it in _Svc.store.list_sessions():
+        meta = parse_session_key(it.get('key'))
+        if meta['source'] == AUTOMATION_SOURCE:
+            rows.append(dict(it, meta=meta))
+    return jsonify({'code': 0, 'data': {'sessions': rows, 'count': len(rows)}})
+
+
 def _view_kb_ingest():
     if _KB is None:
         return jsonify({'code': 1, 'msg': '知识库未启用（检查 rag 配置）'})
@@ -1221,6 +1325,10 @@ def register(plugin_ctx):
                          methods=['POST'], description="导出会话为 JSONL")
         ctx.register_api('/api/llm_core/sessions/clear', _view_clear_sessions,
                          methods=['POST'], description="清空全部会话")
+        ctx.register_api('/api/llm_core/automation', _view_automation,
+                         methods=['POST'], description="自动化任务（保留用户身份，可投递结果）")
+        ctx.register_api('/api/llm_core/automation/sessions', _view_automation_sessions,
+                         methods=['GET'], description="自动化任务会话列表")
         ctx.register_api('/api/llm_core/kb/ingest', _view_kb_ingest,
                          methods=['POST'], description="知识库入库（文本）")
         ctx.register_api('/api/llm_core/kb/docs', _view_kb_docs,
