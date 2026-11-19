@@ -55,11 +55,30 @@ TRIPLES = (('reindex', 'vacuum_into', 'recover_cli'),
            ('reindex', 'recover_cli', 'vacuum_into'),
            ('vacuum_into', 'recover_cli', 'reindex'))
 
-CORRUPT_MARKERS = (
-    'malformed', 'not a database', 'database disk image is malformed',
-    'file is not a database', 'sqlite__corrupt',
+# 判定口径以 SQLite 官方 result codes（https://www.sqlite.org/rescode.html）为准：
+#   - 损坏：SQLITE_CORRUPT（含 _VTAB/_INDEX/_SEQUENCE 扩展码）、SQLITE_NOTADB
+#   - 非损坏：I/O 错误、只读、锁冲突、缺表、权限不足等一律交回调用方
+# 主码就能覆盖整个 CORRUPT 扩展家族（SQLite 默认不启用扩展码，Python 的
+# sqlite_errorname 给出的也是主码），因此这里只列主码；用子串包含匹配即可
+# 同时兜住扩展码。
+CORRUPT_ERRNOS = ('SQLITE_CORRUPT', 'SQLITE_NOTADB')
+NON_CORRUPT_ERRNOS = (
+    'SQLITE_IOERR',        # disk I/O error / 磁盘满 / short read
+    'SQLITE_READONLY',     # 只读挂载 / 文件只读
+    'SQLITE_BUSY',         # database is locked（另一连接正在写）
+    'SQLITE_LOCKED',       # database table is locked（shared cache）
+    'SQLITE_PERM',         # permission denied
+    'SQLITE_AUTH',         # authorization denied
+    'SQLITE_ERROR',        # 通用 SQL 错误，含 no such table
+    'SQLITE_CONSTRAINT',   # 约束冲突
+    'SQLITE_NOMEM', 'SQLITE_FULL', 'SQLITE_CANTOPEN', 'SQLITE_MISUSE',
 )
-CORRUPT_ERRNOS = ('SQLITE_CORRUPT', 'SQLITE_NOTADB', 'SQLITE_CORRUPT_VTAB')
+# 只在结果码拿不到明确信号（老 Python 无 sqlite_errorname / 自定义异常）时兜底，
+# 且只认 SQLite 官方两条精确短语，不用裸 'malformed' 这类过宽的词。
+CORRUPT_MARKERS = (
+    'database disk image is malformed',
+    'file is not a database',
+)
 
 DATA_WARNING = (
     '数据有可能已损坏：恢复只能尽力打捞，可能丢行、把已删除的内容带回来、'
@@ -68,10 +87,19 @@ DATA_WARNING = (
 
 
 def is_corruption(err) -> bool:
-    """只认明确的损坏信号，不把「磁盘满」「锁冲突」误判成损坏。"""
+    """只认明确的损坏信号；其余（I/O、只读、锁、缺表、权限）交回调用方。
+
+    顺序很关键：先看结果码。命中"明确非损坏"码立即 False，命中"损坏"码
+    立即 True；只有结果码没有明确说法时，才退回消息文本的精确短语匹配。
+    这样即便某个非损坏异常的消息里凑巧带了 malformed 之类字眼，也不会被
+    误判成损坏，避免把可恢复的运行时错误交给恢复流程去处理。
+    """
     name = str(getattr(err, 'sqlite_errorname', '') or '').upper()
-    if any(marker in name for marker in CORRUPT_ERRNOS):
-        return True
+    if name:
+        if any(code in name for code in NON_CORRUPT_ERRNOS):
+            return False
+        if any(code in name for code in CORRUPT_ERRNOS):
+            return True
     msg = str(err).lower()
     return any(marker in msg for marker in CORRUPT_MARKERS)
 

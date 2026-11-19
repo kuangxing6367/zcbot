@@ -44,6 +44,7 @@ from types import SimpleNamespace
 
 from flask import Flask, Response, jsonify, request
 
+from framework.api.emergency_admin import verify_token as _verify_emergency_token
 from framework.api.honeypot import tarpit as _tarpit_sleep
 from framework.dual_auth import DualRequestAuthSystem
 from framework.log_broker import log_broker
@@ -635,6 +636,11 @@ def create_web_app(framework) -> Flask:
         """验证 token，返回 admin 字典或 None（支持用户会话 token 与接口令牌 API Key）"""
         if not token:
             return None
+        # 应急 token 自包含校验：不查库（库此刻可能已损坏），带 emergency 标记。
+        # 必须放在所有查库分支之前，否则 DB 一坏就先抛异常/返回 None 了。
+        emergency = _verify_emergency_token(token)
+        if emergency:
+            return emergency
         if len(token) == 2048:
             # 库里只存 sha256 摘要：用定长 64 字符的 token_hash 走索引定位，
             # 再以 compare_digest 做常量时间二次确认（DB 等值匹配受 collation

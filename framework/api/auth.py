@@ -7,6 +7,8 @@ import secrets
 import bcrypt
 from flask import jsonify, request
 
+from framework.api import emergency_admin
+
 logger = logging.getLogger('zcbot')
 
 # 初始化种子默认管理员（admin / admin123）的 bcrypt 哈希。
@@ -33,6 +35,7 @@ def register(ctx):
     db = ctx.db
     framework = ctx.framework
     dual_auth = ctx.dual_auth
+    web_cfg = ctx.web_cfg
     require_auth = ctx.require_auth
     require_super = ctx.require_super
     get_client_ip = ctx.get_client_ip
@@ -43,6 +46,27 @@ def register(ctx):
     _check_login_rate = ctx._check_login_rate
     _record_login_failure = ctx._record_login_failure
     _clear_login_failures = ctx._clear_login_failures
+
+    # 应急登录：不查库，签发自包含 token，审计写独立日志（审计表此刻可能也不可用）
+    def _emergency_login(client_ip, username):
+        _clear_login_failures(client_ip)
+        timeout = (web_cfg.get('token_timeout') or
+                   web_cfg.get('session_timeout', 86400))
+        token = emergency_admin.issue_token(username, role='super', ttl=timeout)
+        emergency_admin.write_audit('login', {'username': username}, ip=client_ip)
+        resp = jsonify({
+            'code': 0,
+            'msg': '登录成功（应急管理员）',
+            'data': {
+                'token': token,
+                'username': username,
+                'role': 'super',
+                'default_password': False,
+                'emergency': True,
+            }
+        })
+        _sync_token_cookie(resp, token)
+        return resp
 
     # ---- 认证接口 ----
 
@@ -62,6 +86,8 @@ def register(ctx):
         if not username or not password:
             return jsonify({'code': 400, 'msg': '用户名和密码不能为空'}), 400
 
+        # 先查库；查询异常时记下标志，不直接 500 —— 让应急入口有机会接管。
+        db_query_failed = False
         try:
             row = db.query_one(
                 "SELECT id, username, password_hash, role, is_active FROM admin_users WHERE username = %s",
@@ -69,9 +95,23 @@ def register(ctx):
             )
         except Exception as e:
             logger.error(f"登录查询失败: {e}")
-            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+            row = None
+            db_query_failed = True
+
+        # DB 侧认证失败（查询异常 / 账号不存在）时，尝试不依赖 DB 的应急管理员。
+        # 只有用户名命中应急账号才走这一步，且必须密码校验通过；否则维持原口径。
+        if row is None and emergency_admin.is_emergency_user(username):
+            if emergency_admin.verify_password(username, password):
+                return _emergency_login(client_ip, username)
+            if db_query_failed:
+                return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+            _record_login_failure(client_ip)
+            audit_log(None, username, 'login', result='failure', error_message='用户不存在')
+            return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
 
         if not row:
+            if db_query_failed:
+                return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
             _record_login_failure(client_ip)
             audit_log(None, username, 'login', result='failure', error_message='用户不存在')
             return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
@@ -147,11 +187,19 @@ def register(ctx):
     @require_auth
     def me():
         """获取当前登录信息（含是否仍使用默认密码的提示标记）"""
-        row = db.query_one(
-            "SELECT password_hash FROM admin_users WHERE id = %s",
-            (request.admin['id'],)
-        )
         data = dict(request.admin)
+        if data.get('emergency'):
+            # 应急身份不从库里取密码状态，DB 不可用也要能返回
+            data['default_password'] = False
+            return jsonify({'code': 0, 'data': data})
+        try:
+            row = db.query_one(
+                "SELECT password_hash FROM admin_users WHERE id = %s",
+                (request.admin['id'],)
+            )
+        except Exception as e:
+            logger.error(f"查询当前用户失败: {e}")
+            row = None
         data['default_password'] = _is_default_password(row['password_hash']) if row else False
         return jsonify({'code': 0, 'data': data})
 

@@ -26,6 +26,38 @@
 
 ---
 
+## [1.28.2] - 2026-11-20
+
+> 主题：SQLite 损坏 / `admin_users` 不可用时，WebUI 登录与鉴权完全失效，
+> 人被挡在门外无法做恢复。补一份不依赖数据库的应急管理员，登录与 token
+> 校验双链路都兜住。版本号按约定只打最小补丁号。
+
+### 新增
+
+1. **WebUI 应急管理员**（`framework/api/emergency_admin.py`）——凭据自动生成在
+   `data/admin_emergency.yaml`（仅存 bcrypt 哈希与签名密钥，权限 0600，首次
+   控制台打印一次明文）；`python -m framework.api.emergency_admin --reset`
+   可重置并使旧 token 失效。仅在 DB 侧认证失败、且用户名命中应急账号时兜底，
+   不是常驻后门；身份带 `emergency` 标记，操作写 `data/logs/emergency_admin.log`。
+2. **应急 token 自包含**：`eme1.<载荷>.<签名>` HMAC 校验，不查库即可过鉴权，
+   解决「库坏了登录进去也全 401」的问题；有效期取 `web.session_timeout`。
+
+### 修复
+
+- `/api/login`、`_verify_token`、`/api/me` 在 DB 查询异常时不再直接 500/401，
+  先给应急入口机会；正常管理员与 API Key 路径保持原口径。
+- **损坏判定收紧**：`is_corruption` 改为结果码优先，按 SQLite 官方口径明确排除
+  disk I/O error、只读、锁冲突、缺表、权限不足等非损坏异常（交回调用方），
+  补全 `SQLITE_CORRUPT` 家族扩展码；消息兜底只用官方精确短语，不再用裸
+  `malformed` 等宽泛词误判。
+
+### 文档与测试
+
+- `docs/进阶/数据库.md` 增「损坏时仍能登录 WebUI」，`config.yaml` 的 `web` 段补说明。
+- 新增 `test_emergency_admin.py`（模块）与 `test_emergency_login_e2e.py`（真 HTTP + DB 损坏替身）。
+
+---
+
 ## [1.28.1] - 2026-11-19
 
 > 主题：手写稿剩余项落地。WebUIplus 补上消息查看/发送与布局主题；

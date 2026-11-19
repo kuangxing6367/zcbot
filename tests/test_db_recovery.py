@@ -83,19 +83,68 @@ def _crash_text(crash_dir):
 
 # ── 损坏识别：不能把别的错误当成损坏 ─────────────────────────
 
+def _sqlerr(code, msg):
+    """带 sqlite_errorname 的异常替身，模拟 Python 3.11+ 的结果码属性。"""
+    class _Err(Exception):
+        sqlite_errorname = code
+    return _Err(msg)
+
+
 def test_corruption_detection():
-    class E(Exception):
-        sqlite_errorname = 'SQLITE_CORRUPT'
-
-    class Locked(Exception):
-        sqlite_errorname = 'SQLITE_BUSY'
-
-    assert rc.is_corruption(E('boom')) is True
+    assert rc.is_corruption(_sqlerr('SQLITE_CORRUPT', 'boom')) is True
+    assert rc.is_corruption(_sqlerr('SQLITE_NOTADB', 'nope')) is True
     assert rc.is_corruption(sqlite3.DatabaseError('database disk image is malformed'))
     assert rc.is_corruption(sqlite3.DatabaseError('file is not a database'))
-    assert rc.is_corruption(Locked('database is locked')) is False
+
+
+def test_corruption_extended_codes_count_as_corruption():
+    # SQLite 官方扩展码沿用主码前缀；启用扩展码时也必须认出来
+    for code in ('SQLITE_CORRUPT_VTAB', 'SQLITE_CORRUPT_INDEX',
+                 'SQLITE_CORRUPT_SEQUENCE'):
+        assert rc.is_corruption(_sqlerr(code, 'broken')) is True, code
+
+
+@pytest.mark.parametrize('code,msg', [
+    ('SQLITE_IOERR', 'disk I/O error'),
+    ('SQLITE_IOERR_SHORT_READ', 'database disk image is malformed'),  # 码优先：I/O 不算损坏
+    ('SQLITE_READONLY', 'attempt to write a readonly database'),
+    ('SQLITE_BUSY', 'database is locked'),
+    ('SQLITE_LOCKED', 'database table is locked'),
+    ('SQLITE_PERM', 'permission denied'),
+    ('SQLITE_AUTH', 'authorization denied'),
+    ('SQLITE_ERROR', 'no such table: admin_users'),
+    ('SQLITE_CONSTRAINT', 'UNIQUE constraint failed'),
+    ('SQLITE_FULL', 'database or disk is full'),
+    ('SQLITE_NOMEM', 'out of memory'),
+    ('SQLITE_CANTOPEN', 'unable to open database file'),
+])
+def test_non_corruption_never_enters_recovery(code, msg):
+    assert rc.is_corruption(_sqlerr(code, msg)) is False
+
+
+def test_plain_exceptions_without_errorname_use_exact_markers():
+    # 没有 sqlite_errorname 时退回消息文本，但只认官方精确短语，不放宽到裸 malformed
     assert rc.is_corruption(sqlite3.OperationalError('no such table: t')) is False
     assert rc.is_corruption(ValueError('disk full')) is False
+    assert rc.is_corruption(sqlite3.OperationalError('database is locked')) is False
+    assert rc.is_corruption(sqlite3.OperationalError(
+        'some malformed-ish message that is not sqlite')) is False
+    assert rc.is_corruption(sqlite3.DatabaseError('database disk image is malformed'))
+
+
+def test_non_corruption_is_handed_back_to_caller(monkeypatch):
+    """非损坏异常不进恢复流程：is_corruption=False 时 _emergency_recover 直接返回。"""
+    called = {'recovery': False}
+
+    def fake_run_recovery(*a, **k):
+        called['recovery'] = True
+        raise AssertionError('非损坏异常不应触发恢复')
+
+    monkeypatch.setattr(rc, 'run_recovery', fake_run_recovery)
+    # query_one 遇到锁冲突：_emergency_recover 返回 False，异常被 raise 交回调用方
+    assert db_mod._emergency_recover(
+        sqlite3.OperationalError('database is locked'), 'x.db') is False
+    assert called['recovery'] is False
 
 
 # ── 组合顺序：纸上写死了 ──────────────────────────────────
