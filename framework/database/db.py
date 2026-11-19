@@ -46,6 +46,8 @@ import weakref
 from contextlib import contextmanager
 from threading import local
 
+from framework.paths import home_dir
+
 from .dialect import (
     _replace_now,
     _translate_sql_for_mysql,
@@ -77,6 +79,46 @@ def _is_readonly_error(err) -> bool:
     """
     s = str(err).lower()
     return 'readonly' in s or 'read-only' in s
+
+
+def _emergency_recover(err, db_path, source='db'):
+    """明确的损坏异常走备份 + 官方恢复 + 退出；其余错误原样交回调用方。
+
+    不能在查询/写入失败后悄悄换成降级库：那会让运维以为写入仍落在主库上。
+    恢复完成后按手写稿直接退出，哨兵文件留给下一轮启动读，防止守护脚本
+    把「可能已经损坏的数据」当正常库继续写。
+    """
+    try:
+        from . import recovery
+        if not recovery.is_corruption(err):
+            return False
+    except Exception as import_err:
+        logger.error('应急恢复模块不可用（%s: %s）',
+                     type(import_err).__name__, import_err)
+        return False
+
+    path = str(db_path or '')
+    if path and not os.path.isabs(path):
+        path = os.path.join(home_dir(), path)
+    logger.error('检测到数据库损坏（%s: %s，来源 %s），进入应急恢复流程',
+                 type(err).__name__, err, source)
+
+    report = None
+    try:
+        report = recovery.run_recovery(path)
+    except Exception as rec_exc:
+        logger.error('应急恢复流程自身失败（%s: %s）',
+                     type(rec_exc).__name__, rec_exc)
+        report = {'status': 'recovery-error', 'ok': False,
+                  'db_path': path, 'note': '%s: %s'
+                  % (type(rec_exc).__name__, rec_exc)}
+    try:
+        recovery.perform_exit(report)
+    except Exception as exit_exc:
+        # 正常情况下 perform_exit 用 os._exit 不会返回；到这里说明是测试替身
+        # 或退出被拦截，不能吞掉原异常，调用方仍要看到最初的损坏。
+        logger.error('退出动作失败（%s: %s）', type(exit_exc).__name__, exit_exc)
+    return True
 
 
 class Database(DatabaseConnMixin):
@@ -184,7 +226,11 @@ class Database(DatabaseConnMixin):
                 if self.db_type == 'mysql' and not getattr(self._local, 'in_txn', False):
                     # 归还连接池（而非真关闭）；事务内连接被 pin，归还要等 transaction() 统一做
                     conn.close()
-        return self._run_with_reconnect(_do, sql, params)
+        try:
+            return self._run_with_reconnect(_do, sql, params)
+        except Exception as e:
+            _emergency_recover(e, getattr(self, '_db_path', None), source='query')
+            raise
 
     def query_one(self, sql: str, params: tuple = None) -> dict:
         """查询单条记录，返回 dict 或 None"""
@@ -204,7 +250,11 @@ class Database(DatabaseConnMixin):
                 if self.db_type == 'mysql' and not getattr(self._local, 'in_txn', False):
                     # 归还连接池（而非真关闭）；事务内连接被 pin，归还要等 transaction() 统一做
                     conn.close()
-        return self._run_with_reconnect(_do, sql, params)
+        try:
+            return self._run_with_reconnect(_do, sql, params)
+        except Exception as e:
+            _emergency_recover(e, getattr(self, '_db_path', None), source='query_one')
+            raise
 
     def _write(self, sql: str, params=None, *, many: bool = False,
                return_id: bool = False):
@@ -243,6 +293,7 @@ class Database(DatabaseConnMixin):
         try:
             result = self._run_with_reconnect(_do, sql, params)
         except Exception as e:
+            _emergency_recover(e, getattr(self, '_db_path', None), source='write')
             self._note_write_failure(e)
             raise
         self._note_write_ok()
@@ -635,6 +686,18 @@ def init_db(config: dict):
     """
     global db
 
+    # 启动哨兵：上次若因库损坏做过自动恢复，必须让本次进程和运维都看见。
+    # 哨兵不在这里清除——外部守护脚本会在退出后立刻拉起，清掉就等于假装
+    # 没发生过，可能损坏的数据会被当成正常库继续写。
+    try:
+        from . import recovery
+        recovery.STARTUP_GUARD = recovery.startup_guard()
+    except Exception as e:
+        logger.error('数据库恢复哨兵检查失败（%s: %s）：本次启动无法确认库是否'
+                     '刚被自动恢复过，请检查 %s',
+                     type(e).__name__, e,
+                     os.path.join(home_dir(), 'data', 'db-recovery.exit'))
+
     # 解析配置
     db_config = _parse_sqlite_type(config)
     dtype = db_config.get('type', 'sqlite').lower()
@@ -667,7 +730,13 @@ def init_db(config: dict):
         # 创建框架扩展表 + 迁移（兼容旧版升级）
         _auto_create_tables(db)
     except Exception as e:
-        # 兜底降级仍保留（不让框架完全起不来），但必须把"数据写到哪、会不会丢"
+        # 明确的「库损坏」不走降级：降级会把新数据写到另一份 JSON 行集里，
+        # 运维还以为在正常写库，故障被掩盖。先备份 + 尝试官方恢复手段，
+        # 然后按口径退出，让外部脚本停下来而不是无脑拉起继续跑。
+        if dtype == 'sqlite':
+            _emergency_recover(e, db_config.get('path'), source='init_db')
+
+        # 兜底降级仍保留（不让框架完全起不起来），但必须把"数据写到哪、会不会丢"
         # 讲清楚：SqlSimEngine 落盘到 <db 目录>/db/sql/*.json，数据与真实库分叉，
         # 切回真实库时不会自动迁移。历史上这条只写"降级为本地 SQL 模拟引擎"，
         # 运维很容易把它当成普通告警忽略，直到发现数据对不上。
