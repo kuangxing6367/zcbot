@@ -1,18 +1,25 @@
-"""数据库损坏应急恢复：哨兵、组合顺序、日志与退出行为。
+"""数据库损坏应急恢复：标准备份、组合顺序、人话日志与崩溃计数联动。
 
 这里刻意不依赖真实损坏的库文件——那类样本不好稳定构造，而且测的是 sqlite
-而不是我们自己的流程。用受控替身把 every attempt 的结果钉住，测的是编排：
-备份是否先做、组合顺序、成功/失败时的产物、哨兵是否被误清。
+而不是我们自己的流程。用受控替身把每一次尝试的结果钉住，测的是编排：
+备份是不是走了标准管线、组合顺序对不对、退出是否落进原生崩溃守卫。
 """
 import json
 import os
-import shutil
 import sqlite3
 
 import pytest
 
+from framework import crash_guard
+from framework.database import backup as backup_mod
 from framework.database import db as db_mod
 from framework.database import recovery as rc
+
+
+@pytest.fixture(autouse=True)
+def _isolated_config(monkeypatch):
+    """恢复流程读配置时只拿默认值，避免本机 config.yaml 干扰断言。"""
+    monkeypatch.setattr(rc, 'get_config', lambda: {})
 
 
 @pytest.fixture()
@@ -35,6 +42,13 @@ def db(tmp_path):
     return str(path)
 
 
+@pytest.fixture()
+def crash_dir(tmp_path):
+    d = tmp_path / 'crash'
+    d.mkdir()
+    return str(d)
+
+
 def _rows(path):
     con = sqlite3.connect(path)
     try:
@@ -43,12 +57,28 @@ def _rows(path):
         con.close()
 
 
-def _log_lines(home):
+def _recovery_logs(home):
     path = os.path.join(home, 'data', 'logs', 'error.log')
     if not os.path.isfile(path):
         return []
     with open(path, encoding='utf-8') as f:
         return [json.loads(line) for line in f if line.strip()]
+
+
+def _crash_config(crash_dir, max_restarts=5, enabled=True):
+    return {'framework': {'crash': {
+        'enabled': enabled,
+        'max_restarts': max_restarts,
+        'path': os.path.join(crash_dir, 'error.log'),
+    }}}
+
+
+def _crash_text(crash_dir):
+    path = os.path.join(crash_dir, 'error.log')
+    if not os.path.isfile(path):
+        return ''
+    with open(path, encoding='utf-8') as f:
+        return f.read()
 
 
 # ── 损坏识别：不能把别的错误当成损坏 ─────────────────────────
@@ -66,51 +96,6 @@ def test_corruption_detection():
     assert rc.is_corruption(Locked('database is locked')) is False
     assert rc.is_corruption(sqlite3.OperationalError('no such table: t')) is False
     assert rc.is_corruption(ValueError('disk full')) is False
-
-
-# ── 哨兵：框架自己绝不清除 ─────────────────────────────────
-
-def test_sentinel_roundtrip_and_manual_clear(home):
-    assert rc.read_sentinel(home) is None
-    path = rc.write_sentinel({'status': 'ok', 'backup_path': '/b', 'attempts': [1]},
-                             home=home)
-    assert os.path.isfile(path)
-    got = rc.read_sentinel(home)
-    assert got['status'] == 'ok'
-    assert got['data_may_be_damaged'] is True
-    assert got['acknowledged'] is False
-    assert rc.clear_sentinel(home) is True
-    assert rc.read_sentinel(home) is None
-
-
-def test_startup_guard_warns_and_does_not_clear(home, caplog):
-    path = rc.write_sentinel({'status': 'ok', 'note': 'n'}, home=home)
-    with caplog.at_level('ERROR', logger='zcbot'):
-        guard = rc.startup_guard(home=home)
-    assert guard['guarded'] is True
-    assert rc.STARTUP_GUARD['guarded'] is True
-    assert os.path.isfile(path)  # 关键：不能自动清
-    text = caplog.text
-    assert '自动恢复过' in text
-    assert '数据有可能已损坏' in text
-    assert '人工删除' in text
-    # 告警同时落 error.log，日志轮转后也能查
-    lines = _log_lines(home)
-    assert lines and lines[-1]['status'] == 'startup-guard'
-
-
-def test_startup_guard_clean_start(home):
-    guard = rc.startup_guard(home=home)
-    assert guard['guarded'] is False
-    assert rc.read_sentinel(home) is None
-
-
-def test_broken_sentinel_is_not_silently_ignored(home):
-    with open(rc.sentinel_path(home), 'w', encoding='utf-8') as f:
-        f.write('{not json')
-    guard = rc.startup_guard(home=home)
-    assert guard['guarded'] is True
-    assert guard['sentinel'].get('broken') is True
 
 
 # ── 组合顺序：纸上写死了 ──────────────────────────────────
@@ -155,9 +140,57 @@ def test_recover_cli_absent_is_reported_not_crashed(db, tmp_path, monkeypatch):
     assert rc.CLI_ENV in r['note']
 
 
-# ── 编排：备份 → 组合 → 转正 → 哨兵 ────────────────────────
+# ── 恢复前备份：必须走标准管线 ─────────────────────────────
 
-def test_recovery_success_checks_every_step_and_leaves_sentinel(home, db, monkeypatch):
+def test_backup_before_repair_uses_standard_pipeline(db, monkeypatch):
+    seen = []
+
+    def fake_run_backup(target, cfg=None, reason='', out_dir=None):
+        seen.append((target._db_path, dict(cfg or {}), reason))
+        return {'ok': True, 'status': 'ok', 'path': '/tmp/snapshot.db',
+                'size': 123}
+
+    monkeypatch.setattr(backup_mod, 'run_backup', fake_run_backup)
+    monkeypatch.setattr(rc, 'get_config', lambda: {
+        'database': {'backup': {'keep': 7, 'probe_chunk_kb': 256,
+                                'refuse_above_mb': 10}}})
+
+    result = rc._backup_before_repair(db)
+    assert result['ok'] is True
+    assert result['path'] == '/tmp/snapshot.db'
+    assert len(seen) == 1
+    path, cfg, reason = seen[0]
+    assert path == db
+    assert reason == 'recovery'
+    # 强制开快照、放开体积上限，但空间探测 / 校验 / 轮转这些闸门照走。
+    assert cfg['enabled'] is True
+    assert cfg['allow_large'] is True
+    assert cfg['keep'] == 7
+    assert cfg['probe_chunk_kb'] == 256
+    assert cfg['refuse_above_mb'] == 10
+
+
+def test_recovery_stops_when_backup_fails_and_never_touches_db(
+        home, db, monkeypatch):
+    def fake_run_backup(target, cfg=None, reason='', out_dir=None):
+        return {'ok': False, 'status': 'failed', 'path': '',
+                'note': '空间不足，未产生备份'}
+
+    monkeypatch.setattr(backup_mod, 'run_backup', fake_run_backup)
+    monkeypatch.setattr(rc, 'attempt',
+                        lambda *a: pytest.fail('没有可靠快照时不该动库'))
+
+    report = rc.run_recovery(db, home=home)
+    assert report['status'] == 'failed'
+    assert report['ok'] is False
+    assert '空间不足' in report['note']
+    assert report['attempts'] == []
+    assert _rows(db) == [(1, 'alive')]
+
+
+# ── 编排：备份 → 组合 → 校验 → 转正 → 明细日志 ───────────────
+
+def test_recovery_success_uses_real_standard_backup(home, db, monkeypatch):
     seen = []
 
     def fake_attempt(method, path, workdir):
@@ -165,26 +198,19 @@ def test_recovery_success_checks_every_step_and_leaves_sentinel(home, db, monkey
         return {'ok': True, 'path': path, 'note': method}
 
     monkeypatch.setattr(rc, 'attempt', fake_attempt)
-    backup = {'called': False}
+    report = rc.run_recovery(db, home=home)
 
-    def fake_backup(path):
-        backup['called'] = True
-        target = path + '.bak'
-        shutil.copy2(path, target)
-        return target
-
-    report = rc.run_recovery(db, home=home, backup_fn=fake_backup)
-    assert backup['called'] is True  # 恢复之前必须先备份
     assert report['status'] == 'ok'
     assert report['ok'] is True
     assert report['should_exit'] is True
-    assert seen == ['reindex']  # 第一个组合就通过，不该继续试别的
-    assert _rows(db) == [(1, 'alive')]  # 数据还在
+    assert seen == ['reindex']
+    assert _rows(db) == [(1, 'alive')]
     assert os.path.isfile(report['backup_path'])
-    assert os.path.isfile(report['sentinel'])
-    assert any('.corrupt-' in str(v) for v in report.values() if isinstance(v, str))
-    log = _log_lines(home)
-    assert log and '数据有可能已损坏' in log[-1]['warning']
+    assert '-recovery.' in os.path.basename(report['backup_path'])
+    assert any('.corrupt-' in str(v) for v in report.values()
+               if isinstance(v, str))
+    logs = _recovery_logs(home)
+    assert logs and '数据有可能已损坏' in logs[-1]['warning']
 
 
 def test_recovery_falls_through_to_next_combo(home, db, monkeypatch):
@@ -201,7 +227,6 @@ def test_recovery_falls_through_to_next_combo(home, db, monkeypatch):
     assert report['status'] == 'ok'
     assert calls[:2] == ['reindex', 'vacuum_into']
     assert report['attempts'][0]['combo'] == 'reindex'
-    # 单个手段先全试完，才轮到两两组合——这是纸上的顺序
     assert report['attempts'][1]['combo'] == 'vacuum_into'
     assert _rows(db) == [(1, 'alive')]
 
@@ -211,7 +236,6 @@ def test_pairs_run_only_after_all_singles(home, db, monkeypatch):
 
     def fake_attempt(method, path, workdir):
         calls.append(method)
-        # 三个单打全失败后，第四个调用是第一个两两组合的 A
         ok = len(calls) == 5
         return {'ok': ok, 'path': path if ok else '', 'note': 'x'}
 
@@ -223,50 +247,77 @@ def test_pairs_run_only_after_all_singles(home, db, monkeypatch):
     assert report['attempts'][3]['combo'] == 'reindex+vacuum_into'
 
 
-def test_all_combos_fail_still_writes_log_and_sentinel(home, db, monkeypatch):
+def test_all_combos_fail_still_writes_log(home, db, monkeypatch):
     monkeypatch.setattr(rc, 'attempt',
                         lambda m, p, w: {'ok': False, 'path': '', 'note': '失败'})
     report = rc.run_recovery(db, home=home)
     assert report['status'] == 'failed'
     assert report['ok'] is False
     assert len(report['attempts']) == len(rc._combinations())
-    assert _rows(db) == [(1, 'alive')]  # 原库没被坏产物覆盖
-    assert os.path.isfile(report['sentinel'])
-    assert _log_lines(home)
-
-
-def test_existing_sentinel_blocks_second_recovery(home, db, monkeypatch):
-    rc.write_sentinel({'status': 'ok', 'note': 'original'}, home=home)
-    monkeypatch.setattr(rc, 'attempt',
-                        lambda *a: pytest.fail('有哨兵时不该再尝试恢复'))
-    report = rc.run_recovery(db, home=home)
-    assert report['status'] == 'guarded'
     assert _rows(db) == [(1, 'alive')]
-    # 第二次尝试不能把第一次的恢复记录覆盖掉
-    assert rc.read_sentinel(home)['note'] == 'original'
+    assert _recovery_logs(home)
 
 
-def test_exit_writes_sentinel_and_uses_given_code(home, monkeypatch):
+# ── 退出：写人话 error.log，落进原生崩溃计数 ────────────────
+
+def test_crash_report_is_human_readable(crash_dir):
+    path = rc.write_crash_report(
+        {'status': 'ok', 'ok': True, 'backup_path': '/backups/snapshot.db',
+         'note': 'REINDEX 完成',
+         'env': {'sqlite': '3.45.0'}},
+        log_dir=crash_dir)
+    assert path == os.path.join(crash_dir, 'error.log')
+    text = _crash_text(crash_dir)
+    assert '数据库损坏' in text
+    assert '请人工核对' in text
+    assert '/backups/snapshot.db' in text
+    assert '数据有可能已损坏' in text
+    assert '[数据库应急恢复]' in text
+    assert 'NoneType: None' not in text
+    assert 'context: {' not in text
+
+
+def test_perform_exit_writes_crash_log_and_uses_standard_code(
+        crash_dir, monkeypatch):
     codes = []
-    rc.perform_exit({'status': 'ok', 'sentinel': ''}, home=home,
+    report = {'status': 'ok', 'ok': True, 'backup_path': '/b'}
+    rc.perform_exit(report, log_dir=crash_dir,
                     exit_fn=lambda code: codes.append(code))
     assert codes == [rc.EXIT_CODE]
-    assert rc.read_sentinel(home) is not None
+    assert rc.EXIT_CODE == 1  # 普通非零退出码，交给原生崩溃守卫计数
+    assert os.path.isfile(os.path.join(crash_dir, 'error.log'))
+    assert report['crash_log'] == os.path.join(crash_dir, 'error.log')
 
 
-def test_restart_after_crash_sees_the_warning(home, db, monkeypatch):
-    """外部脚本拉起后的第二轮：必须知道库刚被恢复过，不能当没事。"""
-    monkeypatch.setattr(rc, 'attempt',
-                        lambda m, p, w: {'ok': True, 'path': p, 'note': 'ok'})
-    first = rc.run_recovery(db, home=home)
-    assert first['ok'] is True
+def test_recovery_crashes_accumulate_until_native_guard_aborts(crash_dir):
+    cfg = _crash_config(crash_dir, max_restarts=3)
+    for i in range(3):
+        assert crash_guard.count_crash_markers(cfg, crash_dir) == i
+        assert crash_guard.should_abort_boot(cfg, crash_dir) is False
+        rc.perform_exit({'status': 'ok', 'ok': True}, log_dir=crash_dir,
+                        exit_fn=lambda code: None)
+    assert crash_guard.count_crash_markers(cfg, crash_dir) == 3
+    # 守护脚本再拉起时，启动入口读到的就是这个结果：安全模式，不装插件不写库。
+    assert crash_guard.should_abort_boot(cfg, crash_dir) is True
 
-    # 模拟新进程：只调启动检查，不改任何状态
-    rc.STARTUP_GUARD = {'guarded': False}
-    guard = rc.startup_guard(home=home)
-    assert guard['guarded'] is True
-    assert guard['sentinel']['data_may_be_damaged'] is True
-    assert _rows(db) == [(1, 'alive')]
+
+def test_disabled_crash_guard_never_aborts_after_recovery(crash_dir):
+    cfg = _crash_config(crash_dir, max_restarts=1, enabled=False)
+    rc.perform_exit({'status': 'failed', 'ok': False}, log_dir=crash_dir,
+                    exit_fn=lambda code: None)
+    assert crash_guard.count_crash_markers(cfg, crash_dir) == 1
+    assert crash_guard.should_abort_boot(cfg, crash_dir) is False
+
+
+def test_crash_log_write_failure_still_exits(crash_dir, monkeypatch):
+    def broken(*args, **kwargs):
+        raise OSError('只读文件系统')
+
+    monkeypatch.setattr(rc, 'write_crash_report', broken)
+    codes = []
+    rc.perform_exit({'status': 'failed'}, log_dir=crash_dir,
+                    exit_fn=lambda code: codes.append(code))
+    assert codes == [rc.EXIT_CODE]
 
 
 # ── 运行时 SQL 错误也要能触发，不只限启动建表 ────────────────────
@@ -316,7 +367,6 @@ def test_runtime_corruption_enters_recovery(db, monkeypatch, method, source):
     monkeypatch.setattr(database, '_run_with_reconnect', boom)
     with pytest.raises(sqlite3.DatabaseError):
         getattr(database, method)('SELECT 1')
-
     assert seen == [source]
 
 
@@ -332,7 +382,7 @@ def test_environment_info_fields(db):
 
 
 def test_module_has_no_emoji():
-    path = rc.__file__
-    with open(path, encoding='utf-8') as f:
-        text = f.read()
-    assert not any(ord(ch) > 0xFFFF for ch in text)
+    for module in (rc, crash_guard):
+        with open(module.__file__, encoding='utf-8') as f:
+            text = f.read()
+        assert not any(ord(ch) > 0xFFFF for ch in text)

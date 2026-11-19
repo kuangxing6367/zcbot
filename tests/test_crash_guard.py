@@ -93,6 +93,32 @@ def test_rotation_preserves_latest_traceback():
     assert 'specific-error-xyz' in content, "崩溃日志未记录真实异常"
 
 
+def test_dict_extra_is_spelled_out_for_humans():
+    """恢复报告这类结构化上下文要逐行写清楚，不要把 dict 直接糊在日志里。"""
+    root = tempfile.mkdtemp()
+    cfg = _cfg(path='error.log')
+    cg.write_crash_log(cfg, root, exc=None,
+                       extra={'发生了什么': '数据库损坏，已完成应急恢复',
+                              '你要做什么': '先核对备份，再删 error.log*'})
+    with open(os.path.join(root, 'error.log'), encoding='utf-8') as f:
+        content = f.read()
+    assert '[发生了什么]' in content
+    assert '数据库损坏，已完成应急恢复' in content
+    assert '[你要做什么]' in content
+    assert 'context: {' not in content
+    assert 'NoneType: None' not in content
+
+
+def test_configured_crash_path_is_honored():
+    """整份 config.yaml 传进来时也要听 framework.crash.path，不能写死根目录。"""
+    root = tempfile.mkdtemp()
+    cfg = {'framework': {'crash': {'path': 'custom-error.log'}}}
+    cg.write_crash_log(cfg, root, exc=RuntimeError('boom'))
+    assert os.path.isfile(os.path.join(root, 'custom-error.log'))
+    assert not os.path.isfile(os.path.join(root, 'error.log'))
+    assert cg.count_crash_markers(cfg, root) == 1
+
+
 if __name__ == '__main__':
     cases = [
         test_count_zero_when_no_log,
@@ -103,6 +129,8 @@ if __name__ == '__main__':
         test_disabled_guard_does_not_abort,
         test_clear_crash_markers,
         test_rotation_preserves_latest_traceback,
+        test_dict_extra_is_spelled_out_for_humans,
+        test_configured_crash_path_is_honored,
     ]
     failed = 0
     for fn in cases:

@@ -1,4 +1,4 @@
-"""SQLite 损坏后的应急恢复：先备份，再按组合尝试恢复，最后退出。
+"""SQLite 损坏后的应急恢复：先备份，再按组合尝试恢复，最后让框架"崩溃退出"。
 
 A/B/C 三套手段是 SQLite 官方支持的：
 - A ``REINDEX`` —— 索引类损坏，纯标准库，代价最小；
@@ -9,8 +9,14 @@ A/B/C 三套手段是 SQLite 官方支持的：
 前一步的产物接着给后一步用；任何一步校验通过就停下。
 
 恢复结果**永远不能当成数据完整**：SQLite 官方文档明确写了打捞可能丢行、
-复活已删除内容、改掉字段类型、破坏约束。所以每次都写 ``error.log``，并且
-退出前留哨兵文件；下次启动读到哨兵就大声告警，不自动清除，等人确认。
+复活已删除内容、改掉字段类型、破坏约束。所以每次都把结果写进 ``error.log``。
+
+退出走框架**原生的崩溃守卫**，不另造哨兵：本模块写一份崩溃日志（计入
+``error.log`` 轮转），然后主动退出进程。守护脚本若把框架拉起，启动时
+``should_abort_boot`` 一看崩溃计数还没到 ``max_restarts`` 就正常启动，再撞到
+损坏再写再崩，计数累加；到了上限直接进安全模式（假启动），进程活着但不加载
+插件、不写库，直到人工核对数据。这样完全复用既有机制，用户看 error.log 就是
+处置指引，不用理解新概念。
 
 没有 emoji：这是排障记录，不是社交消息。
 """
@@ -26,18 +32,17 @@ import tempfile
 import time
 from datetime import datetime, timezone
 
+from framework.config import get_config
 from framework.paths import home_dir, state_dir
+
+from . import backup as backup_mod
 
 logger = logging.getLogger('zcbot')
 
-# 最近一次启动的哨兵检查结果，供状态接口/健康检查读取；不参与业务逻辑。
-STARTUP_GUARD = {'guarded': False, 'sentinel': None, 'path': ''}
-
-SENTINEL_FILE = 'db-recovery.exit'
 ERROR_LOG_NAME = 'error.log'
-EXIT_CODE = 78
 CLI_ENV = 'ZCBOT_SQLITE3_CLI'
 CLI_TIMEOUT_SEC = 300
+EXIT_CODE = 1
 
 # A/B/C 与纸上顺序一致：ABC / BAC / CAB / CBA / ACB / BCA
 METHODS = ('reindex', 'vacuum_into', 'recover_cli')
@@ -75,90 +80,63 @@ def _state_dir(home=None) -> str:
     return os.path.join(home, 'data') if home else state_dir()
 
 
-def sentinel_path(home=None) -> str:
-    return os.path.join(_state_dir(home), SENTINEL_FILE)
+def write_crash_report(report: dict, home=None, log_dir=None) -> str:
+    """把恢复结果写进崩溃日志 error.log，供框架原生崩溃守卫计数与展示。
 
+    复用 ``crash_guard.write_crash_log`` 而不是自己拼一份：计数（error.log 及
+    其 .N 轮转副本）、达阈值进安全模式、外部告警都是那套原语既有能力。这里
+    只负责把内容写成"人能看懂的处置指引"——用户明确说过，光给一堆 traceback
+    会让人困惑，所以第一行就说清发生了什么、数据会怎样、该怎么处理。
 
-def write_sentinel(report: dict, home=None) -> str:
-    """写哨兵。下次启动靠它知道「这台库被自动恢复过」。"""
-    path = sentinel_path(home)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    payload = {
-        'written_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-        'status': report.get('status', 'unknown'),
-        'ok': bool(report.get('ok')),
-        'data_may_be_damaged': True,
-        'db_path': report.get('db_path', ''),
-        'backup_path': report.get('backup_path', ''),
-        'attempts': report.get('attempts', []),
-        'note': report.get('note', ''),
-        'acknowledged': False,
-    }
-    with open(path, 'w', encoding='utf-8', newline='') as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    return path
-
-
-def read_sentinel(home=None):
-    path = sentinel_path(home)
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding='utf-8') as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {'broken': True}
-    except (OSError, ValueError) as e:
-        logger.error('数据库恢复哨兵文件读不出来（%s）: %s', path, e)
-        return {'broken': True, 'path': path}
-
-
-def clear_sentinel(home=None) -> bool:
-    """只给人工确认调用。框架自己永远不调。"""
-    path = sentinel_path(home)
-    try:
-        if os.path.isfile(path):
-            os.remove(path)
-            return True
-    except OSError as e:
-        logger.warning('删除恢复哨兵失败: %s', e)
-    return False
-
-
-def startup_guard(home=None, log_fn=None) -> dict:
-    """启动时检查哨兵：读到就持续告警，清楚说明要人工确认。
-
-    这一层存在的理由：外部守护脚本会在框架退出后自动把它拉起来。若框架
-    对「刚被恢复过」一无所知，它会把一份可能已经损坏的库当正常库继续写，
-    用户也不会收到任何提示。所以哨兵**不自动清**，由人确认后再删。
+    返回写成的 error.log 路径。写失败不能吞掉——调用方要靠它决定后续动作。
     """
-    global STARTUP_GUARD
-    sentinel = read_sentinel(home)
-    if sentinel is None:
-        STARTUP_GUARD = {'guarded': False, 'sentinel': None,
-                         'path': sentinel_path(home)}
-        return STARTUP_GUARD
+    from framework import crash_guard
 
-    path = sentinel_path(home)
-    status = sentinel.get('status', 'unknown')
-    emit = log_fn or (lambda level, msg: getattr(logger, level)(msg))
-    emit('error', '=' * 72)
-    emit('error', '警告：本次启动的数据库是自动恢复过的（上次结果：%s）' % status)
-    emit('error', DATA_WARNING)
-    emit('error', '恢复记录：%s' % path)
-    emit('error', '备份文件：%s' % (sentinel.get('backup_path') or '未记录'))
-    emit('error', '确认数据无误后，请人工删除该文件再重启：%s' % path)
-    emit('error', '=' * 72)
-    # 同时落一份到 error.log，避免日志轮转后用户找不到。写日志失败不能反过来
-    # 吞掉哨兵告警——那时更要让本轮控制台日志把风险说清楚。
+    crash_cfg = {}
     try:
-        _append_error_log({'status': 'startup-guard', 'note': DATA_WARNING,
-                           'sentinel': path, 'env': environment_info()},
-                          home=home)
+        crash_cfg = get_config() or {}
     except Exception as e:
-        emit('error', '写 error.log 失败（%s: %s），以上告警请人工留存'
-             % (type(e).__name__, e))
-    STARTUP_GUARD = {'guarded': True, 'sentinel': sentinel, 'path': path}
-    return STARTUP_GUARD
+        logger.debug('读取崩溃配置失败，按默认 error.log 路径写: %s', e)
+
+    root = home_dir()
+    # 若显式指定了日志目录，用绝对路径覆盖配置里的 path，避开 home/root 差异。
+    if log_dir:
+        crash_cfg = dict(crash_cfg)
+        fw = dict(crash_cfg.get('framework') or {})
+        crash = dict(fw.get('crash') or {})
+        crash['path'] = os.path.join(log_dir, ERROR_LOG_NAME)
+        fw['crash'] = crash
+        crash_cfg['framework'] = fw
+
+    status = report.get('status', 'unknown')
+    ok = bool(report.get('ok'))
+    backup = report.get('backup_path') or '无'
+    if ok:
+        headline = '数据库损坏：已完成应急恢复，但数据可能不完整，请人工核对后再用。'
+    else:
+        headline = '数据库损坏：应急恢复未能完成，框架将停止服务，请勿无脑重启。'
+    detail = '\n'.join([
+        headline,
+        '  - 恢复结果：%s' % status,
+        '  - 备份位置：%s' % backup,
+        '  - %s' % DATA_WARNING,
+        '  - 处置：核对上面这份备份 -> 确认数据是否需要回滚 -> 删除本 error.log 及'
+        '其 .1/.2... 轮转副本后再启动；连续崩溃达到上限时框架会进入安全模式'
+        '（进程挂着但不做事），这是刻意设计，不是卡死。',
+        '  - 说明：这是框架检测到数据库损坏后主动留的排障记录，不是普通的程序异常。',
+    ])
+    try:
+        path = crash_guard.write_crash_log(
+            crash_cfg, root, exc=None,
+            extra={'数据库应急恢复': detail,
+                   '损坏信号': report.get('note', '') or status,
+                   '环境': report.get('env') or environment_info()})
+        if not path:
+            raise OSError('crash_guard.write_crash_log 未返回落盘路径')
+        return path
+    except Exception as e:
+        logger.error('写崩溃日志 error.log 失败（%s: %s）', type(e).__name__, e)
+        raise
 
 
 def environment_info(db_path=None) -> dict:
@@ -329,32 +307,71 @@ def _combinations():
     return [(m,) for m in METHODS] + list(PAIRS) + list(TRIPLES)
 
 
+class _SnapshotTarget:
+    """只给标准备份管线提供它需要的两个属性，不打开任何新连接。"""
+
+    db_type = 'sqlite'
+
+    def __init__(self, path):
+        self._db_path = path
+
+
+def _backup_config() -> dict:
+    """取用户备份配置；应急快照强制开，但所有安全阈值照旧生效。"""
+    raw = {}
+    try:
+        raw = (((get_config() or {}).get('database', {}) or {}).get('backup', {})
+               or {})
+    except Exception as e:
+        logger.warning('读取备份配置失败，按默认值做恢复前快照: %s', e)
+    cfg = dict(raw) if isinstance(raw, dict) else {}
+    # 恢复前必须有快照，所以忽略 enabled；体积上限也不能挡住应急备份，
+    # 但空间探测、.part 写盘、读回复核、轮转全部照走——那才是防炸盘的闸门。
+    cfg['enabled'] = True
+    cfg['allow_large'] = True
+    return cfg
+
+
 def _backup_before_repair(db_path: str, home=None, backup_fn=None) -> dict:
-    """恢复前的快照。失败也要记下来，但绝不因为备份失败就跳过恢复。"""
+    """恢复前快照必须走标准备份流程，不能裸复制。
+
+    裸 ``shutil.copy2`` 不探可用空间、不写 ``.part``、不读回校验，库多大就
+    往盘上写多大；空间不足时把盘写满，比不备份更糟。这里统一交给
+    ``backup.run_backup``：弹性空间探测、校验后转正、压缩、轮转一套都过。
+    """
     if backup_fn is not None:
+        # 测试注入点：保留旧协议，返回值归一成标准报告的形状。
         try:
             result = backup_fn(db_path)
-            if isinstance(result, str):
-                return {'ok': True, 'path': result}
-            if isinstance(result, dict):
-                return result
-            return {'ok': True, 'result': result}
         except Exception as e:
-            return {'ok': False, 'note': '%s: %s' % (type(e).__name__, e)}
-    directory = os.path.join(_state_dir(home), 'backups')
+            return {'status': 'failed', 'ok': False, 'path': '',
+                    'note': '%s: %s' % (type(e).__name__, e)}
+        if isinstance(result, str):
+            return {'status': 'ok', 'ok': True, 'path': result}
+        if isinstance(result, dict):
+            result.setdefault('ok', str(result.get('status', 'failed')) == 'ok')
+            result.setdefault('path', '')
+            return result
+        return {'status': 'ok', 'ok': True, 'result': result, 'path': ''}
+
     try:
-        os.makedirs(directory, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')[:-3]
-        target = os.path.join(directory, 'zcbot-recovery-%s.db' % stamp)
-        shutil.copy2(db_path, target)
-        return {'ok': True, 'path': target}
+        report = dict(backup_mod.run_backup(
+            _SnapshotTarget(db_path), _backup_config(), reason='recovery'))
     except Exception as e:
-        return {'ok': False, 'note': '%s: %s' % (type(e).__name__, e)}
+        return {'status': 'failed', 'ok': False, 'path': '',
+                'note': '%s: %s' % (type(e).__name__, e)}
+    report.setdefault('ok', str(report.get('status', 'failed')) == 'ok')
+    report.setdefault('path', '')
+    return report
 
 
 def run_recovery(db_path: str, home=None, workdir=None,
                  backup_fn=None, log_dir=None, methods=None) -> dict:
-    """备份 -> 按组合尝试 -> 校验 -> 转正 -> 写日志与哨兵。不抛异常。"""
+    """备份 -> 按组合尝试 -> 校验 -> 转正 -> 写明细日志。不抛异常、不退出。
+
+    退出与崩溃计数交给调用方的 ``perform_exit``：那样启动期与运行时（消息
+    处理中撞到损坏）走的是同一条链，都会写一份 error.log 让原生守卫计数。
+    """
     started = time.time()
     db_path = os.path.abspath(db_path)
     report = {'status': 'failed', 'ok': False, 'db_path': db_path,
@@ -362,24 +379,13 @@ def run_recovery(db_path: str, home=None, workdir=None,
               'should_exit': True, 'data_may_be_damaged': True,
               'elapsed': 0.0}
 
-    def finish(status, ok, note, keep_existing_sentinel=False, **extra):
+    def finish(status, ok, note, **extra):
         report.update(status=status, ok=ok, note=note)
         report.update(extra)
         report['elapsed'] = round(time.time() - started, 3)
         report['env'] = environment_info(db_path)
         report['error_log'] = _append_error_log(report, home=home, log_dir=log_dir)
-        if keep_existing_sentinel:
-            # 已有未确认的哨兵是原始证据，不能让第二次尝试把 attempts 覆盖掉。
-            report['sentinel'] = sentinel_path(home)
-        else:
-            report['sentinel'] = write_sentinel(report, home=home)
         return report
-
-    guard = read_sentinel(home)
-    if guard is not None:
-        return finish('guarded', False,
-                      '已有恢复记录未确认，拒绝再次自动恢复。人工确认后删除 %s'
-                      % sentinel_path(home), keep_existing_sentinel=True)
 
     if not os.path.isfile(db_path):
         return finish('failed', False, '库文件不存在: %s' % db_path)
@@ -389,6 +395,11 @@ def run_recovery(db_path: str, home=None, workdir=None,
     if backup.get('path'):
         report['backup_path'] = backup['path']
     logger.error('数据库损坏，已开始应急恢复；备份结果: %s', backup)
+    if not backup.get('ok'):
+        # 没有可靠快照就不动库。否则恢复失败/误判时连回滚的余地都没有。
+        return finish('failed', False,
+                      '恢复前备份未完成，已停止恢复以免无备份改动库：%s'
+                      % (backup.get('note') or '标准备份流程返回失败'))
 
     tmp_root = workdir or os.path.join(_state_dir(home), 'tmp')
     try:
@@ -442,18 +453,25 @@ def run_recovery(db_path: str, home=None, workdir=None,
                       attempts=report['attempts'])
 
 
-def perform_exit(report: dict = None, home=None, exit_fn=None):
-    """备份/恢复后默认退出。日志先落盘，再拉闸。
+def perform_exit(report: dict = None, home=None, exit_fn=None, log_dir=None):
+    """写一份崩溃日志（计入原生守卫的计数），然后退出进程。
 
-    退出前哨兵必须已经写好——外部守护脚本会立刻把框架拉起来，下一轮启动时
-    全靠它告知「这份库刚被恢复过、数据可能有问题」。
+    这就是"故意让框架崩溃"的落点：先写 error.log —— 它同时是崩溃计数源、
+    给人看的处置指引、和触发安全模式的依据 —— 落盘后再拉闸。守护脚本把框架
+    拉起时，启动入口的 ``should_abort_boot`` 会数这些 error.log；没到上限就
+    正常启动（再撞损坏再写再崩），到了上限直接进安全模式。全程零新概念。
+
+    日志写失败也不能跳过退出：留一个坏库在跑比进程退出更危险。
     """
-    if report is not None and not report.get('sentinel'):
-        write_sentinel(report, home=home)
-    path = report.get('sentinel') if report else sentinel_path(home)
-    logger.error('数据库应急恢复流程结束，框架退出（%s）。确认前请勿让守护脚本'
-                 '反复拉起；人工确认后删除: %s',
-                 (report or {}).get('status'), path)
+    report = report or {}
+    try:
+        path = write_crash_report(report, home=home, log_dir=log_dir)
+        report['crash_log'] = path
+        logger.error('数据库应急恢复流程结束，框架退出（%s）。崩溃记录: %s',
+                     report.get('status'), path)
+    except Exception as e:
+        logger.error('写崩溃记录失败（%s: %s）；仍按计划退出以免带病运行',
+                     type(e).__name__, e)
     for handler in logger.handlers:
         try:
             handler.flush()

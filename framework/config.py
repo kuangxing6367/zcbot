@@ -736,6 +736,15 @@ _CONFIG_SCHEMA = {
                     'command_prefix': {'str': True},
                 },
             },
+            'crash': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'safe_mode': {'bool': True},
+                    'max_restarts': {'int': True, 'min': 1},
+                    'path': {'str': True},
+                },
+            },
         },
     },
 }

@@ -82,11 +82,12 @@ def _is_readonly_error(err) -> bool:
 
 
 def _emergency_recover(err, db_path, source='db'):
-    """明确的损坏异常走备份 + 官方恢复 + 退出；其余错误原样交回调用方。
+    """明确的损坏异常走备份 + 官方恢复 + 故意崩溃退出；其余交回调用方。
 
     不能在查询/写入失败后悄悄换成降级库：那会让运维以为写入仍落在主库上。
-    恢复完成后按手写稿直接退出，哨兵文件留给下一轮启动读，防止守护脚本
-    把「可能已经损坏的数据」当正常库继续写。
+    恢复后写一份崩溃日志（计入原生崩溃守卫）再退出；守护脚本拉起时若计数
+    到了上限，框架直接进安全模式假启动——进程活着但不加载插件、不写库，
+    直到人工核对数据并清掉崩溃计数。
     """
     try:
         from . import recovery
@@ -685,18 +686,6 @@ def init_db(config: dict):
     模式实现，data/db/ 下 JSON 行集落盘），框架以最低限度功能继续启动。
     """
     global db
-
-    # 启动哨兵：上次若因库损坏做过自动恢复，必须让本次进程和运维都看见。
-    # 哨兵不在这里清除——外部守护脚本会在退出后立刻拉起，清掉就等于假装
-    # 没发生过，可能损坏的数据会被当成正常库继续写。
-    try:
-        from . import recovery
-        recovery.STARTUP_GUARD = recovery.startup_guard()
-    except Exception as e:
-        logger.error('数据库恢复哨兵检查失败（%s: %s）：本次启动无法确认库是否'
-                     '刚被自动恢复过，请检查 %s',
-                     type(e).__name__, e,
-                     os.path.join(home_dir(), 'data', 'db-recovery.exit'))
 
     # 解析配置
     db_config = _parse_sqlite_type(config)

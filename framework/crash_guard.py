@@ -24,8 +24,25 @@ logger = logging.getLogger('zcbot')
 _MAX_KEEP = 9  # 崩溃日志最多保留轮转副本数
 
 
+def _crash_section(cfg):
+    """从整份配置里取出 framework.crash，兼容直接传 crash 段的旧调用。"""
+    if not isinstance(cfg, dict):
+        return {}
+    framework = cfg.get('framework')
+    if isinstance(framework, dict):
+        crash = framework.get('crash')
+        if isinstance(crash, dict):
+            return crash
+    direct = cfg.get('crash')
+    if isinstance(direct, dict):
+        return direct
+    if any(k in cfg for k in ('path', 'max_restarts', 'enabled')):
+        return cfg
+    return {}
+
+
 def _resolve_path(cfg, root):
-    path = (cfg or {}).get('path') or os.path.join(root, 'error.log')
+    path = _crash_section(cfg).get('path') or os.path.join(root, 'error.log')
     return path if os.path.isabs(path) else os.path.join(root, path)
 
 
@@ -66,7 +83,7 @@ def should_abort_boot(cfg, root):
     # .............................................
     #          佛祖保佑             永无BUG
 
-    crash_cfg = (cfg or {}).get('framework', {}).get('crash', {}) or {}
+    crash_cfg = _crash_section(cfg)
     if not crash_cfg.get('enabled', True):
         return False
     max_restarts = int(crash_cfg.get('max_restarts', 5) or 5)
@@ -74,7 +91,7 @@ def should_abort_boot(cfg, root):
 
 
 def write_crash_log(cfg, root, exc=None, extra=None):
-    """写入崩溃日志并轮转旧副本（保留最近 _MAX_KEEP 份用于排障）。"""
+    """写入崩溃日志并轮转旧副本，返回落盘路径（失败返回空串）。"""
     path = _resolve_path(cfg, root)
     try:
         # 轮转：error.log.N -> error.log.N+1 … error.log -> error.log.1
@@ -100,12 +117,24 @@ def write_crash_log(cfg, root, exc=None, extra=None):
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
         lines = [f"=== ZCBOT 启动崩溃 {ts} ==="]
         if extra:
-            lines.append(f"context: {extra}")
-        lines.append("traceback:\n" + _format_exc(exc))
+            if isinstance(extra, dict):
+                # 结构化上下文逐行展开。第一项若是处置指引，直接顶到最前面——
+                # 用户看 error.log 是来找"出了什么事、我该怎么办"，不是读堆栈。
+                for key, val in extra.items():
+                    lines.append(f"[{key}]")
+                    lines.append(str(val) if val not in (None, '') else '(空)')
+            else:
+                lines.append(f"context: {extra}")
+        trace = _format_exc(exc)
+        # 主动退出（如数据库损坏）没有异常栈，不必留一行 NoneType: None 让人困惑
+        if trace.strip() and trace.strip() != 'NoneType: None':
+            lines.append("traceback:\n" + trace)
         with open(path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(lines) + '\n')
+        return path
     except Exception as e:
         logger.error(f"写入崩溃日志失败: {e}")
+        return ''
 
 
 def _format_exc(exc):
@@ -138,7 +167,7 @@ def clear_crash_markers(cfg, root):
 
 def fire_alert(cfg, exc=None):
     """可选外部告警：alert_command（shell）或 alert_webhook（POST 文本）。"""
-    crash_cfg = (cfg or {}).get('framework', {}).get('crash', {}) or {}
+    crash_cfg = _crash_section(cfg)
     cmd = crash_cfg.get('alert_command')
     if cmd:
         try:
