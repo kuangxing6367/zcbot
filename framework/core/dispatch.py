@@ -233,7 +233,7 @@ class FrameworkDispatchMixin:
             if False in (await self.hooks.trigger_async(
                     HookPoints.EVENT_BEFORE_DISPATCH, event, bot_name)):
                 # 运维可见：该扩展点会真正丢弃事件，生产默认 INFO/WARNING 下必须能看到，
-                # 否则会出现"消息凭空消失却查不到任何线索"的隐性吞（与 IIPC 侧同源问题）。
+                # 否则会出现"消息凭空消失却查不到任何线索"的隐性吞。
                 logger.warning(
                     "事件被扩展点 event.before_dispatch 拦截并丢弃（bot=%s）："
                     "若怀疑消息消失，请排查该扩展点的注册方" % bot_name)

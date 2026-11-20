@@ -258,20 +258,6 @@ async def test_plugin_command_unmatched_when_empty():
     assert await r._match_plugin_commands(entry, _Ev(), '', 'demo') is False
 
 
-# ── 6. IIPC 插件侧事件（独立 SDD 实现，需同口径）────────────
-
-def test_sdk_event_normalizes_same_way():
-    from framework.iipc.py_sdk.event import Event as SdkEvent
-
-    sdk_ev = SdkEvent({
-        'post_type': 'message', 'message_type': 'group', 'self_id': 10001,
-        'user_id': 2, 'group_id': 3,
-        'message': [{'type': 'at', 'data': {'qq': 10001}},
-                    {'type': 'text', 'data': {'text': '\u3000 /help'}}],
-    })
-    assert sdk_ev.message == '/help', sdk_ev.message
-
-
 if __name__ == '__main__':
     import asyncio
     import traceback

@@ -41,7 +41,7 @@ def hello(event, match):
 @on_message
 def on_message(event):
     """订阅所有消息（示例：计数，可删）。"""
-    # PluginContext 没有 set_config（那是 --iipc py_sdk 的 API）。
+    # PluginContext 没有 set_config（配置写入走框架 API，插件侧只读）。
     # 示例只做进程内计数，需要持久化请用 _ctx.get_data_dir() 自行落盘。
     on_message.count = getattr(on_message, "count", 0) + 1
     _ctx.log("收到消息 #%d" % on_message.count)

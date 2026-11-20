@@ -83,6 +83,17 @@ from framework.bootstrap.deps_check import (
 )
 
 
+def _config_syntax_ok(path):
+    """只判断 YAML 语法能否解析：不校验语义、不写文件、不生成默认配置。"""
+    try:
+        import yaml
+        with open(path, encoding='utf-8') as f:
+            yaml.safe_load(f)
+        return True
+    except Exception:
+        return False
+
+
 def _run_auto_migration(config_path=None):
     """启动期状态目录迁移：默认开启，config.yaml 可手动关闭。
 
@@ -118,10 +129,23 @@ def main():
     argv, _lang = _pop_language_arg(argv)
     if _lang:
         os.environ['ZCBOT_LANG'] = _lang
+    # 显式降级开关：等价于 framework.config.on_error: default，只影响语法坏掉的配置。
+    if '--allow-default-config' in argv:
+        os.environ['ZCBOT_ALLOW_DEFAULT_CONFIG'] = '1'
+        argv = [a for a in argv if a != '--allow-default-config']
     # 同步回 sys.argv：amain() 等下游直接读 sys.argv[1] 取配置文件路径，
     # 不同步会把摘掉的语言选项误当成配置文件路径（历史坑的同类问题：
     # `python startup.py argparse` 曾会在根目录生成一个叫 argparse 的配置）
     sys.argv = [sys.argv[0]] + argv
+    # 配置只读检查：转发到 framework.config --check，不启动框架、不写文件。
+    if '--check-config' in argv:
+        from framework.config import check_config
+
+        rest = [a for a in argv if a != '--check-config']
+        if len(rest) > 1:
+            print('错误：--check-config 最多接受一个配置文件路径\n')
+            sys.exit(2)
+        sys.exit(check_config(rest[0] if rest else None))
     if argv[:1] and argv[0] in ('-h', '--help', 'help'):
         _print_usage()
         return
@@ -141,10 +165,10 @@ def main():
         sys.exit(_run_attach(argv[1:]))
 
     # 脚手架子命令 → 统一交给 framework.cli（等价于 `zb <cmd>`）：
-    #   create / init / run / generate / plugin / adapter / driver / self / clean / config
+    #   create / init / run / generate / plugin / adapter / driver / self / clean / config / debug
     # 这些子命令不与「配置文件路径」语义冲突，优先识别并路由；其余位置参数仍当配置路径。
     _CLI_GROUPS = ('create', 'init', 'run', 'generate', 'plugin',
-                   'adapter', 'driver', 'self', 'clean', 'config')
+                   'adapter', 'driver', 'self', 'clean', 'config', 'debug')
     if argv[:1] and argv[0] in _CLI_GROUPS:
         try:
             from framework.cli import main as _cli_main
@@ -153,21 +177,12 @@ def main():
             sys.exit(1)
         sys.exit(_cli_main(argv))
 
-    # 子命令：--iipc / -iipc → 走 IIPC 内核链路（Go 内核 + Rust 协议端 + 独立进程插件）
-    #   与上面的 asyncio 框架是并列的两条启动路径：插件、DB、事件语义 1:1 对齐，
-    #   但进程拓扑不同（插件在独立进程、DB 在 Go 侧执行，不占 Python GIL）。
-    #   不带此开关时框架行为完全不变。
-    if argv[:1] and argv[0] in ('--iipc', '-iipc'):
-        _run_auto_migration()
-        try:
-            from framework.iipc import run as _iipc_run
-        except Exception as e:
-            print('[iipc] 无法加载 IIPC 链路: %s' % e)
-            print('[iipc] 确认 framework/iipc/ 源码完整；IIPC 模式需要 go / cargo 工具链'
-                  '（也可设 ZCBOT_GO_BIN / ZCBOT_CARGO 指定路径）。'
-                  '注意：go/cargo 仅 --iipc 模式需要，基础 `python startup.py`（asyncio 引擎）不需要。')
-            sys.exit(1)
-        sys.exit(_iipc_run(argv[1:]) or 0)
+    # 已移除的第二条内核链路：给出明确说明，而不是当成未知选项一笔带过。
+    if argv[:1] and argv[0] in ('--iipc', '-iipc', 'iipc'):
+        print('错误：--iipc 启动方式已移除（framework/iipc 整体下线）。')
+        print('      直接运行 `python startup.py` 即走 asyncio 主链路；')
+        print('      插件进程隔离请使用双进程模式（config.yaml 的 dual_process 段）。')
+        sys.exit(2)
 
     # 未知选项：不要静默忽略（历史坑：`-a` 被当无事发生、`argparse`
     # 被当成配置文件路径并在根目录生成一个叫 argparse 的默认配置）
@@ -192,14 +207,33 @@ def main():
 
     # 状态目录自动迁移（默认开启；framework.auto_migrate: false 可关闭）
     # 必须在 load_config() 之前：迁移后主配置物理路径会变。
-    _run_auto_migration(config_path)
+    # 因此这里先做一次「纯语法」预检：配置根本解析不了时不要搬动 data/ 目录，
+    # 否则用户只是少写一个冒号，就会被顺带迁移一次数据目录（不可接受的副作用）。
+    if _config_syntax_ok(resolve_config_path(config_path)):
+        _run_auto_migration(config_path)
 
     # 双进程模式：由 config.yaml 的 dual_process.enabled 门控（默认关闭，行为不变）
+    from framework.config import (
+        ConfigLoadError,
+        ConfigValidationError,
+        load_config,
+        report_config_load_error,
+        report_config_validation_error,
+    )
+
+    _root = os.path.dirname(os.path.abspath(__file__))
     try:
-        from framework.config import load_config
         cfg = load_config(config_path)
-    except Exception:
-        cfg = {}
+    except ConfigLoadError as config_exc:
+        report_config_load_error(config_exc, _root, config_path)
+        sys.exit(2)
+    except ConfigValidationError as config_exc:
+        report_config_validation_error(config_exc, _root, config_path)
+        sys.exit(2)
+    except Exception as exc:
+        # 其他读取失败也不能用内置默认值假装启动成功：宁可拒绝启动。
+        print(f'[配置加载失败] 框架未启动，请检查配置文件与权限: {exc}', file=sys.stderr)
+        sys.exit(2)
     # 可选数据库驱动的补装必须在 asyncio.run(amain()) 之前完成：
     # 放到 Framework() 构造里会同步阻塞事件循环最长 120s。
     _ensure_optional_driver(config_path)

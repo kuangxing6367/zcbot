@@ -136,7 +136,6 @@ export default defineConfig({
             { text: '框架结构', link: '/速查/框架结构' },
             { text: '插件开发', link: '/速查/插件开发' },
             { text: '调试与测试', link: '/速查/调试排错' },
-            { text: 'IIPC 内核链路', link: '/速查/IIPC内核链路' },
             { text: '安全加固', link: '/速查/安全加固' }
           ]
         }

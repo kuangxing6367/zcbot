@@ -8,6 +8,7 @@
     python tests/test_extreme_conditions.py
 """
 import argparse
+import glob
 import os
 import sys
 import tempfile
@@ -200,16 +201,21 @@ def test_config_get_missing_key():
 
 
 # --------------------------------------------------------------------------
-# 6) load_config：畸形 YAML 安全回退（不崩溃，备份+默认）
+# 6) load_config：畸形 YAML 拒绝启动（不再静默回退到默认配置）。
+#    旧断言期待「不抛异常 + .bak 备份」，与 fail-fast 契约冲突，已按新行为改写。
 # --------------------------------------------------------------------------
 def test_load_config_malformed_yaml():
     d = tempfile.mkdtemp()
     path = os.path.join(d, "config.yaml")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("::: this is : not : valid : yaml: [unbalanced\n")
-    cfg = load_config(path)  # 不应抛异常
-    assert isinstance(cfg, dict)
-    assert os.path.isfile(path + ".bak")  # 损坏文件应被备份
+    raw = "::: this is : not : valid : yaml: [unbalanced\n"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(raw)
+    with pytest.raises(Exception) as ei:
+        load_config(path)
+    assert "配置文件语法错误" in str(ei.value)
+    with open(path, "r", encoding="utf-8") as f:
+        assert f.read() == raw  # 原文件只读不改
+    assert glob.glob(path + ".broken.*")  # 原文副本带时间戳
 
 
 def test_load_config_missing_file_generates_default():

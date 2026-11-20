@@ -10,10 +10,8 @@
 - 数据在 `data/`(db/logs/plugins_dat),代码目录更新会被覆盖,数据禁止写代码目录
 - 配置两份:`config.yaml`(全局) + `core_plugins.yaml`(官方插件开关,启动自动同步)
 - 适用版本以仓库根 `VERSION` 为准（不在本文写死版本号，避免文档漂移）;文档站 docs/(VitePress);可 pip 安装(`pip install zcbot`,入口 `zcbot`,状态落 `~/.zcbot`)
-- **三条启动路径并存**:单进程(默认) / `dual_process` 双 Python 进程 / **`python startup.py --iipc`**
-  (IIPC:Go 内核 + Rust 协议端 + 独立进程插件)。后两者**不是一回事**,别混:IIPC 内核是 Go 进程,
-  DB 在 Go 侧执行不占 GIL;不带 `--iipc` 时主框架行为完全不变
-- **IIPC 已搁置**:新功能只在主框架落地,IIPC 侧不跟进(见 [docs/速查/IIPC内核链路.md](docs/速查/IIPC内核链路.md) 顶部)
+- **两条启动路径**:单进程(默认) / `dual_process` 双 Python 进程。原 `--iipc` 内核链路已整体移除,
+  带该参数启动会直接报错退出;插件进程隔离请走 `dual_process`
 - Web 终端与 AI 智能体:`/api/console/{commands,exec,agent}` 直接复用 `ConsoleServer.run_command` / `run_agent`,
   超管专用 + 审计 + 超时;不要再写第二套执行器
 - **文件改动只有一个记账点**:`core_plugins/aiwriter/changeset.py`。智能体的 `write`/`edit`/`plugin_new`
@@ -43,7 +41,6 @@
 | 改框架 / 找模块 / 理解事件流 | [docs/速查/框架结构.md](docs/速查/框架结构.md) |
 | 跑测试 / 排查报错 / 避坑 | [docs/速查/调试排错.md](docs/速查/调试排错.md) |
 | 查操作审计 / 探针 / 指标 / 结构化日志 | [docs/进阶/可观测性与运维.md](docs/进阶/可观测性与运维.md) |
-| **IIPC 链路（`--iipc`）** | [docs/速查/IIPC内核链路.md](docs/速查/IIPC内核链路.md) |
 | **加固 API / 前端安全** | [docs/速查/安全加固.md](docs/速查/安全加固.md) |
 
 人类文档:[README.md](README.md) · [docs/](docs/index.md)

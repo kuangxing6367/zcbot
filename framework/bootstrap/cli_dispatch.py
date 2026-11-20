@@ -28,7 +28,7 @@ def print_usage():
   python startup.py config        配置控制台：显示当前配置摘要
   python startup.py config get K  查看配置项（如 language）
   python startup.py config set K V 修改配置项（写回 config.yaml，重启生效）
-  python startup.py --iipc        走 IIPC 内核链路（Go 内核 + Rust 协议端，插件独立进程）
+  python startup.py --check-config [config.yaml] 只读检查配置语法与已知键，返回 0/2
   python startup.py --help        显示本帮助
 
   兼容：以上命令全部可用 `python main.py ...` 执行，行为一致；
@@ -45,13 +45,8 @@ attach 常用参数：
   --port/--token    直接指定控制台端口与 token（跳过读库）
   --agent           每行都交给 AI（正常模式下也可用行首 `!` 单条交给 AI）
 
---iipc 常用参数（其余见 framework/iipc/README.md；端口等也可在 config.yaml 的 iipc: 段配置）：
-  --ipc-addr ADDR      内核 IPC 监听 [ip:]port（默认 127.0.0.1:18730）
-  --plugins-dir DIR    插件目录（默认 framework/iipc/plugins）
-  --admin IDS          管理员 user_id（逗号分隔，供 require_admin 鉴权）
-  --onebot-url URL     正向 WS：适配器主动连 ws://host:port
-  --onebot-listen ADDR 反向 WS：监听 [ip:]port 等 OneBot 实现连入（默认 127.0.0.1:6701）
-  --no-rust            不启动 Rust 协议端（send 类动作不可用，事件注入仍可）""")
+插件进程隔离：使用 config.yaml 的 dual_process 段（核心 + 宿主双进程），
+            不再提供 --iipc 启动方式。""")
 
 
 def pop_language_arg(argv):

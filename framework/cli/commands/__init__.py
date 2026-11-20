@@ -2,6 +2,7 @@
 from .adapter import do_adapter
 from .clean import do_clean
 from .config import do_config
+from .debug import do_debug
 from .driver import do_driver
 from .generate import do_generate
 from .plugin import do_plugin
@@ -14,6 +15,7 @@ __all__ = [
     "do_clean",
     "do_config",
     "do_create",
+    "do_debug",
     "do_driver",
     "do_generate",
     "do_init",

@@ -6,11 +6,13 @@
 """
 import base64
 import importlib.util
+import io
 import os
 import sys
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -18,6 +20,13 @@ sys.path.insert(0, str(ROOT))
 from framework.ctx.messaging import PluginMessagingMixin
 from framework.messaging.event import Event
 from framework.messaging.segments import at, file_seg, image, text, voice
+
+
+def _png() -> bytes:
+    buf = io.BytesIO()
+    Image.new('RGB', (1, 1), (7, 8, 9)).save(buf, 'PNG')
+    return buf.getvalue()
+
 
 # ─────────────────────────────────────────────────────────────
 # 测试替身
@@ -120,23 +129,26 @@ async def test_arecall_awaits_acall():
 # ─────────────────────────────────────────────────────────────
 
 def test_download_media_base64(tmp_path):
-    payload = base64.b64encode(b'abc').decode()
+    raw = _png()
+    payload = base64.b64encode(raw).decode()
     res = _Ctx(_OneBotApi()).download_media(
         {'type': 'image', 'data': {'base64': payload}}, dest_dir=str(tmp_path))
     assert res['status'] == 'ok'
-    assert res['size'] == 3
+    assert res['size'] == len(raw)
+    assert res['kind'] == 'png' and res['mime'] == 'image/png'
 
 
 def test_download_media_file_id_resolved_by_adapter(tmp_path):
     """file_id 只有接入端能换地址：先 get_image，拿到真实路径再下载。"""
+    raw = _png()
     src = tmp_path / 'real.png'
-    src.write_bytes(b'png!')
+    src.write_bytes(raw)
     api = _OneBotApi(file_ref=str(src))
     res = _Ctx(api).download_media(
         {'type': 'image', 'data': {'file_id': 'FI-1'}},
         dest_dir=str(tmp_path / 'out'))
     assert res['status'] == 'ok'
-    assert res['size'] == 4
+    assert res['size'] == len(raw)
     assert ('get_image', 'FI-1', None) in api.calls
 
 
@@ -190,11 +202,12 @@ def test_download_media_over_limit(tmp_path):
 
 
 async def test_adownload_media_runs_off_loop(tmp_path):
-    payload = base64.b64encode(b'zz').decode()
+    raw = _png()
+    payload = base64.b64encode(raw).decode()
     res = await _Ctx(_OneBotApi()).adownload_media(
         {'type': 'image', 'data': {'base64': payload}}, dest_dir=str(tmp_path))
     assert res['status'] == 'ok'
-    assert res['size'] == 2
+    assert res['size'] == len(raw)
 
 
 # ─────────────────────────────────────────────────────────────

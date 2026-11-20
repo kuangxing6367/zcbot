@@ -85,11 +85,16 @@ def test_all_required_tables_created(schema_db):
 
 
 def test_table_count_matches_init_sql(schema_db):
-    """建出的表数应与 init.sql 的 CREATE TABLE 数一致（不多不少）。"""
+    """init.sql 建出的业务表数量应与声明一致（不多不少）。
+
+    排除迁移账本/流水表：它们由 migrations.ensure_ledger/ensure_runs 维护，
+    不在 init.sql 里声明，提前建出来是为了让「运行期账本被删」可被判定。
+    """
     import re
     count = len(re.findall(r'CREATE TABLE(?: IF NOT EXISTS)?\s+`?\w+`?',
                            _init_sql_text(), re.IGNORECASE))
-    have = _tables(schema_db)
+    infra = {'schema_migrations', 'schema_migration_runs'}
+    have = _tables(schema_db) - infra
     assert len(have) == count, f"期望 {count} 张，实际 {len(have)} 张: {sorted(have)}"
 
 

@@ -5,13 +5,24 @@
 所以畸形输入的权重要大于正常路径——真出事的都是畸形输入。
 """
 import base64
+import io
 import os
 import sys
 
 import pytest
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from framework.messaging.media_guard import (
+    REJECT_ACTIVE_CONTENT,
+    REJECT_BLOCKED_ADDRESS,
+    REJECT_BLOCKED_HOST,
+    REJECT_HEADER_PARSE,
+    REJECT_REDIRECT,
+    REJECT_TOO_LARGE,
+    REJECT_USERINFO,
+)
 from framework.messaging.media_io import (
     DEFAULT_MAX_BYTES,
     default_media_dir,
@@ -19,6 +30,13 @@ from framework.messaging.media_io import (
     safe_filename,
     segment_file_id,
 )
+
+
+def _png(width: int = 1, height: int = 1, extra: bytes = b'') -> bytes:
+    """生成一张真实 PNG。图片段默认走内容闸门，不能用 b'hello' 之类的假字节。"""
+    buf = io.BytesIO()
+    Image.new('RGB', (width, height), (12, 34, 56)).save(buf, 'PNG')
+    return buf.getvalue() + extra
 
 # ─────────────────────────────────────────────────────────────
 # 测试替身：不发真网络请求
@@ -44,6 +62,27 @@ def _fetcher(resp=None, exc=None):
             raise exc
         return resp
     return _get
+
+
+def _public_resolver(host):
+    """测试里不发真 DNS 查询，统一解析到一个公网地址。"""
+    return ['93.184.216.34']
+
+
+class _RedirectResp:
+    """只带 Location 的 302 响应：重定向目标必须在第二次请求前被拦住。"""
+
+    def __init__(self, location):
+        self.headers = {'Location': location}
+        self.status_code = 302
+        self.closed = False
+        self.url = 'https://public.example/a.png'
+
+    def iter_content(self, size):
+        yield b''
+
+    def close(self):
+        self.closed = True
 
 
 # ─────────────────────────────────────────────────────────────
@@ -146,61 +185,74 @@ def test_segment_file_id_malformed(seg):
 # ─────────────────────────────────────────────────────────────
 
 def test_download_base64(tmp_path):
-    payload = base64.b64encode(b'hello').decode()
+    raw = _png()
+    payload = base64.b64encode(raw).decode()
     res = download({'type': 'image', 'data': {'base64': payload}},
                    dest_dir=str(tmp_path))
     assert res['status'] == 'ok'
-    assert res['size'] == 5
-    assert open(res['path'], 'rb').read() == b'hello'
+    assert res['size'] == len(raw)
+    assert res['kind'] == 'png'
+    assert res['mime'] == 'image/png'
+    assert res['rejected_reason'] == ''
+    with open(res['path'], 'rb') as f:
+        assert f.read() == raw
 
 
 def test_download_base64_data_url(tmp_path):
     """data URL 的头部不参与解码。"""
-    payload = 'data:image/png;base64,' + base64.b64encode(b'xx').decode()
+    raw = _png()
+    payload = 'data:image/png;base64,' + base64.b64encode(raw).decode()
     res = download({'type': 'image', 'data': {'base64': payload}},
                    dest_dir=str(tmp_path))
     assert res['status'] == 'ok'
-    assert res['size'] == 2
+    assert res['size'] == len(raw)
 
 
 def test_download_base64_with_newlines(tmp_path):
     """有些实现会在 base64 里塞换行，必须先去空白再解码。"""
-    payload = base64.encodebytes(b'y' * 100).decode()
+    raw = _png()
+    payload = base64.encodebytes(raw).decode()
     res = download({'type': 'image', 'data': {'base64': payload}},
                    dest_dir=str(tmp_path))
     assert res['status'] == 'ok'
-    assert res['size'] == 100
+    assert res['size'] == len(raw)
 
 
 def test_download_local_file(tmp_path):
+    raw = _png()
     src = tmp_path / 'src.bin'
-    src.write_bytes(b'abc')
+    src.write_bytes(raw)
     dest = tmp_path / 'out'
-    res = download(str(src), dest_dir=str(dest))
+    res = download(str(src), dest_dir=str(dest), expected_type='image')
     assert res['status'] == 'ok'
-    assert res['size'] == 3
+    assert res['size'] == len(raw)
 
 
 def test_download_file_url(tmp_path):
+    raw = _png()
     src = tmp_path / 'src.bin'
-    src.write_bytes(b'abcd')
+    src.write_bytes(raw)
     dest = tmp_path / 'out'
-    res = download('file://' + src.as_posix(), dest_dir=str(dest))
+    res = download('file://' + src.as_posix(), dest_dir=str(dest),
+                   expected_type='image')
     assert res['status'] == 'ok'
-    assert res['size'] == 4
+    assert res['size'] == len(raw)
 
 
 def test_download_http_ok(tmp_path):
-    resp = _Resp([b'12345'])
+    raw = _png()
+    resp = _Resp([raw])
     res = download('https://x/a.png', dest_dir=str(tmp_path),
-                   fetcher=_fetcher(resp))
+                   fetcher=_fetcher(resp), expected_type='image',
+                   resolver=_public_resolver)
     assert res['status'] == 'ok'
-    assert res['size'] == 5
+    assert res['size'] == len(raw)
+    assert res['kind'] == 'png'
     assert resp.closed, '响应必须关闭，否则连接池会泄漏'
 
 
 def test_download_same_name_does_not_overwrite(tmp_path):
-    payload = base64.b64encode(b'1').decode()
+    payload = base64.b64encode(_png()).decode()
     seg = {'type': 'image', 'data': {'base64': payload, 'name': 'a.png'}}
     first = download(seg, dest_dir=str(tmp_path))
     second = download(seg, dest_dir=str(tmp_path))
@@ -307,9 +359,90 @@ def test_download_http_connection_error(tmp_path):
     assert '请求失败' in res['msg']
 
 
+def test_download_image_rejects_fake_png(tmp_path):
+    """魔数说 PNG、内容不是图片：必须在转正前拒绝，且不留半成品。"""
+    fake = b'\x89PNG\r\n\x1a\n' + b'plain text payload'
+    seg = {'type': 'image', 'data': {
+        'base64': base64.b64encode(fake).decode(), 'name': 'evil.png'}}
+    res = download(seg, dest_dir=str(tmp_path))
+    assert res['status'] == 'rejected'
+    assert res['rejected_reason'] == REJECT_HEADER_PARSE
+    assert res['kind'] == 'png' and res['mime'] == 'image/png'
+    assert res['path'] == ''
+    assert os.listdir(tmp_path) == []
+
+
+def test_download_image_rejects_svg_payload(tmp_path):
+    seg = {'type': 'image', 'data': {
+        'base64': base64.b64encode(b'<svg onload="alert(1)">').decode(),
+        'name': 'evil.png'}}
+    res = download(seg, dest_dir=str(tmp_path))
+    assert res['status'] == 'rejected'
+    assert res['rejected_reason'] == REJECT_ACTIVE_CONTENT
+    assert os.listdir(tmp_path) == []
+
+
+def test_download_non_image_segment_not_guarded(tmp_path):
+    """语音/文件段不是图片，不能被魔数白名单误杀。"""
+    raw = b'not-an-image'
+    seg = {'type': 'voice', 'data': {'base64': base64.b64encode(raw).decode()}}
+    res = download(seg, dest_dir=str(tmp_path))
+    assert res['status'] == 'ok'
+    assert res['size'] == len(raw)
+    assert res['kind'] == '' and res['mime'] == ''
+    assert res['rejected_reason'] == ''
+
+
+def test_download_http_loopback_rejected_before_request(tmp_path):
+    called = []
+
+    def _get(url, **kw):
+        called.append(url)
+        raise AssertionError('内网地址不应该发出请求')
+
+    res = download('http://127.0.0.1:8080/inner.png', dest_dir=str(tmp_path),
+                   fetcher=_get)
+    assert res['status'] == 'rejected'
+    assert res['rejected_reason'] == REJECT_BLOCKED_ADDRESS
+    assert called == []
+    assert os.listdir(tmp_path) == []
+
+
+def test_download_http_metadata_host_rejected(tmp_path):
+    res = download('http://metadata.google.internal/latest/meta-data/',
+                   dest_dir=str(tmp_path),
+                   fetcher=_fetcher(exc=AssertionError('不应发出请求')))
+    assert res['status'] == 'rejected'
+    assert res['rejected_reason'] == REJECT_BLOCKED_HOST
+
+
+def test_download_http_userinfo_rejected(tmp_path):
+    res = download('https://user:pass@example.com/a.png',
+                   dest_dir=str(tmp_path),
+                   fetcher=_fetcher(exc=AssertionError('不应发出请求')))
+    assert res['status'] == 'rejected'
+    assert res['rejected_reason'] == REJECT_USERINFO
+
+
+def test_download_http_redirect_to_private_rejected(tmp_path):
+    """公网跳内网必须在第二次请求之前被拦住。"""
+    seen = []
+
+    def _get(url, **kw):
+        seen.append(url)
+        return _RedirectResp('http://127.0.0.1/inner.png')
+
+    res = download('https://public.example/a.png', dest_dir=str(tmp_path),
+                   fetcher=_get, resolver=_public_resolver)
+    assert res['status'] == 'rejected'
+    assert res['rejected_reason'] == REJECT_REDIRECT
+    assert seen == ['https://public.example/a.png']
+    assert os.listdir(tmp_path) == []
+
+
 def test_download_path_traversal_name(tmp_path):
     """发送方完全控制 data['name']，必须只能落在目标目录内。"""
-    payload = base64.b64encode(b'x').decode()
+    payload = base64.b64encode(_png()).decode()
     seg = {'type': 'image',
            'data': {'base64': payload, 'name': '../../evil.sh'}}
     res = download(seg, dest_dir=str(tmp_path))
@@ -321,7 +454,7 @@ def test_download_path_traversal_name(tmp_path):
 
 def test_download_malformed_name_field(tmp_path):
     """data['name'] 是 dict / None 时退回默认名，不能抛异常。"""
-    payload = base64.b64encode(b'x').decode()
+    payload = base64.b64encode(_png()).decode()
     names = []
     for i, bad in enumerate(({'a': 1}, None, 123, ['x'])):
         seg = {'type': 'image', 'data': {'base64': payload, 'name': bad}}
@@ -389,3 +522,19 @@ def test_default_media_dir_under_state_dir():
 
 def test_default_max_bytes_is_positive():
     assert DEFAULT_MAX_BYTES > 0
+
+
+def test_download_results_always_have_guard_fields(tmp_path):
+    """成功、普通失败、闸门拒绝三种口径的返回键必须一致。"""
+    fake = {'type': 'image', 'data': {'base64': base64.b64encode(b'nope').decode()}}
+    cases = [
+        download(None, dest_dir=str(tmp_path)),
+        download('base64://!!!!', dest_dir=str(tmp_path)),
+        download(fake, dest_dir=str(tmp_path)),
+        download({'type': 'image', 'data': {'base64':
+                  base64.b64encode(_png()).decode()}}, dest_dir=str(tmp_path)),
+    ]
+    expected = {'status', 'path', 'size', 'ref', 'msg',
+                'kind', 'mime', 'rejected_reason'}
+    for res in cases:
+        assert expected <= set(res), res

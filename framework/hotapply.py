@@ -35,7 +35,6 @@ RESTART_ONLY_SECTIONS = {
     'ssl': '证书在启动时加载并构建 SSLContext',
     'event_queue': '队列容量与 worker 数在启动时创建',
     'dual_process': '双进程拓扑在启动时决定',
-    'iipc': 'IPC 服务端在启动时创建',
     'console': '调试控制台监听在启动时创建',
     'observability': '探针/指标路由在 Web 应用创建时注册',
     'system': '系统级参数在启动时读取',

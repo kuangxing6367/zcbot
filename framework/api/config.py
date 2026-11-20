@@ -347,6 +347,8 @@ def register(ctx):
                 'scheduler': scheduler_stats,
                 'event_loop': loop_health,
                 'db_degraded': bool(getattr(framework, 'db_degraded', False)),
+                'db_schema_incomplete': list(
+                    getattr(framework, 'schema_incomplete', None) or []),
             }})
         except Exception as e:
             logger.error(f"获取运行状态失败: {e}")
@@ -359,7 +361,7 @@ def register(ctx):
     _YAML_SECTIONS = (
         'database', 'onebot', 'web', 'ssl', 'plugin', 'log', 'system',
         'security', 'framework', 'observability', 'reliability', 'outbound',
-        'scheduler', 'startup', 'memory', 'iipc', 'dependencies',
+        'scheduler', 'startup', 'memory', 'dependencies',
         'dual_process', 'language', 'terminal', 'console', 'event_queue',
         'multi_platform', 'github_proxy', 'http_api', 'http_inject',
     )

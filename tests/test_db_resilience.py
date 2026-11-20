@@ -54,42 +54,61 @@ def _boot(db):
     _auto_create_tables(db)
 
 
-# ─────────────────────── 场景3：部分表丢失自愈 ───────────────────────
+# ─────────────────────── 场景3：运行期丢表只告警，不补建 ───────────────────────
 
-def test_partial_table_loss_self_heals(tmp_path):
-    """只丢部分表（探针表仍在）时，重启必须补齐缺失表。"""
+def test_partial_table_loss_alarms_without_rebuild(tmp_path, caplog):
+    """运行期丢表：必须告警，且不得静默重建（避免空表掩盖数据丢失）。"""
     db = _new_db(tmp_path)
     _boot(db)
     assert missing_required_tables(db) == []
 
-    # 写入业务数据，用于验证自愈不会破坏既有数据
     db.execute(
         "INSERT INTO users(user_id, role, created_at) VALUES(%s, %s, %s)",
         ("u_alive", "member", "2026-01-01 00:00:00"))
     admin_before = len(db.query("SELECT * FROM admin_users"))
-    cfg_before = len(db.query("SELECT * FROM system_config"))
 
-    # 模拟运行中部分表丢失：故意保留 admin_users / plugins（历史探针表）
     dropped = ["group_members", "plugin_configs", "system_config"]
     for t in dropped:
         db.execute("DROP TABLE %s" % t)
     assert set(missing_required_tables(db)) == set(dropped)
 
-    # 重启语义：重新走完整启动链路
-    _boot(db)
+    caplog.set_level(logging.DEBUG, logger="zcbot")
+    caplog.clear()
+    auto_init_database(db)
 
-    # 1) 缺失表全部重建
-    assert missing_required_tables(db) == []
-    # 2) 既有数据还在
+    # 1) 仍然缺失：没有自动补建
+    assert set(missing_required_tables(db)) == set(dropped)
+    # 2) 既有数据不受影响
     row = db.query_one("SELECT role FROM users WHERE user_id=%s", ("u_alive",))
     assert row and row["role"] == "member"
-    # 3) 种子数据随新建表回来（system_config 本次是新建的）
-    assert db.query_one(
-        "SELECT config_value FROM system_config WHERE config_key=%s",
-        ("framework.name",)) is not None
-    # 4) 种子没有被重复播种（admin_users 表本就没丢，不该再插一条 admin）
+    # 3) 默认管理员没有被重新种回来
     assert len(db.query("SELECT * FROM admin_users")) == admin_before
-    assert len(db.query("SELECT * FROM system_config")) == cfg_before
+    # 4) 告警里点名缺失表与处置方式
+    blob = "\n".join(r.getMessage() for r in caplog.records)
+    assert "此前已完成初始化" in blob
+    assert "group_members" in blob
+    assert "repair_missing_tables" in blob
+    # 5) 状态可被探针读到
+    assert set(db.schema_incomplete) == set(dropped)
+    db.close()
+
+
+def test_explicit_repair_rebuilds_without_default_admin(tmp_path):
+    """显式授权补表：表可重建，但绝不能把默认管理员口令写回去。"""
+    db = Database({
+        "type": "sqlite",
+        "path": str(tmp_path / "repair.db"),
+        "repair_missing_tables": True,
+    })
+    _boot(db)
+    db.execute("DROP TABLE admin_users")
+    db.execute("DROP TABLE system_config")
+
+    auto_init_database(db)
+
+    assert missing_required_tables(db) == []
+    # 表被补回来了，但里面没有默认管理员
+    assert db.query("SELECT * FROM admin_users") == []
     db.close()
 
 
@@ -154,41 +173,40 @@ def test_readonly_with_complete_schema_stays_quiet(tmp_path):
 
 
 def test_readonly_with_missing_table_reports_failure(tmp_path, caplog):
-    """表缺失 + 只读：必须报"初始化未完成"，绝不能打"初始化完成"。"""
+    """表缺失 + 只读：必须告警并点明缺失表，不能悄悄重建。"""
     db = _new_db(tmp_path)
     _boot(db)
     db.execute("DROP TABLE group_members")
     db.execute("PRAGMA query_only = ON")
 
     caplog.set_level(logging.DEBUG, logger="zcbot")
-    caplog.clear()                      # 只关注"只读+缺表"这次初始化，
-                                         # 隔离 boot 阶段那句正常的"初始化完成"日志
+    caplog.clear()
     auto_init_database(db)
 
-    # 复验：表仍然缺失（只读下建不出来）
     assert missing_required_tables(db) == ["group_members"]
 
     blob = "\n".join(r.getMessage() for r in caplog.records)
-    assert "初始化未完成" in blob, f"未报初始化未完成，实际日志:\n{blob}"
+    assert "此前已完成初始化" in blob, f"未按要求告警，实际日志:\n{blob}"
     assert "group_members" in blob, "缺失清单里应点名缺失表"
-    assert "数据库自动初始化完成" not in blob, "建表失败时不得声称初始化完成"
+    assert "数据库自动初始化完成" not in blob, "丢表时不得声称初始化完成"
     db.close()
 
 
-# ─────────────────────── 种子数据不重复播种 ───────────────────────
+# ─────────────────────── 丢表不触发默认管理员重种 ───────────────────────
 
-def test_seed_only_for_newly_created_tables(tmp_path):
-    """只删 system_config（表丢失），不该连带重复插入 admin_users。"""
-    db = _new_db(tmp_path)
+def test_seed_not_replayed_on_table_loss(tmp_path):
+    """丢表后即使显式补建，也不会重新插入默认管理员。"""
+    db = Database({
+        "type": "sqlite",
+        "path": str(tmp_path / "seed.db"),
+        "repair_missing_tables": True,
+    })
     _boot(db)
     admin_before = len(db.query("SELECT * FROM admin_users"))
 
     db.execute("DROP TABLE system_config")
     auto_init_database(db)
 
-    assert db.query_one(
-        "SELECT config_value FROM system_config WHERE config_key=%s",
-        ("onebot.ws_url",)) is not None
     assert len(db.query("SELECT * FROM admin_users")) == admin_before
     db.close()
 

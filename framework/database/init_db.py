@@ -118,7 +118,7 @@ def _dml_target_table(stmt: str):
 
 
 def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
-                    sql_filename="init.sql") -> dict:
+                    sql_filename="init.sql", seed_credentials=True) -> dict:
     """按「只补缺失表」的方式应用初始化 SQL，返回统计而不是靠异常抛出。
 
     为什么不能无脑全量重跑：init.sql 除 18 条 CREATE TABLE 外还有 3 条种子 INSERT
@@ -129,6 +129,9 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
       - 表已存在 → 整条 CREATE 跳过（不执行任何副作用）；
       - 表缺失   → 执行 CREATE，并把它记入本次新建集合；
       - 种子 INSERT → 仅当目标表是本次新建时才执行（表刚建出来必定为空，插一次即正确）。
+
+    ``seed_credentials=False`` 时跳过默认管理员种子：运行期补表属于恢复动作，
+    不能把已知默认口令重新种回库（那等于给了任何能删表的人一个后门账号）。
 
     失败不再吞成 debug：收集 (表名, 错误摘要) 返回，由调用方按"是否影响可用性"告警。
 
@@ -213,6 +216,11 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
         target = _dml_target_table(stmt)
         if target is not None and target not in created:
             continue
+        if target == 'admin_users' and not seed_credentials:
+            logger.warning(
+                "跳过默认管理员种子：本次属于运行期补表，不能把已知默认口令"
+                "重新写回库。请通过 CLI 或 WebUI 重置管理员密码后再登录。")
+            continue
         sql = transform(stmt) if transform else stmt
         try:
             run(sql)
@@ -232,18 +240,57 @@ def _apply_init_sql(database, transform=None, label="建表", exec_fn=None,
     return {"created": created, "skipped": skipped, "failed": failed, "no_file": False}
 
 
-def auto_init_database(database) -> bool:
-    """自动检测并初始化数据库：缺哪张表补哪张，建完复验。
+def _warn_if_no_admin(database) -> None:
+    """初始化/补表后若 admin_users 为空，明确提示还有文件应急管理员可用。"""
+    try:
+        row = database.query_one("SELECT COUNT(*) AS n FROM admin_users")
+        count = int(list(row.values())[0]) if row else 0
+    except Exception:
+        return
+    if count:
+        return
+    logger.warning(
+        "数据库 admin_users 表为空：当前没有任何数据库管理员，WebUI 无法用库内账号登录。"
+        "如已生成文件应急管理员，请用 data/admin_emergency.yaml 中的账号登录；"
+        "也可执行 python -m framework.api.emergency_admin --reset 重新生成凭据，"
+        "或在数据库恢复后通过 CLI/WebUI 重新创建管理员。")
+
+
+def _ensure_marker(database, tables=None) -> None:
+    """标记缺失但已判定「已初始化」时补写，并带上证据说明。
+
+    ``is_initialized()`` 本身是纯查询（它也被直接建表/迁移的路径调用，
+    不该有落盘副作用），标记的补写统一在这里完成。
+    """
+    from . import integrity
+
+    if integrity.read_marker(database) is not None:
+        return
+    integrity.mark_initialized(
+        database, tables, evidence='库内已有业务数据（标记文件缺失）')
+    logger.warning(
+        "初始化标记缺失，但库内已存在业务数据：按「已初始化」处理，"
+        "不重建缺失表、不写入默认管理员口令。已补写标记 %s。",
+        integrity.marker_path(database))
+
+
+def auto_init_database(database, allow_repair: bool | None = None) -> bool:
+    """自动检测并初始化数据库。
 
     返回 True 表示执行了初始化动作，False 表示核心表本就齐全（无需动作）。
 
-    与历史实现的关键差别：
-      1. 用 _REQUIRED_TABLES 全量检测缺失，而不是只看 admin_users + plugins；
-      2. 只补缺失表（幂等，不重复执行种子 INSERT）；
-      3. 建完**再校验一遍**，仍有缺失就报 error 并列出清单——不再无条件打
-         "数据库自动初始化完成"。历史上建 0 张表也报"完成"，使首次部署的
-         建表失败（权限/方言/磁盘）完全不可观测。
+    关键规则：**首次安装才建表，运行期丢表只告警不补建。**
+
+    区分依据是落库文件之外的初始化标记（``integrity.py``）：表被 DROP 不会连带
+    删掉标记，所以「标记存在 + 核心表缺失」可以明确判定为运行期丢表。此时默认
+    只打 error 告警并置 ``schema_incomplete``，不执行任何 CREATE、不播种默认
+    管理员账号 —— 否则谁删了表，谁就能拿回一个已知默认口令的管理员。
+
+    显式 ``allow_repair=True``（或配置 ``database.repair_missing_tables: true``）
+    才补建，且补建时**跳过默认管理员种子**。
     """
+    from . import integrity
+
     try:
         missing = missing_required_tables(database)
     except Exception as e:
@@ -262,18 +309,58 @@ def auto_init_database(database) -> bool:
                 _ensure_sqlite_indexes(database)
             except Exception as e:
                 logger.debug("SQLite 索引补建异常（不影响启动）: %s", e)
+        # 存量库/升级上来的库：表齐全即视为已初始化，补写标记，供下次丢表时判定。
+        if integrity.read_marker(database) is None:
+            try:
+                from .migrations import ensure_ledger
+
+                ensure_ledger(database)
+            except Exception as e:
+                logger.debug("迁移账本预建失败（不影响启动）: %s", e)
+            _ensure_marker(database, list(_REQUIRED_TABLES))
+        _warn_if_no_admin(database)
         return False
 
-    logger.info("检测到 %d 张核心表缺失（%s），开始自动初始化...",
-                len(missing), ", ".join(missing))
+    already_initialized = integrity.is_initialized(database)
+    if already_initialized:
+        # 证据判成已初始化但标记不在（换机恢复 / 标记未随库走）：补写，
+        # 让后续 may_create 的「是否曾存在」判定稳定下来。
+        _ensure_marker(database)
+    if allow_repair is None:
+        cfg = getattr(database, 'config', None) or {}
+        allow_repair = bool(cfg.get('repair_missing_tables', False))
+
+    if already_initialized and not allow_repair:
+        # 运行期丢表：告警，不补。
+        detail = ", ".join(missing)
+        logger.error(
+            "检测到数据库核心表缺失（%d 张：%s），但该库此前已完成初始化。"
+            "按策略不自动补建：重建会产生空表，默认管理员等种子数据还可能被"
+            "重新写入。请从 data/backups/ 恢复最近备份，或确认后显式开启 "
+            "database.repair_missing_tables（补建不会恢复默认管理员口令），"
+            "再重启。",
+            len(missing), detail)
+        try:
+            database.schema_incomplete = list(missing)
+        except Exception:
+            pass
+        return False
+
+    if already_initialized:
+        logger.warning(
+            "运行期补表已显式授权：将补建 %d 张缺失表 %s，并跳过默认管理员种子。",
+            len(missing), ", ".join(missing))
+    else:
+        logger.info("首次初始化：检测到 %d 张核心表缺失（%s），开始建表...",
+                    len(missing), ", ".join(missing))
 
     try:
         if database.db_type == 'mysql':
-            stats = _init_mysql(database)
+            stats = _init_mysql(database, seed_credentials=not already_initialized)
         elif database.db_type == 'debug':
-            stats = _init_debug(database)
+            stats = _init_debug(database, seed_credentials=not already_initialized)
         else:
-            stats = _init_sqlite(database)
+            stats = _init_sqlite(database, seed_credentials=not already_initialized)
     except Exception as e:
         logger.error("数据库自动初始化异常中断: %s —— 下方仍会复验缺失表", e)
         stats = {"created": [], "skipped": 0, "failed": [("*", str(e)[:160])]}
@@ -302,13 +389,30 @@ def auto_init_database(database) -> bool:
             "相关功能写库会失败，请检查数据库用户建表权限、磁盘空间与 DDL 方言兼容性。",
             len(still_missing), ", ".join(still_missing),
             len(stats.get("created", [])), len(stats.get("failed", [])))
+        try:
+            database.schema_incomplete = list(still_missing)
+        except Exception:
+            pass
         return True
 
+    from . import integrity
+
+    # 标记「已初始化」之前先把迁移账本落下来。顺序反了会出现：标记已 ready，
+    # 但账本还不存在，下一次启动的防重放保护就会把正常迁移当成「账本被删」拦住。
+    try:
+        from .migrations import ensure_ledger
+
+        ensure_ledger(database)
+    except Exception as e:
+        logger.debug("迁移账本预建失败（不影响建表结果）: %s", e)
+
+    integrity.mark_initialized(database, list(_REQUIRED_TABLES))
     logger.info(
         "数据库自动初始化完成：本次新建 %d 张表（%s），核心表 %d 张已全部就绪",
         len(stats.get("created", [])),
         ", ".join(stats.get("created", [])) or "无",
         len(_REQUIRED_TABLES))
+    _warn_if_no_admin(database)
     return True
 
 
@@ -374,7 +478,7 @@ def _adapt_ddl_for_mysql(ddl: str, ver: dict) -> str:
     return ddl
 
 
-def _init_mysql(database) -> dict:
+def _init_mysql(database, seed_credentials=True) -> dict:
     """MySQL 模式自动建表：只补缺失表，返回 {created, skipped, failed}。
 
     连接分两步：先不指定库连上去 CREATE DATABASE，再 USE 目标库做表级初始化。
@@ -451,6 +555,7 @@ def _init_mysql(database) -> dict:
                 label="MySQL 建表",
                 exec_fn=cursor.execute,
                 sql_filename=init_file,
+                seed_credentials=seed_credentials,
             )
         finally:
             cursor.close()
@@ -511,12 +616,13 @@ def _ensure_sqlite_indexes(database, sql_filename="init.sql") -> dict:
     return {"created": created, "failed": failed}
 
 
-def _init_sqlite(database) -> dict:
+def _init_sqlite(database, seed_credentials=True) -> dict:
     """SQLite 模式自动建表（复用 db.py 的 SQL 翻译）：只补缺失表。"""
     from framework.database.db import _translate_sql_for_sqlite
 
     stats = _apply_init_sql(
-        database, transform=_translate_sql_for_sqlite, label="SQLite 建表")
+        database, transform=_translate_sql_for_sqlite, label="SQLite 建表",
+        seed_credentials=seed_credentials)
     # 建表后补建普通索引（见 _ensure_sqlite_indexes 的说明）
     try:
         idx = _ensure_sqlite_indexes(database)
@@ -527,7 +633,7 @@ def _init_sqlite(database) -> dict:
     return stats
 
 
-def _init_debug(database) -> dict:
+def _init_debug(database, seed_credentials=True) -> dict:
     """调试模式（SqlSimEngine）建表：执行原生 init.sql 的 DDL（MySQL 方言）。
 
     SqlSimEngine 本就是 MySQL 方言模拟器，无需 SQLite 翻译，喂原生 CREATE 即可，
@@ -536,7 +642,8 @@ def _init_debug(database) -> dict:
 
     种子数据同样只在「对应表本次新建」时插入，避免每次启动重复写管理员/系统配置。
     """
-    return _apply_init_sql(database, label="调试模式建表")
+    return _apply_init_sql(database, label="调试模式建表",
+                           seed_credentials=seed_credentials)
 
 
 # ── 工具函数 ──────────────────────────────────────────────────

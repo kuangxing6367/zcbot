@@ -9,6 +9,9 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(_ROOT, 'core_plugins', 'llm_load', 'src')
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
+# media.py 现在委托 framework 层的统一闸门，需要仓库根目录可导入
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from llm_core.agent import ToolLoopAgent
 from llm_core.providers import Provider, ProviderReply, ToolCall

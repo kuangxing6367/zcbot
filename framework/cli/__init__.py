@@ -17,6 +17,7 @@ plugin / adapter / driver / self / clean / config``），作用于 ZCBOT 自身�
     zb self list
     zb clean
     zb config list
+    zb debug blackbox
 
 全局选项：
     -w, --working-dir PATH   工作目录（默认当前目录）
@@ -32,7 +33,7 @@ from .utils import PROG, read_version
 
 # 这些一级命令会被 main.py 的入口分发接管（python startup.py <cmd> 等价 zb <cmd>）
 CLI_GROUPS = ("create", "init", "run", "generate", "plugin",
-              "adapter", "driver", "self", "clean", "config")
+              "adapter", "driver", "self", "clean", "config", "debug")
 
 
 def build_parser():
@@ -151,6 +152,25 @@ def build_parser():
     cfg_set = cfgs.add_parser("set", help="修改某一项")
     cfg_set.add_argument("key", help="配置键")
     cfg_set.add_argument("value", nargs="+", help="配置值")
+
+    # ---- debug ----
+    p_debug = sub.add_parser("debug", help="查看运行中实例的内部状态")
+    ds = p_debug.add_subparsers(dest="action")
+    p_bb = ds.add_parser("blackbox", help="从另一个进程查看黑匣子")
+    p_bb.add_argument("--last", type=int, default=None, metavar="N",
+                      help="输出最近 N 帧")
+    p_bb.add_argument("--trace", default=None, metavar="EID",
+                      help="按 event_id 查看单条链路")
+    p_bb.add_argument("--stuck", action="store_true",
+                      help="只列未走完的事件")
+    p_bb.add_argument("--follow", action="store_true",
+                      help="每秒增量拉取新帧，Ctrl-C 退出")
+    p_bb.add_argument("--json", action="store_true",
+                      help="输出 JSON，供脚本消费")
+    p_bb.add_argument("--clear", action="store_true",
+                      help="清空内存黑匣子（需服务端允许）")
+    p_bb.add_argument("--yes", action="store_true",
+                      help="确认清空")
 
     return parser
 

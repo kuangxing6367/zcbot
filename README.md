@@ -51,7 +51,7 @@ ZCBOT 是一个**不绑定任何聊天协议**的机器人框架。内核只负�
 ## 启动入口与目录约定
 
 - **唯一入口 `startup.py`**：`python startup.py [config.yaml]`、`python startup.py code`、
-  `python startup.py attach`、`python startup.py --iipc` 等全部从这里进入；
+  `python startup.py attach`、`python startup.py config` 等全部从这里进入；
   `main.py` 只保留兼容转派，存量 systemd / NSSM / 旧脚本不用改。启动期细节统一在
   `framework/bootstrap/`，状态路径统一在 `framework/paths.py`。
 - **状态统一在 `data/`**：`config.yaml`、`core_plugins.yaml`、`plugins/`、`plugins_dat/`、

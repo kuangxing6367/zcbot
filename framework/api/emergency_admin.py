@@ -38,11 +38,14 @@ __all__ = [
     'CONFIG_NAME',
     'DEFAULT_TTL',
     'TOKEN_PREFIX',
+    'add_admin',
     'config_path',
     'ensure_config',
     'is_emergency_user',
     'issue_token',
+    'list_admins',
     'load_config',
+    'remove_admin',
     'reset_password',
     'verify_password',
     'verify_token',
@@ -81,7 +84,7 @@ def _write(path, cfg):
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
     tmp = path + '.part'
-    with open(tmp, 'w', encoding='utf-8') as f:
+    with open(tmp, 'w', encoding='utf-8', newline='') as f:
         _yaml().safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
     os.replace(tmp, path)
     try:
@@ -90,17 +93,31 @@ def _write(path, cfg):
         logger.warning('应急管理员配置权限收紧失败: %s', e)
 
 
-def _fresh_config():
-    """生成一份全新的应急凭据。明文只通过返回值交给调用方，不写进文件。"""
+def _hash_password(password):
     import bcrypt
 
+    return bcrypt.hashpw(str(password).encode('utf-8'),
+                         bcrypt.gensalt(12)).decode('utf-8')
+
+
+def _fresh_config():
+    """生成一份全新的应急凭据。明文只通过返回值交给调用方，不写进文件。
+
+    ``admins`` 是新版多账号名单；顶层 ``username`` / ``password_hash`` 保留为
+    旧版单账号镜像，供老部署和旧工具继续读取。校验时两处都会识别。
+    """
     username = 'emerg_' + secrets.token_hex(4)
     password = secrets.token_urlsafe(18)
+    digest = _hash_password(password)
     cfg = {
         'enabled': True,
         'username': username,
-        'password_hash': bcrypt.hashpw(
-            password.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8'),
+        'password_hash': digest,
+        'admins': [{
+            'username': username,
+            'password_hash': digest,
+            'role': 'super',
+        }],
         'token_secret': secrets.token_hex(32),
         'created_at': int(time.time()),
         'note': '数据库故障时 WebUI 应急登录凭据；密码明文不落盘，请离线保存。',
@@ -108,10 +125,131 @@ def _fresh_config():
     return cfg, password
 
 
-def _announce(cfg, password, path):
+def _enabled(value):
+    if isinstance(value, str):
+        return value.strip().lower() not in ('0', 'false', 'no', 'off')
+    return bool(value)
+
+
+def _admin_entries(cfg):
+    """归一化文件里的应急账号：admins 列表 + 旧版单账号镜像。"""
+    if not cfg or not _enabled(cfg.get('enabled', True)):
+        return []
+    entries = []
+    seen = set()
+    admins = cfg.get('admins')
+    if isinstance(admins, list):
+        for item in admins:
+            if not isinstance(item, dict) or not _enabled(item.get('enabled', True)):
+                continue
+            username = str(item.get('username') or '')
+            digest = str(item.get('password_hash') or '')
+            if not username or not digest or username in seen:
+                continue
+            seen.add(username)
+            entries.append({
+                'username': username,
+                'password_hash': digest,
+                'role': str(item.get('role') or 'super'),
+            })
+    legacy_user = str(cfg.get('username') or '')
+    legacy_hash = str(cfg.get('password_hash') or '')
+    if legacy_user and legacy_hash and legacy_user not in seen:
+        entries.append({
+            'username': legacy_user,
+            'password_hash': legacy_hash,
+            'role': str(cfg.get('role') or 'super'),
+        })
+    return entries
+
+
+def _find_admin(cfg, username):
+    name = str(username or '')
+    for entry in _admin_entries(cfg):
+        if hmac.compare_digest(entry['username'], name):
+            return entry
+    return None
+
+
+def list_admins(base=None):
+    """列出应急账号名与角色（绝不返回密码哈希）。"""
+    return [
+        {'username': e['username'], 'role': e['role']}
+        for e in _admin_entries(load_config(base))
+    ]
+
+
+def add_admin(username, password, role='super', base=None):
+    """新增/更新一个文件管理员；返回 (配置, 是否新建)。不改动其他账号。"""
+    name = str(username or '').strip()
+    if not name or not password:
+        raise ValueError('用户名和密码不能为空')
+    cfg = _load(config_path(base)) or {}
+    if not cfg:
+        cfg, _ = _fresh_config()
+    cfg['enabled'] = True
+    cfg.setdefault('token_secret', secrets.token_hex(32))
+    cfg.setdefault('created_at', int(time.time()))
+    cfg.setdefault('note', '数据库故障时 WebUI 应急登录凭据；密码明文不落盘，请离线保存。')
+    digest = _hash_password(password)
+    admins = cfg.get('admins')
+    if not isinstance(admins, list):
+        admins = []
+        legacy_user = str(cfg.get('username') or '')
+        legacy_hash = str(cfg.get('password_hash') or '')
+        if legacy_user and legacy_hash:
+            admins.append({
+                'username': legacy_user,
+                'password_hash': legacy_hash,
+                'role': str(cfg.get('role') or 'super'),
+            })
+    created = True
+    for item in admins:
+        if isinstance(item, dict) and item.get('username') == name:
+            item.update({
+                'password_hash': digest,
+                'role': str(role or 'super'),
+                'enabled': True,
+            })
+            created = False
+            break
+    else:
+        admins.append({
+            'username': name,
+            'password_hash': digest,
+            'role': str(role or 'super'),
+        })
+    cfg['admins'] = admins
+    # 旧版单账号镜像保持指向首个账号，不覆盖其他人的凭据。
+    first = admins[0]
+    cfg['username'] = first['username']
+    cfg['password_hash'] = first['password_hash']
+    _write(config_path(base), cfg)
+    return cfg, created
+
+
+def remove_admin(username, base=None):
+    """移除一个文件管理员；至少保留一个账号，最后一个不允许删除。"""
+    cfg = _load(config_path(base)) or {}
+    entries = _admin_entries(cfg)
+    name = str(username or '')
+    if len(entries) <= 1:
+        raise ValueError('至少保留一个应急管理员')
+    remaining = [e for e in entries if e['username'] != name]
+    if len(remaining) == len(entries):
+        raise ValueError('未找到该应急管理员')
+    cfg['admins'] = remaining
+    first = remaining[0]
+    cfg['username'] = first['username']
+    cfg['password_hash'] = first['password_hash']
+    _write(config_path(base), cfg)
+    return cfg
+
+
+def _announce(cfg, password, path, username=None):
     lines = [
         '[WebUI 应急管理员] 已生成应急登录凭据（明文仅显示这一次，请立即离线保存）：',
-        '  用户名: %s' % cfg['username'],
+        '  用户名: %s' % (username or cfg.get('username')),
         '  密码:   %s' % password,
         '  配置:   %s（权限 0600，文件内只有 bcrypt 哈希）' % path,
         '  忘记密码可执行: python -m framework.api.emergency_admin --reset',
@@ -125,7 +263,7 @@ def ensure_config(base=None, announce=True):
     """确保配置存在。首次生成时打印一次明文密码；返回 (配置, 明文或 None)。"""
     path = config_path(base)
     cfg = _load(path)
-    if cfg and cfg.get('password_hash') and cfg.get('token_secret'):
+    if cfg and cfg.get('token_secret') and _admin_entries(cfg):
         return cfg, None
     cfg, password = _fresh_config()
     _write(path, cfg)
@@ -134,46 +272,67 @@ def ensure_config(base=None, announce=True):
     return cfg, password
 
 
-def reset_password(base=None, announce=True):
-    """重置应急密码（忘记密码时用），返回 (配置, 新明文)；旧 token 同时失效。"""
+def reset_password(base=None, announce=True, username=None, role=None):
+    """重置应急密码（忘记密码时用），返回 (配置, 新明文)；旧 token 同时失效。
+
+    不传 ``username`` 时重置首个账号；传入时只重置该账号并保留其他账号。
+    """
+    import bcrypt
+
     path = config_path(base)
     cfg = _load(path) or {}
-    fresh, password = _fresh_config()
+    entries = _admin_entries(cfg)
+    name = str(username or (entries[0]['username'] if entries else ''))
+    password = secrets.token_urlsafe(18)
+    digest = bcrypt.hashpw(password.encode('utf-8'),
+                           bcrypt.gensalt(12)).decode('utf-8')
+    admins = cfg.get('admins')
+    if not isinstance(admins, list):
+        admins = entries[:]
+    hit = False
+    for item in admins:
+        if isinstance(item, dict) and item.get('username') == name:
+            item['password_hash'] = digest
+            if role:
+                item['role'] = str(role)
+            hit = True
+            break
+    if not hit:
+        admins.append({
+            'username': name,
+            'password_hash': digest,
+            'role': str(role or 'super'),
+        })
+    cfg['admins'] = admins
+    first = admins[0]
     cfg.update({
         'enabled': True,
-        'username': fresh['username'],
-        'password_hash': fresh['password_hash'],
-        'token_secret': fresh['token_secret'],
-        'created_at': fresh['created_at'],
-        'note': fresh['note'],
+        'username': first['username'],
+        'password_hash': first['password_hash'],
+        'token_secret': secrets.token_hex(32),
     })
     _write(path, cfg)
     if announce:
-        _announce(cfg, password, path)
+        _announce(cfg, password, path, username=name)
     return cfg, password
 
 
 def is_emergency_user(username, base=None):
     """用户名是否命中应急账号（DB 认证失败时用它决定是否尝试应急凭据）。"""
-    cfg = load_config(base)
-    if not cfg or not cfg.get('enabled', True):
-        return False
-    expected = str(cfg.get('username') or '')
-    return bool(expected) and hmac.compare_digest(expected, str(username or ''))
+    return _find_admin(load_config(base), username) is not None
 
 
 def verify_password(username, password, base=None):
     """校验应急账号密码；bcrypt 比对，配置里绝不存明文。"""
     import bcrypt
 
-    cfg = load_config(base)
-    if not cfg or not cfg.get('enabled', True):
-        return False
-    if not is_emergency_user(username, base):
+    entry = _find_admin(load_config(base), username)
+    if not entry:
         return False
     try:
-        stored = str(cfg.get('password_hash') or '').encode('utf-8')
-        return bcrypt.checkpw(str(password or '').encode('utf-8'), stored)
+        return bcrypt.checkpw(
+            str(password or '').encode('utf-8'),
+            entry['password_hash'].encode('utf-8'))
     except (ValueError, TypeError) as e:
         logger.warning('应急密码校验异常: %s', e)
         return False
@@ -187,17 +346,18 @@ def _b64d(text):
     return base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
 
 
-def issue_token(username, role='super', ttl=DEFAULT_TTL, base=None):
+def issue_token(username, role=None, ttl=DEFAULT_TTL, base=None):
     """签发自包含 token，格式 ``eme1.<payload>.<hmac>``，全程不查库。"""
     cfg = load_config(base)
     if not cfg or not cfg.get('enabled', True):
         return ''
     secret = str(cfg.get('token_secret') or '').encode('utf-8')
-    if not secret or not is_emergency_user(username, base):
+    entry = _find_admin(cfg, username)
+    if not secret or not entry:
         return ''
     payload = {
-        'u': str(username),
-        'r': role or 'super',
+        'u': entry['username'],
+        'r': str(role or entry.get('role') or 'super'),
         'exp': int(time.time()) + int(ttl or DEFAULT_TTL),
         'n': secrets.token_hex(8),
     }
@@ -227,12 +387,14 @@ def verify_token(token, base=None):
         if int(payload['exp']) < int(time.time()):
             return None
         username = str(payload.get('u') or '')
-        if not is_emergency_user(username, base):
+        entry = _find_admin(cfg, username)
+        if not entry:
             return None
         return {
             'id': 'emergency',
-            'username': username,
-            'role': payload.get('r') or 'super',
+            'username': entry['username'],
+            # 角色以当前文件为准：即便旧 token 的 payload 被改过也无法提权。
+            'role': entry.get('role') or 'super',
             'emergency': True,
         }
     except (ValueError, TypeError, KeyError, UnicodeError, json.JSONDecodeError) as e:
@@ -252,7 +414,7 @@ def write_audit(action, detail=None, base=None, ip='', result='success'):
     }
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'a', encoding='utf-8') as f:
+        with open(path, 'a', encoding='utf-8', newline='') as f:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
     except OSError as e:
         logger.error('应急审计日志写入失败: %s', e)
@@ -264,16 +426,34 @@ def _main():
     parser = argparse.ArgumentParser(description='WebUI 应急管理员凭据管理')
     parser.add_argument('--reset', action='store_true', help='重置应急密码与 token 密钥')
     parser.add_argument('--base', default=None, help='配置文件所在目录（默认 data/）')
+    parser.add_argument('--username', default=None,
+                        help='指定要重置/新增的应急账号名')
+    parser.add_argument('--password', default=None,
+                        help='配合 --username 设置指定账号密码（不传则随机生成）')
+    parser.add_argument('--list', action='store_true', help='列出应急账号名与角色')
+    parser.add_argument('--remove', default=None, help='删除指定应急账号')
     args = parser.parse_args()
+    if args.list:
+        for item in list_admins(args.base):
+            print('%s\t%s' % (item['username'], item['role']))
+        return
+    if args.remove:
+        remove_admin(args.remove, args.base)
+        print('已删除应急管理员: %s' % args.remove)
+        return
+    if args.username and args.password:
+        add_admin(args.username, args.password, base=args.base)
+        print('应急管理员已更新: %s' % args.username)
+        return
     if args.reset:
-        reset_password(args.base)
+        reset_password(args.base, username=args.username)
     else:
         cfg, password = ensure_config(args.base)
         if password:
             _announce(cfg, password, config_path(args.base))
         else:
-            print('应急管理员已配置，用户名: %s（配置: %s）'
-                  % (cfg.get('username'), config_path(args.base)))
+            print('应急管理员已配置，共 %d 个账号（配置: %s）'
+                  % (len(list_admins(args.base)), config_path(args.base)))
 
 
 if __name__ == '__main__':

@@ -129,8 +129,18 @@ def write_crash_log(cfg, root, exc=None, extra=None):
         # 主动退出（如数据库损坏）没有异常栈，不必留一行 NoneType: None 让人困惑
         if trace.strip() and trace.strip() != 'NoneType: None':
             lines.append("traceback:\n" + trace)
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, 'w', encoding='utf-8', newline='') as f:
             f.write('\n'.join(lines) + '\n')
+        # 页脚追加失败不能影响上面的崩溃日志：求助时第一眼就能看到机器环境，
+        # 但目录不可写时也必须保住 traceback 本身。
+        try:
+            from framework import environment
+
+            with open(path, 'a', encoding='utf-8', newline='') as f:
+                f.write(environment.format_block(
+                    environment.snapshot(), title='[系统环境]') + '\n')
+        except Exception as e:
+            logger.debug(f'崩溃日志环境页脚写入失败（忽略）: {e}')
         return path
     except Exception as e:
         logger.error(f"写入崩溃日志失败: {e}")

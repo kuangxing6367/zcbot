@@ -568,7 +568,7 @@ class OneBotWebSocketServer:
                 if post_type:
                     # WS 事件与 http_inject 一样必须先净化再进事件总线。
                     # 修复前这里直接把外部帧整包派发：实测可注入
-                    # role=super / permissions=['*'] / admin / bot_name=spoofed，
+                    # role=super / permissions=['*'] / admin / bot_name=spoofed,
                     # 还能用 _msg_text 伪造命令文本（Event 会优先采用该字段）。
                     # 用适配器专用净化：剥顶层控制字段，但保留合法的 sender.role。
                     data = sanitize_adapter_event(data, bot_name)

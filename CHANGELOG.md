@@ -26,6 +26,140 @@
 
 ---
 
+## [1.28.6] - 2026-11-21
+
+> 主题：下线第二条内核链路；插件源码检查从「加载即拦截」改为「启动期预检 + 告警」。
+
+### 破坏性变更
+
+1. **`framework/iipc` 整体移除**（113 个文件：Go 内核、Rust 协议端、Python SDK、链路自带插件与配套测试）。`python startup.py --iipc` 不再可用，执行时打印「已移除」并以退出码 2 结束。插件进程隔离改由 `dual_process` 段提供；`framework/ipc` 保留（双进程的 `remote_db` / `host_entry` 在用）。
+2. 配置模板、面板可写段清单、热应用重启表、打包排除项、`.gitignore` 与文档站入口同步去掉 `iipc`。
+
+### 新增
+
+1. **启动期插件预检**（`framework/loader/plugin_preflight.py`）：加载任何插件之前，先对插件目录与 `core_plugins/` 做一次 AST 扫描，命中项按 `[插件预检]` 前缀写进启动日志，随后照常启动。配置项：`plugins.source_scan.enabled`（默认 true）、`mode`（`warn` 默认 / `block`）、`scan_core_plugins`（默认 true）、`max_report`（默认 50）。
+2. 扫描覆盖同步等待：`thread` / `process` / `event` / `condition` / `lock` / `semaphore` / `queue` / `pool` / `future` / `task` 这类对象上的 `join()` / `wait()` / `acquire()` / `result()`；带超时参数时放行，容器类对象（`' '.join(...)`）不误报。
+
+### 变更
+
+- 加载期扫描的处置改为按 `mode` 执行：`warn` 只写告警并继续加载，`block` 才拒绝加载该插件；`block_on_import_side_effects` / `block_on_blocking_handler` 仅在 `block` 下生效。
+- `await` 内部的调用不再按同步阻塞上报：`await asyncio.wait_for(ev.wait(), timeout=3)` 这类写法此前被误报。
+
+### 文档与测试
+
+- `docs/进阶/插件加载机制.md` 的静态检查小节重写为「启动期预检 + 加载期处置」两步，附配置与日志样例。
+- 删除 `docs/速查/IIPC内核链路.md`；`docs/速查/插件开发.md` 一并删掉只对该链路成立的「多阶段中间件与全局变换节点」小节——主框架 `PluginContext` 没有 `middleware` / `transform` 这两个方法。
+- 新增 `tests/test_plugin_preflight.py`（7 项）；`tests/test_plugin_source_scan.py` 扩到 16 项（`warn` 模式、`mode` 默认值、同步等待识别、带超时放行、目录扫描）。
+
+---
+
+## [1.28.5] - 2026-11-20
+
+> 主题：新增本地控制通道，供外部进程读取运行中的黑匣子现场。
+
+### 新增
+
+1. **本地控制通道**（`framework/control/server.py`、`framework/control/client.py`）：框架启动后只监听 `127.0.0.1`，随机端口与每次启动重新生成的令牌写入 `<state_dir>/control.json`（POSIX 权限 0600），进程退出时删除；`POST /rpc` 提供 `ping` 与 `blackbox.*` 命令，`blackbox.clear` 默认关闭；配置项为 `framework.control.enabled` / `port` / `allow_clear`；依赖清单同步加入 `aiohttp>=3.8.0`。
+2. **CLI 调试命令**：`python -m framework.cli debug blackbox` 支持 `--last`、`--trace`、`--stuck`、`--follow`、`--json`、`--clear --yes`；令牌只从 `control.json` 读取，不进入命令行参数。
+3. **帧格式化公共模块**（`framework/blackbox_format.py`）：终端 viewer 与 CLI 共用同一套帧与链路输出函数。
+
+### 修正
+
+- 插件源码静态检查：`os._exit` / `os.abort` 此前只在模块作用域报告，`async def` 与普通函数体内不报。插件 handler 跑在核心进程内，被 handler 触发的退出会带走探针、适配器与控制通道。现在按作用域判定：模块作用域与 `async def` 内直接拒绝加载，普通函数体内的 `os._exit` / `os.abort` 同样拒绝，`main` / `cli` / `__main__` 脚本入口与 `if __name__` 守卫块豁免；`raise SystemExit` 在 `async def` 内一并拒绝。
+
+### 文档与测试
+
+- `docs/进阶/可观测性与运维.md` 增加「从另一个进程查看黑匣子」小节，说明文件位置与权限、各命令、安全边界、与 WebUI 调试页的区别；
+- 新增 `tests/test_control_channel.py`，覆盖回环监听、令牌与来源校验、文件权限与生命周期、清空开关及 CLI 端到端调用。
+
+---
+
+## [1.28.4] - 2026-11-20
+
+> 主题：配置错误不再静默降级；启动环境与数据库探针说真话；文件应急管理员支持多账号；
+> 插件加载前增加源码静态检查。
+
+### 变更
+
+1. **配置 fail-fast**：YAML 语法错误和安全段未知键默认拒绝启动（退出码 2），
+   原文只读不改并生成 `<config>.broken.<时间戳>` 副本；`python -m framework.config --check`
+   与 `python startup.py --check-config` 可只读预检。只有 `framework.config.on_error: default`
+   或 `--allow-default-config` 才显式降级，并逐项打印实际生效值。
+2. **启动环境横幅**：抢到实例锁后打印一次 `[运行环境]` 块，含真实配置路径、数据库路径、
+   Python/虚拟环境/容器/特权身份/系统/资源信息；`framework.startup_info` 与
+   `framework.security.warn_if_root` 可调。
+3. **数据库就绪探针**：`/readyz` 真实检查库文件、核心表完整性与 `SELECT 1`，
+   结果按 `observability.db_probe_ttl` 缓存，缺表日志限流。
+4. **文件应急管理员多账号**：`data/admin_emergency.yaml` 新增 `admins` 列表，
+   兼容旧单账号格式；登录顺序改为 DB → 文件管理员 → 明确失败，DB 口令错误也会兜底。
+
+### 新增
+
+1. **插件源码静态检查**（`framework/loader/source_scan.py`）：加载前用 AST 拦下模块级
+   `sys.exit` / 同步阻塞调用，以及 `async def` 直接调用的阻塞函数；嵌套同步函数不误伤。
+   配置位于 `plugins.source_scan`。
+2. **空管理员告警**：运行期补表或初始化后 `admin_users` 为空时，日志明确提示文件应急管理员入口。
+
+### 修正
+
+- 未知键检测收敛到框架核心段与安全段，并先识别插件配置段：不再把 `aiwriter` /
+  `webuiplus` / `onebot.enabled` 这类合法配置报成未知，也不会给出 `webuiplus` →
+  `webui` 这种会让插件配置失效的建议；`webuii` 这类手滑仍带建议报出。
+- 源码静态检查补两处豁免：`if __name__ == '__main__':` 块内的调用按延迟执行处理，
+  `subprocess.run/call/check_output` 显式带 `timeout=` 时视为有上限而放行。否则每个
+  带自测入口或带超时子进程的插件都会被拒绝加载。
+- 崩溃日志页脚标题统一为 `[系统环境]`，标签列按东亚字符显示宽度对齐（原来中文标签
+  会差两个字符位）。
+- 初始化判定增加库内证据：标记文件缺失时按「核心表存在过半」或「种子表有行」判定为
+  已初始化，避免库恢复到新机器后把老库当首次安装、把默认口令 admin123 种回去；
+  证据查不出来时保守判为已初始化。`is_initialized()` 保持纯查询，标记补写统一由
+  启动流程完成，不给直接建表/迁移的路径制造副作用。
+- `clear_marker()` 落 `.initstate.reset` 显式重置标记，优先级高于库内证据，人工重置后
+  仍能按首次安装重来。
+- 配置语法错误时不再执行状态目录迁移：先做纯语法预检，避免用户写错一个缩进就被顺带
+  搬动 `data/` 目录。
+
+---
+
+## [1.28.3] - 2026-11-20
+
+> 主题：图片内容闸门从单个插件下沉到框架通用层，堵住伪图片与内网 URL 两条通道；
+> 同时把接入端清单与企业类缺口写成可核对的矩阵。版本号按约定只打最小补丁号。
+
+### 新增
+
+1. **框架级媒体闸门**（`framework/messaging/media_guard.py`）——统一做魔数/MIME 判定、
+   活动内容拒绝、尺寸/帧数/像素预算、PNG IEND 尾随数据检查，以及 URL 的回环/私网/
+   元数据域名、userinfo、DNS 解析结果与逐跳重定向复查；每类拒绝都有独立 reason 常量。
+2. **接入端支持矩阵**（`docs/速查/适配器支持矩阵.md`）——按注册表与契约事实列出 8 个
+   已注册适配器，并给出企业微信、钉钉、飞书的最小接入面与规范段够不够的结论；
+   三家均为「规范能表达、适配器缺失」。
+
+### 修复
+
+- 运行期核心表被删改为**只告警、不补建**：新增数据库文件之外的初始化标记
+  （`framework/database/integrity.py`），区分首次安装与丢表；丢表时 error
+  点名缺失表、`/readyz` 不就绪、WebUI 返回 `db_schema_incomplete`。显式
+  `database.repair_missing_tables: true` 才补建，且补建**跳过默认管理员种子**，
+  避免已知默认口令被重新写回。账本表 `schema_migrations` 被删时同样拦住，
+  不把历史迁移当成首次接管重放（含 destructive）。
+- `media_io.download()` 在文件转正前过闸门，返回结构新增 `kind` / `mime` /
+  `rejected_reason`，策略性拒绝返回 `status='rejected'` 且不留下 `.part` 半成品；
+  voice/audio/video/file 等非图片段不按魔数误杀。
+- `ctx.download_media()` / `adownload_media()` 透传段类型，`file_id` 换取真实地址后的
+  第二次落盘也保留图片语义，原有位置参数保持兼容。
+- `image_renderer._guard_image_bytes()` 与 `llm_core` 的私有魔数/URL 判定收敛到统一模块；
+  `backend=rust` 资源缺失仍明确报错，不静默回退。
+
+### 文档与测试
+
+- 新增 `tests/test_media_guard.py`，覆盖伪 PNG、SVG/HTML/PostScript/MVG、像素炸弹、
+  PNG 尾随数据、内网/元数据 URL、DNS rebinding、重定向到私网与正常图片放行；
+  扩展 `tests/test_media_io.py`、`tests/test_ctx_media.py` 断言新字段与无半成品残留。
+- 更新 `llm_core.zip` 内的 `media.py`，与源码载荷保持一致。
+
+---
+
 ## [1.28.2] - 2026-11-20
 
 > 主题：SQLite 损坏 / `admin_users` 不可用时，WebUI 登录与鉴权完全失效，

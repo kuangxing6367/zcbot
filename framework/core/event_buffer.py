@@ -282,7 +282,7 @@ class EventBuffer:
         # 于是 pip 安装态 / systemd(WorkingDirectory) / 容器下日志落到
         # <cwd>/data/event_buffer.l2.log，而数据库与配置在 <home>/data，
         # 同一份状态被劈成两处（也正是内核迁移子系统报「新旧两处并存」的成因之一）。
-        # 与本仓库其余相对路径（log.file、iipc log、db path）保持同一口径。
+        # 与本仓库其余相对路径（log.file、db path）保持同一口径。
         home = None
         try:
             from framework.config import get_home

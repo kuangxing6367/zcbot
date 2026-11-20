@@ -94,16 +94,23 @@ class PluginMessagingMixin:
 
     def download_media(self, segment, dest_dir: str = None, filename: str = None,
                        max_bytes: int = None, timeout: float = 30,
-                       bot: str = None) -> dict:
+                       bot: str = None, expected_type: str = None,
+                       resolver=None) -> dict:
         """
-        把消息里的媒体落到本地，返回 `{'status','path','size','ref','msg'}`。
+        把消息里的媒体落到本地，返回 `{'status','path','size','ref','msg',
+        'kind','mime','rejected_reason'}`。
 
         `segment` 可以是规范段（`ev.first_image` 之类）或裸引用字符串。
         支持 http(s) / base64 / file:// / 本地路径；`file_id` 会交给接入端
         换取真实地址（拿不到就是拿不到，不猜）。
 
-        落盘规则：先按引用种类预检长度，再流式写入 `.part`，写完转正；
-        任何一步失败都删掉半成品。超限返回 `status='failed'`，不会截断保存。
+        落盘规则：先按引用种类预检长度，再流式写入 `.part`；图片段在转正前
+        过统一内容闸门，URL 段逐跳复查目标。任何一步失败都删掉半成品。
+        超限返回 `status='failed'`，内容/URL 被拒返回 `status='rejected'`。
+
+        `expected_type` 可显式声明段类型，不传时按段自身的 type 推断；
+        `resolver` 是 URL 闸门的可注入 DNS 解析器。两者都放在末尾，原有
+        位置参数调用不变。
         """
         from framework.messaging.media_io import (
             DEFAULT_MAX_BYTES,
@@ -117,10 +124,18 @@ class PluginMessagingMixin:
             limit = DEFAULT_MAX_BYTES if max_bytes is None else int(max_bytes)
         except (TypeError, ValueError):
             return {'status': 'failed', 'path': '', 'size': 0, 'ref': '',
-                    'msg': f'max_bytes 不是整数: {max_bytes!r}'}
+                    'msg': f'max_bytes 不是整数: {max_bytes!r}',
+                    'kind': '', 'mime': '', 'rejected_reason': ''}
 
+        # file_id 换地址后是按裸字符串再次落盘，若不在这里固定段类型，
+        # 第二次调用会丢失 image 语义、绕过内容闸门。
+        derived_type = expected_type
+        if derived_type is None and isinstance(segment, dict):
+            from framework.messaging.segments import canonical_type
+            derived_type = canonical_type(segment.get('type'))
         opts = {'dest_dir': dest_dir, 'filename': filename,
-                'max_bytes': limit, 'timeout': timeout}
+                'max_bytes': limit, 'timeout': timeout,
+                'expected_type': derived_type, 'resolver': resolver}
         res = _download(segment, **opts)
         if res.get('status') != 'needs_adapter':
             return res
@@ -150,17 +165,20 @@ class PluginMessagingMixin:
 
     async def adownload_media(self, segment, dest_dir: str = None,
                               filename: str = None, max_bytes: int = None,
-                              timeout: float = 30, bot: str = None) -> dict:
+                              timeout: float = 30, bot: str = None,
+                              expected_type: str = None,
+                              resolver=None) -> dict:
         """
         `download_media` 的异步版本。
 
         下载是网络 IO，同步版本会占住事件循环——定时任务和别的插件都得等
-        它下完。async handler 里请用这个。
+        它下完。async handler 里请用这个。新增参数与同步版本保持一致。
         """
         import asyncio
         return await asyncio.to_thread(
             self.download_media, segment, dest_dir=dest_dir, filename=filename,
-            max_bytes=max_bytes, timeout=timeout, bot=bot)
+            max_bytes=max_bytes, timeout=timeout, bot=bot,
+            expected_type=expected_type, resolver=resolver)
 
     @staticmethod
     def _media_ref_from_action(raw):

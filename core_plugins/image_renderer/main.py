@@ -1299,132 +1299,23 @@ def _get_native_or_pil_canvas(width, height, bg_color=None, font_path=None):
 
 
 # ---------------------------------------------------------------- 解码前的像素预算
-#
-# 为什么必须在 Python 层做，而不能只靠后端：
-#   1. 原生后端（image crate）默认有 512MB 单次分配上限，实测 11000²(462MB) 通过、
-#      12000²(549MB) 报 "Memory limit exceeded"。但代码在原生失败后会**回退 PIL**，
-#      而 PIL 的阈值完全不是一回事 —— 默认 89478485 像素只 warn，要到 1.79 亿才 raise，
-#      实测 12000²(1.44 亿像素) 只打一条 DecompressionBombWarning 就照常分配。
-#      也就是说原生那道闸门被回退逻辑绕过了。
-#   2. PIL 的 Image.MAX_IMAGE_PIXELS 是**模块级全局变量**，同进程任何插件都能改掉
-#      （甚至设为 None 直接关死）。在多插件共进程的宿主里不能当作安全边界。
-# 所以在解码之前、与后端无关地做一次尺寸预算检查，超限直接拒绝。
-# 第 5 轮收口：原阈值 1.34 亿像素（512MB 位图）高于 Pillow 自己的
-# DecompressionBombWarning 阈值（89478485 像素），实测 10000²=1 亿像素的
-# 真实解压炸弹被旧 guard 放行、只打一条警告。Pillow 官方明确要求把
-# DecompressionBombWarning 当错误处理，因此预算下调到 4000 万像素。
-_MAX_IMAGE_FILE_BYTES = 20 * 1024 * 1024   # 压缩文件字节上限（解码前）
-_MAX_PIXELS = 40_000_000                   # RGBA 约 160 MB 位图
-_MAX_FRAMES = 200                          # 动画帧数上限（Pillow D-3）
-_ALLOWED_IMAGE_FORMATS = frozenset({'PNG', 'JPEG', 'GIF', 'WEBP', 'BMP'})
-_IMAGE_MAGIC = (b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff',
-                b'GIF87a', b'GIF89a', b'BM')
-# Pillow E-2：EPS 会经 subprocess 调用系统 Ghostscript；SVG/MVG/XXE 属于
-# 活动内容，必须在入口按字节拒绝，不能交给任何后端猜格式。
-_FORBIDDEN_HEAD_MARKERS = (
-    b'<svg', b'<!doctype', b'<!entity', b'<script',
-    b'push graphic-context', b'%!ps', b'xmlns=',
-)
-# 第 6 轮 polyglot 深校验：第 5 轮只扫前 4096 字节，实测仍有两张真实
-# PoC 被放行（EXIF 里的 onerror=、GIF/JS 无 trailer）。依据 Pillow Security
-# Handbook T-1/T-2（元数据传播与隐藏数据通道）、CWE-434 polyglot、
-# 以及「解码后重新编码」之外的轻量替代：整包活动标记 + 格式结束标记校验。
-# 刻意不含 `<%`（实测 8 张正常 fuzz 样本的二进制里会随机出现，会误伤）。
-_FORBIDDEN_CONTENT_MARKERS = (
-    b'<script', b'<svg', b'<?php', b'<!entity', b'onerror=', b'onload=',
-    b'javascript:', b'eval(', b'<html', b'<body',
-    b'push graphic-context', b'%!ps',
-)
+# 统一闸门已下沉到 framework.messaging.media_guard。
+# 这里只保留原有的函数名与 ValueError 语义：图片渲染器的所有解码入口仍然先过
+# 这道闸，但判断规则只有一份。
 
 
 def _guard_image_bytes(blob):
     """解码前 fail-closed 校验：长度 / magic / 格式 / 尺寸 / 帧数 / 尾随数据。
 
-    只读文件头（Pillow 的 open 是惰性的），不做像素解码。与旧实现的关键差别：
-    · 旧版 `except Exception: return` 把「读不出尺寸」一律当放行，实测 111 张
-      恶意图片（含 900 亿像素声明、EPS/PostScript、SVG 脚本、MVG、空文件）
-      全部 guard=pass；现在任何失败都拒绝。
-    · 只放行白名单格式；EPS 会触发 Ghostscript subprocess，SVG/MVG/XXE 是活动内容。
-    · DecompressionBombWarning 当错误处理（Pillow Security Handbook D-1）。
-    · 拒绝 PNG IEND 之后的尾随数据（CVE-2023-28303 aCropalypse / CWE-359）。
+    具体规则、拒绝原因常量与 Pillow 的 DecompressionBombWarning 处理都在
+    统一模块里；这里把拒绝转成 ValueError，保持渲染器原有对外行为不变。
     """
-    # 【踩坑保佑】image_renderer 像素预算
-    # 坑：MAX_IMAGE_PIXELS不可作安全边界  →  _guard_image_bytes
-    #                    _ooOoo_
-    #                   o8888888o
-    #                   88" . "88
-    #                   (| -_- |)
-    #                    O\ = /O
-    #                ____/`---'\____
-    #              .   ' \\| |// `.
-    #               / \\||| : |||// \
-    #             / _||||| -:- |||||- \
-    #               | | \\\ - /// | |
-    #             | \_| ''\---/'' | |
-    #              \ .-\__ `-` ___/-. /
-    #           ___`. .' /--.--\ `. . __
-    #        ."" '< `.___\_<|>_/___.' >'"".
-    #       | | : `- \`.;`\ _ /`;.`/ - ` : | |
-    #         \ \ `-. \_ __\ /__ _/ .-` / /
-    # ======`-.____`-.___\_____/___.-`____.-'======
-    #                    `=---='
-    #
-    # .............................................
-    #          佛祖保佑             永无BUG
+    from framework.messaging.media_guard import inspect_image_bytes
 
     data = blob if isinstance(blob, bytes) else bytes(blob)
-    if not data:
-        raise ValueError('图片为空，已拒绝解码')
-    if len(data) > _MAX_IMAGE_FILE_BYTES:
-        raise ValueError(f'图片文件超过 {_MAX_IMAGE_FILE_BYTES // 1024 // 1024}MB 上限，已拒绝解码')
-    is_webp = data[:4] == b'RIFF' and data[8:12] == b'WEBP'
-    if not (data.startswith(_IMAGE_MAGIC) or is_webp):
-        raise ValueError('不是允许的图片格式（仅 PNG/JPEG/GIF/WEBP/BMP），已拒绝解码')
-    head = data[:4096].lower()
-    for marker in _FORBIDDEN_HEAD_MARKERS:
-        if marker in head:
-            raise ValueError('图片内含脚本/外部实体/PostScript/MVG 内容，已拒绝解码')
-    try:
-        import warnings
-        from io import BytesIO as _BytesIO
-
-        from PIL import Image as _PILImage
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', _PILImage.DecompressionBombWarning)
-            with _PILImage.open(_BytesIO(data)) as probe:
-                fmt = (probe.format or '').upper()
-                w, h = probe.size
-                frames = int(getattr(probe, 'n_frames', 1) or 1)
-    except Exception as e:
-        raise ValueError(
-            f'图片头解析失败或触发解压炸弹警告，已拒绝解码: {type(e).__name__}') from e
-    if fmt not in _ALLOWED_IMAGE_FORMATS:
-        raise ValueError(f'不允许的图片格式 {fmt!r}，已拒绝解码')
-    if w <= 0 or h <= 0:
-        raise ValueError('图片尺寸非法，已拒绝解码')
-    if w * h > _MAX_PIXELS:
-        raise ValueError(
-            f'图片尺寸过大已拒绝解码：{w}×{h} = {w * h / 1e6:.1f} 百万像素，上限 {_MAX_PIXELS / 1e6:.1f} 百万像素'
-            f'（约 {_MAX_PIXELS * 4 // (1024 * 1024)}MB 位图）。请先缩小后再处理。')
-    if frames > _MAX_FRAMES:
-        raise ValueError(f'动画帧数 {frames} 超过上限 {_MAX_FRAMES}，已拒绝解码')
-    # 全文活动内容扫描：EXIF/XMP/注释区或尾随数据里塞脚本的 polyglot，
-    # 光看前 4096 字节和 magic 是看不出来的（本机两张真实 PoC 实测放行）。
-    low_all = data.lower()
-    for marker in _FORBIDDEN_CONTENT_MARKERS:
-        if marker in low_all:
-            raise ValueError(
-                '图片内嵌脚本/外部实体/活动载荷标记 %r，已拒绝解码' % marker.decode('latin1'))
-    if fmt == 'PNG':
-        iend = data.rfind(b'IEND\xaeB`\x82')
-        if iend < 0 or len(data) - (iend + 8) != 0:
-            raise ValueError('PNG 缺 IEND 或 IEND 后有尾随数据（aCropalypse 残留），已拒绝解码')
-    if fmt == 'JPEG':
-        eoi = data.rfind(b'\xff\xd9')
-        if eoi < 0 or len(data) - (eoi + 2) != 0:
-            raise ValueError('JPEG 缺 EOI 或 EOI 后有尾随数据（polyglot 附加载荷），已拒绝解码')
-    if fmt == 'GIF' and not data.endswith(b'\x3b'):
-        raise ValueError('GIF 缺 trailer 或尾部附加数据（GIF/JS polyglot），已拒绝解码')
+    verdict = inspect_image_bytes(data)
+    if not verdict['ok']:
+        raise ValueError(verdict['msg'])
 
 
 def image_resize(img_bytes, width, height, keep_ratio=True):

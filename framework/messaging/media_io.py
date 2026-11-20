@@ -19,11 +19,13 @@
 ------------
 所有分支都返回同一形状的 dict，调用方不需要按引用种类分支::
 
-    {'status': 'ok' | 'failed' | 'unsupported' | 'needs_adapter',
-     'path': str, 'size': int, 'ref': str, 'msg': str}
+    {'status': 'ok' | 'failed' | 'unsupported' | 'needs_adapter' | 'rejected',
+     'path': str, 'size': int, 'ref': str, 'msg': str,
+     'kind': str, 'mime': str, 'rejected_reason': str}
 
 `needs_adapter` 是留给上层处理器的信号：`file_id:` 这类引用只有接入端
-能换出真实地址，本模块不猜也不联网试。
+能换出真实地址，本模块不猜也不联网试。`rejected` 表示内容闸门或 URL
+闸门拒绝，`rejected_reason` 给出可直接展示的常量。
 """
 import base64
 import binascii
@@ -33,6 +35,16 @@ import re
 import shutil
 import tempfile
 import urllib.parse
+
+from framework.messaging.media_guard import (
+    MAX_IMAGE_BYTES as GUARD_MAX_IMAGE_BYTES,
+)
+from framework.messaging.media_guard import (
+    REJECT_REQUEST,
+    check_redirect_chain,
+    inspect_image_bytes,
+)
+from framework.messaging.segments import canonical_type
 
 logger = logging.getLogger('zcbot')
 
@@ -56,6 +68,11 @@ _WIN_RESERVED = frozenset(
 #: 文件名里允许保留的字符之外一律替换。用白名单而不是黑名单，
 #: 因为黑名单永远漏（各平台还会冒出新的保留字）。
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
+
+#: 需要走图片内容闸门的段类型。voice/audio/video/file/animation 等段只走
+#: URL 闸门，不按图片魔数误杀（规范段里 animation 归入 videos）。
+_IMAGE_EXPECTED = frozenset({'image', 'picture', 'photo', 'png', 'jpeg',
+                             'jpg', 'gif', 'webp', 'bmp'})
 
 
 def default_media_dir() -> str:
@@ -171,29 +188,62 @@ def _inside(dest_dir: str, path: str) -> bool:
         return False
 
 
-def _finish(tmp: str, dest_dir: str, name: str, ref: str) -> dict:
+def _result(status: str, ref: str, msg: str = '', *, kind: str = '',
+            mime: str = '', reason: str = '', path: str = '',
+            size: int = 0) -> dict:
+    """所有返回分支共用同一形状，调用方不必按失败种类分支取键。"""
+    return {'status': status, 'path': path, 'size': size, 'ref': ref,
+            'msg': msg, 'kind': kind, 'mime': mime,
+            'rejected_reason': reason}
+
+
+def _finish(tmp: str, dest_dir: str, name: str, ref: str, *,
+            kind: str = '', mime: str = '') -> dict:
     """把临时文件转正。写入阶段的成败判断只在这里发生一次。"""
     final = _unique_path(dest_dir, name)
     if not _inside(dest_dir, final):
         os.unlink(tmp)
-        return {'status': 'failed', 'path': '', 'size': 0, 'ref': ref,
-                'msg': '文件名解析后越出目标目录，已拒绝'}
+        return _result('failed', ref, '文件名解析后越出目标目录，已拒绝')
     os.replace(tmp, final)
-    return {'status': 'ok', 'path': final, 'size': os.path.getsize(final),
-            'ref': ref, 'msg': ''}
+    return _result('ok', ref, path=final, size=os.path.getsize(final),
+                   kind=kind, mime=mime)
 
 
 def _fail(msg: str, ref: str) -> dict:
-    return {'status': 'failed', 'path': '', 'size': 0, 'ref': ref, 'msg': msg}
+    return _result('failed', ref, msg)
 
 
 def _too_large(size: int, max_bytes: int, ref: str) -> dict:
-    return {'status': 'failed', 'path': '', 'size': 0, 'ref': ref,
-            'msg': f'媒体 {size} 字节超过上限 {max_bytes}，已拒绝下载'}
+    return _result('failed', ref,
+                   f'媒体 {size} 字节超过上限 {max_bytes}，已拒绝下载')
+
+
+def _rejected(verdict: dict, ref: str) -> dict:
+    return _result('rejected', ref, verdict['msg'],
+                   kind=verdict.get('kind', ''), mime=verdict.get('mime', ''),
+                   reason=verdict.get('rejected_reason', ''))
+
+
+def _guard_content(tmp: str, expected_type: str, max_bytes: int,
+                   ref: str) -> tuple[dict | None, str, str]:
+    """文件转正前的内容校验。非图片段直接放行，返回 (拒绝结果, kind, mime)。"""
+    if expected_type not in _IMAGE_EXPECTED:
+        return None, '', ''
+    try:
+        with open(tmp, 'rb') as f:
+            raw = f.read(max_bytes + 1)
+    except OSError as e:
+        _discard(tmp)
+        return _fail(f'内容闸门读取失败: {e}', ref), '', ''
+    verdict = inspect_image_bytes(raw, max_bytes=min(max_bytes, GUARD_MAX_IMAGE_BYTES))
+    if not verdict['ok']:
+        _discard(tmp)
+        return _rejected(verdict, ref), verdict.get('kind', ''), verdict.get('mime', '')
+    return None, verdict.get('kind', ''), verdict.get('mime', '')
 
 
 def _write_base64(payload: str, dest_dir: str, name: str, ref: str,
-                  max_bytes: int) -> dict:
+                  max_bytes: int, expected_type: str) -> dict:
     """base64 引用：先按长度估算，超限不进解码器。"""
     if payload.startswith('data:'):
         # data URL 的头部不参与解码，逗号前全丢
@@ -218,7 +268,10 @@ def _write_base64(payload: str, dest_dir: str, name: str, ref: str,
     except Exception:
         _discard(tmp)
         raise
-    return _finish(tmp, dest_dir, name, ref)
+    rejected, kind, mime = _guard_content(tmp, expected_type, max_bytes, ref)
+    if rejected is not None:
+        return rejected
+    return _finish(tmp, dest_dir, name, ref, kind=kind, mime=mime)
 
 
 def _new_tmp(dest_dir: str) -> str:
@@ -245,7 +298,7 @@ def _discard(path: str) -> None:
 
 
 def _read_local(path: str, dest_dir: str, name: str, ref: str,
-                max_bytes: int) -> dict:
+                max_bytes: int, expected_type: str) -> dict:
     """本地路径引用：先看大小，再复制。不移动原文件。"""
     if not os.path.isfile(path):
         return _fail(f'本地文件不存在: {path}', ref)
@@ -258,21 +311,26 @@ def _read_local(path: str, dest_dir: str, name: str, ref: str,
     except Exception:
         _discard(tmp)
         raise
-    return _finish(tmp, dest_dir, name, ref)
+    rejected, kind, mime = _guard_content(tmp, expected_type, max_bytes, ref)
+    if rejected is not None:
+        return rejected
+    return _finish(tmp, dest_dir, name, ref, kind=kind, mime=mime)
 
 
 def _download_http(ref: str, dest_dir: str, name: str, max_bytes: int,
-                   timeout: float, fetcher) -> dict:
-    """HTTP 引用：Content-Length 预检 + 边读边累计，超限立刻停。"""
-    import requests
+                   timeout: float, fetcher, expected_type: str,
+                   resolver=None) -> dict:
+    """HTTP 引用：目标闸门 + Content-Length 预检 + 边读边累计。"""
+    chain = check_redirect_chain(
+        ref, fetcher=fetcher, resolver=resolver, timeout=timeout,
+        headers={'User-Agent': 'zcbot-media/1.0'})
+    if not chain['ok']:
+        # 请求本身失败沿用旧口径 failed；策略性拒绝才是 rejected。
+        if chain.get('rejected_reason') == REJECT_REQUEST:
+            return _fail(chain['msg'], ref)
+        return _rejected(chain, ref)
 
-    get = fetcher or requests.get
-    try:
-        resp = get(ref, stream=True, timeout=(5, timeout),
-                   headers={'User-Agent': 'zcbot-media/1.0'})
-    except Exception as e:
-        return _fail(f'请求失败: {type(e).__name__}: {e}', ref)
-
+    resp = chain['response']
     try:
         status = getattr(resp, 'status_code', 200)
         if not isinstance(status, int) or status < 200 or status >= 300:
@@ -306,7 +364,10 @@ def _download_http(ref: str, dest_dir: str, name: str, max_bytes: int,
         if written == 0:
             _discard(tmp)
             return _fail('响应体为空', ref)
-        return _finish(tmp, dest_dir, name, ref)
+        rejected, kind, mime = _guard_content(tmp, expected_type, max_bytes, ref)
+        if rejected is not None:
+            return rejected
+        return _finish(tmp, dest_dir, name, ref, kind=kind, mime=mime)
     finally:
         close = getattr(resp, 'close', None)
         if callable(close):
@@ -318,7 +379,7 @@ def _download_http(ref: str, dest_dir: str, name: str, max_bytes: int,
 
 def download(ref_or_segment, dest_dir=None, filename=None,
              max_bytes: int = DEFAULT_MAX_BYTES, timeout: float = 30,
-             fetcher=None) -> dict:
+             fetcher=None, expected_type: str = None, resolver=None) -> dict:
     """
     把一个媒体段（或裸引用字符串）落盘。
 
@@ -328,9 +389,12 @@ def download(ref_or_segment, dest_dir=None, filename=None,
     :param max_bytes: 单文件上限
     :param timeout: 网络读取超时（秒）
     :param fetcher: 测试注入用，签名为 `requests.get(url, **kw)`
+    :param expected_type: 声明段类型（如 image / file）。不传时按段自身的 type
+        推断；只声明图片类段才走内容闸门，voice/audio/video/file 不按图片误杀。
+    :param resolver: URL 闸门用的 DNS 解析器，签名为 `host -> list[str]`
     """
     ref = ''
-    result_base = {'status': 'failed', 'path': '', 'size': 0, 'ref': '', 'msg': ''}
+    result_base = _result('failed', '')
     if isinstance(ref_or_segment, dict):
         # 不直接用 media_ref：它对 file_id 不加前缀（只有 base64 才加），
         # 于是 file_id 的裸值会被当成"本地路径"去找文件——找不到是小事，
@@ -354,6 +418,11 @@ def download(ref_or_segment, dest_dir=None, filename=None,
         return result_base
     result_base['ref'] = ref
 
+    raw_type = expected_type
+    if raw_type is None and isinstance(ref_or_segment, dict):
+        raw_type = ref_or_segment.get('type')
+    expected = canonical_type(raw_type).lower() if isinstance(raw_type, str) else ''
+
     if not ref:
         result_base['msg'] = '段里没有可取的文件引用（url / file / base64 / path / file_id 都为空）'
         return result_base
@@ -376,16 +445,18 @@ def download(ref_or_segment, dest_dir=None, filename=None,
     name = safe_filename(filename or _name_from_ref(ref, ref_or_segment))
 
     if ref.startswith('base64://'):
-        return _write_base64(ref[len('base64://'):], dest, name, ref, max_bytes)
+        return _write_base64(ref[len('base64://'):], dest, name, ref, max_bytes,
+                             expected)
     if ref.startswith(('http://', 'https://')):
-        return _download_http(ref, dest, name, max_bytes, timeout, fetcher)
+        return _download_http(ref, dest, name, max_bytes, timeout, fetcher,
+                              expected, resolver)
     if ref.startswith('file://'):
         local = urllib.parse.unquote(ref[7:])
         # Windows 上 file:///C:/x 的 path 部分是 /C:/x，去掉前导斜杠
         if re.match(r'^/[A-Za-z]:', local):
             local = local[1:]
-        return _read_local(local, dest, name, ref, max_bytes)
-    return _read_local(ref, dest, name, ref, max_bytes)
+        return _read_local(local, dest, name, ref, max_bytes, expected)
+    return _read_local(ref, dest, name, ref, max_bytes, expected)
 
 
 __all__ = [

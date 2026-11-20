@@ -25,21 +25,17 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# 模块级裸用 ctx 的插件（ruff F821 的 202 处集中在这 6 个文件）
+# 模块级裸用 ctx 的插件（ruff F821 的集中点）
 CTX_MODULES = [
     'core_plugins/echo/main.py',
     'core_plugins/html_assembler/main.py',
     'core_plugins/image_renderer/main.py',
-    'framework/iipc/plugins/api_surface/main.py',
-    'framework/iipc/plugins/official_blacklist/main.py',
-    'framework/iipc/plugins/official_signin/main.py',
 ]
 
 # 框架加载期注入 ctx 的全部位置（少一处就会有插件在运行时 NameError）
 INJECTION_SITES = [
     'framework/loader/base.py',
     'framework/core/runtime.py',
-    'framework/iipc/py_sdk/sdk.py',
     'framework/terminal/cmd_plugin.py',
 ]
 
@@ -231,8 +227,8 @@ def test_packaging_contract_web_stack_and_excludes():
     for pkg in ('flask>=2.3.0', 'flask-cors>=4.0.0', 'waitress>=3.0.0'):
         assert pkg in requirements, f'{pkg} 没同步进 requirements.txt'
 
-    assert 'framework.iipc.tools*' in pyproject
     assert '*.tests*' in pyproject
+    assert '*.native.target*' in pyproject
 
 
 def test_plugin_discovery_uses_kernel_core_plugins_dir(tmp_path, monkeypatch):

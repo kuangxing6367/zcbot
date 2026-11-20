@@ -18,6 +18,43 @@ logger = logging.getLogger('zcbot')
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _emit_startup_environment(config_path=None):
+    """启动横幅：把实际运行的解释器/环境/容器/权限打给 stdout 和日志。
+
+    必须在实例锁之后调用：抢锁失败时进程立刻退出，不应留下误导性的启动信息。
+    探测和读取开关都做降级，任何失败都不阻止框架继续启动。
+    """
+    cfg = {}
+    try:
+        from framework.config import load_config
+        from framework.paths import resolve_config_path
+
+        cfg = load_config(resolve_config_path(config_path)) or {}
+    except Exception as exc:
+        logger.debug('[amain] 读取启动横幅配置失败: %s', exc)
+    framework_cfg = cfg.get('framework') if isinstance(cfg, dict) else None
+    framework_cfg = framework_cfg if isinstance(framework_cfg, dict) else {}
+    security_cfg = framework_cfg.get('security') or {}
+
+    try:
+        from framework import environment as env
+
+        if framework_cfg.get('startup_info', True):
+            info = env.snapshot(config=cfg)
+            block = env.format_block(info)
+            logger.info('%s', block)
+            print(block, flush=True)
+        privileged, detail = env.is_privileged()
+        if privileged and security_cfg.get('warn_if_root', True):
+            logger.warning(
+                '[安全警告] 当前以 root/管理员身份运行（%s）。'
+                '若已在容器或受限环境中运行，请确认这是有意为之；'
+                'root 可直接读写数据库文件，绕开文件权限保护，'
+                '请通过非特权用户运行并只授予数据库文件/目录所需权限。', detail)
+    except Exception as exc:
+        logger.debug('[amain] 运行环境探测失败: %s', exc)
+
+
 async def amain():
     """异步主流程"""
     # 【踩坑保佑】架构总览 启动时序
@@ -65,6 +102,9 @@ async def amain():
     # 注册退出清理（双保险：atexit + 顶层 finally），确保锁文件被释放并删除
     atexit.register(cleanup_instance_lock)
 
+    # 运行环境横幅：抢锁成功后再打印，配置 framework.startup_info / security.warn_if_root
+    _emit_startup_environment(config_path)
+
     # 注册停止信号（提前到崩溃守卫之前，使安全模式也能优雅响应 SIGTERM/SIGINT）
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -74,18 +114,33 @@ async def amain():
         except (NotImplementedError, RuntimeError):
             pass
 
-    # 读取崩溃配置（仅用标准库 yaml，避免提前 import 重型依赖）
-    crash_cfg = {}
+    # 读取崩溃配置：配置语法坏掉时走容错解析，保证崩溃计数仍能累加。
+    from framework.config import (
+        ConfigLoadError,
+        ConfigValidationError,
+        _best_effort_crash_config,
+        report_config_load_error,
+        report_config_validation_error,
+    )
+
+    crash_cfg = _best_effort_crash_config(config_path, root)
+    boot_cfg = {}
     try:
         import yaml
 
         from framework.paths import resolve_config_path
         cp = resolve_config_path(config_path)
         if os.path.isfile(cp):
-            crash_cfg = yaml.safe_load(open(cp, encoding='utf-8')) or {}
+            with open(cp, 'r', encoding='utf-8') as f:
+                parsed = yaml.safe_load(f)
+            if isinstance(parsed, dict):
+                boot_cfg = parsed
     except Exception as _exc:
         logger.debug('[amain] 捕获异常后按降级路径继续: %s', _exc)
-        crash_cfg = {}
+        boot_cfg = {}
+
+    # 启动横幅统一由 _emit_startup_environment() 在抢锁后立即输出；
+    # 这里不再重复探测/打印，避免同一进程出现两份环境块。
 
     # 崩溃守卫：达重启上限则进入安全模式（假启动）或明确拒绝，打破守护进程无限拉起。
     # safe_mode（默认开）：不退出进程、仅挂起，让 systemd/pm2（Type=simple 只看进程
@@ -137,7 +192,14 @@ async def amain():
         except Exception as _exc:
             logger.debug('[amain] 捕获异常后按降级路径继续: %s', _exc)
     try:
-        framework = Framework(config_path)
+        try:
+            framework = Framework(config_path)
+        except (ConfigLoadError, ConfigValidationError) as config_exc:
+            if isinstance(config_exc, ConfigLoadError):
+                report_config_load_error(config_exc, root, config_path)
+            else:
+                report_config_validation_error(config_exc, root, config_path)
+            sys.exit(2)
         # 异步启动模式：config.yaml → startup.wait_ready: false 时不等待插件加载完成，
         # 核心/用户插件在后台异步加载，启动立即返回（可后续 await framework.wait_ready()）
         _startup_cfg = framework.config.get('startup', {}) or {}
@@ -158,6 +220,13 @@ async def amain():
         write_crash_log(crash_cfg, root, exc=e)
         fire_alert(crash_cfg, exc=e)
         logger.exception("启动期致命异常（已写入崩溃日志）")
+        try:
+            from framework import environment
+
+            print(environment.format_block(
+                environment.snapshot(), title='[系统环境]'), file=sys.stderr)
+        except Exception as _exc:
+            logger.debug('[amain] 环境信息输出失败（不影响退出）: %s', _exc)
         sys.exit(1)
     finally:
         if watchdog is not None:

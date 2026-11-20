@@ -158,7 +158,7 @@ def write_crash_report(report: dict, home=None, log_dir=None) -> str:
             crash_cfg, root, exc=None,
             extra={'数据库应急恢复': detail,
                    '损坏信号': report.get('note', '') or status,
-                   '环境': report.get('env') or environment_info()})
+                   '环境': report.get('env') or error_environment()})
         if not path:
             raise OSError('crash_guard.write_crash_log 未返回落盘路径')
         return path
@@ -182,60 +182,17 @@ def _read_first_line(path):
 
 
 def _cgroup_memory_limit():
-    """容器内存上限：cgroup v2 的 memory.max，回退 v1 的 limit_in_bytes。"""
-    for path in (CGROUP_V2_MEM_MAX, CGROUP_V1_MEM_LIMIT):
-        raw = _read_first_line(path)
-        if not raw or raw == 'max':
-            continue
-        try:
-            value = int(raw)
-        except ValueError:
-            continue
-        if 0 < value < _CGROUP_UNLIMITED:
-            return value
-    return None
+    """容器内存上限：复用 environment 的公共实现，保留本模块可注入常量。"""
+    from framework import environment
+
+    return environment._cgroup_memory_limit(CGROUP_V2_MEM_MAX, CGROUP_V1_MEM_LIMIT)
 
 
 def _memory_usage():
-    """(总内存, 可用内存)，字节；平台不识别返回 (None, None)。"""
-    system = platform.system()
-    if system == 'Linux':
-        total = available = None
-        try:
-            with open(PROC_MEMINFO, encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    if line.startswith('MemTotal:'):
-                        total = int(line.split()[1]) * 1024
-                    elif line.startswith('MemAvailable:'):
-                        available = int(line.split()[1]) * 1024
-        except (OSError, ValueError, IndexError):
-            return None, None
-        return total, available
-    if system == 'Windows':
-        try:
-            import ctypes
+    """(总内存, 可用内存)，字节；与 environment 共用一份实现。"""
+    from framework import environment
 
-            class MEMORYSTATUSEX(ctypes.Structure):
-                _fields_ = [
-                    ('dwLength', ctypes.c_ulong),
-                    ('dwMemoryLoad', ctypes.c_ulong),
-                    ('ullTotalPhys', ctypes.c_ulonglong),
-                    ('ullAvailPhys', ctypes.c_ulonglong),
-                    ('ullTotalPageFile', ctypes.c_ulonglong),
-                    ('ullAvailPageFile', ctypes.c_ulonglong),
-                    ('ullTotalVirtual', ctypes.c_ulonglong),
-                    ('ullAvailVirtual', ctypes.c_ulonglong),
-                    ('ullAvailExtendedVirtual', ctypes.c_ulonglong),
-                ]
-
-            stat = MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-                return None, None
-            return stat.ullTotalPhys, stat.ullAvailPhys
-        except Exception:
-            return None, None
-    return None, None
+    return environment._memory_usage(platform.system(), PROC_MEMINFO)
 
 
 def environment_info(db_path=None) -> dict:
@@ -285,6 +242,27 @@ def environment_info(db_path=None) -> dict:
         except OSError:
             info['db_bytes'] = -1
     return info
+
+
+def error_environment(db_path=None) -> dict:
+    """错误日志里的环境页脚：同一份 snapshot + 向后兼容的旧字段名。"""
+    try:
+        from framework import environment as env
+
+        info = dict(env.snapshot())
+        info.update(environment_info(db_path))
+        info.update({
+            'system': info.get('os') or platform.system() or '未知',
+            'python': info.get('version') or sys.version.split()[0],
+            'in_venv': info.get('in_venv', sys.prefix != sys.base_prefix),
+            'in_docker': bool(info.get('in_docker') or info.get('container') == 'docker'),
+            'env_kind': info.get('env') or '未检测到',
+            'runtime_block': env.format_block(info),
+        })
+        return info
+    except Exception as e:
+        logger.debug('[error_environment] 运行环境快照失败，回退旧字段: %s', e)
+        return environment_info(db_path)
 
 
 def _append_error_log(report: dict, home=None, log_dir=None) -> str:
@@ -493,7 +471,7 @@ def run_recovery(db_path: str, home=None, workdir=None,
         report.update(status=status, ok=ok, note=note)
         report.update(extra)
         report['elapsed'] = round(time.time() - started, 3)
-        report['env'] = environment_info(db_path)
+        report['env'] = error_environment(db_path)
         report['error_log'] = _append_error_log(report, home=home, log_dir=log_dir)
         return report
 

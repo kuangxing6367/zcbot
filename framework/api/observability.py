@@ -140,28 +140,185 @@ def _is_select_one(value) -> bool:
         return False
 
 
-def db_probe(framework):
-    """探针级数据库检查：一次 SELECT 1，返回 (ok, detail)"""
+# 探针缓存：K8s 每几秒打一次 /readyz，真查 schema 的代价不能全打到库上。
+# 0 = 每次真查；force=True 绕过缓存并刷新正常键（WebUI 手动刷新用）。
+db_probe_ttl = 1.5
+_DB_PROBE_CACHE = {}
+_DB_PROBE_LOCK = threading.Lock()
+_MISSING_LOG_INTERVAL = 60.0
+_MISSING_LOG_LAST = {}
+
+
+def _db_path_of(framework, db):
+    """SQLite 库路径（绝对路径）；非 SQLite / 无路径信息返回 None。"""
+    db_type = str(getattr(db, 'db_type', 'sqlite') or 'sqlite').lower()
+    if db_type == 'mysql':
+        return None
+    path = getattr(db, '_db_path', None)
+    if not path:
+        cfg = getattr(db, 'config', None) or {}
+        path = cfg.get('path')
+    if not path:
+        return None
+    path = str(path)
+    if not os.path.isabs(path):
+        try:
+            from framework.paths import home_dir
+
+            path = os.path.join(home_dir(), path)
+        except Exception as _exc:
+            logger.debug('[_db_path_of] 捕获异常后按降级路径继续: %s', _exc)
+    return os.path.abspath(path)
+
+
+def _required_tables():
+    try:
+        from framework.database.init_db import _REQUIRED_TABLES
+
+        return list(_REQUIRED_TABLES)
+    except Exception as _exc:
+        logger.debug('[_required_tables] 捕获异常后按降级路径继续: %s', _exc)
+        return []
+
+
+def _probe_table_names(db, db_type, required):
+    """真实结构查询；无批量接口的桩/调试引擎回退逐表探测。
+    返回表名集合，或 None 表示「该后端没有结构接口，只能靠 SELECT 1」。"""
+    query = getattr(db, 'query', None)
+    if callable(query):
+        if db_type == 'sqlite':
+            rows = query("SELECT name FROM sqlite_master WHERE type='table'")
+        elif db_type == 'mysql':
+            rows = query("SELECT TABLE_NAME FROM information_schema.TABLES "
+                         "WHERE TABLE_SCHEMA = DATABASE()")
+        else:
+            rows = None
+        if rows is not None:
+            names = set()
+            for row in rows:
+                if isinstance(row, dict):
+                    value = (row.get('name') or row.get('TABLE_NAME')
+                             or row.get('table_name'))
+                else:
+                    value = row[0] if row else None
+                if value is not None:
+                    names.add(str(value).lower())
+            return names
+    exists = getattr(db, 'table_exists', None)
+    if callable(exists):
+        return {t for t in required if exists(t)}
+    return None
+
+
+def _select_one_value(db):
+    """SELECT 1 兼容层：优先 scalar，退回 query_one。"""
+    try:
+        return db.scalar('SELECT 1')
+    except AttributeError:
+        row = db.query_one('SELECT 1')
+        return (next(iter(row.values()), None) if isinstance(row, dict)
+                else row[0] if row else None)
+
+
+def _cache_key(framework, db, force):
+    return (id(framework), id(db), _db_path_of(framework, db) or '', bool(force))
+
+
+def db_probe(framework, force=False):
+    """真实数据库探针：库文件 → 核心表结构 → SELECT 1，返回 (ok, detail)。
+
+    SQLite 的 ``SELECT 1`` 是常量表达式，不碰 schema、不碰表，删表后仍返回 1。
+    因此必须先看库文件是否存在，再查真实表名集合，最后才用 SELECT 1 兜底。
+    """
     db = getattr(framework, 'db', None)
     if db is None:
         return False, '数据库实例不存在'
-    t0 = time.perf_counter()
-    try:
+    db_type = str(getattr(db, 'db_type', 'sqlite') or 'sqlite').lower()
+    path = _db_path_of(framework, db)
+    # 文件检查很便宜，放在缓存之前：库文件被移走时必须立刻不就绪，
+    # 不能因为上一秒的缓存结果继续报 200。
+    if path is not None:
+        if not os.path.isfile(path):
+            return False, f'库文件不存在: {path}'
         try:
-            value = db.scalar('SELECT 1')
-        except AttributeError:
-            row = db.query_one('SELECT 1')
-            value = (next(iter(row.values()), None) if isinstance(row, dict)
-                     else row[0] if row else None)
+            if os.path.getsize(path) == 0:
+                return False, f'库文件为空: {path}'
+        except OSError as e:
+            return False, f'{type(e).__name__}: {e}'
+
+    normal_key = _cache_key(framework, db, False)
+    force_key = _cache_key(framework, db, True)
+    now = time.monotonic()
+    ttl = float(db_probe_ttl or 0)
+    if not force:
+        with _DB_PROBE_LOCK:
+            hit = _DB_PROBE_CACHE.get(normal_key)
+        if hit and len(hit) >= 4 and ttl > 0 and now - hit[0] < ttl:
+            return hit[1]
+
+    t0 = time.perf_counter()
+    required = _required_tables()
+    try:
+        names = _probe_table_names(db, db_type, required)
+    except Exception as e:
+        return False, f'{type(e).__name__}: {e}'
+
+    missing = []
+    if names is not None and required:
+        missing = [t for t in required if t not in names]
+        try:
+            db.schema_incomplete = list(missing)
+        except Exception as _exc:
+            logger.debug('[db_probe] 捕获异常后按降级路径继续: %s', _exc)
+    else:
+        existing = list(getattr(db, 'schema_incomplete', None) or [])
+        missing = [t for t in existing if t in required] if required else existing
+
+    try:
+        value = _select_one_value(db)
     except Exception as e:
         logger.debug('[db_probe] 捕获异常后按降级路径继续: %s', e)
         return False, f'{type(e).__name__}: {e}'
     ms = (time.perf_counter() - t0) * 1000
+
+    if missing:
+        return False, (f"核心表缺失 {len(missing)} 张："
+                       f"{', '.join(missing[:8])}（{ms:.1f}ms）")
     if not _is_select_one(value):
         return False, f'SELECT 1 未返回预期值: {value!r}（{ms:.1f}ms）'
     if getattr(framework, 'db_degraded', False):
-        return True, f'{ms:.1f}ms（降级写缓冲中）'
-    return True, f'{ms:.1f}ms'
+        detail = f'{ms:.1f}ms（降级写缓冲中）'
+    elif names is not None and required:
+        detail = f'{ms:.1f}ms，核心表 {len(required) - len(missing)}/{len(required)}'
+    else:
+        detail = f'{ms:.1f}ms'
+    result = (True, detail)
+    with _DB_PROBE_LOCK:
+        # 缓存键用 id()，条目必须持有对象引用：否则临时对象被回收后 id 复用，
+        # 新库会命中旧条目的 ready=True。过期条目顺手清掉，避免长期悬挂引用。
+        for cached_key, cached in list(_DB_PROBE_CACHE.items()):
+            if now - cached[0] >= ttl:
+                _DB_PROBE_CACHE.pop(cached_key, None)
+        _DB_PROBE_CACHE[normal_key] = (now, result, framework, db)
+        _DB_PROBE_CACHE[force_key] = (now, result, framework, db)
+    return result
+
+
+def _log_missing_tables(missing):
+    """运行期缺表告警限频：同一组缺失表名 60 秒最多一条 error。"""
+    if not missing:
+        return
+    key = tuple(sorted(str(t) for t in missing))
+    now = time.monotonic()
+    with _DB_PROBE_LOCK:
+        last = _MISSING_LOG_LAST.get(key, 0)
+        if now - last < _MISSING_LOG_INTERVAL:
+            return
+        _MISSING_LOG_LAST[key] = now
+    logger.error(
+        "数据库核心表运行期缺失（%d 张：%s）。请从 data/backups/ 恢复最近备份，"
+        "或确认后显式开启 database.repair_missing_tables（补建不会恢复默认管理员口令）。",
+        len(key), ', '.join(key))
 
 
 def plugin_counts(framework):
@@ -214,6 +371,9 @@ def collect_checks(framework) -> dict:
     ready = bool(getattr(framework, '_ready', False))
     checks['startup'] = {'ok': ready, 'detail': '插件加载完成' if ready else '插件加载中'}
     db_ok, db_detail = db_probe(framework)
+    if not db_ok and '核心表缺失' in db_detail:
+        db = getattr(framework, 'db', None)
+        _log_missing_tables(list(getattr(db, 'schema_incomplete', None) or []))
     checks['database'] = {'ok': db_ok, 'detail': db_detail}
     loaded, failed = plugin_counts(framework)
     # 插件加载失败不阻止就绪（框架本身可用），但如实暴露，便于排障
@@ -264,6 +424,11 @@ def register(ctx):
         cfg = {}
     if not isinstance(cfg, dict):
         cfg = {}
+    try:
+        global db_probe_ttl
+        db_probe_ttl = max(0.0, float(cfg.get('db_probe_ttl', db_probe_ttl)))
+    except (TypeError, ValueError) as _exc:
+        logger.debug('[register] db_probe_ttl 配置无效，沿用当前值: %s', _exc)
 
     health_enabled = _truthy(cfg.get('health', True))
     metrics_enabled = _truthy(cfg.get('metrics', True))

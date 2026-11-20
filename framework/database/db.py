@@ -156,6 +156,9 @@ class Database(DatabaseConnMixin):
         self._pool = None
         # 持久化降级标记：卷变只读时置位，恢复可写后清除（详见 persist_degraded）
         self._persist_degraded = False
+        # 运行期核心表缺失清单：由 init_db 在「已初始化但表丢失」时写入，
+        # 供 /readyz 与 WebUI 直接展示，不依赖翻日志。
+        self.schema_incomplete = []
         # 启动期元数据快照：把「逐表 table_exists / 逐列 table_has_column」
         # 合并成一次批量探测。命中快照时零 DB 往返；DDL 由 _note_ddl 增量
         # 维护或整体失效，避免快照与真实结构分叉。None = 未加载（惰性）。

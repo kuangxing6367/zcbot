@@ -122,6 +122,38 @@ def test_emergency_login_ok_and_token_survives_db_broken(env, monkeypatch):
     assert me.get_json()['data']['emergency'] is True
 
 
+def test_file_admin_fallback_after_db_password_failure(env):
+    """DB 里有同名账号但口令不匹配时，文件管理员凭据应作为第二来源生效。"""
+    ema.add_admin('admin', 'file-only-pass', base=env['eme_dir'])
+    r = env['client'].post('/api/login', json={
+        'username': 'admin', 'password': 'file-only-pass'})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['emergency'] is True
+    assert r.get_json()['data']['username'] == 'admin'
+
+
+def test_file_admin_login_after_admin_table_dropped(env):
+    """管理员表被删（补建成空表 / 缺表）后，文件管理员仍能登进 WebUI。
+
+    这是「数据库侧塌了也不至于完全进不去」的核心保障：DROP admin_users 后
+    db.query_one 抛 OperationalError，登录必须回落到 data/admin_emergency.yaml，
+    且返回的 token 要能继续通过 /api/me（校验不查库）。
+    """
+    ema.add_admin('ops', 'file-only-pass-2', base=env['eme_dir'])
+    env['fw'].db.execute('DROP TABLE admin_users')
+
+    r = env['client'].post('/api/login', json={
+        'username': 'ops', 'password': 'file-only-pass-2'})
+    assert r.status_code == 200, r.get_json()
+    data = r.get_json()['data']
+    assert data['username'] == 'ops'
+    assert data['role'] == 'super'
+    token = data['token']
+
+    me = env['client'].get('/api/me', headers=_auth(token))
+    assert me.status_code == 200, me.get_json()
+
+
 def test_forged_emergency_token_rejected_even_if_db_ok(env):
     bad = ema.TOKEN_PREFIX + 'forged.payload.deadbeef'
     me = env['client'].get('/api/me', headers=_auth(bad))

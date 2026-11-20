@@ -91,7 +91,7 @@ class ProtocolAdapter(ABC):
     # 消息契约（可选实现，基类给全套兜底）
     #
     # 内核对"一条消息"只有一种形状：规范消息段列表
-    # [{'type': 'text'|'image'|'voice'|..., 'data': {...}}]。
+    # [{'type': 'text'|'image'|'voice'|..., 'data': {...}}].
     # 接入端只需在两个方向各做一个翻译，其余由基类兜底：
     #
     #   原生协议 ──normalize_incoming──▶ 规范段 ──▶ ev.segments（插件）

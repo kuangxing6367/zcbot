@@ -149,3 +149,63 @@ def test_no_emoji_in_module():
     with open(ema.__file__, encoding='utf-8') as f:
         text = f.read()
     assert not any(ord(ch) > 0xFFFF for ch in text)
+
+
+# ── 多账号文件管理员 ──────────────────────────────────────────────
+
+def test_admins_list_supports_multiple_accounts(base):
+    cfg, pwd1 = ema.ensure_config(base, announce=False)
+    cfg2, created = ema.add_admin('ops_breakglass', 'second-password',
+                                  role='operator', base=base)
+    assert created is True
+    assert ema.verify_password(cfg['username'], pwd1, base) is True
+    assert ema.verify_password('ops_breakglass', 'second-password', base) is True
+    assert ema.is_emergency_user('ops_breakglass', base) is True
+    names = {item['username'] for item in ema.list_admins(base)}
+    assert names == {cfg['username'], 'ops_breakglass'}
+
+    token = ema.issue_token('ops_breakglass', base=base)
+    admin = ema.verify_token(token, base)
+    assert admin['username'] == 'ops_breakglass'
+    assert admin['role'] == 'operator'
+
+    raw = _load_raw(base)
+    assert len(raw['admins']) == 2
+    assert raw['username'] == cfg2['username']
+    assert 'second-password' not in json.dumps(raw, ensure_ascii=False)
+
+
+def test_reset_one_admin_keeps_other_accounts(base):
+    cfg, pwd1 = ema.ensure_config(base, announce=False)
+    ema.add_admin('ops_breakglass', 'second-password', base=base)
+    _, new_pwd = ema.reset_password(base, announce=False,
+                                    username='ops_breakglass')
+    assert ema.verify_password('ops_breakglass', new_pwd, base) is True
+    assert ema.verify_password('ops_breakglass', 'second-password', base) is False
+    assert ema.verify_password(cfg['username'], pwd1, base) is True
+    assert len(ema.list_admins(base)) == 2
+
+
+def test_legacy_single_account_still_works(base):
+    import bcrypt
+    import yaml
+
+    raw = {
+        'enabled': True,
+        'username': 'legacy_admin',
+        'password_hash': bcrypt.hashpw(b'legacy-pwd', bcrypt.gensalt(4)).decode(),
+        'token_secret': 'legacy-secret',
+    }
+    with open(ema.config_path(base), 'w', encoding='utf-8', newline='') as f:
+        yaml.safe_dump(raw, f)
+    assert ema.verify_password('legacy_admin', 'legacy-pwd', base) is True
+    assert ema.issue_token('legacy_admin', base=base).startswith(ema.TOKEN_PREFIX)
+
+
+def test_remove_admin_keeps_last_account(base):
+    cfg, _ = ema.ensure_config(base, announce=False)
+    ema.add_admin('ops_breakglass', 'second-password', base=base)
+    ema.remove_admin('ops_breakglass', base)
+    assert [a['username'] for a in ema.list_admins(base)] == [cfg['username']]
+    with pytest.raises(ValueError):
+        ema.remove_admin(cfg['username'], base)

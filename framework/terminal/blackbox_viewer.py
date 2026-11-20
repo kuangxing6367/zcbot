@@ -20,17 +20,20 @@
   （黑匣子仍是 WebUI 调试接口兜底），符合「不向非交互环境强加 TTY 依赖」。
 """
 import builtins
-import sys
-import time
 
 from framework.blackbox import (
-    STAGE_STEP,
     clear,
     get_event_trace,
     get_frames,
     recent_event_ids,
     stats,
     stuck_at,
+)
+from framework.blackbox_format import (
+    format_event,
+    format_frame,
+    format_stats,
+    format_trace,
 )
 
 _PROMPT = "blackbox> "
@@ -45,49 +48,8 @@ _HELP = """黑匣子查看器命令:
 说明: 黑匣子为纯内存环形缓冲，进程退出即失；trace 报「未找到」多为缓冲淘汰。"""
 
 
-def _ts(t):
-    try:
-        return time.strftime('%H:%M:%S', time.localtime(t))
-    except Exception:
-        return '??:??:??'
-
-
-def _step_name(step):
-    inv = {v: k for k, v in STAGE_STEP.items()}
-    return inv.get(step, str(step))
-
-
-def _print_frame(f, idx=None):
-    ts = _ts(f.get('t', 0))
-    step = f.get('step')
-    stage = f.get('stage', '')
-    plugin = f.get('plugin', '')
-    eid = f.get('eid', '')
-    msg = f.get('msg', '')
-    to = f.get('to', '')
-    subs = f.get('subs', '')
-    prefix = f"  [{idx}] " if idx is not None else "  "
-    s = f"{prefix}[{ts}] #{step} {stage}"
-    if plugin:
-        s += f" <{plugin}>"
-    if eid:
-        s += f" ({eid})"
-    if to:
-        s += f" ->{to}"
-    if subs:
-        s += f" subs={subs}"
-    if msg:
-        s += f" :: {msg}"
-    print(s)
-
-
 def _cmd_stats():
-    st = stats()
-    print("=== 黑匣子统计 ===")
-    print(f"  启用: {st.get('enabled')}")
-    print(f"  容量: {st.get('used_bytes')} / {st.get('max_bytes')} 字节")
-    print(f"  帧数: {st.get('frames')}  事件数: {st.get('events')}")
-    print(f"  丢弃帧: {st.get('dropped')}  自增序号: {st.get('seq')}")
+    print(format_stats(stats()))
 
 
 def _cmd_recent(n, only_stuck=False):
@@ -101,14 +63,8 @@ def _cmd_recent(n, only_stuck=False):
         s = stuck_at(eid)
         if only_stuck and s is None:
             continue
-        if s is None:
-            status = "已完成"
-        else:
-            status = f"卡在 #{s.get('step')} {s.get('stage')}"
-            if s.get('plugin'):
-                status += f" <{s.get('plugin')}>"
         steps = len(get_event_trace(eid))
-        print(f"  {eid}: {status}  （链路 {steps} 帧）")
+        print(format_event(eid, s, steps))
         shown += 1
     if shown == 0:
         print("  （无卡住的事件）")
@@ -121,7 +77,7 @@ def _cmd_last(n):
         return
     print(f"=== 最近 {len(frames)} 帧 ===")
     for i, f in enumerate(frames):
-        _print_frame(f, idx=i + 1)
+        print(format_frame(f, idx=i + 1))
 
 
 def _cmd_trace(eid):
@@ -132,16 +88,7 @@ def _cmd_trace(eid):
     if not trace:
         print(f"未找到事件 {eid}（可能已被环形缓冲淘汰）")
         return
-    print(f"=== 事件 {eid} 完整链路（{len(trace)} 帧）===")
-    for f in trace:
-        _print_frame(f)
-    s = stuck_at(eid)
-    print("---")
-    if s is None:
-        print("状态: 已完成（已抵达 DONE）")
-    else:
-        print(f"状态: 卡在第 {s.get('step')} 步 [{s.get('stage')}]"
-              + (f" <{s.get('plugin')}>" if s.get('plugin') else ""))
+    print(format_trace(eid, trace, stuck_at(eid)))
 
 
 def _parse_int(s, default):

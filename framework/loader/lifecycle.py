@@ -15,6 +15,7 @@ import types
 from framework import i18n
 from framework.blackbox import record as _bb_record
 from framework.deps import classify_load_error, pip_install_all
+from framework.loader.source_scan import scan_mode, scan_plugin
 
 logger = logging.getLogger('zcbot')
 
@@ -411,6 +412,25 @@ class PluginLifecycleMixin:
 
         # ====== 动态导入 main.py（带重试）======
         main_path = os.path.join(plugin_path, 'main.py')
+
+        # 源码静态扫描：先审后执行。默认 warn —— 命中只写日志并照常加载，
+        # 把「插件写错就整个起不来」换成「能看到问题、行为不变」；
+        # 需要硬拦截时把 plugins.source_scan.mode 改成 block。
+        _scan_cfg = getattr(self.framework, 'config', None)
+        scan_issues = scan_plugin(plugin_name, main_path, _scan_cfg)
+        if scan_issues:
+            detail = '；'.join(str(i) for i in scan_issues[:5])
+            if scan_mode(_scan_cfg) == 'block':
+                logger.error(f"[{plugin_name}] 源码静态检查未通过，拒绝加载：{detail}")
+                self._purge_plugin_modules(plugin_name, plugin_path)
+                self._release_plugin_api_routes(plugin_name)
+                self._record_dep_error(plugin_name, f'源码静态检查未通过: {detail}')
+                self._failed_mtimes[plugin_name] = self._snapshot_mtime(plugin_name)
+                return False
+            logger.warning(
+                f"[{plugin_name}] 源码静态检查命中 {len(scan_issues)} 处可疑写法，"
+                f"按 warn 模式继续加载：{detail}")
+
         for attempt in range(2):  # 最多重试1次
             try:
                 # 第二次尝试前清掉首次残留的半初始化模块，保证重试幂等

@@ -103,6 +103,12 @@ def _migrate_identity_id_columns(database):
                 raise
 
 
+def allow_repair_flag(database) -> bool:
+    """是否显式允许运行期补建缺失表/账本（默认否）。"""
+    cfg = getattr(database, 'config', None) or {}
+    return bool(cfg.get('repair_missing_tables', False))
+
+
 def _auto_create_tables(database, context=None):
     """创建框架扩展表并应用版本化迁移。
 
@@ -253,10 +259,28 @@ def _auto_create_tables(database, context=None):
         tables = mysql_tables
     for name, ddl in tables.items():
         try:
+            from framework.database import integrity
+
+            allow_repair = allow_repair_flag(database)
+            if (not allow_repair and not integrity.may_create(database, name)
+                    and not database.table_exists(name)):
+                logger.error(
+                    "扩展表 %s 在运行期被删除：按策略不自动重建（避免空表掩盖数据丢失）。"
+                    "请从 data/backups/ 恢复，或确认后开启 database.repair_missing_tables。",
+                    name)
+                continue
             database.execute(ddl)
             logger.debug(f"自动建表: {name}")
         except Exception as e:
             logger.warning(f"自动建表失败 [{name}]: {e}")
+
+    # 扩展表建完后并入标记，下次启动才能判定它们「曾经存在」。
+    try:
+        from framework.database import integrity
+
+        integrity.record_tables(database)
+    except Exception as e:
+        logger.debug("更新数据库初始化标记失败（不影响启动）: %s", e)
 
     # 版本化迁移：账本 schema_migrations 记录已应用版本，每版只执行一次。
     # 迁移失败不阻塞启动（可用性优先），但必须可见：error 日志 + 账本 success=0
@@ -267,12 +291,28 @@ def _auto_create_tables(database, context=None):
     # 自动化的启动流程不能同时充当授权者。
     report = None
     try:
-        ctx = context or migrations_context(database, source='boot')
-        report = run_migrations(database, MIGRATIONS, ctx)
+        from framework.database import integrity
+        from framework.database.migrations import LEDGER_TABLE
+
+        if (integrity.is_initialized(database)
+                and not database.table_exists(LEDGER_TABLE)
+                and not allow_repair_flag(database)):
+            # 账本表在运行期被删：此时 run_pending 会判成 first_run，
+            # 把历史迁移（含 destructive）一次性重放。必须先拦住。
+            logger.error(
+                "迁移账本表 %s 在运行期被删除：按策略不重建账本、也不重放历史迁移"
+                "（首次接管判定会把 destructive 迁移一并放行）。"
+                "请从 data/backups/ 恢复，或确认后开启 database.repair_missing_tables。",
+                LEDGER_TABLE)
+        else:
+            ctx = context or migrations_context(database, source='boot')
+            report = run_migrations(database, MIGRATIONS, ctx)
     except Exception as e:
         logger.error("数据库迁移引擎异常，已跳过迁移: %s", e)
     else:
-        if report.get('blocked'):
+        if report is None:
+            pass
+        elif report.get('blocked'):
             b = report['blocked'][0]
             logger.error(
                 "数据库迁移待授权：v%s %s（%s）未执行 —— %s。"

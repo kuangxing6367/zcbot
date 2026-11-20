@@ -70,6 +70,9 @@ database:
   # 迁移按级别执行：additive（加表加列）开机自动跑；
   # rewrite（重建表/改类型）自动跑但先备份；destructive（删表删列删数据）
   # 必须人工执行 `python -m framework.database.migrate up --approve <变更单号>`。
+  # 运行期核心表被删时默认只告警、不补建（补建会得到空表，且可能把默认
+  # 管理员口令重新种回去）。确认要补时再开下面这个开关；补建不含默认口令。
+  # repair_missing_tables: false
   migrations:
     auto_apply_destructive: false   # 生产环境保持 false：开机流程不能兼任批准人
     backup_before_rewrite: true     # rewrite/destructive 前自动备份（SQLite 在线快照）
@@ -159,6 +162,7 @@ observability:
   health: true                 # /healthz（存活，不查库）与 /readyz（就绪，含逐项检查明细）
   metrics: true                # /metrics（Prometheus 文本格式，仅在 API 端口暴露，避免公网 WebUI 端口泄露）
   metrics_token: ""            # 非空时 /metrics 需 Authorization: Bearer <token>（跨机抓取时设置）
+  db_probe_ttl: 1.5            # 就绪探针读库结果缓存秒数，0 = 每次真读
 
 # ── 入站可靠性（去重 + 限流，核心基础设施，非运维项）──────────────
 # 生产环境机器人先挂的往往是「没限流」和「重连重放重复回复」，不是命令逻辑。
@@ -250,11 +254,24 @@ plugin:
   max_memory_mb: 64          # 单插件内存上限（MB），超限自动卸载
   hot_reload: true           # 用户插件（plugins/）源码变更时自动全量热重载（unload+reload），改动的 handler 逻辑即时生效；false 则沿用旧行为（仅重新注册，不重跑模块代码）。仅作用于用户插件，核心插件不参与
 
+# ── 插件源码静态检查（启动期扫描同步阻塞 / 同步等待 / 同步退出）──
+# 启动时先用 AST 把插件目录整体扫一遍，命中写进日志后照常启动；
+# 只读源码、不执行插件代码，也不改动任何文件。
+plugins:
+  source_scan:
+    enabled: true                    # 启动时扫描插件目录（默认开）
+    mode: warn                       # warn=命中只告警并继续启动（默认）；block=命中即拒绝加载该插件
+    scan_core_plugins: true          # 一并扫描 core_plugins/（官方插件同样跑在核心进程内）
+    max_report: 50                   # 单次启动最多逐条打印多少条命中，其余汇总一行
+    allowlist: []                    # 信任的插件名（跳过静态检查）
+    block_on_import_side_effects: true # 仅 mode=block 生效：模块加载期的退出/阻塞拒绝加载
+    block_on_blocking_handler: true  # 仅 mode=block 生效：async handler 里的同步阻塞同样拒绝
+
 # ── 依赖自检（启动自愈）──────────────────────────────────
 # 启动自检读取 requirements.txt，自动安装缺失的核心依赖（移机自愈）。
 # allow_missing：列出"允许缺失、无需安装也不报错"的包名（小写，连字符/下划线等价）。
 #   这些包即便缺失，也只记一条 WARNING，不强制安装、不打断启动、不退出。
-#   适用：确定不用的可选依赖（如纯 Web 部署不装 Pillow / 不用 IIPC 不装 go 工具链对应包）。
+#   适用：确定不用的可选依赖（如纯 Web 部署不装 Pillow / 不接 IM 平台不装对应驱动包）。
 #   注意：被注释在 requirements.txt 中的可选依赖本就不会被自检强制，无需在此重复列出。
 dependencies:
   allow_missing: []
@@ -370,6 +387,13 @@ scheduler:
 # ── 框架基础约定与限制（framework 段） ────────────────────────
 # 集中管理此前散落或写死的基础约定，统一在此可调；WebUI 也通过本段编辑。
 framework:
+  startup_info: true          # 启动时打印运行环境（Python/虚拟环境/容器/特权身份）
+  security:
+    warn_if_root: true        # 以 root / 管理员身份运行时告警
+  config:
+    on_error: abort           # abort（默认，拒绝启动）/ default（显式授权降级到内置默认配置）
+    strict_unknown_keys: true # 安全段的未知键是否中止启动
+
   # ── 状态目录自动迁移（默认开启）──
   # 启动期探测当前目录是哪一代版本留下的布局；若是旧版根目录布局，自动把
   # config.yaml / core_plugins.yaml / plugins/ 收敛到 data/。
@@ -413,6 +437,14 @@ framework:
     # 默认 256KB；若只想要粗粒度现场可调小，想要更长回溯可调大。
     max_bytes: 262144           # 默认 256KB
 
+  # ── 本地控制通道（外部进程查看黑匣子）──
+  # 只监听 127.0.0.1；端口与每次启动重新生成的令牌写入 <state_dir>/control.json。
+  # 令牌不写入本文件。修改本段后需重启框架。
+  control:
+    enabled: true
+    port: 0            # 0 = 随机端口，实际端口写入 <state_dir>/control.json
+    allow_clear: false # true 时才允许 blackbox.clear，且请求仍需 confirm: true
+
   # ── 崩溃重启守卫（Crash-loop Guard）──
   # 解决“DB 损坏/启动致命异常 → systemd/pm2 无限重启 → 永远起不来”的死循环：
   # 崩溃时写 error.log（自动轮转 .1..N）；累计 ≥ max_restarts 次直接拒绝启动并给出处置指引。
@@ -447,25 +479,11 @@ dual_process:
   event_batch_max: 64       # 核心→宿主事件攒批条数上限（<=1 关闭批量，逐条发送）
   event_batch_delay_ms: 5   # 攒批时间窗口（毫秒）；满批或到窗口即发送
 
-# ── IIPC 内核链路（可选，--iipc 启动）────────────────────────
-# 与主框架并列的第二条启动路径；不带 --iipc 时本节不参与。
-# 优先级：命令行 > 本节 > 环境变量 > 内置默认。
-iipc:
-  ipc_addr: "127.0.0.1:18730"
-  db: ":memory:"
-  admin: ""
-  plugins_dir: ""
-  onebot_url: ""
-  onebot_listen: ""
-  onebot_token: ""
-  no_rust: false
-  max_rss_mb: 1024
-
 # ── 调试控制台（无 TTY 也能接进运行中的框架） ──────────────────
 # 启动时在 127.0.0.1 上监听一个本地端口，端口与超长随机 token 自动生成并
 # 存入数据库（console_access 表），无需重启、无需 TTY（systemd 托管场景）。
 # 本地执行 `python startup.py attach` 即可接入，直接使用框架的终端命令
-# （help / status / plugins / reload / ...）。
+# (help / status / plugins / reload / ...).
 console:
   enabled: true              # 是否启用本地调试控制台
   host: 127.0.0.1            # 仅回环地址；不要改成 0.0.0.0（等于把控制台暴露到网络）
@@ -597,7 +615,36 @@ _CONFIG_SCHEMA = {
     'database': {
         'type': dict,
         'keys': {
-            'type': {'allowed': ('sqlite', 'mysql')},
+            # debug = 进程内 SQL 模拟引擎（framework/database/migrate.py、
+            # storage.py、init_db._init_debug 都有对应分支），是合法取值。
+            'type': {'allowed': ('sqlite', 'mysql', 'debug')},
+            # SQLite 路径与 MySQL 连接参数都是运行时真实读取的键；
+            # 之前只声明了 type/backup，导致合法配置被误报成未知键。
+            'path': {'str': True},
+            'host': {'str': True},
+            'port': {'int': True, 'min': 1, 'max': 65535},
+            'user': {'str': True},
+            'password': {'str': True},
+            'database': {'str': True},
+            'name': {'str': True},
+            'charset': {'str': True},
+            'pool_size': {'int': True, 'min': 1},
+            'pool_wait_timeout': {'float': True, 'min': 0},
+            'ping_interval': {'float': True, 'min': 0},
+            'connect_timeout': {'float': True, 'min': 0},
+            'read_timeout': {'float': True, 'min': 0},
+            'write_timeout': {'float': True, 'min': 0},
+            'max_reconnect': {'int': True, 'min': 0},
+            'repair_missing_tables': {'bool': True},
+            'migrations': {
+                'type': dict,
+                'keys': {
+                    'auto_apply_destructive': {'bool': True},
+                    'backup_before_rewrite': {'bool': True},
+                    'keep_backups': {'int': True, 'min': 0},
+                    'operator': {'str': True},
+                },
+            },
             # 自动备份：全部阈值可改。类型写错时这里就拦下，
             # 而不是等到半夜备份线程跑到一半才发现 interval 是个字符串。
             'backup': {
@@ -641,7 +688,11 @@ _CONFIG_SCHEMA = {
         'keys': {
             'host': {'str': True},
             'port': {'int': True, 'min': 1, 'max': 65535},
+            'api_port': {'int': True, 'min': 1, 'max': 65535},
+            'ui_enabled': {'bool': True},
+            'secret_key': {'str': True},
             'session_timeout': {'int': True, 'min': 30},
+            'token_timeout': {'int': True, 'min': 30},
         },
     },
     'observability': {
@@ -649,8 +700,21 @@ _CONFIG_SCHEMA = {
         'keys': {
             'health': {'bool': True},
             'metrics': {'bool': True},
+            'db_probe_ttl': {'float': True, 'min': 0, 'max': 60},
         },
     },
+    # WebUI 插件段（core_plugins.yaml 管启停，这里只声明已知的配置键）。
+    # 声明 security 是为了让 webui.securty 这类拼写错误能被点名提示。
+    'webui': {
+        'type': dict,
+        'keys': {
+            'security': {'bool': True},
+            'theme': {'str': True},
+            'max_messages': {'int': True, 'min': 1},
+        },
+    },
+    # 独立管理员来源（文件 + DB 双来源）保留段；为空也不影响启动。
+    'auth': {'type': dict, 'keys': {}},
     'reliability': {
         'type': dict,
         'keys': {
@@ -693,6 +757,60 @@ _CONFIG_SCHEMA = {
         'keys': {
             'level': {'allowed': ('off', 'low', 'medium', 'high', 'paranoid')},
             'silent_auth': {'bool': True},
+            # 与等级无关的独立参数
+            'fake_token_len': {'int': True, 'min': 1},
+            'real_token_len': {'int': True, 'min': 1},
+            'nonce_len': {'int': True, 'min': 1},
+            'fake_response_msg': {'str': True},
+            'nonce_expiry': {'int': True, 'min': 0},
+            'blacklist_enabled': {'bool': True},
+            'whitelist_ips': {'any': True},
+            'trusted_proxies': {'any': True},
+            'success_fake_data': {'any': True},
+            # 单项覆盖（可选；不填则完全由 security.level 决定）
+            'headers': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'server': {'str': True},
+                    'csp': {'str': True},
+                },
+            },
+            'human_check': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'difficulty': {'int': True, 'min': 0, 'max': 16},
+                    'apply_to': {'allowed': ('all', 'login', 'none')},
+                    'bypass_whitelist': {'bool': True},
+                    'ticket_ttl': {'int': True, 'min': 0},
+                    'challenge_ttl': {'int': True, 'min': 0},
+                },
+            },
+            'honeypot': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'decoy_set': {'allowed': ('off', 'basic', 'full')},
+                    'tarpit_ms': {'int': True, 'min': 0},
+                    'blacklist': {'bool': True},
+                    'blacklist_ttl': {'int': True, 'min': 0},
+                    'log_body': {'bool': True},
+                    'max_body_log': {'int': True, 'min': 0},
+                    'unknown_api_decoy': {'bool': True},
+                    # 弱证据拉黑阈值：honeypot.py 与 security_levels.py 真实读取。
+                    'ban_internal_ips': {'bool': True},
+                    'ban_threshold': {'int': True, 'min': 1},
+                    'ban_window': {'int': True, 'min': 1},
+                    'auth_fail_blacklist': {'int': True, 'min': 0},
+                    'auth_fail_window': {'int': True, 'min': 0},
+                    'tarpit_auth_ms': {'int': True, 'min': 0},
+                    'invalid_token_decoy': {'bool': True},
+                    'canary': {'bool': True},
+                    'evasion_detect': {'bool': True},
+                    'fake_404': {'bool': True},
+                },
+            },
         },
     },
     'log': {
@@ -721,6 +839,23 @@ _CONFIG_SCHEMA = {
             'auto_install_deps_on_startup': {'bool': True},
         },
     },
+    'plugins': {
+        'type': dict,
+        'keys': {
+            'source_scan': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'mode': {'str': True, 'allowed': ['warn', 'block']},
+                    'scan_core_plugins': {'bool': True},
+                    'max_report': {'int': True, 'min': 0},
+                    'block_on_import_side_effects': {'bool': True},
+                    'block_on_blocking_handler': {'bool': True},
+                    'allowlist': {'any': True},
+                },
+            },
+        },
+    },
     'memory': {
         'type': dict,
         'keys': {
@@ -730,10 +865,32 @@ _CONFIG_SCHEMA = {
     'framework': {
         'type': dict,
         'keys': {
+            'startup_info': {'bool': True},
+            'security': {
+                'type': dict,
+                'keys': {
+                    'warn_if_root': {'bool': True},
+                },
+            },
+            'config': {
+                'type': dict,
+                'keys': {
+                    'on_error': {'allowed': ('abort', 'default')},
+                    'strict_unknown_keys': {'bool': True},
+                },
+            },
             'conventions': {
                 'type': dict,
                 'keys': {
                     'command_prefix': {'str': True},
+                },
+            },
+            'control': {
+                'type': dict,
+                'keys': {
+                    'enabled': {'bool': True},
+                    'port': {'int': True, 'min': 0, 'max': 65535},
+                    'allow_clear': {'bool': True},
                 },
             },
             'crash': {
@@ -748,6 +905,45 @@ _CONFIG_SCHEMA = {
         },
     },
 }
+
+# 默认模板里还有大量「合法但没有强类型约束」的段/键（ssl、http_api、terminal…）。
+# 双向未知键检测必须认识它们，否则一份原封不动的默认配置会被自己报成未知配置。
+# 这里从模板自动补齐「已知键」名单，已有显式 schema 的项保持原样（不降级校验强度）。
+_KNOWN_TOP_LEVEL = set(_CONFIG_SCHEMA)
+
+
+def _merge_declared_keys(defaults: dict, keys: dict) -> None:
+    for key, val in defaults.items():
+        if not isinstance(key, str):
+            continue
+        if key not in keys:
+            if isinstance(val, dict):
+                keys[key] = {'type': dict, 'keys': {}}
+                _merge_declared_keys(val, keys[key]['keys'])
+            else:
+                keys[key] = {'any': True}
+            continue
+        entry = keys[key]
+        if isinstance(val, dict) and isinstance(entry, dict) and 'type' in entry:
+            _merge_declared_keys(val, entry.setdefault('keys', {}))
+
+
+def _merge_declared_defaults():
+    try:
+        defaults = yaml.safe_load(_DEFAULT_CONFIG) or {}
+    except yaml.YAMLError:
+        return
+    if not isinstance(defaults, dict):
+        return
+    for sec, val in defaults.items():
+        _KNOWN_TOP_LEVEL.add(sec)
+        if not isinstance(val, dict):
+            continue
+        entry = _CONFIG_SCHEMA.setdefault(sec, {'type': dict, 'keys': {}})
+        _merge_declared_keys(val, entry.setdefault('keys', {}))
+
+
+_merge_declared_defaults()
 
 
 def _coerce_int(v):
@@ -837,6 +1033,428 @@ def _validate_keys(path: str, node: dict, spec: dict, issues: list) -> None:
             continue
 
 
+class ConfigLoadError(Exception):
+    """配置文件语法错误：不可静默降级，调用方必须拒绝启动。"""
+
+    def __init__(self, path, line, column, snippet, cause):
+        self.path = os.path.abspath(str(path))
+        self.line = line
+        self.column = column
+        self.snippet = snippet or ''
+        self.cause = cause
+        self.copy_path = ''
+        super().__init__(
+            f'配置文件语法错误: {self.path} 第 {self.line} 行第 {self.column} 列: {self.cause}')
+
+
+class ConfigValidationError(Exception):
+    """安全段未知键等致命校验问题：与语法错误一样拒绝启动（退出码 2）。"""
+
+    def __init__(self, path, issues):
+        self.path = os.path.abspath(str(path))
+        self.issues = list(issues)
+        detail = '；'.join(str(i) for i in self.issues[:5])
+        super().__init__(
+            f'配置校验未通过: {self.path}（{len(self.issues)} 处问题）'
+            + (f'：{detail}' if detail else ''))
+
+
+class ConfigIssue(str):
+    """问题清单条目：保持 str 语义，额外携带日志级别供启动横幅分流。"""
+
+    def __new__(cls, text, level='warning'):
+        obj = super().__new__(cls, text)
+        obj.level = level
+        return obj
+
+
+def _make_broken_copy(path: str) -> str:
+    """把坏配置原文复制到 <path>.broken.<时间戳>，原文件只读。"""
+    import shutil
+    import time
+
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    copy_path = f'{path}.broken.{stamp}'
+    suffix = 1
+    while os.path.exists(copy_path):
+        copy_path = f'{path}.broken.{stamp}.{suffix}'
+        suffix += 1
+    try:
+        shutil.copyfile(path, copy_path)
+    except OSError as e:
+        return f'副本创建失败: {e}'
+    return copy_path
+
+
+def _error_context(snippet: str, line) -> list:
+    """出错行前后各 2 行原文，问题行用 > 标记。"""
+    lines = (snippet or '').splitlines()
+    if isinstance(line, int) and 1 <= line <= len(lines):
+        start, end = max(1, line - 2), min(len(lines), line + 2)
+    else:
+        start, end = 1, min(len(lines), 5)
+    out = []
+    for no in range(start, end + 1):
+        out.append(f"    {'>' if no == line else ' '} {no:>4} | {lines[no - 1]}")
+    return out or ['    （原文为空）']
+
+
+def format_config_error(exc: ConfigLoadError) -> str:
+    """结构化错误块：print 到 stderr 与 logger.critical 必须用同一份内容。"""
+    return '\n'.join([
+        '=' * 72,
+        '[配置文件语法错误] 框架未启动，请修复后重启',
+        f'  配置文件: {exc.path}',
+        f'  错误位置: 第 {exc.line} 行，第 {exc.column} 列',
+        f'  YAML 报错: {exc.cause}',
+        f'  原文副本: {os.path.abspath(exc.copy_path) if exc.copy_path else "未创建（只读检查）"}',
+        '  出错位置前后 2 行原文（> 标出问题行）:',
+        *_error_context(exc.snippet, exc.line),
+        '  原配置文件未被修改；修复后可用 python -m framework.config --check <path> 复核。',
+        '=' * 72,
+    ])
+
+
+def _peek_on_error(raw: str) -> str:
+    """坏配置无法整体解析，只做最小限度的显式降级开关探测。
+
+    只认 framework.config.on_error: default；匹配不到一律 abort。
+    """
+    import re
+
+    match = re.search(r'(?m)^\s*on_error:\s*([A-Za-z_][\w-]*)\s*(?:#.*)?$', raw or '')
+    return (match.group(1).strip().lower() if match else '') or 'abort'
+
+
+def _best_effort_crash_config(path: str = None, root: str = None) -> dict:
+    """配置本身读不出来时，单独容错取出 crash 段；取不到就用默认值。
+
+    崩溃日志写入路径绝不能因为配置语法错误而再次抛异常，破坏退出路径。
+    """
+    from framework.paths import home_dir, resolve_config_path
+
+    base = {
+        'framework': {'crash': {
+            'enabled': True,
+            'safe_mode': True,
+            'max_restarts': 5,
+            'path': os.path.join(root or home_dir(), 'error.log'),
+        }},
+    }
+    cp = resolve_config_path(path)
+    if not os.path.isfile(cp):
+        return base
+    try:
+        with open(cp, 'r', encoding='utf-8') as f:
+            raw = f.read()
+    except OSError:
+        return base
+    try:
+        parsed = yaml.safe_load(raw)
+        crash = ((parsed or {}).get('framework') or {}).get('crash') \
+            if isinstance(parsed, dict) else None
+        if isinstance(crash, dict):
+            base['framework']['crash'].update(crash)
+            return base
+    except Exception:
+        pass
+    # 语法坏掉时按缩进找 framework.crash 段里的几个关键键。
+    crash_indent = None
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if crash_indent is None:
+            if stripped == 'crash:' and indent > 0:
+                crash_indent = indent
+            continue
+        if indent <= crash_indent and not stripped.startswith('#'):
+            break
+        for key in ('enabled', 'safe_mode', 'max_restarts', 'path'):
+            if stripped.startswith(key + ':'):
+                val = stripped.split(':', 1)[1].split('#', 1)[0].strip().strip('"\'')
+                if key in ('enabled', 'safe_mode'):
+                    base['framework']['crash'][key] = val.lower() in (
+                        '1', 'true', 'yes', 'on')
+                elif key == 'max_restarts':
+                    try:
+                        base['framework']['crash'][key] = int(val)
+                    except ValueError:
+                        pass
+                elif val:
+                    base['framework']['crash'][key] = val
+    return base
+
+
+def _default_values_banner(config: dict) -> str:
+    """显式选择默认配置时，逐项列出当前真正生效的关键值。"""
+    fill_missing_sections(config)
+    db = config.get('database') or {}
+    web = config.get('web') or {}
+    webui = config.get('webui') or {}
+    plugins = config.get('plugin') or {}
+    if str(db.get('type', '')).lower() == 'mysql':
+        db_text = ("mysql host=%s, database=%s" %
+                   (db.get('host') or '未检测到', db.get('database') or '未检测到'))
+    else:
+        db_text = f"sqlite {db.get('path') or '未检测到'}"
+    return '\n'.join([
+        '[当前运行的不是你的配置文件] 配置解析失败，已按显式授权使用内置默认配置。',
+        f"  database.type / path: {db_text}",
+        f"  web.host / port: {web.get('host') or '未检测到'} / {web.get('port') or '未检测到'}",
+        f"  webui.host / port: {webui.get('host') or web.get('host') or '未检测到'} / "
+        f"{webui.get('port') or web.get('port') or '未检测到'}",
+        f"  access_token 是否为空: {'是' if not (config.get('access_token') or config.get('onebot', {}).get('access_token')) else '否'}",
+        f"  framework.log_level: {(config.get('log') or {}).get('level') or '未检测到'}",
+        f"  插件目录: {plugins.get('dir') or '状态目录下的 plugins（默认）'}",
+        '  原配置文件未被修改；修复后请重启并移除显式降级开关。',
+    ])
+
+
+def report_config_load_error(exc: ConfigLoadError, root: str = None,
+                             config_path: str = None) -> None:
+    """进程入口统一处置：写副本、打印并落日志、计入崩溃计数。调用方自行 sys.exit(2)。"""
+    import sys
+
+    if not exc.copy_path or not os.path.isfile(exc.copy_path):
+        exc.copy_path = _make_broken_copy(exc.path)
+    block = format_config_error(exc)
+    print(block, file=sys.stderr)
+    _get_logger().critical(block)
+    try:
+        from framework.crash_guard import write_crash_log
+
+        write_crash_log(
+            _best_effort_crash_config(config_path or exc.path, root),
+            root or os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))),
+            extra={
+                '处置指引': ('修复配置文件语法后重启；可用 python -m framework.config --check '
+                             '<path> 复核。原文件未被修改，副本见上面的「原文副本」。'),
+                '配置错误': block,
+            })
+    except Exception as e:
+        _get_logger().warning(f'配置错误崩溃记录写入失败（不影响退出）: {e}')
+
+
+def report_config_validation_error(exc: ConfigValidationError, root: str = None,
+                                   config_path: str = None) -> None:
+    """安全段未知键等致命校验问题：结构化打印、落日志并计入崩溃计数。"""
+    import sys
+
+    block = '\n'.join([
+        '=' * 72,
+        '[配置校验失败] 框架未启动，请修复后重启',
+        f'  配置文件: {exc.path}',
+        *[f'  - {issue}' for issue in exc.issues],
+        '=' * 72,
+    ])
+    print(block, file=sys.stderr)
+    _get_logger().critical(block)
+    try:
+        from framework.crash_guard import write_crash_log
+
+        write_crash_log(
+            _best_effort_crash_config(config_path or exc.path, root),
+            root or os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))),
+            extra={
+                '处置指引': '修正上面点名的配置键后重启；可用 python -m framework.config --check <path> 复核。',
+                '配置错误': block,
+            })
+    except Exception as e:
+        _get_logger().warning(f'配置错误崩溃记录写入失败（不影响退出）: {e}')
+
+
+# 这些段写错的代价最高（安全开关 / 数据库连接 / 探针），未知键按 error 报。
+_SECURITY_SECTIONS = frozenset(
+    ('webui', 'auth', 'database', 'observability', 'security'))
+
+# 只对这些段做「段内未知键」检测：框架核心段 + 安全相关段。
+# 其余段（onebot/web/scheduler/http_api…）的键来自 core_plugins.yaml 的插件
+# 配置块动态合并，schema 无法穷举，检测只会制造噪声。
+_UNKNOWN_KEY_SECTIONS = frozenset(
+    ('framework', 'webui', 'security', 'auth', 'database', 'observability'))
+
+
+def _issue_level(path: str, strict: bool = True) -> str:
+    root = path.split('.', 1)[0]
+    if (path.startswith('framework.security') or path.startswith('framework.config')
+            or root in _SECURITY_SECTIONS):
+        return 'error' if strict else 'warning'
+    return 'warning'
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """标准 Levenshtein 距离（只用于配置键纠错建议，输入都很短）。"""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _suggest_key(key: str, candidates) -> str | None:
+    """仅当编辑距离 ≤2 或互为前缀时才给建议，避免猜出一个无关键。"""
+    low = str(key).lower()
+    best = None
+    best_score = None
+    for cand in candidates:
+        name = str(cand)
+        cl = name.lower()
+        if cl == low:
+            continue
+        distance = _edit_distance(low, cl)
+        if not (distance <= 2 or cl.startswith(low) or low.startswith(cl)):
+            continue
+        score = (distance, name)
+        if best_score is None or score < best_score:
+            best_score, best = score, name
+    return best
+
+
+def _walk_unknown_keys(node, spec, path, issues, strict=True) -> None:
+    """已声明配置段内做双向比对：多出来的键逐一点名。"""
+    if not isinstance(node, dict):
+        return
+    known = (spec or {}).get('keys', {}) or {}
+    for key, val in node.items():
+        if not isinstance(key, str):
+            continue
+        full = f"{path}.{key}" if path else key
+        kspec = known.get(key)
+        if kspec is not None:
+            if isinstance(kspec, dict) and 'type' in kspec and isinstance(val, dict):
+                _walk_unknown_keys(val, kspec, full, issues, strict)
+            continue
+        suggestion = _suggest_key(key, known)
+        text = f"配置项 [{full}] 不是已知配置键，已忽略。"
+        if suggestion:
+            text += f" 是否想写 [{full.rsplit('.', 1)[0]}.{suggestion}]？"
+        issues.append(ConfigIssue(text, _issue_level(full, strict)))
+
+
+def _nearest_section(name: str) -> str | None:
+    """只在编辑距离 ≤1 时给出「是否想写 X」。用于识别 webuii 这类手滑。
+
+    刻意不做 ≤2 的宽松匹配：``webuiplus`` 这种真实插件段名与 ``webui`` 的
+    距离是 5，但 ``user`` 与 ``users`` 之类只差 1 的两个名字依然可能是两个
+    独立的合法段，因此这里只接受 1，宁可漏报建议也不误导用户改名。
+    """
+    low = str(name).lower()
+    best = None
+    for cand in sorted(_KNOWN_TOP_LEVEL):
+        if cand.lower() == low:
+            continue
+        if _edit_distance(low, cand.lower()) <= 1:
+            if best is None or (cand, len(cand)) < (best, len(best)):
+                best = cand
+    return best
+
+
+def _plugin_section_names(config: dict) -> set:
+    """能被当成「插件配置段」的段名集合。
+
+    来源两处：
+      1. ``core_plugins`` 段合并后的键（插件开关表）；
+      2. 项目根 ``core_plugins/`` 与 ``plugins/`` 下含 main.py 的目录名。
+
+    插件会在 config 里占一个与插件同名的配置段（``aiwriter`` / ``webuiplus``…），
+    不做这个识别就会把几十个合法段报成「未知配置段」，还会给出
+    ``webuiplus`` → ``webui`` 这种会让插件配置失效的错误建议。
+    """
+    names = set()
+    cp = config.get('core_plugins')
+    if isinstance(cp, dict):
+        names.update(str(k) for k in cp)
+    try:
+        from framework.paths import home_dir
+
+        root = home_dir()
+        for sub in ('core_plugins', 'plugins'):
+            base = os.path.join(root, sub)
+            try:
+                entries = os.listdir(base)
+            except OSError:
+                continue
+            for entry in entries:
+                item = os.path.join(base, entry)
+                if not os.path.isdir(item):
+                    continue
+                if (os.path.isfile(os.path.join(item, 'main.py'))
+                        or os.path.isfile(os.path.join(item, 'main.py.disabled'))):
+                    names.add(entry)
+    except Exception as e:
+        logger.debug('[config] 插件段名枚举失败（按无插件段处理）: %s', e)
+    return names
+
+
+def _collect_unknown_keys(config: dict, issues: list, strict=True) -> None:
+    """双向比对：只对「框架核心段 + 安全段」做段内未知键检测。
+
+    为什么不做全段检测：``onebot`` / ``web`` / ``scheduler`` / ``http_api`` 这些段
+    的键由 core_plugins.yaml 的插件配置块动态合并进来（``enabled`` /
+    ``max_pending_events`` 等），schema 天然不可能穷举；插件还会各自占一个同名
+    配置段（``aiwriter`` / ``webuiplus`` / ``llm_load``…）。对这些做未知键检测
+    只会刷出几十条噪声，把真正的拼写错误淹没掉——那和"静默忽略"一样有害。
+
+    未知顶层段同理：无法区分「用户自己插件写的配置段」与「框架段名手滑」，
+    因此识别出的插件段直接跳过，其余一律按 warning 报出（``foo`` 这种手滑
+    会被点名）；只有编辑距离 ≤1 时才附带「是否想写 X」的建议。
+    """
+    plugins = _plugin_section_names(config)
+    for sec, val in config.items():
+        # 下划线开头是框架内部注入的字段（如 _config_path），不是用户写的配置段。
+        if not isinstance(sec, str) or sec.startswith('_'):
+            continue
+        spec = _CONFIG_SCHEMA.get(sec)
+        if sec not in _KNOWN_TOP_LEVEL and spec is None:
+            if sec in plugins or sec == 'core_plugins':
+                # 插件配置段：插件自己读，框架无从判定键名。
+                continue
+            text = f"配置段 [{sec}] 不是已知配置段，已忽略。"
+            suggestion = _nearest_section(sec)
+            if suggestion:
+                text += f" 是否想写 [{suggestion}]？"
+            issues.append(ConfigIssue(text, 'warning'))
+            continue
+        if sec not in _UNKNOWN_KEY_SECTIONS:
+            continue
+        if isinstance(val, dict) and isinstance(spec, dict):
+            _walk_unknown_keys(val, spec, sec, issues, strict)
+
+
+def _normalize_issues(issues: list, strict: bool) -> list:
+    """把「无级别的纯字符串问题」补成带 level 的 ConfigIssue。
+
+    ``_validate_keys`` 里追加的是纯字符串（值/类型/枚举/范围），没有 level
+    属性；而 ``load_config`` 用 ``getattr(i, 'level', 'warning')`` 决定要不要
+    中止启动，缺属性就一律按 warning 放行——安全段的枚举写错（经典例子：
+    ``security.level: off`` 不加引号会被 YAML 解析成布尔 False，框架静默
+    回退到 medium，管理员以为关了防护其实没关）就这样漏过去了。
+    """
+    out = []
+    for item in issues:
+        if hasattr(item, 'level'):
+            out.append(item)
+            continue
+        text = str(item)
+        match = re.search(r'\[([^\]]+)\]', text)
+        path = match.group(1) if match else ''
+        out.append(ConfigIssue(text, _issue_level(path, strict)))
+    return out
+
+
 def validate_config(config: dict) -> list:
     """校验配置值与类型，返回问题清单（每条为可读中文）。
 
@@ -869,7 +1487,12 @@ def validate_config(config: dict) -> list:
             if not db.get(k):
                 issues.append(f"database.type=mysql 但缺少 database.{k}，将无法连接数据库")
 
-    return issues
+    fw = config.get('framework') or {}
+    cfg_section = fw.get('config') or {} if isinstance(fw, dict) else {}
+    strict = _as_bool(cfg_section.get('strict_unknown_keys', True)) \
+        if isinstance(cfg_section, dict) else True
+    _collect_unknown_keys(config, issues, strict=strict)
+    return _normalize_issues(issues, strict)
 
 
 def load_config(config_path: str = None) -> dict:
@@ -885,24 +1508,27 @@ def load_config(config_path: str = None) -> dict:
         _get_logger().warning(f"配置文件不存在，正在生成默认配置: {config_path}")
         _generate_default_config(config_path)
 
+    # 语法错误红线：原文件只读不写，默认拒绝启动（ConfigLoadError）。
+    # 只有显式 framework.config.on_error: default 或命令行
+    # --allow-default-config（ZCBOT_ALLOW_DEFAULT_CONFIG=1）才允许降级到内置默认值。
+    broken = False
     with open(config_path, 'r', encoding='utf-8') as f:
-        try:
-            config = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            _get_logger().error(
-                f"配置文件语法错误: {config_path} - {e}\n"
-                f"已回退到默认配置启动，请修复配置后重启"
-            )
-            backup = config_path + '.bak'
-            try:
-                import shutil
-                shutil.copy(config_path, backup)
-                _get_logger().warning(f"损坏的配置文件已备份到: {backup}")
-            except Exception as _exc:
-                logger.debug('[load_config] 捕获异常后按降级路径继续: %s', _exc)
-            _generate_default_config(config_path)
-            with open(config_path, 'r', encoding='utf-8') as f2:
-                config = yaml.safe_load(f2)
+        raw = f.read()
+    try:
+        config = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        broken = True
+        mark = getattr(e, 'problem_mark', None)
+        line_no = (mark.line + 1) if mark is not None else '未知'
+        col_no = (mark.column + 1) if mark is not None else '未知'
+        allow_default = (os.environ.get('ZCBOT_ALLOW_DEFAULT_CONFIG') == '1'
+                         or _peek_on_error(raw) == 'default')
+        if not allow_default:
+            exc = ConfigLoadError(config_path, line_no, col_no, raw, e)
+            exc.copy_path = _make_broken_copy(config_path)
+            raise exc
+        config = yaml.safe_load(_DEFAULT_CONFIG) or {}
+        _get_logger().critical(_default_values_banner(config))
     if config is None:
         config = {}
 
@@ -911,7 +1537,7 @@ def load_config(config_path: str = None) -> dict:
     try:
         from framework import secretbox as _secretbox
         _secretbox.warn_if_no_key()
-        if _secretbox.available():
+        if _secretbox.available() and not broken:
             _migrated = _secretbox.migrate_file_and_config(config_path, config)
             if _migrated:
                 _get_logger().info("已将 %d 处明文凭据加密写回 %s", _migrated, config_path)
@@ -949,11 +1575,20 @@ def load_config(config_path: str = None) -> dict:
     except Exception as e:
         _get_logger().warning(f"配置校验异常（跳过）: {e}")
     else:
-        if _issues:
+        errors = [i for i in _issues if getattr(i, 'level', 'warning') == 'error']
+        warnings = [i for i in _issues if getattr(i, 'level', 'warning') != 'error']
+        if errors:
+            _get_logger().error(
+                "配置文件存在 %d 处高危问题（安全/连接开关可能已失效），拒绝启动：\n  - %s",
+                len(errors), "\n  - ".join(errors))
+            raise ConfigValidationError(config_path, errors)
+        if warnings:
             _get_logger().warning(
                 "配置文件存在 %d 处可疑配置（不影响启动，但可能静默误配），请检查：\n  - %s",
-                len(_issues), "\n  - ".join(_issues))
+                len(warnings), "\n  - ".join(warnings))
 
+    # 启动横幅显示真实配置路径；不作为 YAML 键写回，也不参与校验/未知键扫描。
+    config['_config_path'] = os.path.abspath(config_path)
     return config
 
 
@@ -1475,3 +2110,57 @@ def _core_plugin_desc(name: str):
 
 
 _config = None
+
+
+def check_config(path: str = None) -> int:
+    """只读加载 + 校验配置：不生成文件、不启动框架、不迁移凭据。
+
+    返回 0 = 通过，2 = 有问题（语法错误 / 结构错误 / 校验问题清单非空）。
+    """
+    if path is None:
+        from framework.paths import resolve_config_path
+
+        path = resolve_config_path()
+    path = os.path.abspath(path)
+    if not os.path.isfile(path):
+        print(f'配置检查失败：文件不存在: {path}')
+        return 2
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        mark = getattr(e, 'problem_mark', None)
+        line_no = (mark.line + 1) if mark is not None else '未知'
+        col_no = (mark.column + 1) if mark is not None else '未知'
+        print(f'配置检查失败：{path} 第 {line_no} 行第 {col_no} 列语法错误: {e}')
+        return 2
+    issues = validate_config(config)
+    if issues:
+        print(f'配置检查失败：{path} 共 {len(issues)} 处问题：')
+        for issue in issues:
+            print(f'  - [{getattr(issue, "level", "warning")}] {issue}')
+        return 2
+    print(f'配置检查通过：{path}')
+    return 0
+
+
+def _main():
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description='ZCBOT 配置文件只读检查')
+    parser.add_argument('--check', action='store_true',
+                        help='只加载并校验配置，不启动框架、不写任何文件')
+    parser.add_argument('path', nargs='?', default=None,
+                        help='配置文件路径（缺省用默认解析路径）')
+    args = parser.parse_args()
+    if not args.check:
+        parser.print_help()
+        return 0
+    return check_config(args.path)
+
+
+if __name__ == '__main__':
+    import sys
+
+    sys.exit(_main())

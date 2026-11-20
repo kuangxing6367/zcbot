@@ -10,6 +10,7 @@ import time
 
 from framework import i18n
 from framework.deps import classify_load_error
+from framework.loader.source_scan import scan_mode, scan_plugin
 from framework.memory import log_malloc_hint, process_memory_snapshot, trim_memory
 
 logger = logging.getLogger('zcbot')
@@ -89,6 +90,16 @@ class FrameworkRuntimeMixin:
                 continue
 
             try:
+                scan_issues = scan_plugin(name, main_file, self.config)
+                if scan_issues:
+                    detail = '；'.join(str(i) for i in scan_issues[:5])
+                    if scan_mode(self.config) == 'block':
+                        logger.error(
+                            f"官方插件 [{name}] 源码静态检查未通过，跳过加载：{detail}")
+                        continue
+                    logger.warning(
+                        f"官方插件 [{name}] 源码静态检查命中 {len(scan_issues)} 处可疑写法，"
+                        f"按 warn 模式继续加载：{detail}")
                 spec = importlib.util.spec_from_file_location(
                     f"core_plugin_{name}", main_file,
                     submodule_search_locations=[plugin_dir])

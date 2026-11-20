@@ -131,6 +131,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 降级标志：数据库不可用时，框架以 data/db 文件存储（JSON/YAML）运行
         self.db_degraded = bool(getattr(self.db, 'degraded', False))
+        # 运行期核心表缺失清单（丢表不补建，只告警；/readyz 会因此不就绪）
+        self.schema_incomplete = list(getattr(self.db, 'schema_incomplete', None) or [])
         if self.db_degraded:
             logger.warning(
                 "框架处于数据库降级模式：持久化能力受限，使用 data/db 下 JSON/YAML 文件存储"
@@ -189,6 +191,8 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
 
         # 本地调试控制台（无 TTY 也能接进运行中的框架；见 framework/console_server.py）
         self.console_server = None
+        # 本地回环控制通道（外部进程读取黑匣子；启动收尾时创建）
+        self.control_server = None
 
         # 统计批量写库器
         self.stats_writer = AsyncStatsWriter(self)
@@ -586,6 +590,15 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         import time
         t0 = time.perf_counter()
 
+        # 0. 启动期插件预检：整目录扫一遍同步阻塞 / 同步等待 / 同步退出写法。
+        #    只写日志不阻断（拦截由 plugins.source_scan.mode=block 决定），
+        #    放在加载之前，插件 import 卡住时日志里已经有线索。
+        try:
+            from framework.loader import plugin_preflight
+            plugin_preflight.run(self.config)
+        except Exception as e:
+            logger.debug('插件预检未执行: %s', e)
+
         # 1. 加载官方插件（core_plugins/）— 必须最先加载，提供基础服务
         self._load_core_plugins()
         t_core = time.perf_counter()
@@ -645,6 +658,9 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         import time
         logger.info(i18n.t('framework.started',
                            elapsed="%.2f" % (time.time() - self._start_time)))
+
+        # 5. 启动本地控制通道。插件加载与路由预热已结束，此时对外提供黑匣子现场。
+        await self._start_control_channel()
 
     async def _background_startup_load(self):
         """异步启动模式的后台插件加载任务"""
@@ -722,6 +738,24 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
             self.console_server = None
         return self.console_server
 
+    async def _start_control_channel(self):
+        """启动本地控制通道；失败只告警，不影响框架主流程。"""
+        fw_cfg = self.config.get('framework', {}) or {}
+        cfg = fw_cfg.get('control', {}) or {}
+        if cfg.get('enabled', True) is False:
+            logger.info('本地控制通道已禁用（framework.control.enabled: false）')
+            return None
+        try:
+            from framework.control.server import start_control
+            from framework.paths import state_dir
+
+            self.control_server = await start_control(
+                state_dir=state_dir(), cfg=cfg)
+        except Exception as exc:
+            logger.warning('本地控制通道启动失败（不影响主流程）: %s', exc)
+            self.control_server = None
+        return self.control_server
+
     def build_ssl_context(self):
         """构建服务端 SSLContext（Web HTTPS 与 OneBot WSS 共用 config['ssl']）。
 
@@ -737,6 +771,14 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         """停止框架（异步）"""
         logger.info(i18n.t('framework.stopping'))
         self._running = False
+
+        # 控制通道先停：确保正常退出时删除 control.json。
+        if getattr(self, 'control_server', None) is not None:
+            try:
+                await self.control_server.stop()
+            except Exception as exc:
+                logger.debug('本地控制通道停止异常: %s', exc)
+            self.control_server = None
 
         # 先停备份线程：它可能正在 VACUUM/压缩，晚停会跟库关闭抢文件句柄。
         try:

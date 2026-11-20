@@ -90,7 +90,7 @@ def _kernel_plugin_dirs():
 
 
 def _iter_plugin_dirs(working_dir):
-    """yield (plugin_id, main_py_path, kind) —— kind: 'user' / 'core'。
+    """yield (plugin_id, main_py_path, kind) - kind: 'user' / 'core'.
 
     同时纳入 ``plugins_disabled/``（被卸载到禁用区的用户插件，标记仍为 user，
     但其启用态由 ``plugin_enabled_state`` 判定为 False）。

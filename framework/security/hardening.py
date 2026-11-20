@@ -394,8 +394,8 @@ def apply_socket_timeout(handler, seconds=DEFAULT_READ_TIMEOUT):
 # 实测修复前：外部消息里的 \r\n 可以伪造整行日志，ESC 序列能操控终端，
 # NUL/C0 控制符、bidi override 与零宽字符全部原样进入 log_broker 缓存。
 # 依据：CWE-117 Improper Output Neutralization for Logs、CWE-93 CRLF、
-# OWASP Logging Cheat Sheet「sanitize all event data」、
-# CVE-2021-42574 Trojan Source / UAX #9 / UTS #39。
+# OWASP Logging Cheat Sheet "sanitize all event data",
+# CVE-2021-42574 Trojan Source / UAX #9 / UTS #39.
 # 关键取舍：只改「日志输出」，不改事件原文。阿拉伯语、波斯语 ZWNJ、
 # emoji ZWJ 序列、CJK、变体选择符全部原样保留，避免误伤正常语言。
 _MAX_LOG_VALUE_CHARS = 4096

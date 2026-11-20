@@ -15,14 +15,18 @@
 provider 自己声明，不支持就干脆不带图。
 """
 import base64
-import ipaddress
 import logging
 import mimetypes
 import os
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+
+from framework.messaging.media_guard import (
+    check_url,
+    detect_image_kind,
+    inspect_image_bytes,
+)
 
 logger = logging.getLogger('zcbot.llm_core')
 
@@ -38,59 +42,30 @@ _MAX_IMAGE_BYTES = 5 * 1024 * 1024
 _MAX_BASE64_CHARS = 4 * 1024 * 1024
 _MAX_IMAGE_SEGMENTS = 10
 _MAX_URL_CHARS = 2048
-_IMAGE_MAGIC = (
-    (b'\x89PNG\r\n\x1a\n', 'image/png'),
-    (b'\xff\xd8\xff', 'image/jpeg'),
-    (b'GIF87a', 'image/gif'),
-    (b'GIF89a', 'image/gif'),
-    (b'BM', 'image/bmp'),
-)
+# 魔数 / URL 判定已收敛到 framework.messaging.media_guard。这里保留三个私有
+# 函数名作为薄封装，模型调用链的其它代码不需要改；判定规则只有一份。
 
 
 def _mime_of(raw: bytes) -> str:
     """按真实 magic bytes 判定图片类型；不是白名单格式返回空串。"""
-    for sig, mime in _IMAGE_MAGIC:
-        if raw.startswith(sig):
-            return mime
-    if raw[:4] == b'RIFF' and raw[8:12] == b'WEBP':
-        return 'image/webp'
-    return ''
+    return detect_image_kind(raw)[1]
 
 
 def _is_image_bytes(raw: bytes) -> bool:
-    if not raw or len(raw) > _MAX_IMAGE_BYTES:
-        return False
-    low = raw[:4096].lower()
-    for bad in (b'<svg', b'<!doctype', b'<!entity', b'<script',
-                b'push graphic-context', b'%!ps'):
-        if bad in low:
-            return False
-    return bool(_mime_of(raw))
+    """沿用本模块原有的 5MB 预算，其余规则交给统一内容闸门。"""
+    return bool(inspect_image_bytes(raw, max_bytes=_MAX_IMAGE_BYTES)['ok'])
 
 
 def _url_allowed(url: str) -> bool:
-    """只允许公网 http(s)；拒绝回环/私网/链路本地/云元数据地址。"""
+    """只允许公网 http(s)；拒绝回环/私网/链路本地/云元数据地址。
+
+    只做字面判定，不做 DNS：该函数在构造模型请求的同步路径上被调用，
+    解析域名会阻塞事件循环。真正的下载地址由 media_io 在下载线程里
+    做逐跳 DNS 复查，DNS rebinding 在那一步拦。
+    """
     if not isinstance(url, str) or len(url) > _MAX_URL_CHARS:
         return False
-    try:
-        p = urlparse(url)
-    except Exception as _exc:
-        logger.warning('[_url_allowed] 捕获异常后按降级路径继续: %s', _exc)
-        return False
-    if p.scheme not in ('http', 'https') or not p.hostname or p.username or p.password:
-        return False
-    host = p.hostname.lower().strip('[]')
-    if host in ('localhost', 'metadata', 'metadata.google.internal',
-                'instance-data', 'localhost.localdomain'):
-        return False
-    try:
-        ip = ipaddress.ip_address(host)
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return False
-    except ValueError:
-        pass
-    return True
+    return bool(check_url(url, resolver=lambda _host: [])['ok'])
 
 
 def _guess_mime(path: str, default: str = 'image/png') -> str:

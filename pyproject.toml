@@ -15,7 +15,7 @@
 
 [project]
 name = "zcbot"
-version = "1.28.2"
+version = "1.28.5"
 description = "ZCBOT 事件驱动 IM 平台：内核 + 扩展点契约 + 协议无关的接入端（以插件形式提供多平台接入）"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -45,6 +45,7 @@ dependencies = [
     "flask>=2.3.0",
     "flask-cors>=4.0.0",
     "waitress>=3.0.0",
+    "aiohttp>=3.8.0",
 ]
 
 [project.optional-dependencies]
@@ -106,11 +107,9 @@ py-modules = ["startup", "main", "zb"]
 
 [tool.setuptools.packages.find]
 include = ["framework*", "core_plugins*", "plugins*", "sql*"]
-# framework/iipc/tools/ 是开发期自检工具（联调探针、压测、e2e 脚本和
-# iipc_hardening_test.py），运行时不 import 任何一个，之前被当作命名空间包
-# 整目录打进 wheel。发行包里塞测试与压测脚本，等于让每个用户多下一份
-# 用不到的东西，还会被扫描工具当成"包内有测试代码"。
-exclude = ["*.__pycache__", "*.native.target*", "framework.iipc.tools*", "*.tests*"]
+# 纯非包目录（如 core_plugins/<name>/native/）会被 setuptools 当成命名空间包整目录
+# 打进 wheel；这里显式排除，避免发行包里塞进运行时不 import 的内容。
+exclude = ["*.__pycache__", "*.native.target*", "*.tests*"]
 
 # 非 package 目录下的原生二进制（image_renderer 按插件目录相对定位 native/bin/<平台>/）
 # + sql 建表脚本（init_db._find_sql_file 运行时读取）
@@ -139,6 +138,10 @@ asyncio_mode = "auto"
 # 不显式设置时 pytest-asyncio 会打 DeprecationWarning，且未来默认作用域会变；
 # 钉成 function 与现状一致，升级插件版本时不会静默改语义。
 asyncio_default_fixture_loop_scope = "function"
+# 当前 CI 环境对「单次批量删除 50+ 文件」有安全拦截；pytest 默认只保留最近 3 份
+# tmp_path 目录，回收旧目录时会被拦下并让进程退出码变 1。调高保留份数，
+# 避免测试进程在 teardown 阶段被外部清理策略误伤（临时目录仍由系统回收）。
+tmp_path_retention_count = 1000
 # 用例返回值当"汇报文字"用是历史写法（59 处，脚本运行器 print 出 fn() 的返回值）。
 # pytest 8 起报 PytestReturnNotNoneWarning，新版会直接判失败；已把说明改从 docstring
 # 取，并在这里升级为 error，防止新用例再走返回值这条路。

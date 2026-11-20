@@ -47,6 +47,14 @@ def register(ctx):
     _record_login_failure = ctx._record_login_failure
     _clear_login_failures = ctx._clear_login_failures
 
+    # 文件管理员兜底：DB 侧任何认证失败（查询异常 / 无此账号 / 禁用 / 密码错）
+    # 之后才尝试；命中且密码正确才签发自包含 token，全程不查库。
+    def _try_file_admin(client_ip, username, password):
+        if (emergency_admin.is_emergency_user(username)
+                and emergency_admin.verify_password(username, password)):
+            return _emergency_login(client_ip, username)
+        return None
+
     # 应急登录：不查库，签发自包含 token，审计写独立日志（审计表此刻可能也不可用）
     def _emergency_login(client_ip, username):
         _clear_login_failures(client_ip)
@@ -98,18 +106,11 @@ def register(ctx):
             row = None
             db_query_failed = True
 
-        # DB 侧认证失败（查询异常 / 账号不存在）时，尝试不依赖 DB 的应急管理员。
-        # 只有用户名命中应急账号才走这一步，且必须密码校验通过；否则维持原口径。
-        if row is None and emergency_admin.is_emergency_user(username):
-            if emergency_admin.verify_password(username, password):
-                return _emergency_login(client_ip, username)
-            if db_query_failed:
-                return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
-            _record_login_failure(client_ip)
-            audit_log(None, username, 'login', result='failure', error_message='用户不存在')
-            return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
-
-        if not row:
+        # DB 查询异常或账号不存在：先给文件管理员一次机会，再按原口径失败。
+        if row is None:
+            fallback = _try_file_admin(client_ip, username, password)
+            if fallback is not None:
+                return fallback
             if db_query_failed:
                 return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
             _record_login_failure(client_ip)
@@ -118,6 +119,9 @@ def register(ctx):
 
         if not row['is_active']:
             # 与「用户不存在/密码错误」返回一致文案，防止用户名枚举
+            fallback = _try_file_admin(client_ip, username, password)
+            if fallback is not None:
+                return fallback
             _record_login_failure(client_ip)
             audit_log(row['id'], username, 'login', result='failure', error_message='账号已禁用')
             return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
@@ -127,14 +131,19 @@ def register(ctx):
             stored_hash = row['password_hash']
             if isinstance(stored_hash, str):
                 stored_hash = stored_hash.encode('utf-8')
-            if isinstance(password, str):
-                password = password.encode('utf-8')
-            if not bcrypt.checkpw(password, stored_hash):
+            password_bytes = password.encode('utf-8') if isinstance(password, str) else password
+            if not bcrypt.checkpw(password_bytes, stored_hash):
+                fallback = _try_file_admin(client_ip, username, password)
+                if fallback is not None:
+                    return fallback
                 _record_login_failure(client_ip)
                 audit_log(row['id'], username, 'login', result='failure', error_message='密码错误')
                 return jsonify({'code': 401, 'msg': '用户名或密码错误'}), 401
         except Exception as e:
             logger.error(f"密码验证异常: {e}")
+            fallback = _try_file_admin(client_ip, username, password)
+            if fallback is not None:
+                return fallback
             return jsonify({'code': 500, 'msg': '密码验证失败'}), 500
 
         # 登录成功，清除失败计数

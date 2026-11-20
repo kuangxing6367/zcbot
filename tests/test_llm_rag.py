@@ -12,6 +12,9 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(_ROOT, 'core_plugins', 'llm_load', 'src')
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
+# media.py 现在委托 framework 层的统一闸门，需要仓库根目录可导入
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 import llm_core.main as llm_main
 from llm_core import embeddings as emb_mod
