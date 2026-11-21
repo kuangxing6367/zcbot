@@ -23,7 +23,6 @@ recursive-exclude core_plugins/image_renderer/native *.so *.pyd *.dll
 # 上面 recursive-include 的 *.json/*.txt 会把它们一起捞进来，体积比代码还大。
 prune core_plugins/image_renderer/native/target
 prune core_plugins/rust_accel/rust_accel/target
-prune framework/iipc/rust_adapter/target
 exclude core_plugins/*/native/target/*
 exclude core_plugins/rust_accel/rust_accel/target/*
 global-exclude __pycache__ *.py[cod] *.db *.db-shm *.db-wal *.db-journal
