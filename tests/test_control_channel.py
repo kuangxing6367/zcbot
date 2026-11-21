@@ -27,6 +27,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NO_INSTANCE = '未发现运行中的 zcbot 实例（控制通道文件不存在或进程已退出）'
 
 
+def _framework_version():
+    """从 VERSION 读实际版本：控制通道写的是框架版本，不该在测试里写死。"""
+    with open(os.path.join(ROOT, 'VERSION'), encoding='utf-8') as f:
+        return f.read().strip()
+
+
 class ServerThread:
     """在独立线程里跑控制服务，让同步客户端可以跨进程式调用。"""
 
@@ -122,7 +128,7 @@ def test_control_file_fields_and_loopback_bind(channel):
     assert info['version'] == 1
     assert info['pid'] == os.getpid()
     assert info['host'] == '127.0.0.1'
-    assert info['framework_version'] == '1.28.5'
+    assert info['framework_version'] == _framework_version()
     assert len(info['token']) == 64
     assert set(info['token']) <= set('0123456789abcdef')
     assert 1 <= info['port'] <= 65535
@@ -228,7 +234,7 @@ def test_stale_file_removed_when_pid_dead(tmp_path):
     st.stop()
     assert info['pid'] == os.getpid()
     assert info['token'] != stale['token']
-    assert info['framework_version'] == '1.28.5'
+    assert info['framework_version'] == _framework_version()
 
 
 def test_clear_disabled_by_default(channel):
@@ -321,13 +327,27 @@ def test_cli_follow_streams_new_frames(channel):
     assert '跟随可见帧' in out
 
 
-def test_config_three_places_in_sync():
+def test_config_three_places_in_sync(tmp_path):
+    """默认模板、按模板生成的 config.yaml、配置 schema 三处保持一致。
+
+    仓库不跟踪根目录 config.yaml（用户运行时生成的文件），所以 CI 里用模板
+    写一份临时配置校验；本地已有该文件时一并校验，避免真实配置漂移。
+    """
     expected = {'enabled': True, 'port': 0, 'allow_clear': False}
     defaults = yaml.safe_load(_DEFAULT_CONFIG)
-    with open(os.path.join(ROOT, 'config.yaml'), encoding='utf-8') as f:
-        actual = yaml.safe_load(f)
+    generated = tmp_path / 'config.yaml'
+    generated.write_text(_DEFAULT_CONFIG, encoding='utf-8')
+    actual = yaml.safe_load(generated.read_text(encoding='utf-8'))
+
     assert defaults['framework']['control'] == expected
     assert actual['framework']['control'] == expected
+
+    user_config = os.path.join(ROOT, 'config.yaml')
+    if os.path.isfile(user_config):
+        with open(user_config, encoding='utf-8') as f:
+            user = yaml.safe_load(f)
+        assert user['framework']['control'] == expected
+
     schema = _CONFIG_SCHEMA['framework']['keys']['control']['keys']
     assert set(schema) == set(expected)
     issues = [str(issue) for issue in validate_config(actual)]

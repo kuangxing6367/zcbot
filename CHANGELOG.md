@@ -26,6 +26,18 @@
 
 ---
 
+## [1.28.8] - 2026-11-21
+
+> 主题：修复 v1.28.6 / v1.28.7 推送后 CI 失败的三处门禁问题。
+
+### 修正
+
+1. `pyproject.toml` 版本同步到 1.28.8。此前只改 `VERSION`，Release workflow 的「版本一致性」门禁读到 pyproject 仍是 1.28.5，直接拒绝发布。
+2. `tests/test_control_channel.py` 两处 `framework_version` 断言改为从 `VERSION` 读取，不再写死 1.28.5。
+3. `test_config_three_places_in_sync` 不再依赖未纳入版本库的根目录 `config.yaml`：改用默认模板生成临时配置校验；本地已有该文件时额外校验，防止真实配置漂移。
+
+---
+
 ## [1.28.7] - 2026-11-21
 
 > 主题：清理 v1.28.6 遗留的打包排除规则。
