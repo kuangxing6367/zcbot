@@ -235,6 +235,69 @@ def test_db_file_download_blocked_for_normal_admin(env):
         assert not os.path.exists(target), '测试临时库未清理干净'
 
 
+def test_audit_logs_requires_super(env):
+    """审计日志只给 super：普通管理员登录后可访问其它接口，但读不到审计表。"""
+    c = env['client']
+    super_token = _login(c, 'admin', 'admin123')
+    normal_token = _login(c, 'normaladmin', 'admin123')
+    assert super_token and normal_token
+
+    assert c.get('/api/audit_logs').status_code in (401, 403)
+    r_normal = c.get('/api/audit_logs',
+                     headers={'Authorization': f'Bearer {normal_token}'})
+    assert r_normal.status_code == 403
+    r_super = c.get('/api/audit_logs',
+                    headers={'Authorization': f'Bearer {super_token}'})
+    assert r_super.status_code == 200
+    assert 'audit_logs' not in (r_normal.get_json() or {})
+
+
+def test_audit_table_hidden_from_normal_admin(env):
+    """审计表与 admin_users / api_tokens 同级：普通管理员连表名都看不到。"""
+    c = env['client']
+    super_token = _login(c, 'admin', 'admin123')
+    normal_token = _login(c, 'normaladmin', 'admin123')
+
+    names_super = {t['name'] for t in c.get(
+        '/api/db/tables', headers={'Authorization': f'Bearer {super_token}'}
+    ).get_json()['data']}
+    names_normal = {t['name'] for t in c.get(
+        '/api/db/tables', headers={'Authorization': f'Bearer {normal_token}'}
+    ).get_json()['data']}
+    assert 'audit_logs' in names_super
+    assert 'audit_logs' not in names_normal
+
+    hdr = {'Authorization': f'Bearer {normal_token}'}
+    assert c.get('/api/db/tables/audit_logs/schema', headers=hdr).status_code == 403
+    assert c.get('/api/db/tables/audit_logs/rows', headers=hdr).status_code == 403
+
+
+def test_audit_table_cannot_be_changed_by_raw_sql(env):
+    """即使是 super，raw SQL 也不能删改或插入审计记录。"""
+    c = env['client']
+    token = _login(c, 'admin', 'admin123')
+    hdr = {'Authorization': f'Bearer {token}'}
+    for sql in (
+        'DELETE FROM audit_logs',
+        "UPDATE audit_logs SET result='success'",
+        'DROP TABLE audit_logs',
+        'TRUNCATE TABLE audit_logs',
+        "INSERT INTO audit_logs (action) VALUES ('forged')",
+        'WITH x AS (SELECT 1) DELETE FROM audit_logs',
+    ):
+        r = c.post('/api/db/query', json={'sql': sql, 'write': True}, headers=hdr)
+        assert r.status_code == 403, (sql, r.status_code, r.get_json())
+        assert 'append' in (r.get_json() or {}).get('msg', '') or '审计' in (r.get_json() or {}).get('msg', '')
+
+    # 只读查询不受影响；字符串字面量里的 delete 不是破坏性动词。
+    for sql in (
+        'SELECT COUNT(*) AS c FROM audit_logs',
+        "SELECT * FROM audit_logs WHERE action='delete'",
+    ):
+        r = c.post('/api/db/query', json={'sql': sql}, headers=hdr)
+        assert r.status_code == 200, (sql, r.get_json())
+
+
 if __name__ == '__main__':
     import pytest as _pytest
     _pytest.main([__file__, '-v', '-o', 'asyncio_mode=auto'])

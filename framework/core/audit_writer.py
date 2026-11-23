@@ -32,6 +32,8 @@ import logging
 import time
 from collections import deque
 
+from framework.security.redact import redact_detail
+
 logger = logging.getLogger('zcbot')
 
 #: 单条 detail 里消息正文的截断长度（审计只留够定位的片段）
@@ -296,12 +298,7 @@ def _clip(value, limit: int):
 def _detail_json(detail) -> str | None:
     if not detail:
         return None
-    safe = {}
-    for k, v in detail.items():
-        if isinstance(v, str):
-            safe[k] = v[:_MAX_TEXT]
-        else:
-            safe[k] = v
+    safe = redact_detail(detail)
     try:
         return json.dumps(safe, ensure_ascii=False)
     except Exception:

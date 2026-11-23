@@ -20,7 +20,22 @@ def register(ctx):
 
     # 敏感表：普通管理员不可见内容、不可读数据（仅超级管理员），
     # 防止经 /api/db 泄露登录令牌与凭据哈希（token / password_hash / 密钥）。
-    _SENSITIVE_TABLES = {'admin_users', 'api_tokens'}
+    # audit_logs 同时是 append-only 表：既不能给普通管理员读，也不能给任何人经
+    # raw SQL 删改，否则「审计只增」的承诺在超级管理员路径上是空的。
+    _SENSITIVE_TABLES = {'admin_users', 'api_tokens', 'audit_logs'}
+
+    # 针对审计表的写/删语句一律拒绝。字符串字面量与注释先剥离，
+    # 避免 SELECT ... WHERE action='delete' 这类只读查询被误判。
+    _SQL_COMMENT_OR_STRING = re.compile(
+        r"'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|--[^\n]*|/\*[\s\S]*?\*/")
+    _AUDIT_WRITE_VERB = re.compile(
+        r'\b(delete|update|drop|truncate|alter|insert|replace)\b', re.IGNORECASE)
+
+    def _audit_destructive_sql(sql: str) -> bool:
+        cleaned = _SQL_COMMENT_OR_STRING.sub(' ', sql)
+        if not re.search(r'\baudit_logs\b', cleaned, re.IGNORECASE):
+            return False
+        return _AUDIT_WRITE_VERB.search(cleaned) is not None
 
     def _is_super() -> bool:
         """当前登录管理员是否为 super 角色"""
@@ -116,8 +131,11 @@ def register(ctx):
         lowered = sql.lstrip().lower()
         is_readonly = lowered.startswith('select') or lowered.startswith('show') \
             or lowered.startswith('pragma') or lowered.startswith('explain')
-        if not is_readonly and not write_flag:
-            return jsonify({'code': 400, 'msg': 'WRITE_CONFIRM_NEEDED', 'write': True}), 400
+        if not is_readonly:
+            if _audit_destructive_sql(sql):
+                return jsonify({'code': 403, 'msg': '审计日志只允许追加，不可删改'}), 403
+            if not write_flag:
+                return jsonify({'code': 400, 'msg': 'WRITE_CONFIRM_NEEDED', 'write': True}), 400
         try:
             if is_readonly:
                 rows = db.query(sql)

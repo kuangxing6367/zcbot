@@ -48,6 +48,7 @@ from framework.api.emergency_admin import verify_token as _verify_emergency_toke
 from framework.api.honeypot import tarpit as _tarpit_sleep
 from framework.dual_auth import DualRequestAuthSystem
 from framework.log_broker import log_broker
+from framework.security.redact import redact_detail
 from framework.token_hash import (
     api_key_matches,
     hash_api_key,
@@ -608,7 +609,7 @@ def create_web_app(framework) -> Flask:
                 "INSERT INTO audit_logs (admin_id, admin_name, action, target_type, target_name, "
                 "detail, ip_address, result, error_message) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (admin_id, admin_name, action, target_type, target_name,
-                 json.dumps(detail, ensure_ascii=False) if detail else None,
+                 json.dumps(redact_detail(detail), ensure_ascii=False) if detail else None,
                  get_client_ip(), result, error_message)
             )
         except Exception as e:

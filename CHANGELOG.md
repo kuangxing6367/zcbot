@@ -26,6 +26,29 @@
 
 ---
 
+## [1.28.9] - 2026-11-24
+
+> 主题：收敛审计面权限与详情脱敏，把发版检查前移到本地。
+
+### 变更
+
+1. `/api/audit_logs` 从「已登录可读」收紧为 super 角色可读；普通管理员访问返回 403。
+2. `/api/db` 敏感表清单加入 `audit_logs`：普通管理员看不到该表名、表结构与表数据。
+3. 超级管理员经 `/api/db/query` 执行针对 `audit_logs` 的 DELETE / UPDATE / DROP / TRUNCATE / ALTER / INSERT / REPLACE 语句一律返回 403；只读查询与字符串字面量里的关键字不误判。管理面维持审计表只增。
+
+### 新增
+
+1. **审计详情脱敏**（`framework/security/redact.py`）：写入前按键名递归屏蔽 password / token / secret / api_key / authorization 等凭据字段为 `__redacted__`，非敏感字符串截断到 320 字符。Web 审计入口与消息侧批量写入器共用同一套规则。
+2. **发版前本地门禁**（`tools/release_check.py`）：一次核对 VERSION / pyproject.toml / tag / CHANGELOG、测试里对当前版本的硬编码断言，并跑 ruff 两道；任一失败退出码 1。
+
+### 测试
+
+- `tests/test_api_security.py` 增加审计查看权限、审计表隐藏与 raw SQL 拒绝三类用例；
+- 新增 `tests/test_audit_redaction.py`（7 项）；
+- `tests/test_security_hardening.py` 的敏感表断言同步纳入 `audit_logs`。
+
+---
+
 ## [1.28.8] - 2026-11-21
 
 > 主题：修复 v1.28.6 / v1.28.7 推送后 CI 失败的三处门禁问题。

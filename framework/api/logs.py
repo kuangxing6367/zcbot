@@ -14,6 +14,7 @@ def register(ctx):
     app = ctx.app
     db = ctx.db
     require_auth = ctx.require_auth
+    require_super = ctx.require_super
     audit_log = ctx.audit_log
     log_broker = ctx.log_broker
     _extract_token = ctx._extract_token
@@ -22,7 +23,7 @@ def register(ctx):
     # ---- 审计日志 ----
 
     @app.route('/api/audit_logs', methods=['GET'])
-    @require_auth
+    @require_super
     def list_audit_logs():
         """获取审计日志"""
         page = int(request.args.get('page', 1))

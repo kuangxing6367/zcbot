@@ -43,8 +43,11 @@ def read_api(name):
 
 def test_db_gateway_sensitive_tables():
     src = read_api('db_gateway.py')
-    check("db_gateway 定义 _SENSITIVE_TABLES 且含 admin_users/api_tokens",
-          "_SENSITIVE_TABLES = {'admin_users', 'api_tokens'}" in src)
+    sensitive_line = next(
+        (line for line in src.splitlines() if '_SENSITIVE_TABLES = {' in line), '')
+    check("db_gateway 定义 _SENSITIVE_TABLES 且含 admin_users/api_tokens/audit_logs",
+          all(f"'{table}'" in sensitive_line
+              for table in ('admin_users', 'api_tokens', 'audit_logs')))
     check("schema 接口对敏感表返回 403",
           "if table in _SENSITIVE_TABLES and not _is_super():" in src
           and "403" in src)
