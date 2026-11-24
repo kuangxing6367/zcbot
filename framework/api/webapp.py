@@ -805,6 +805,7 @@ def create_web_app(framework) -> Flask:
         tasks,
         users_groups,
         webui,
+        workflows,
     )
     auth.register(ctx)
     admins.register(ctx)
@@ -828,6 +829,7 @@ def create_web_app(framework) -> Flask:
     files.register(ctx)
     stats.register(ctx)
     perm_api.register(ctx)
+    workflows.register(ctx)
     # 会话令牌：默认关闭（security.session_tokens.enabled），开启后才注册握手端点与闸门。
     # 必须早于蜜罐注册 —— 蜜罐的 /api/<path> 兜底会吃掉未匹配的路径。
     session_tokens.register(ctx)

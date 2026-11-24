@@ -562,7 +562,21 @@ class FrameworkDispatchMixin:
                    subscribers=','.join(it['plugin_name'] for it in self._raw_message_handlers),
                    msg=f"{len(self._raw_message_handlers)} 个原始消息处理器候选")
         timeout = self._raw_handler_timeout()
+
+        # 工作流：按 QQ 过滤原始消息处理器。无工作流时全部放行。
+        _wf_store = getattr(self, 'workflow_store', None)
+        _wf_plan = None
+        if _wf_store is not None:
+            try:
+                from framework.workflow import resolve as _wf_resolve
+                _wf_plan = _wf_resolve(
+                    _wf_store, data.get('user_id'), data.get('group_id'))
+            except Exception as _wf_exc:
+                logger.warning('原始消息工作流解析失败（按全部放行继续）: %s', _wf_exc)
+
         for item in list(self._raw_message_handlers):
+            if _wf_plan is not None and not _wf_plan.allows(item['plugin_name']):
+                continue
             # 多平台接入：适配器↔插件双向绑定白名单（不受当前适配器允许的插件直接跳过）
             # 注：本 mixin 的 self 即 Framework 本体（同 self.hooks / self.router 的用法），
             #     不是 self.framework；用 getattr 取以兼容没有该方法的桩/老实例。

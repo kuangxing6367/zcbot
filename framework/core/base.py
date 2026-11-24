@@ -176,6 +176,10 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 事件总线
         self.event_bus = EventBus()
 
+        # 消息处理链工作流（QQ → 节点链 → 插件集合与顺序）
+        from framework.workflow import WorkflowStore
+        self.workflow_store = WorkflowStore(self.db)
+
         # 消息路由器
         self.router = MessageRouter(self)
 

@@ -26,6 +26,31 @@
 
 ---
 
+## [1.28.10] - 2026-11-24
+
+> 主题：消息处理链工作流（按 QQ 选链）、工作流可视化编辑器、文件管理加固。
+
+### 新增
+
+1. **消息处理链工作流**（`framework/workflow/`）：按 QQ 号选择节点链，决定本次消息由哪些插件、按什么顺序参与。节点类型：`user` / `group` / `plugin` / `exclude` / `stop`；无绑定或节点为空时保持框架默认链路，行为不变。生效点为 raw handler 循环与 router 命令循环，不复制插件执行逻辑。
+2. `workflows` 与 `workflow_bindings` 两张表：启动时 `CREATE TABLE IF NOT EXISTS` 建立，运行时 5 秒 TTL 内存快照读取，管理面写入后立即失效。
+3. `/api/workflows` 系列 REST：列表、增删改、节点校验、按 QQ 预览命中插件、按 QQ 列表生成节点数组；写操作限 super 并写审计。
+4. **工作流编辑器**（`core_plugins/workflow_editor`，默认关闭）：WebUI 侧边栏自包含页面，节点卡片编排、QQ 绑定、保存与预览。
+5. `docs/进阶/消息处理链工作流.md`：节点语义、选择规则、影响范围与接口清单。
+
+### 加固（文件管理）
+
+1. 上传与写入统一后缀黑名单（`.pyc` / `.db` / `.sqlite` / `.db-wal` / `.db-shm`），敏感文件不可上传；
+2. 在线预览上限 2MB，单文件上传上限 16MB；无 `Content-Length` 的分块上传落盘后按实际大小兜底检查。
+
+### 测试
+
+- 新增 `tests/test_workflow.py`（8 项）；
+- `tests/test_files_api_cross_platform.py` 增加上传后缀与预览大小上限用例；
+- 全量 1543 项收集、0 失败；脚本回归 20 文件 0 失败；ruff 两道通过。
+
+---
+
 ## [1.28.9] - 2026-11-24
 
 > 主题：收敛审计面权限与详情脱敏，把发版检查前移到本地。

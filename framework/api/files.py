@@ -9,6 +9,13 @@ from flask import jsonify, request, send_from_directory
 
 logger = logging.getLogger('zcbot')
 
+# 预览/读取的最大字节数：面板只用来看配置与文本，不需要把整个大文件读进内存。
+MAX_READ_BYTES = 2 * 1024 * 1024
+# 单个上传文件的上限（与预览限制分开：上传允许稍大些）。
+MAX_UPLOAD_BYTES = 16 * 1024 * 1024
+# 与写入路由保持一致的禁止后缀；上传曾没有这个限制，形成绕过。
+BLOCKED_WRITE_EXTS = frozenset({'.pyc', '.db', '.sqlite', '.db-wal', '.db-shm'})
+
 
 def register(ctx):
     app = ctx.app
@@ -158,6 +165,9 @@ def register(ctx):
             binary_exts = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.zip', '.pyc', '.db', '.sqlite'}
             if ext in binary_exts:
                 return jsonify({'code': 400, 'msg': '不支持预览二进制文件'}), 400
+            if os.path.getsize(abs_path) > MAX_READ_BYTES:
+                return jsonify({'code': 400,
+                                'msg': f'文件超过 {MAX_READ_BYTES // 1024 // 1024}MB，不支持在线预览'}), 400
             with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
             # 扩展名不可靠（无后缀的二进制、被改名的图片）：读到 NUL 就直接拒绝预览
@@ -186,7 +196,7 @@ def register(ctx):
         if not abs_path:
             return jsonify({'code': 400, 'msg': '路径不允许'}), 400
         ext = os.path.splitext(abs_path)[1].lower()
-        if ext in {'.pyc', '.db', '.sqlite'}:
+        if ext in BLOCKED_WRITE_EXTS:
             return jsonify({'code': 400, 'msg': '不允许写入该类型文件'}), 400
         try:
             with open(abs_path, 'w', encoding='utf-8') as f:
@@ -344,6 +354,15 @@ def register(ctx):
             if not name or name in ('.', '..'):
                 failed.append({'name': f.filename, 'err': '非法文件名'})
                 continue
+            if _is_sensitive_file(os.path.join(abs_dir, name)) or \
+                    os.path.splitext(name)[1].lower() in BLOCKED_WRITE_EXTS:
+                failed.append({'name': name, 'err': '不允许上传该类型文件'})
+                continue
+            # content_length 在无 Content-Length 头的分块上传里可能是 None，
+            # 这时跳过预检、落盘后再按实际大小兜底检查。
+            if f.content_length is not None and f.content_length > MAX_UPLOAD_BYTES:
+                failed.append({'name': name, 'err': '文件超过 16MB'})
+                continue
             dest = os.path.join(abs_dir, name)
             if os.path.exists(dest):
                 base, ext = os.path.splitext(name)
@@ -353,6 +372,10 @@ def register(ctx):
                     i += 1
             try:
                 f.save(dest)
+                if os.path.getsize(dest) > MAX_UPLOAD_BYTES:
+                    os.remove(dest)
+                    failed.append({'name': name, 'err': '文件超过 16MB'})
+                    continue
                 saved.append(os.path.basename(dest))
             except Exception as e:
                 logger.debug('[file_browser_upload] 捕获异常后按降级路径继续: %s', e)

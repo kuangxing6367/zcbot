@@ -143,3 +143,31 @@ def test_rename_rejects_traversal(env):
     p = os.path.join(env['data_dir'], 'evil.txt').replace('\\', '/')
     r = env['client'].post('/api/files/rename', json={'path': p, 'new_name': '../x'})
     assert r.status_code == 400
+
+
+def test_upload_rejects_database_extensions(env):
+    """上传与写入必须同一套后缀黑名单，不能用上传绕过 .db/.sqlite 限制。"""
+    for name in ('evil.db', 'evil.sqlite', 'evil.pYC'):
+        r = env['client'].post(
+            '/api/files/upload',
+            data={'dir': env['data_dir'], 'files': (io.BytesIO(b'x'), name)},
+            content_type='multipart/form-data',
+        )
+        assert r.status_code == 200, r.get_data(as_text=True)[:200]
+        assert not r.get_json().get('saved'), name
+        assert not os.path.exists(os.path.join(env['data_dir'], name)), name
+
+
+def test_read_rejects_oversized_file(env):
+    """在线预览有大小上限，超大文件只能下载，不能整份读进内存。"""
+    from framework.api.files import MAX_READ_BYTES
+
+    p = os.path.join(env['data_dir'], 'big.txt')
+    with open(p, 'wb') as f:
+        f.truncate(MAX_READ_BYTES + 1)
+    try:
+        r = env['client'].get('/api/files/read?path=' + p.replace('\\', '/'))
+        assert r.status_code == 400
+        assert '超过' in r.get_json()['msg']
+    finally:
+        os.remove(p)

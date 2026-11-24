@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工作流编辑器</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="wf-shell">
+  <header class="wf-head">
+    <div class="wf-title">消息处理链工作流</div>
+    <div class="wf-sub">按 QQ 号选择节点链，决定本次消息由哪些插件、按什么顺序处理</div>
+  </header>
+
+  <section class="wf-grid">
+    <aside class="wf-panel">
+      <h2>工作流列表</h2>
+      <div id="wf-list" class="wf-list"></div>
+      <button id="wf-new" type="button">新建工作流</button>
+    </aside>
+
+    <main class="wf-panel wf-editor">
+      <h2>节点链 <span id="wf-name-hint" class="wf-hint"></span></h2>
+      <div class="wf-form">
+        <label>名称 <input id="wf-name" type="text" placeholder="例如：测试群专用链"></label>
+        <label>说明 <input id="wf-desc" type="text" placeholder="可选"></label>
+        <label class="wf-check"><input id="wf-enabled" type="checkbox" checked> 启用</label>
+        <label class="wf-check"><input id="wf-default" type="checkbox"> 设为默认工作流</label>
+      </div>
+
+      <h3>节点（按顺序执行）</h3>
+      <div id="wf-nodes" class="wf-nodes"></div>
+      <div class="wf-add">
+        <button type="button" data-add="user">+ QQ 筛选</button>
+        <button type="button" data-add="group">+ 群筛选</button>
+        <button type="button" data-add="plugin">+ 插件</button>
+        <button type="button" data-add="exclude">+ 排除插件</button>
+        <button type="button" data-add="stop">+ 终止</button>
+      </div>
+
+      <h3>绑定 QQ 号</h3>
+      <label class="wf-uid">每行一个 QQ 号 <textarea id="wf-users" rows="4" placeholder="123456&#10;789012"></textarea></label>
+
+      <div class="wf-actions">
+        <button id="wf-save" type="button" class="wf-primary">保存</button>
+        <button id="wf-preview" type="button">预览命中插件</button>
+        <button id="wf-delete" type="button" class="wf-danger">删除</button>
+        <span id="wf-status" class="wf-status"></span>
+      </div>
+      <pre id="wf-preview-out" class="wf-preview"></pre>
+    </main>
+  </section>
+</div>
+<script src="js/app.js"></script>
+</body>
+</html>

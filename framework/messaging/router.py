@@ -677,6 +677,24 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         routes = self._routes
         plugin_order = self._plugin_order
 
+        # 消息处理链工作流：按 QQ 号选节点链，重排/过滤本次的插件队列。
+        # 没有绑定工作流时 apply_workflow 返回 no_plan()，队列保持原样。
+        _wf_store = getattr(self.framework, 'workflow_store', None)
+        if _wf_store is not None:
+            try:
+                from framework.workflow import resolve as _wf_resolve
+                _plan = _wf_resolve(_wf_store, ev.user_id, ev.group_id)
+                plugin_order = _plan.ordered(plugin_order)
+                if _plan.workflow_id:
+                    _bb_record('workflow', plugin='router', fn='route',
+                               event_id=event.get('_bb_eid'),
+                               msg=f"工作流 [{_plan.workflow_name}] 选中 {len(plugin_order)} 个插件")
+                    if _plan.stopped:
+                        logger.debug('工作流 [%s] 含 stop 节点，命令链到此结束',
+                                     _plan.workflow_name)
+            except Exception as _wf_exc:
+                logger.warning('工作流解析失败（按原插件队列继续）: %s', _wf_exc)
+
         logger.debug('路由消息: "%s" → 插件队列: %s', message[:80], plugin_order)
 
         matched_any = False

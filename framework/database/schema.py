@@ -134,6 +134,32 @@ def _auto_create_tables(database, context=None):
                 UNIQUE(group_id, plugin_name)
             )
         """,
+        # 消息处理链工作流：nodes 存 JSON 数组，绑定表按 QQ 号选工作流。
+        'workflows': """
+            CREATE TABLE IF NOT EXISTS workflows (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        VARCHAR(100) NOT NULL,
+                description VARCHAR(255),
+                nodes       TEXT         NOT NULL DEFAULT '[]',
+                enabled     INTEGER      DEFAULT 1,
+                is_default  INTEGER      DEFAULT 0,
+                created_at  VARCHAR(32),
+                updated_at  VARCHAR(32),
+                UNIQUE(name)
+            )
+        """,
+        'workflow_bindings': """
+            CREATE TABLE IF NOT EXISTS workflow_bindings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     VARCHAR(64) NOT NULL,
+                workflow_id INTEGER      NOT NULL,
+                note        VARCHAR(255),
+                enabled     INTEGER      DEFAULT 1,
+                created_at  VARCHAR(32),
+                UNIQUE(user_id, workflow_id)
+            )
+        """,
+
         # IP 黑名单表（蜜罐自动拉黑 + 手动拉黑）
         'ip_blacklist': """
             CREATE TABLE IF NOT EXISTS ip_blacklist (
