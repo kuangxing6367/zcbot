@@ -64,6 +64,77 @@ def register(ctx):
             logger.error(f"add_admin 内部错误: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
+    @app.route('/api/admins/<int:admin_id>', methods=['PUT'])
+    @require_super
+    def update_admin(admin_id):
+        """修改管理员用户名 / 角色 / 启用状态"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        try:
+            row = db.query_one(
+                "SELECT id, username, role, is_active FROM admin_users WHERE id = %s", (admin_id,))
+            if not row:
+                return jsonify({'code': 404, 'msg': '管理员不存在'}), 404
+
+            username = str(data.get('username') or row['username']).strip()
+            role = data.get('role', row['role'])
+            is_active = data.get('is_active', bool(row['is_active']))
+            if not username:
+                return jsonify({'code': 400, 'msg': '用户名不能为空'}), 400
+            if role not in ('super', 'admin'):
+                return jsonify({'code': 400, 'msg': '角色无效'}), 400
+            if not isinstance(is_active, bool):
+                return jsonify({'code': 400, 'msg': '状态无效'}), 400
+
+            # 不允许把自己降级或禁用，避免锁死管理面。
+            if admin_id == admin['id'] and (role != 'super' or not is_active):
+                return jsonify({'code': 400, 'msg': '不能降级或禁用当前账号'}), 400
+
+            dup = db.query_one(
+                "SELECT id FROM admin_users WHERE username = %s AND id <> %s", (username, admin_id))
+            if dup:
+                return jsonify({'code': 409, 'msg': '用户名已存在'}), 409
+
+            # 最后一个 super 不允许降级 / 禁用。
+            if row['role'] == 'super' and (role != 'super' or not is_active):
+                count = db.query_one(
+                    "SELECT COUNT(*) AS c FROM admin_users WHERE role = 'super' AND is_active = 1")
+                if count and count['c'] <= 1:
+                    return jsonify({'code': 400, 'msg': '至少保留一个启用的超级管理员'}), 400
+
+            db.execute(
+                "UPDATE admin_users SET username = %s, role = %s, is_active = %s WHERE id = %s",
+                (username, role, 1 if is_active else 0, admin_id))
+            audit_log(admin['id'], admin['username'], 'update_admin', 'admin', username,
+                      {'role': role, 'is_active': is_active})
+            return jsonify({'code': 0, 'msg': f'管理员 [{username}] 已更新'})
+        except Exception as e:
+            logger.error(f"update_admin 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+    @app.route('/api/admins/<int:admin_id>/password', methods=['POST'])
+    @require_super
+    def reset_admin_password(admin_id):
+        """超级管理员重置指定管理员密码；明文不落库，令牌同时失效。"""
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        password = data.get('password', '')
+        if len(password) < 6:
+            return jsonify({'code': 400, 'msg': '密码至少6位'}), 400
+        try:
+            row = db.query_one("SELECT username FROM admin_users WHERE id = %s", (admin_id,))
+            if not row:
+                return jsonify({'code': 404, 'msg': '管理员不存在'}), 404
+            pwd_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(12)).decode('utf-8')
+            db.execute(
+                "UPDATE admin_users SET password_hash = %s, token_hash = NULL, "
+                "token_created_at = NULL WHERE id = %s", (pwd_hash, admin_id))
+            audit_log(admin['id'], admin['username'], 'reset_admin_password', 'admin', row['username'])
+            return jsonify({'code': 0, 'msg': f'管理员 [{row["username"]}] 密码已重置'})
+        except Exception as e:
+            logger.error(f"reset_admin_password 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
     @app.route('/api/admins/<int:admin_id>', methods=['DELETE'])
     @require_super
     def delete_admin(admin_id):

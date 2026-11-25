@@ -60,9 +60,9 @@ class ToolRegistry:
     _CAPS = {
         'read': CAP_READ, 'list': CAP_READ, 'glob': CAP_READ, 'grep': CAP_READ,
         'webfetch': CAP_READ, 'websearch': CAP_READ,
-        'db_query': CAP_READ, 'plugin_list': CAP_READ,
+        'db_query': CAP_READ, 'plugin_list': CAP_READ, 'blackbox': CAP_READ,
         'write': CAP_WRITE, 'edit': CAP_WRITE, 'remember': CAP_WRITE, 'plugin_new': CAP_WRITE,
-        'shell': CAP_EXEC, 'python': CAP_EXEC,
+        'shell': CAP_EXEC, 'python': CAP_EXEC, 'simulate_message': CAP_EXEC,
         'db_execute': CAP_EXEC, 'plugin_action': CAP_EXEC,
     }
 
@@ -241,6 +241,26 @@ class ToolRegistry:
                     "action": {"type": "string", "description": "enable | disable | reload"},
                     "name": {"type": "string", "description": "插件名"},
                 }, "required": ["action", "name"]},
+            },
+            'blackbox': {
+                "name": "blackbox",
+                "description": ("查看运行中框架的内存黑匣子：action 为 stats / recent / trace / stuck。"
+                                "用于排查某条消息卡在哪一步、插件是否跑完。"),
+                "parameters": {"type": "object", "properties": {
+                    "action": {"type": "string", "description": "stats | recent | trace | stuck"},
+                    "event_id": {"type": "string", "description": "trace / stuck 时的事件 ID"},
+                    "limit": {"type": "integer", "description": "recent 的条数，默认 20"},
+                }, "required": ["action"]},
+            },
+            'simulate_message': {
+                "name": "simulate_message",
+                "description": ("模拟一条 QQ 消息进入框架处理链（真实的 dispatch 入口，插件会照常收到）。"
+                                "高风险，仅 full 模式开放；用于复现问题。"),
+                "parameters": {"type": "object", "properties": {
+                    "text": {"type": "string", "description": "消息文本"},
+                    "user_id": {"type": "integer", "description": "模拟的 QQ 号"},
+                    "group_id": {"type": "integer", "description": "群号，不填为私聊"},
+                }, "required": ["text"]},
             },
         }
         return [spec for name, spec in all_specs.items() if self.can(name)]
@@ -631,6 +651,28 @@ class ToolRegistry:
         if not name:
             raise ToolError("plugin_action 需要 name")
         return self._host().plugin_action(action, name) or "已执行"
+
+    def _t_blackbox(self, a):
+        action = (a.get('action') or '').strip().lower()
+        if action not in ('stats', 'recent', 'trace', 'stuck'):
+            raise ToolError("action 必须是 stats / recent / trace / stuck")
+        try:
+            limit = int(a.get('limit', 20) or 20)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(100, limit))
+        return self._host().blackbox_query(action, str(a.get('event_id') or ''), limit)
+
+    def _t_simulate_message(self, a):
+        text = (a.get('text') or '').strip()
+        if not text:
+            raise ToolError("simulate_message 需要 text")
+        try:
+            user_id = int(a.get('user_id') or 10001)
+            group_id = int(a.get('group_id') or 0)
+        except (TypeError, ValueError):
+            raise ToolError("user_id / group_id 必须是整数")
+        return self._host().simulate_message(text, user_id, group_id)
 
     def _t_remember(self, a):
         text = (a.get('text') or '').strip()

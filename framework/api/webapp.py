@@ -796,6 +796,7 @@ def create_web_app(framework) -> Flask:
         framework_ops,
         honeypot,
         logs,
+        media,
         observability,
         perm_api,
         plugins,
@@ -803,7 +804,9 @@ def create_web_app(framework) -> Flask:
         static_routes,
         stats,
         tasks,
+        telemetry,
         users_groups,
+        webchat,
         webui,
         workflows,
     )
@@ -816,7 +819,9 @@ def create_web_app(framework) -> Flask:
     commands.register(ctx)
     users_groups.register(ctx)
     tasks.register(ctx)
+    telemetry.register(ctx)
     logs.register(ctx)
+    media.register(ctx)
     config.register(ctx)
     console.register(ctx)
     aiwriter.register(ctx)
@@ -826,6 +831,7 @@ def create_web_app(framework) -> Flask:
     db_gateway.register(ctx)
     framework_ops.register(ctx)
     webui.register(ctx)
+    webchat.register(ctx)
     files.register(ctx)
     stats.register(ctx)
     perm_api.register(ctx)

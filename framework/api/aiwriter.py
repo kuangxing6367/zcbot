@@ -43,6 +43,60 @@ def register(ctx):
             return None, (jsonify({'code': 503, 'msg': why}), 503)
         return svc, None
 
+    # ── 对话 ───────────────────────────────────────────────────────────
+    @app.route('/api/aiwriter/chat', methods=['POST'])
+    @require_super
+    def aiwriter_chat():
+        """把一句话交给智能体，返回最终回复与执行事件。
+
+        与终端 `code` 走同一个 `svc.run`，会话、工具、改动账本口径完全一致。
+        `on_event` 收集中间事件（思考 / 工具调用 / 改动），前端据此展示过程。
+        """
+        svc, bad = _guard()
+        if bad:
+            return bad
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        text = str(data.get('text') or '').strip()
+        if not text:
+            return jsonify({'code': 400, 'msg': '消息不能为空'}), 400
+        if len(text) > 8000:
+            return jsonify({'code': 400, 'msg': '消息过长（上限 8000 字符）'}), 400
+        session = str(data.get('session') or '').strip()
+
+        events = []
+
+        def _on_event(kind, payload):
+            try:
+                events.append({'kind': str(kind),
+                               'payload': str(payload)[:2000]})
+            except Exception:
+                pass
+
+        try:
+            final = svc.run(text, on_event=_on_event, session=session or None)
+        except Exception as e:
+            logger.error('[aiwriter] 对话失败: %s', e)
+            try:
+                audit_log(admin['id'], admin['username'], 'aiwriter_chat', 'aiwriter',
+                          text[:120], {'ok': False, 'err': str(e)[:200]})
+            except Exception as _exc:
+                logger.debug('[aiwriter] 审计写入失败: %s', _exc)
+            return jsonify({'code': 500, 'msg': '智能体执行失败: %s' % e}), 500
+
+        try:
+            audit_log(admin['id'], admin['username'], 'aiwriter_chat', 'aiwriter',
+                      text[:120], {'ok': True, 'events': len(events),
+                                   'change_id': getattr(svc, 'last_change_id', None)})
+        except Exception as _exc:
+            logger.debug('[aiwriter] 审计写入失败: %s', _exc)
+        return jsonify({'code': 0, 'data': {
+            'text': final or '',
+            'events': events,
+            'change_id': getattr(svc, 'last_change_id', None),
+            'active': svc.active_session(),
+        }})
+
     # ── 会话 ───────────────────────────────────────────────────────────
     @app.route('/api/aiwriter/sessions', methods=['GET'])
     @require_super

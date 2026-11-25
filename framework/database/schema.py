@@ -160,6 +160,30 @@ def _auto_create_tables(database, context=None):
             )
         """,
 
+        # 富媒体消息：特殊段类型（语音/视频/文件/名片/位置等）登记与查看。
+        'media_messages': """
+            CREATE TABLE IF NOT EXISTS media_messages (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                seg_type    VARCHAR(40)  NOT NULL,
+                user_id     VARCHAR(64)  NOT NULL DEFAULT '',
+                group_id    VARCHAR(64)  NOT NULL DEFAULT '',
+                detail      TEXT         NOT NULL DEFAULT '',
+                created_at  VARCHAR(32)
+            )
+        """,
+
+        # Web 聊天：把 QQ 消息镜像到面板，并支持从面板发消息进入处理链。
+        'webchat_messages': """
+            CREATE TABLE IF NOT EXISTS webchat_messages (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                direction   VARCHAR(8)   NOT NULL DEFAULT 'in',
+                sender      VARCHAR(64)  NOT NULL DEFAULT '',
+                peer_id     VARCHAR(64)  NOT NULL DEFAULT '',
+                content     TEXT         NOT NULL DEFAULT '',
+                created_at  VARCHAR(32)
+            )
+        """,
+
         # IP 黑名单表（蜜罐自动拉黑 + 手动拉黑）
         'ip_blacklist': """
             CREATE TABLE IF NOT EXISTS ip_blacklist (

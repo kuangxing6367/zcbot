@@ -515,6 +515,13 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         # 安全提示
         self._warn_insecure_config()
 
+        # 遥测（默认关闭；开启时创建后台周期任务，不影响启动耗时）
+        try:
+            from framework import telemetry
+            telemetry.start(self)
+        except Exception as e:
+            logger.debug('遥测启动失败: %s', e)
+
         # 1. 启动路由表周期刷新任务（首次预热在插件加载完成后进行）
         self.router.start(self.loop)
 

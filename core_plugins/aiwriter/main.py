@@ -577,6 +577,51 @@ class _HostBridge:
             handler(name)
         return buf.getvalue().strip() or "已执行 %s %s" % (action, name)
 
+    # 内存黑匣子（供 blackbox 工具）
+    def blackbox_query(self, action, event_id='', limit=20):
+        if self.standalone:
+            return "独立模式下黑匣子属于运行中的框架实例，无法从 CLI 读取"
+        from framework import blackbox
+
+        if action == 'stats':
+            return str(blackbox.stats())
+        if action == 'recent':
+            ids = blackbox.recent_event_ids(limit=limit) or []
+            return "\n".join(str(i) for i in ids) or "（暂无事件）"
+        if not event_id:
+            raise RuntimeError("trace / stuck 需要 event_id（可先 recent 取事件 ID）")
+        if action == 'trace':
+            frames = blackbox.get_event_trace(event_id) or []
+            return "\n".join(str(f) for f in frames)[:8000] or "（无轨迹）"
+        return "卡点: %s" % blackbox.stuck_at(event_id)
+
+    # 模拟消息（供 simulate_message 工具）
+    def simulate_message(self, text, user_id, group_id):
+        if self.standalone:
+            return "独立模式下无法模拟消息（未连接运行中的框架）"
+        import asyncio
+        import time
+
+        raw = {
+            'post_type': 'message',
+            'message_type': 'group' if group_id else 'private',
+            'sub_type': 'normal',
+            'self_id': 10001,
+            'user_id': user_id,
+            'group_id': group_id,
+            'message_id': int(time.time() * 1000),
+            'message': [{'type': 'text', 'data': {'text': text}}],
+            'raw_message': text,
+            'time': int(time.time()),
+        }
+        loop = getattr(self.fw, 'loop', None)
+        if loop is None or loop.is_closed():
+            return "框架事件循环不可用，无法模拟消息"
+        future = asyncio.run_coroutine_threadsafe(
+            self.fw.dispatch.dispatch_event(raw, wait=True), loop)
+        future.result(timeout=30)
+        return "已注入模拟消息：%s（user_id=%s, group_id=%s）" % (text[:80], user_id, group_id)
+
     # 长期记忆（供 remember 工具）
     def memory_add(self, text):
         return _append_memory(text)[1]

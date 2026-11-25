@@ -1718,6 +1718,38 @@ def register(ctx):
         except Exception as e:
             logger.warning(f"[蜜罐] 注册陷阱路由失败 {_tp}: {e}")
 
+    # ---- 自定义安全入口（默认空：不注册任何路径）----
+    # security.honeypot.entry_paths 里列出的路径一律按陷阱处理：命中即审计 +
+    # 拉黑 + tarpit。用途是把「不希望被探测到的后台入口」也纳入同一套处置。
+    _entry_paths = hp.get('entry_paths') or []
+    if isinstance(_entry_paths, str):
+        _entry_paths = [_entry_paths]
+    for _raw in _entry_paths:
+        _ep = str(_raw or '').strip()
+        if not _ep.startswith('/'):
+            _ep = '/' + _ep
+        if _ep in real_paths or _ep in ('/admin', '/admin/login'):
+            continue
+
+        def _make_entry_trap(path):
+            def _handler():
+                _hit(path, '安全入口探测: %s' % path)
+                _tarpit()
+                return body_error(403, 'nginx')
+            return _handler
+
+        try:
+            app.add_url_rule(
+                _ep,
+                endpoint='_honeypot_entry_%d' % registered,
+                view_func=_make_entry_trap(_ep),
+                methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+            )
+            registered += 1
+            logger.info('[蜜罐] 安全入口陷阱已注册: %s', _ep)
+        except Exception as e:
+            logger.warning('[蜜罐] 注册安全入口失败 %s: %s', _ep, e)
+
     # ---- 前端「主动调用」型诱饵（真实前端会调用，混入真实流量）----
     _fe_builders = {
         '/api/internal/telemetry': body_fe_telemetry,

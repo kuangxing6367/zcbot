@@ -115,6 +115,7 @@ export default defineConfig({
             { text: '架构总览', link: '/进阶/架构总览' },
             { text: '插件加载与模块机制', link: '/进阶/插件加载机制' },
             { text: '消息处理链工作流', link: '/进阶/消息处理链工作流' },
+            { text: 'WebUI 能力扩展', link: '/进阶/WebUI能力扩展' },
             { text: '可靠性与限流', link: '/进阶/可靠性与限流' },
             { text: '数据库', link: '/进阶/数据库' },
             { text: '数据库迁移', link: '/进阶/数据库迁移' },

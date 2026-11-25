@@ -158,6 +158,14 @@ web:
 # ── 可观测性（健康探针 / 指标端点）────────────────────────────
 # 供 Docker healthcheck / Kubernetes probe / systemd / 负载均衡 / Prometheus 使用。
 # 三个端点只读、零新依赖；免登录、免限速、免人机验证（否则外部探针无法通过）。
+# ── 遥测（默认关闭）────────────────────────────────────────────
+# 开启后每 interval_days 天上报一次系统信息与错误日志，携带框架生成的随机唯一标识。
+# 不上报管理员账号、令牌、IP。endpoint 为空时即使 enabled=true 也不会上报。
+telemetry:
+  enabled: false
+  endpoint: ""
+  interval_days: 15
+
 observability:
   health: true                 # /healthz（存活，不查库）与 /readyz（就绪，含逐项检查明细）
   metrics: true                # /metrics（Prometheus 文本格式，仅在 API 端口暴露，避免公网 WebUI 端口泄露）
@@ -363,6 +371,7 @@ security:
   #   canary: true             # 在诱饵响应中植入唯一追踪串，便于事后追溯泄露路径
   #   evasion_detect: true     # 检测路径变形绕过（%2e 编码 / 重复斜杠 / 穿越），加重处置
   #   fake_404: true           # 未知页面返回伪装 nginx 的假 404（false=普通 JSON 404）
+  #   entry_paths: []          # 自定义安全入口（陷阱路径），默认为空；命中按蜜罐处置
 
 # ── 定时任务（scheduler 段）──────────────────────────────────
 # 影响 ctx.task 注册的 cron 任务、内置任务，以及插件定时逻辑的执行方式。
@@ -693,6 +702,21 @@ _CONFIG_SCHEMA = {
             'secret_key': {'str': True},
             'session_timeout': {'int': True, 'min': 30},
             'token_timeout': {'int': True, 'min': 30},
+            'dashboard': {
+                'type': dict,
+                'keys': {
+                    'layout': {'str': True},
+                    'order': {'any': True},
+                },
+            },
+        },
+    },
+    'telemetry': {
+        'type': dict,
+        'keys': {
+            'enabled': {'bool': True},
+            'endpoint': {'str': True},
+            'interval_days': {'int': True, 'min': 1, 'max': 365},
         },
     },
     'observability': {

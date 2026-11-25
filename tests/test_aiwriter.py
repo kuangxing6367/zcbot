@@ -178,12 +178,12 @@ def test_tool_caps_by_mode():
 def test_tool_specs_filtered_by_mode():
     names_ro = {s["name"] for s in ToolRegistry("x", mode="readonly").specs()}
     assert names_ro == {"read", "list", "glob", "grep",
-                        "webfetch", "websearch", "db_query", "plugin_list"}
+                        "webfetch", "websearch", "db_query", "plugin_list", "blackbox"}
     names_ws = {s["name"] for s in ToolRegistry("x", mode="workspace").specs()}
     assert {"write", "edit"} <= names_ws
     assert not ({"shell", "python", "db_execute", "plugin_action"} & names_ws)
     names_full = {s["name"] for s in ToolRegistry("x", mode="full", allow_exec=True).specs()}
-    assert {"shell", "python", "db_execute", "plugin_action"} <= names_full
+    assert {"shell", "python", "db_execute", "plugin_action", "simulate_message"} <= names_full
 
 
 def test_tool_path_boundary_rejects_escape():

@@ -46,6 +46,12 @@ def register(ctx):
                 'hidden': sidebar.get('hidden') or [],
             },
             'plugins': framework.plugin_loader.get_plugin_webuis(),
+            # 依赖可插拔能力的菜单项：插件未启用时前端隐藏对应入口。
+            'features': {
+                'aiwriter': bool(framework.services.get('aiwriter')),
+                'webchat': True,
+                'media': True,
+            },
         }})
 
     @app.route('/api/plugin_webuis', methods=['GET'])
