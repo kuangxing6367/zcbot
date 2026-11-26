@@ -378,7 +378,7 @@ class ToolRegistry:
                 result = await asyncio.wait_for(tool.handler(**kwargs),
                                                 timeout=tool.timeout)
             else:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 result = await asyncio.wait_for(
                     loop.run_in_executor(None, lambda: tool.handler(**kwargs)),
                     timeout=tool.timeout)

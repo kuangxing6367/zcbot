@@ -120,6 +120,12 @@ def main():
     except Exception:
         pass
 
+    # 运行时下限：pyproject 声明 requires-python >= 3.12。绕过 pip 直接跑源码时
+    # 给一条明确提示，免得后面在 asyncio / AST 上撞见难懂的报错。
+    if sys.version_info < (3, 12):
+        print('[startup] 本版本要求 Python 3.12 及以上，当前 %s；'
+              '请升级解释器，或改用支持旧解释器的发行包。' % sys.version.split()[0])
+
     # 启动前依赖自检（移机自愈）
     _check_and_install_deps()
 

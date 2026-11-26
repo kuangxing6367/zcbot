@@ -123,7 +123,7 @@ class ToolLoopAgent:
                              tools: list[dict] | None, temperature: float,
                              max_tokens: int) -> ProviderReply:
         """把同步 HTTP 请求丢到线程池，不阻塞事件循环"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None, lambda: provider.chat(messages, tools, temperature, max_tokens))
 

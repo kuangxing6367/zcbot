@@ -439,6 +439,106 @@ def test_ledger_columns_migrated():
     check(len(M.runs(db, 5)) == 0, '老账本：流水表建立但无记录')
 
 
+# ── 跨解释器版本的结构哈希（Python 3.12+ 的 AST 差异） ──────────
+
+
+def _gen_plain(db):
+    db.execute("SELECT 1")
+
+
+def _gen_typed[T](db: T):
+    """PEP 695 泛型参数：3.12 起才有的语法，用于验证 type_params 不被抹平"""
+    db.execute("SELECT 1")
+
+
+def _dump_probe(db):
+    db.execute("SELECT 2")
+
+
+def test_checksum_is_stable_across_interpreter_ast_versions():
+    """AST 字段随解释器版本变（3.12 加 type_params、3.13 省空字段），校验和不变
+
+    这是「能不能升 Python」的那道门：换解释器后账本里所有已应用迁移都被判成
+    drift，就再也升不动了。
+    """
+    import ast
+
+    src = M._dedented_source(_m1)
+
+    def fingerprint(mutate):
+        tree = M._normalize_def_names(M._strip_docstrings(ast.parse(src)))
+        mutate(tree)
+        return M._canonical_ast(tree)
+
+    def add_empty_type_params(tree):
+        # 模拟 3.12：def / class 上多出 type_params 字段，值为空列表
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                node.type_params = []
+
+    def drop_type_params(tree):
+        # 模拟 3.10 / 3.11：字段根本不存在
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                del node.type_params
+
+    base = fingerprint(lambda t: None)
+    check(fingerprint(add_empty_type_params) == base, '校验和：空 type_params 不影响结果')
+    check(fingerprint(drop_type_params) == base, '校验和：缺 type_params 字段不影响结果')
+
+    plain = M.checksum_of(M.Migration(98, 'demo.gen_plain', _gen_plain))
+    typed = M.checksum_of(M.Migration(98, 'demo.gen_typed', _gen_typed))
+    check(plain != typed, '校验和：真用了泛型参数 → 哈希不同（不把 type_params 一律抹掉）')
+
+
+def test_checksum_does_not_depend_on_ast_dump():
+    """结构哈希不再走 ast.dump() —— 它的默认输出随解释器版本变"""
+    import ast as _ast
+    real_dump = _ast.dump
+
+    def boom(*a, **kw):
+        raise AssertionError('校验和不应再走 ast.dump()')
+
+    mig = M.Migration(97, 'demo.dump_probe', _dump_probe)
+    _ast.dump = boom
+    try:
+        digest = M.checksum_of(mig)
+    finally:
+        _ast.dump = real_dump
+    check(len(digest) == 64, '校验和：不依赖 ast.dump() 也能算出 64 位摘要')
+
+
+def test_legacy_ast_v1_ledger_upgraded_without_drift():
+    """ast-v1 账本（3.10/3.11 形态）换到当前解释器 → 静默升级，不报 drift
+
+    旧实现直接 ast.dump()：3.12 起多出 type_params，账本值必然对不上；而 algo
+    标签两边都写 ast-v1，于是落进「已按新算法记账 → drift」分支，把正常的
+    Python 升级判成「迁移被篡改」。
+    """
+    db = _new_db()
+    M.run_pending(db, _registry())
+    src = M._dedented_source(_m1)
+    old_shape = M._structural_digest(src, omit_none=False, omit_empty_list=False,
+                                     drop=M._LATE_AST_FIELDS)
+    db.execute("UPDATE schema_migrations SET checksum = %s, checksum_algo = 'ast-v1' "
+               "WHERE version = 1", (old_shape,))
+    _CALLS.clear()
+    report = M.run_pending(db, _registry())
+    check(not report['drift'], 'ast-v1 老账本：不报 drift')
+    check(_CALLS == [], 'ast-v1 老账本：不重跑迁移')
+    row = db.query_one("SELECT checksum, checksum_algo FROM schema_migrations "
+                       "WHERE version = 1")
+    check(row['checksum_algo'] == M.CHECKSUM_ALGO, 'ast-v1 老账本：代际已升到当前算法')
+    check(row['checksum'] == M.checksum_of(M.Migration(1, 'demo.create', _m1)),
+          'ast-v1 老账本：校验和已换成当前算法值')
+
+    # 三种解释器写出的账本值（含/不含 None、含/不含 type_params）都要能对上
+    m1 = M.Migration(1, 'demo.create', _m1)
+    for idx, shape in enumerate(M.legacy_ast_checksums(m1)):
+        verdict = M.resolve_recorded_checksum(shape, m1, 'ast-v1')[0]
+        check(verdict in ('ok', 'upgraded'), f'ast-v1 形态 {idx}：判定为 {verdict}（不报 drift）')
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith('test_')]
     for fn in tests:

@@ -52,8 +52,11 @@ logger = logging.getLogger('zcbot')
 LEDGER_TABLE = 'schema_migrations'
 RUNS_TABLE = 'schema_migration_runs'
 
-# 校验和算法代际：空 = v1.22.0 及以前的「函数源码文本」；ast-v1 = 结构哈希
-CHECKSUM_ALGO = 'ast-v1'
+# 校验和算法代际：
+#   空      = v1.22.0 及以前的「函数源码文本」
+#   ast-v1  = 直接 ast.dump() 的结构哈希（依赖解释器版本，见 _structural_digest）
+#   ast-v2  = 自写序列化的结构哈希（3.10~3.14 输出一致）
+CHECKSUM_ALGO = 'ast-v2'
 
 # 账本里 origin 的取值：
 #   run      —— 引擎实际执行过
@@ -270,6 +273,15 @@ def checksum_of(migration: Migration) -> str:
     真正想防的「改逻辑」没变，噪音却常年留着。AST 只描述结构：改逻辑会变，
     改注释/排版/docstring 不会变。老账本由 :func:`resolve_recorded_checksum`
     平滑升级，见 :func:`legacy_checksum_of`。
+
+    为什么不用 ``ast.dump()``：它的输出随解释器版本变。3.12 给
+    ``FunctionDef`` / ``AsyncFunctionDef`` / ``ClassDef`` 加了 ``type_params``
+    字段（空列表也会打出来），3.13 又让 ``ast.dump`` 默认省略空列表与 None。
+    同一份源码在 3.10/3.11/3.12/3.13 上会算出四种不同的哈希 —— 换个 Python
+    启动，账本里所有已应用迁移都会被判成「被篡改」，而这个错误恰好会把升级
+    解释器这件事挡住。这里改为自己按 ``_fields`` 顺序序列化并跳过空字段，
+    3.10~3.14 输出一致；老账本的 ast-v1 值由
+    :func:`legacy_ast_checksums` 反推比对。
     """
     # 【踩坑保佑】v1.13.0 迁移校验和
     # 坑：取迁移体源码sha256，已应用被改动报drift不重跑  →  checksum_of
@@ -304,12 +316,7 @@ def checksum_of(migration: Migration) -> str:
         # 冻结分发（.pyc-only / 动态生成）取不到源码：不做校验，不误报
         _checksum_cache[key] = ''
         return ''
-    try:
-        tree = _normalize_def_names(_strip_docstrings(ast.parse(src)))
-        norm = ast.dump(tree, annotate_fields=True, include_attributes=False)
-    except SyntaxError:
-        norm = '\n'.join(line.rstrip() for line in src.splitlines())
-    digest = hashlib.sha256(norm.encode('utf-8')).hexdigest()
+    digest = _structural_digest(src)
     _checksum_cache[key] = digest
     return digest
 
@@ -350,6 +357,97 @@ def _normalize_def_names(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             node.name = '_'
     return tree
+
+
+# ``type_params`` 是 3.12 新增的字段：同一份迁移源码在 3.10/3.11 的 AST 里
+# 根本没有它，3.12 的 ast.dump() 会把它写成 ``type_params=[]``。旧算法
+# （ast-v1）因此跨版本对不上，这里反推老值时把它排除掉。
+_LATE_AST_FIELDS = frozenset({'type_params'})
+
+# 老账本的 ast-v1 值可能是这几种形态之一，反推时逐一比对
+# （保留 None / 省略 None 两种写法都列上：``ast.dump`` 是否输出可选字段的
+#  None，在解释器之间并不完全一致，多算两次比误报 drift 便宜）：
+#   (False, False, 去 type_params) —— 3.10 / 3.11，保留 None 与空列表
+#   (True,  False, 去 type_params) —— 同上但不输出 None
+#   (False, False, 留 type_params) —— 3.12，含 type_params=[]
+#   (True,  False, 留 type_params) —— 同上但不输出 None
+#   (True,  True,  去 type_params) —— 3.13+（ast.dump 默认省略空字段）
+_LEGACY_AST_SHAPES = (
+    (False, False, _LATE_AST_FIELDS),
+    (True, False, _LATE_AST_FIELDS),
+    (False, False, frozenset()),
+    (True, False, frozenset()),
+    (True, True, _LATE_AST_FIELDS),
+)
+
+_legacy_ast_cache: dict[tuple[int, bool, bool, frozenset], str] = {}
+
+
+def _canonical_ast(node, *, omit_none: bool = True, omit_empty_list: bool = True,
+                   drop: frozenset = frozenset()) -> str:
+    """把 AST 序列化成与解释器版本无关的文本
+
+    * 只按 ``_fields`` 顺序输出语义字段，不输出行列号等 attributes；
+    * 默认跳过 ``None`` 与空列表 —— 这些字段的「不存在」就是它们的语义，
+      3.13 的 ``ast.dump`` 也是这么做的；
+    * ``drop`` 里的字段整体忽略，用于对齐 3.10/3.11 那种「字段尚未存在」的形态
+      （反推老账本时用）。
+
+    与 ``ast.dump`` 的差异只在空字段策略上，非空字段的写法完全一致
+    （``Name(field=value, ...)``、列表用 ``', '`` 分隔、叶子用 ``repr``）。
+    """
+    if isinstance(node, ast.AST):
+        parts = []
+        for field in node._fields:
+            if field in drop or not hasattr(node, field):
+                continue
+            value = getattr(node, field)
+            if omit_none and value is None:
+                continue
+            if omit_empty_list and isinstance(value, list) and not value:
+                continue
+            parts.append(
+                f'{field}=' + _canonical_ast(
+                    value, omit_none=omit_none, omit_empty_list=omit_empty_list, drop=drop))
+        return f"{type(node).__name__}({', '.join(parts)})"
+    if isinstance(node, list):
+        return '[' + ', '.join(
+            _canonical_ast(x, omit_none=omit_none, omit_empty_list=omit_empty_list, drop=drop)
+            for x in node) + ']'
+    return repr(node)
+
+
+def _structural_digest(src: str, *, omit_none: bool = True, omit_empty_list: bool = True,
+                       drop: frozenset = frozenset()) -> str:
+    """对迁移体源码的 AST 结构求 sha256（解析失败退回去尾空白的文本哈希）"""
+    try:
+        tree = _normalize_def_names(_strip_docstrings(ast.parse(src)))
+        norm = _canonical_ast(tree, omit_none=omit_none,
+                              omit_empty_list=omit_empty_list, drop=drop)
+    except SyntaxError:
+        norm = '\n'.join(line.rstrip() for line in src.splitlines())
+    return hashlib.sha256(norm.encode('utf-8')).hexdigest()
+
+
+def legacy_ast_checksums(migration: Migration) -> tuple[str, ...]:
+    """ast-v1 账本可能记录的值（按 ast.dump 的历史形态逐一反推）
+
+    只用于把 ast-v1 账本平滑升到 ast-v2：命中任意一种形态即说明迁移内容
+    没变，只是当年写账本的 Python 版本不同，不该报 drift。
+    """
+    src = _dedented_source(migration.apply)
+    if not src:
+        return ()
+    out = []
+    for omit_none, omit_empty_list, drop in _LEGACY_AST_SHAPES:
+        key = (id(migration.apply), omit_none, omit_empty_list, drop)
+        digest = _legacy_ast_cache.get(key)
+        if digest is None:
+            digest = _structural_digest(src, omit_none=omit_none,
+                                        omit_empty_list=omit_empty_list, drop=drop)
+            _legacy_ast_cache[key] = digest
+        out.append(digest)
+    return tuple(dict.fromkeys(out))
 
 
 def legacy_checksum_of(migration: Migration) -> str:
@@ -394,6 +492,10 @@ def resolve_recorded_checksum(recorded: str, migration: Migration,
         return ('ok', '') if algo == CHECKSUM_ALGO else ('ok', actual)
     if algo == CHECKSUM_ALGO:
         return 'drift', ''
+    # ast-v1：换过解释器也能对上（3.10/3.11 无 type_params，3.12 有空 type_params，
+    # 3.13+ 默认省略空字段），逐一反推，命中即静默升级，不打扰运维
+    if recorded in legacy_ast_checksums(migration):
+        return 'upgraded', actual
     if recorded == legacy_checksum_of(migration):
         return 'upgraded', actual
     return 'reaccepted', actual

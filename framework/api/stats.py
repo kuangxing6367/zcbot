@@ -88,21 +88,26 @@ def register(ctx):
             cpu_count = psutil.cpu_count()
             cpu_freq = psutil.cpu_freq()
 
-            # Python 包信息
+            # Python 包信息：优先标准库 importlib.metadata。
+            # pkg_resources 自 3.12 起弃用，且依赖 setuptools——精简虚拟环境里
+            # 往往没有，只能当兜底。
             packages = []
             try:
-                import pkg_resources
-                for pkg in sorted(pkg_resources.working_set, key=lambda x: x.key):
-                    if pkg.key in ('pip', 'setuptools', 'wheel'):
+                import importlib.metadata as im
+                for dist in im.distributions():
+                    name = (dist.metadata['Name'] if dist.metadata else '') or ''
+                    if not name or name in ('pip', 'setuptools', 'wheel'):
                         continue
-                    packages.append({'name': pkg.key, 'version': pkg.version})
+                    packages.append({'name': name, 'version': dist.version})
+                packages.sort(key=lambda p: p['name'].lower())
             except Exception as _exc:
                 logger.debug('[envinfo] 捕获异常后按降级路径继续: %s', _exc)
                 try:
-                    import importlib.metadata as im
-                    for dist in im.distributions():
-                        if dist.metadata['Name'] and dist.metadata['Name'] not in ('pip', 'setuptools', 'wheel'):
-                            packages.append({'name': dist.metadata['Name'], 'version': dist.version})
+                    import pkg_resources
+                    for pkg in sorted(pkg_resources.working_set, key=lambda x: x.key):
+                        if pkg.key in ('pip', 'setuptools', 'wheel'):
+                            continue
+                        packages.append({'name': pkg.key, 'version': pkg.version})
                 except Exception as _exc:
                     logger.debug('[envinfo] 捕获异常后按降级路径继续: %s', _exc)
 

@@ -9,7 +9,7 @@
 <br>
 
 [![PyPI](https://img.shields.io/badge/PyPI-zcbot-3775A9?logo=pypi&logoColor=white)](https://pypi.org/project/zcbot/)
-[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#开源协议)
 [![Release](https://img.shields.io/badge/release-v1.26.0-orange)](https://gitee.com/liquanfeng123/zcbot/releases)
 

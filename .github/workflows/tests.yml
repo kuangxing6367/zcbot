@@ -29,11 +29,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13"]
         experimental: [false]
         include:
           # 3.14 观察一轮：requires-python 无上界，等于对外声明支持，但此前
-          # 全量测试从未在 3.13/3.14 上跑过（ci.yml 只在 3.13/3.14 跑 compileall）。
+          # 全量测试从未在 3.14 上跑过（ci.yml 只在 3.12–3.14 跑 compileall）。
           # 跑绿一轮后把 experimental 去掉，转为正式矩阵成员。
           - python-version: "3.14"
             experimental: true
