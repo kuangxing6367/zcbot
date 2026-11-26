@@ -70,9 +70,11 @@ def register(fw):
             return
 
         # 解压并覆盖
-        tmp_zip = tempfile.mktemp(suffix='.zip')
+        # mktemp 只返回名字、不占文件，从「拿到名字」到「open 创建」之间有个
+        # 竞态窗口（同名文件可被抢注）；mkstemp 一步拿到独占句柄，写完再关。
+        _fd, tmp_zip = tempfile.mkstemp(suffix='.zip', prefix='zcbot_upd_')
         try:
-            with open(tmp_zip, 'wb') as f:
+            with os.fdopen(_fd, 'wb') as f:
                 f.write(resp.content)
             tmp_dir = tempfile.mkdtemp(prefix='zcbot_upd_')
             try:

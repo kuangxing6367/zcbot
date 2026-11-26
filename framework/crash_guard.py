@@ -181,7 +181,8 @@ def fire_alert(cfg, exc=None):
     cmd = crash_cfg.get('alert_command')
     if cmd:
         try:
-            subprocess.run(cmd, shell=True, timeout=30, capture_output=True,
+            # 命令来自用户配置（crash.alert_command），要支持管道/重定向写法
+            subprocess.run(cmd, shell=True, timeout=30, capture_output=True,  # nosec B602
                            env={**os.environ, 'ZCBOT_CRASH': '1'})
         except Exception as e:
             logger.warning(f"崩溃告警命令执行失败: {e}")

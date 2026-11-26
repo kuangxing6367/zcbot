@@ -17,3 +17,6 @@ pytest-timeout>=2.3
 # 静态检查：CI 的 static-contract 作业只跑 F821（未定义名）门禁；
 # 其余 lint 规则属历史技术债，不在门禁范围。
 ruff>=0.6
+
+# 安全扫描（CI security-scan 作业只阻断 HIGH：bandit -r framework core_plugins -lll）
+bandit>=1.8,<2

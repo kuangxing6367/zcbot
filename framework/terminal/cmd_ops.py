@@ -75,8 +75,9 @@ def register(fw):
             print("用法: shell <命令>，如: shell echo hello")
             return
         try:
+            # 终端功能：用户就是要敲整条命令，shell 语义是预期行为
             proc = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
+                cmd, shell=True, capture_output=True, text=True,  # nosec B602
                 timeout=_shell_timeout,
                 encoding='utf-8', errors='replace')
         except subprocess.TimeoutExpired:

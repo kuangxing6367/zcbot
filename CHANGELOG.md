@@ -26,6 +26,28 @@
 
 ---
 
+## [开发中]
+
+> 主题：补上静态安全扫描（Bandit），并把扫描出的高危项清零。
+
+### 变更
+
+1. **CI 新增 `security-scan` 作业**：对 `framework/` 与 `core_plugins/` 跑 Bandit，只阻断 HIGH 级
+   （`bandit -r framework core_plugins -lll`）。中危项（按表名拼 SQL、`0.0.0.0` 监听、`urlopen`
+   允许 file:// 等）是既有设计取舍，全量阻断只会逼出一堆 `# nosec`，留作报告人工判断。
+   `bandit>=1.8,<2` 进 dev 依赖组与 `requirements-dev.txt`，`[tool.bandit]` 排除 tests / build / 前端产物。
+2. **高危项清零（12 → 0）**：8 处 `hashlib.md5/sha1` 补 `usedforsecurity=False`——它们只做内容指纹
+   （QQ 上传协议字段、会话文件名、路由 endpoint 后缀、token 日志短标识），换算法反而对不上；
+   3 处 `shell=True`（智能体 shell 工具、崩溃告警命令、终端 `shell` 子命令）标注 `# nosec B602`
+   并写明理由；`tempfile.mktemp` 改 `mkstemp`（消掉抢注竞态）；终端清屏的 `os.system` 改常量 argv。
+3. **评估后不引入**：`mypy` 在 `framework/` 上实测 646 个错误 / 73 个文件（还是 `--ignore-missing-imports`
+   的非严格模式），现在上类型门禁等于把 CI 长期钉红；`tox`/`nox` 与现有 Python 版本矩阵重复；
+   `Black`/`Pylint`/`Flake8` 与已有 ruff 职责重叠；`SonarQube` 需要额外服务端，暂不引入。
+
+### 验证
+
+`bandit -r framework core_plugins -lll` 为空（修复前 12 项 HIGH）；干净副本全量 1571 passed / 9 skipped；ruff 两道、脚本式回归全过。
+
 ## [1.28.14] - 2026-11-26
 
 > 主题：运行时下限升到 Python 3.12；Web 面板对话界面按 dsh 真实源码重建；QQ 被动回复改成「引对人、不撞名额」。

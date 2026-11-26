@@ -457,7 +457,8 @@ class ToolRegistry:
         if not os.path.isdir(cwd):
             cwd = self.root
         try:
-            proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
+            # 智能体 shell 工具：命令就是模型给出的整串，shell 语义是功能本身
+            proc = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,  # nosec B602
                                   text=True, encoding='utf-8', errors='replace',
                                   timeout=self.shell_timeout)
         except subprocess.TimeoutExpired:

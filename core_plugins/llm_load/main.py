@@ -82,7 +82,8 @@ def is_migratable(rel: str) -> bool:
 # ── 纯函数：不依赖框架，测试直接调用 ──────────────────────────
 
 def md5_of(data: bytes) -> str:
-    return hashlib.md5(data).hexdigest()
+    # 只做内容指纹，不承担安全职责
+    return hashlib.md5(data, usedforsecurity=False).hexdigest()
 
 
 def read_manifest(zip_path: str) -> dict:

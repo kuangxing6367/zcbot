@@ -52,6 +52,29 @@ jobs:
       - name: Startup smoke
         run: python tests/test_smoke.py
 
+  # ── 安全扫描：Bandit 高危阻断 ──────────────────────────────
+  # 只阻断 HIGH 级（-lll）：框架里存在大量「按表名拼 SQL」「0.0.0.0 监听」
+  # 这类中危项，是设计取舍而非缺陷，全量阻断只会逼人加满 nosec 注释。
+  # 中危保留在报告里，由人工按需处理（本地：bandit -r framework core_plugins -ll）。
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bandit
+        run: |
+          python -m pip install --upgrade pip
+          pip install "bandit>=1.8,<2"
+
+      - name: Bandit (HIGH 阻断)
+        run: bandit -r framework core_plugins -lll -q
+
   # ── WebUI：构建产物存在性检查 ──────────────────────────────
   # 前端源码为闭源资产（不进仓库），仅发布 core_plugins/webui/web 构建产物。
   # 仓库不含 webui/ 源码，CI 无法从源码构建；本作业改为校验已提交的发布产物。

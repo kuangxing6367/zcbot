@@ -1440,9 +1440,9 @@ class QQOfficialAdapter(ProtocolAdapter):
             'file_type': file_type,
             'file_size': str(len(raw)),
             'file_name': name,
-            'md5': hashlib.md5(raw).hexdigest(),
-            'sha1': hashlib.sha1(raw).hexdigest(),
-            'md5_10m': hashlib.md5(raw[:_MD5_10M_BYTES]).hexdigest(),
+            'md5': hashlib.md5(raw, usedforsecurity=False).hexdigest(),
+            'sha1': hashlib.sha1(raw, usedforsecurity=False).hexdigest(),
+            'md5_10m': hashlib.md5(raw[:_MD5_10M_BYTES], usedforsecurity=False).hexdigest(),
         }, timeout=60)
         upload_id = prep.get('upload_id')
         parts = prep.get('parts') or []
@@ -1461,7 +1461,7 @@ class QQOfficialAdapter(ProtocolAdapter):
                 'upload_id': upload_id,
                 'part_index': int(part.get('index') or 0),
                 'block_size': str(len(chunk)),
-                'md5': hashlib.md5(chunk).hexdigest(),
+                'md5': hashlib.md5(chunk, usedforsecurity=False).hexdigest(),
             }, timeout=60)
         if offset != len(raw):
             # 分片覆盖不满整个文件时必须停手：带 upload_id 合并会得到一个截断

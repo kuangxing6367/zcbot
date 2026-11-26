@@ -3,6 +3,7 @@
 """
 import asyncio
 import os
+import subprocess
 
 from .command import terminal_commands
 
@@ -97,7 +98,11 @@ def register(fw):
 
     def cmd_clear(args):
         """清屏"""
-        os.system('cls' if os.name == 'nt' else 'clear')
+        # 常量 argv、不经 shell：os.system 会把整串交给 shell 解释（B605）
+        try:
+            subprocess.call(['cls'] if os.name == 'nt' else ['clear'])
+        except Exception:
+            print('\n' * 40)
 
     def cmd_exit(args):
         """退出框架"""

@@ -419,7 +419,8 @@ class TelegramAdapter(ProtocolAdapter):
 
     def _token_hint(self) -> str:
         import hashlib
-        return hashlib.sha1(self.token.encode('utf-8')).hexdigest()[:12]
+        # 只用于稳定短标识，不参与校验
+        return hashlib.sha1(self.token.encode('utf-8'), usedforsecurity=False).hexdigest()[:12]
 
     def _load_offset(self) -> int:
         try:

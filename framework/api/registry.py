@@ -50,7 +50,8 @@ def get_web_app():
 def _endpoint_for(path):
     """由路径决定 endpoint：热重载前后同一路线保持同一 endpoint"""
     slug = re.sub(r'[^0-9a-z]+', '_', str(path).lower()).strip('_')[:40]
-    digest = hashlib.md5(str(path).encode('utf-8')).hexdigest()[:8]
+    # 路由稳定性标识，与安全无关
+    digest = hashlib.md5(str(path).encode('utf-8'), usedforsecurity=False).hexdigest()[:8]
     return f'_zcbot_api_{slug}_{digest}'
 
 

@@ -273,7 +273,9 @@ class SessionPersist:
             logger.error(f"[history] 会话目录创建失败 {self._dir}: {e}")
 
     def _path(self, key: str) -> str:
-        return os.path.join(self._dir, hashlib.sha1(key.encode('utf-8')).hexdigest() + '.json')
+        # 会话文件名：只求稳定不重复
+        digest = hashlib.sha1(key.encode('utf-8'), usedforsecurity=False).hexdigest()
+        return os.path.join(self._dir, digest + '.json')
 
     def save(self, conv: 'Conversation') -> None:
         try:

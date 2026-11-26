@@ -92,6 +92,9 @@ dev = [
     # CI 归档覆盖率用；本地不装则 `--cov` 直接报 unrecognized arguments。
     "pytest-cov>=5.0",
     "ruff>=0.6",
+    # 安全扫描：CI 的 security-scan 作业只阻断 HIGH（bandit -lll），
+    # 本地用 bandit -r framework core_plugins -ll 看中危清单。
+    "bandit>=1.8,<2",
 ]
 
 [project.urls]
@@ -157,3 +160,7 @@ tmp_path_retention_count = 1000
 filterwarnings = [
     "error::pytest.PytestReturnNotNoneWarning",
 ]
+
+[tool.bandit]
+# 只扫运行时代码：测试里的 assert、打包产物、前端产物都不该计入
+exclude_dirs = ["tests", "build", "dist", "node_modules", "core_plugins/webui/web"]
