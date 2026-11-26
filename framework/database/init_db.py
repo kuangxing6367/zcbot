@@ -28,7 +28,7 @@ logger = logging.getLogger('zcbot')
 _REQUIRED_TABLES = [
     'users', 'groups_info', 'group_members', 'plugins', 'commands',
     'dynamic_commands', 'tasks', 'admin_users', 'audit_logs',
-    'plugin_configs', 'system_config', 'ip_blacklist',
+    'plugin_configs', 'system_config', 'ip_blacklist', 'core_config',
     'perm_groups', 'perm_group_nodes', 'perm_user_nodes', 'perm_tracks',
     'perm_audit', 'api_tokens',
 ]

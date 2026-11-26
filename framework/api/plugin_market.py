@@ -15,6 +15,8 @@ import requests
 import yaml
 from flask import jsonify, request
 
+from framework import net as _net
+
 logger = logging.getLogger('zcbot')
 
 
@@ -70,7 +72,7 @@ def register(ctx):
                 elif repo.startswith('http://github.com/'):
                     repo = repo.replace('http://github.com/', '').rstrip('/')
                 api_url = f"https://api.github.com/repos/{repo}/commits/{branch}"
-                headers = {'Accept': 'application/vnd.github.v3+json'}
+                headers = _net.default_headers({'Accept': 'application/vnd.github.v3+json'})
                 last_err = ''
                 for cand in _github_url_candidates(api_url):
                     try:

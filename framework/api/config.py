@@ -69,9 +69,15 @@ def register(ctx):
     @app.route('/api/config', methods=['GET'])
     @require_auth
     def list_config():
-        """获取系统配置"""
+        """获取系统配置（敏感键一律 ***，超管也一样）"""
         try:
             rows = db.query("SELECT config_key, config_value, description, updated_by FROM system_config")
+            for row in rows:
+                key = str(row.get('config_key') or '')
+                value = row.get('config_value')
+                if (_SENSITIVE_KEY.search(key) and not _SAFE_KEY_HINT.search(key)
+                        and value not in (None, '', _MASK)):
+                    row['config_value'] = _MASK
             return jsonify({'code': 0, 'data': rows})
         except Exception as e:
             logger.error(f"list_config 内部错误: {e}")
@@ -161,12 +167,10 @@ def register(ctx):
         primary = adapters[0] if adapters else {
             'config': {}, 'status': {'connected_bots': [], 'total': 0},
         }
-        masked = not _is_super()
-        if masked:
-            adapters = _mask_sensitive(adapters)
-            primary_config = _mask_sensitive(primary.get('config') or {})
-        else:
-            primary_config = primary.get('config') or {}
+        # 一律脱敏（含超管）：凭据只进不出，要改就填新值覆盖。
+        masked = True
+        adapters = _mask_sensitive(adapters)
+        primary_config = _mask_sensitive(primary.get('config') or {})
         return jsonify({'code': 0, 'data': {
             'adapters': adapters,
             'config': primary_config,
@@ -415,7 +419,7 @@ def register(ctx):
     @app.route('/api/config/yaml', methods=['GET'])
     @require_auth
     def get_yaml_config():
-        """读取 config.yaml（超级管理员看明文，普通管理员看凭据脱敏版）"""
+        """读取 config.yaml（凭据一律脱敏，超管也一样）"""
         path = _yaml_config_path()
         if not os.path.isfile(path):
             return jsonify({'code': 404, 'msg': 'config.yaml 不存在'}), 404
@@ -429,9 +433,9 @@ def register(ctx):
                 secretbox.decrypt_config_secrets(doc)
             except Exception as exc:
                 logger.warning(f"配置页凭据解密失败（按原值显示）: {exc}")
-            masked = not _is_super()
-            if masked:
-                doc = _mask_sensitive(doc)
+            # 一律脱敏（含超管），见 docs/速查/安全加固.md「配置读取口径」
+            masked = True
+            doc = _mask_sensitive(doc)
             return jsonify({'code': 0, 'data': doc, 'masked': masked})
         except Exception as e:
             logger.error(f"get_yaml_config 内部错误: {e}")
@@ -475,6 +479,42 @@ def register(ctx):
             reason = applied.get('restart_reason') or '重启后生效'
             msg += f'；{reason}'
         return jsonify({'code': 0, 'msg': msg, 'data': applied})
+
+    # ---- 核心插件配置（core_plugins.yaml ↔ core_config 表）----
+
+    @app.route('/api/config/core', methods=['GET'])
+    @require_auth
+    def list_core_config():
+        """核心插件配置（带数据库 id / 同步时间；敏感值一律 ***）"""
+        from framework import core_config_sync as ccs
+        try:
+            rows = ccs.get_config_for_api(db, masked=True)
+            return jsonify({'code': 0, 'data': rows, 'masked': True})
+        except Exception as e:
+            logger.error(f"list_core_config 内部错误: {e}")
+            return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
+
+    @app.route('/api/config/core/<plugin>/<key>', methods=['PUT'])
+    @require_super
+    def update_core_config(plugin, key):
+        """面板改核心插件配置：写库（敏感值加密）+ 回写 core_plugins.yaml"""
+        from framework import core_config_sync as ccs
+        admin = request.admin
+        data = request.get_json(silent=True) or {}
+        if 'value' not in data:
+            return jsonify({'code': 400, 'msg': '缺少 value'}), 400
+        value = data.get('value')
+        if value == ccs.MASK:
+            return jsonify({'code': 0, 'msg': '脱敏占位符已忽略，未做修改'})
+        if not ccs.update_from_panel(db, _core_plugins_yaml(), plugin, key, value):
+            return jsonify({'code': 500, 'msg': '写入核心插件配置失败'}), 500
+        audit_log(admin['id'], admin['username'], 'update_core_config', 'config',
+                  f'{plugin}.{key}', {'value': ccs.MASK if ccs._is_secret(key) else value})
+        return jsonify({'code': 0, 'msg': f'[{plugin}.{key}] 已保存（文件与数据库已同步）'})
+
+    def _core_plugins_yaml():
+        from framework.paths import core_plugins_yaml_path
+        return core_plugins_yaml_path()
 
     # ---- 内存黑匣子调试接口 ----
     from framework.blackbox import clear as bb_clear

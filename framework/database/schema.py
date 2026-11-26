@@ -198,6 +198,21 @@ def _auto_create_tables(database, context=None):
             )
         """,
 
+        # core_plugins.yaml 配置项镜像：文件是权威（手改文件后启动/检测即覆写本表），
+        # 面板改动写本表并回写文件。敏感值（token/api_key/...）以 secretbox enc:v1 密文落库。
+        # synced_at 存 unix 时间戳字符串（SQLite/MySQL 一致），驱动文件带 ID 注释与同步时间。
+        'core_config': """
+            CREATE TABLE IF NOT EXISTS core_config (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_name   VARCHAR(64)  NOT NULL,
+                config_key    VARCHAR(100) NOT NULL,
+                config_value  TEXT,
+                synced_at     VARCHAR(32),
+                source        VARCHAR(16)  DEFAULT 'file',
+                UNIQUE(plugin_name, config_key)
+            )
+        """,
+
         # ── 权限系统（节点式）─────────────────────────────
         # node = 'group.xxx' 表示继承/加入 xxx 组；context_* 为 NULL = 全局生效
         # 时间字段统一用 VARCHAR(32) 存 unix 时间戳字符串（SQLite/MySQL 一致）
@@ -344,7 +359,16 @@ def _auto_create_tables(database, context=None):
         from framework.database import integrity
         from framework.database.migrations import LEDGER_TABLE
 
-        if (integrity.is_initialized(database)
+        # 「账本被删」与「老库本来就没有账本」必须分开：
+        #   - 前者：标记文件里记过这张表，说明它曾经存在 → 拒绝重放 destructive；
+        #   - 后者：老版本升级上来、从没建过账本 → 走 first_run 一次性收敛。
+        # 只用 is_initialized 会把后一种也判成「被删」（它靠表结构/行数据推断已初始化），
+        # 于是老库永远升不上来。标记里的 tables 是唯一能区分二者的证据。
+        _marker = integrity.read_marker(database)
+        _recorded = {str(t).lower()
+                     for t in (_marker or {}).get('tables') or []}
+        _ledger_was_there = LEDGER_TABLE.lower() in _recorded
+        if (_ledger_was_there
                 and not database.table_exists(LEDGER_TABLE)
                 and not allow_repair_flag(database)):
             # 账本表在运行期被删：此时 run_pending 会判成 first_run，
@@ -357,6 +381,11 @@ def _auto_create_tables(database, context=None):
         else:
             ctx = context or migrations_context(database, source='boot')
             report = run_migrations(database, MIGRATIONS, ctx)
+            # 迁移会新建账本表：补记一次，下次启动才判得出「账本曾经存在」。
+            try:
+                integrity.record_tables(database)
+            except Exception as _exc:
+                logger.debug("迁移后补记表清单失败: %s", _exc)
     except Exception as e:
         logger.error("数据库迁移引擎异常，已跳过迁移: %s", e)
     else:

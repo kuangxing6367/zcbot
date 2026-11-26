@@ -15,6 +15,8 @@ import zipfile
 import requests
 import yaml
 
+from framework import net as _net
+
 logger = logging.getLogger('zcbot')
 
 # 项目根目录（framework/api/app_helpers.py 向上三级）
@@ -116,7 +118,7 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         try:
             resp = requests.get(
                 f"https://api.github.com/repos/{repo}/releases?per_page=30",
-                headers={'Accept': 'application/vnd.github+json'},
+                headers=_net.default_headers({'Accept': 'application/vnd.github+json'}),
                 timeout=15,
             )
             if resp.status_code != 200:
@@ -328,7 +330,8 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         for url in urls:
             try:
                 logger.info(f"正在下载 ZIP: {url}")
-                resp = requests.get(url, timeout=180, stream=True)
+                resp = requests.get(url, headers=_net.default_headers(),
+                                    timeout=180, stream=True)
                 if resp.status_code != 200:
                     continue
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
@@ -356,7 +359,7 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         url = (source.get('url') or '').strip()
         if not url:
             return []
-        resp = requests.get(url, timeout=15)
+        resp = requests.get(url, headers=_net.default_headers(), timeout=15)
         resp.raise_for_status()
         data = resp.json()
         plugins = data.get('plugins', []) if isinstance(data, dict) else []
@@ -387,7 +390,7 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
         """通过 GitHub API 获取仓库文件树，仅下载 sub_path 目录下的文件。返回 (ok, msg)。"""
         try:
             api_url = f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1"
-            headers = {'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'zcbot'}
+            headers = _net.default_headers({'Accept': 'application/vnd.github.v3+json'})
             tree = None
             api_err = ''
             for cand in _github_url_candidates(api_url):
@@ -444,7 +447,7 @@ def make_app_helpers(framework, db, plugins_dir) -> dict:
                 last_err = ''
                 for u in urls:
                     try:
-                        r = requests.get(u, timeout=30)
+                        r = requests.get(u, headers=_net.default_headers(), timeout=30)
                         if r.status_code == 200:
                             dest = os.path.join(target_dir, rel)
                             parent = os.path.dirname(dest)

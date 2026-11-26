@@ -190,7 +190,8 @@ def fire_alert(cfg, exc=None):
     if hook:
         try:
             data = (traceback.format_exc() if exc else 'ZCBOT crash').encode('utf-8')
-            req = urllib.request.Request(hook, data=data, method='POST')
+            from framework import net as _net
+            req = _net.build_request(hook, data=data, method='POST')
             urllib.request.urlopen(req, timeout=15)
         except Exception as e:
             logger.warning(f"崩溃告警 Webhook 失败: {e}")

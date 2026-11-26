@@ -11,6 +11,7 @@ import zipfile
 import requests
 from flask import jsonify, request
 
+from framework import net as _net
 from framework.security.archive import (
     FRAMEWORK_UPDATE_LIMITS,
     SafeArchiveError,
@@ -84,7 +85,7 @@ def register(ctx):
             try:
                 rresp = requests.get(
                     f"https://api.github.com/repos/{repo}/releases?per_page=30",
-                    headers={'Accept': 'application/vnd.github+json'},
+                    headers=_net.default_headers({'Accept': 'application/vnd.github+json'}),
                     timeout=15,
                 )
                 if rresp.status_code == 200:
@@ -144,7 +145,10 @@ def register(ctx):
 
             # 回退：仓库无任何 Release → 按 main 分支最新提交对比
             api_url = f"https://api.github.com/repos/{repo}/commits/{branch}"
-            resp = requests.get(api_url, headers={'Accept': 'application/vnd.github.v3+json'}, timeout=15)
+            resp = requests.get(
+                api_url,
+                headers=_net.default_headers({'Accept': 'application/vnd.github.v3+json'}),
+                timeout=15)
             if resp.status_code == 404:
                 return jsonify({'code': 404, 'msg': '仓库或分支不存在'}), 404
             if resp.status_code != 200:

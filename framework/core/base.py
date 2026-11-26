@@ -138,6 +138,20 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
                 "框架处于数据库降级模式：持久化能力受限，使用 data/db 下 JSON/YAML 文件存储"
             )
 
+        # 核心插件配置（core_plugins.yaml）→ core_config 表：文件是权威，
+        # 启动时全量覆写并把 id/同步时间回写到 yaml；面板改配置走
+        # /api/config/core（写库 + 回写文件）。失败不阻断启动。
+        self.core_config_info = {}
+        try:
+            from framework import core_config_sync as _ccs
+            from framework.paths import core_plugins_yaml_path as _cps_path
+
+            if not self.db_degraded and getattr(self.db, 'db_type', '') != 'remote':
+                self.core_config_info = _ccs.sync_and_annotate(
+                    self.db, _cps_path())
+        except Exception as e:
+            logger.warning('核心插件配置同步失败（不影响启动）: %s', e)
+
         # 存储抽象层接入点：当前后端（sqlite/mysql/debug）与调试模式标志。
         # debug = 调试模式（低性能模式）：config 显式配置 database.type: debug，
         # 在本机以 JSON 行集本地模拟 SQL（查询有语义），见 framework/database/storage.py。

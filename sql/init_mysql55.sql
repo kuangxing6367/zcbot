@@ -239,6 +239,24 @@ CREATE TABLE IF NOT EXISTS plugin_configs (
 
 
 -- ============================================================
+-- 10.5 核心插件配置镜像表（core_plugins.yaml 同步落点）
+-- 文件是权威：手改 yaml 后启动/检测即覆写本表；面板改动写本表并回写文件。
+-- config_value 敏感键以 secretbox enc:v1 密文存储，不下发明文。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS core_config (
+    id              INT             AUTO_INCREMENT  PRIMARY KEY,
+    plugin_name     VARCHAR(64)     NOT NULL        COMMENT '核心插件名',
+    config_key      VARCHAR(100)    NOT NULL        COMMENT '配置键',
+    config_value    TEXT            DEFAULT NULL    COMMENT '配置值(敏感键为 enc:v1 密文)',
+    synced_at       VARCHAR(32)     DEFAULT NULL    COMMENT '同步时间(unix 时间戳秒)',
+    source          VARCHAR(16)     DEFAULT 'file'  COMMENT '来源: file / panel',
+    UNIQUE KEY uk_core_plugin_key (plugin_name, config_key),
+    KEY idx_core_plugin (plugin_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  COMMENT='核心插件配置镜像表';
+
+
+-- ============================================================
 -- 11. 系统配置表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS system_config (

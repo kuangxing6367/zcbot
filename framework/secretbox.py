@@ -27,6 +27,8 @@ import os
 import re
 import secrets
 
+import yaml
+
 logger = logging.getLogger('zcbot')
 
 PREFIX = 'enc:v1:'
@@ -47,13 +49,78 @@ _warned_missing_key = False
 _warned_bad_cipher = False
 
 
-def master_secret():
-    """返回环境变量里的主密钥；未设置返回 None。"""
+def env_secret():
+    """只取环境变量里的主密钥；未设置返回 None（不落内置密钥）。"""
     for name in ENV_KEYS:
         value = os.environ.get(name)
         if value:
             return value
     return None
+
+
+def file_encryption_enabled() -> bool:
+    """是否把配置文件里的明文凭据加密写回。
+
+    只有显式配置了外部密钥才做。内置密钥用于「数据落库/落盘加密」（如 core_config），
+    而 config.yaml / core_plugins.yaml 是用户手改的入口——自动改成 enc:v1 密文会让人
+    没法直接编辑，也让"手写明文 → 框架接管加密入库"这条路走不通。
+    """
+    return env_secret() is not None
+
+
+def master_secret():
+    """返回主密钥：环境变量优先，未设置时用框架内置密钥（自动生成落盘）。
+
+    内置密钥复用应急管理员的成熟模式：随机令牌落 ``data/config_secret.yaml``
+    并收紧到 0600，密钥只在该文件，不进版本库、不下发接口。这样"加密入库"
+    开箱即用，不再要求用户手动配 ZCBOT_TOKEN_KEY；显式设置环境变量仍可覆盖，
+    便于集中密钥托管。读取/生成失败时降级为 None（明文透传，兼容老部署）。
+    """
+    value = env_secret()
+    if value:
+        return value
+    return _builtin_secret()
+
+
+_builtin_secret_cache = None
+
+
+def _builtin_secret():
+    """读取或首次生成内置密钥；进程内缓存，失败返回 None。"""
+    global _builtin_secret_cache
+    if _builtin_secret_cache is not None:
+        return _builtin_secret_cache
+    try:
+        from framework.paths import state_dir
+
+        path = os.path.join(state_dir(), 'config_secret.yaml')
+        if os.path.isfile(path):
+            with open(path, encoding='utf-8') as f:
+                data = yaml.safe_load(f) or {}
+            key = str(data.get('key') or '').strip()
+            if key:
+                _builtin_secret_cache = key
+                return key
+        # 首次生成
+        key = secrets.token_urlsafe(48)
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        tmp = path + '.part'
+        with open(tmp, 'w', encoding='utf-8', newline='') as f:
+            yaml.safe_dump({
+                'key': key,
+                'note': '框架内置配置加密密钥，请勿删除或修改；删除后已加密凭据将无法解密。',
+            }, f, allow_unicode=True, sort_keys=False)
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        logger.info("已生成框架内置配置加密密钥: %s（权限 0600）", path)
+        _builtin_secret_cache = key
+        return key
+    except Exception as exc:
+        logger.warning("内置配置密钥读取/生成失败，凭据将以明文处理: %s", exc)
+        return None
 
 
 def available() -> bool:
@@ -72,8 +139,9 @@ def _warn_missing_key_once():
         return
     _warned_missing_key = True
     logger.warning(
-        "未设置 ZCBOT_TOKEN_KEY，适配器凭据仍以明文存储在配置文件中。"
-        "设置该环境变量后重启，框架会自动把 access_token / app_secret / api_key 一次性加密落盘。")
+        "配置加密不可用（环境变量与内置密钥均无法读取），凭据仍以明文处理。"
+        "正常情况下框架会在 data/config_secret.yaml 自动生成内置密钥；"
+        "也可设置 ZCBOT_TOKEN_KEY 使用外部密钥。")
 
 
 def _warn_bad_cipher_once():

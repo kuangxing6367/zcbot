@@ -3,6 +3,7 @@
 """
 import os
 
+from framework import net as _net
 from framework.security.archive import FRAMEWORK_UPDATE_LIMITS, safe_extract_zip
 
 from .command import terminal_commands
@@ -35,7 +36,9 @@ def register(fw):
         else:
             # 取最新 Release
             try:
-                r = requests.get(f"https://api.github.com/repos/{repo}/releases?per_page=5", timeout=15)
+                r = requests.get(
+                    f"https://api.github.com/repos/{repo}/releases?per_page=5",
+                    headers=_net.default_headers(), timeout=15)
                 releases = r.json() if r.status_code == 200 else []
                 best = None
                 for rel in releases:
@@ -57,7 +60,7 @@ def register(fw):
 
         # 下载
         try:
-            resp = requests.get(zip_url, timeout=60)
+            resp = requests.get(zip_url, headers=_net.default_headers(), timeout=60)
             if resp.status_code != 200:
                 print(f"下载失败: HTTP {resp.status_code}")
                 return

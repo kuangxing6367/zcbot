@@ -26,9 +26,9 @@
 
 ---
 
-## [开发中]
+## [1.28.15] - 2026-11-26
 
-> 主题：补上静态安全扫描（Bandit），并把扫描出的高危项清零。
+> 主题：核心插件配置与数据库双向同步（敏感值加密、接口一律脱敏）；出站 HTTP 统一浏览器 UA；补上 Bandit 高危门禁。
 
 ### 变更
 
@@ -44,9 +44,29 @@
    的非严格模式），现在上类型门禁等于把 CI 长期钉红；`tox`/`nox` 与现有 Python 版本矩阵重复；
    `Black`/`Pylint`/`Flake8` 与已有 ruff 职责重叠；`SonarQube` 需要额外服务端，暂不引入。
 
+4. **core_plugins.yaml ↔ `core_config` 表双向同步**：文件是权威——手改后重启即全量覆写库（敏感键
+   `token`/`app_secret`/`api_key` 等以 `enc:v1:` 密文落库），面板改动写库并回写 yaml。文件顶部加
+   说明块与 `# synced_at:`，每个配置项加 `# id:N` 指向库主键；内容未变时只更新时间，`id` 不漂移。
+   新增 `GET /api/config/core`、`PUT /api/config/core/<plugin>/<key>`（收到 `***` 视为未改）。
+   文档见 `docs/进阶/核心配置同步.md`。
+5. **配置读取一律脱敏（含超管）**：`/api/config/yaml`、`/api/connection` 不再对超管下发明文；
+   此前完全没有脱敏的 `GET /api/config`（`system_config` 全表，含 `onebot.access_token`）补上
+   敏感键打码。要改凭据就填新值覆盖，"只进不出"。
+6. **加密密钥开箱可用**：没配 `ZCBOT_TOKEN_KEY` 时框架自动在 `data/config_secret.yaml` 生成
+   内置密钥（0600），供落库/落盘加密使用；**配置文件本身仍只在显式配了外部密钥时才加密回写**
+   ——否则"手写明文 → 重启 → 框架接管加密入库"这条手工配置路径会被密文堵死。
+7. **出站 HTTP 统一浏览器 UA**（`framework/net.py`）：Python 默认 UA 会被 Cloudflare 之类的 WAF
+   判成脚本，表现为 curl 能通、框架里 403 + error 1010。aiwriter 的 LLM 请求、遥测上报、
+   崩溃告警 webhook、插件市场/资产下载、框架自更新、终端更新全部改走统一默认头；
+   调用方显式传的 UA 仍然优先。
+8. **修正迁移守卫误判**：`schema.py` 原先把「老库从没建过账本」和「账本运行期被删」都判成后者，
+   结果是带数据的老库永远升不上来（历史 destructive 迁移被拦，`commands` 去重补索引跑不掉）。
+   改为只在标记文件里记过 `schema_migrations` 时才拦，迁移后再补记一次表清单。
+
 ### 验证
 
-`bandit -r framework core_plugins -lll` 为空（修复前 12 项 HIGH）；干净副本全量 1571 passed / 9 skipped；ruff 两道、脚本式回归全过。
+`bandit -r framework core_plugins -lll` 为空（修复前 12 项 HIGH）；全量 1588 passed / 3 skipped；
+ruff 两道、脚本式回归 19 文件 0 失败、`release_check` 全过。
 
 ## [1.28.14] - 2026-11-26
 

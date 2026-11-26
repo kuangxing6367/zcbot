@@ -341,15 +341,17 @@ def test_normal_admin_gets_masked_config(web_env):
     assert 'atk-real-value' not in str(body)
 
 
-def test_super_admin_still_reads_plaintext_config(web_env):
+def test_super_admin_also_gets_masked_config(web_env):
+    """超管看配置页也是脱敏视图：凭据只进不出，要改就填新值覆盖"""
     c = web_env['client']
     token = _login(c)
     assert token
     r = c.get('/api/config/yaml', headers={'Authorization': f'Bearer {token}'})
     assert r.status_code == 200, r.get_json()
     body = r.get_json()
-    assert body['masked'] is False
-    assert body['data']['database']['password'] == 'db-real-pw'
+    assert body['masked'] is True
+    assert body['data']['database']['password'] == '***'
+    assert 'db-real-pw' not in str(body)
 
 
 def test_connection_config_masked_for_normal_admin(web_env):

@@ -49,7 +49,9 @@ def _sse_stream(cfg, messages, tools):
             payload["reasoning_effort"] = str(cfg.get("reasoning_effort", "medium"))
 
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
+    # 统一出站头：默认 Python-urllib UA 会被 Cloudflare 拦成 403/1010
+    from framework import net as _net
+    req = _net.build_request(
         url, data=data, method="POST",
         headers={
             "Content-Type": "application/json",

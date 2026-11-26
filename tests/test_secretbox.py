@@ -23,6 +23,8 @@ def _set_key(monkeypatch, key='unit-test-master-key'):
 def _clear_key(monkeypatch):
     monkeypatch.delenv('ZCBOT_TOKEN_KEY', raising=False)
     monkeypatch.delenv('ZCBOT_CONFIG_SECRET', raising=False)
+    # 屏蔽框架内置密钥，模拟「完全无密钥」的降级场景
+    monkeypatch.setattr(secretbox, '_builtin_secret', lambda: None)
 
 
 # ── 基础加解密 ───────────────────────────────────────────────
@@ -31,6 +33,25 @@ def test_no_key_is_plaintext_passthrough(monkeypatch):
     assert secretbox.available() is False
     assert secretbox.encrypt_value('abc') == 'abc'
     assert secretbox.decrypt_value('abc') == 'abc'
+
+
+def test_builtin_key_enables_encryption_without_env(monkeypatch, tmp_path):
+    """未设环境变量时用框架内置密钥加密，开箱即用；密钥落盘 0600 且不进版本库。"""
+    from framework import paths
+
+    monkeypatch.delenv('ZCBOT_TOKEN_KEY', raising=False)
+    monkeypatch.delenv('ZCBOT_CONFIG_SECRET', raising=False)
+    monkeypatch.setattr(paths, 'state_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(secretbox, '_builtin_secret_cache', None)
+
+    assert secretbox.available() is True
+    cipher = secretbox.encrypt_value('my-qq-app-secret')
+    assert cipher.startswith(secretbox.PREFIX)
+    assert secretbox.decrypt_value(cipher) == 'my-qq-app-secret'
+    key_file = tmp_path / 'config_secret.yaml'
+    assert key_file.is_file()
+    assert 'my-qq-app-secret' not in key_file.read_text(encoding='utf-8')
+    # POSIX 下权限收紧到 0600（Windows 上 chmod 语义有限，不做断言）
 
 
 def test_roundtrip_is_random_and_authenticated(monkeypatch):

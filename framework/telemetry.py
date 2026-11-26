@@ -16,6 +16,7 @@ import time
 import urllib.request
 import uuid
 
+from framework import net as _net
 from framework.paths import state_dir
 
 logger = logging.getLogger('zcbot')
@@ -182,9 +183,10 @@ async def _loop():
 async def _report(framework):
     endpoint = str(config_of(framework).get('endpoint') or '').strip()
     body = json.dumps(collect(framework), ensure_ascii=False).encode('utf-8')
-    req = urllib.request.Request(
+    # 默认 UA 是 Python-urllib/3.x，Cloudflare 会直接 403（error 1010）
+    req = _net.build_request(
         endpoint, data=body, method='POST',
-        headers={'Content-Type': 'application/json', 'User-Agent': 'zcbot-telemetry'})
+        headers={'Content-Type': 'application/json'})
     result = await asyncio.to_thread(
         lambda: urllib.request.urlopen(req, timeout=15).read())
     state = _read_state()

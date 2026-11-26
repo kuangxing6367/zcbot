@@ -1564,7 +1564,7 @@ def load_config(config_path: str = None) -> dict:
     try:
         from framework import secretbox as _secretbox
         _secretbox.warn_if_no_key()
-        if _secretbox.available() and not broken:
+        if _secretbox.file_encryption_enabled() and not broken:
             _migrated = _secretbox.migrate_file_and_config(config_path, config)
             if _migrated:
                 _get_logger().info("已将 %d 处明文凭据加密写回 %s", _migrated, config_path)
@@ -1845,7 +1845,7 @@ def _autoload_core_plugins(config: dict) -> dict:
     # 内存里先保持密文，等最后合并进主 config 前再解密成运行时明文。
     try:
         from framework import secretbox as _secretbox
-        if _secretbox.available() and _secretbox.encrypt_config_secrets(data):
+        if _secretbox.file_encryption_enabled() and _secretbox.encrypt_config_secrets(data):
             _secretbox.rewrite_secret_file(yaml_path)
             changed = True
     except Exception as e:
