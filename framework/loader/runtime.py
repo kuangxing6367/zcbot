@@ -114,12 +114,18 @@ class PluginRuntimeMixin:
         stop_event.clear()  # 支持 stop() 后再次 start()
 
         cfg = self.framework.config.get('plugin', {})
+        # 两个数不能混用：max_mb 是「单个插件估算内存」的上限，用于判定是否卸载；
+        # 进程 RSS 是整个 Python 进程（解释器 + 所有插件 + 框架自身），正常就在
+        # 几十到几百 MB。原来拿 max_mb * 1.5 当进程警戒线，64MB 上限等于把线画在
+        # 96MB——正常进程 96.6MB 就每分钟报一次「疑似泄漏」，纯噪音。
         max_mb = cfg.get('max_memory_mb', 64)
+        proc_warn_mb = float(cfg.get('process_warn_mb', 512) or 512)
 
         def monitor():
             import psutil  # 延迟导入：psutil 导入较慢，仅在启动内存监控线程时加载
             process = psutil.Process(os.getpid())
             last_proc_warn = 0.0
+            over_streak = 0
 
             # 用可唤醒的 Event 等待：stop() 置位后立即退出，不必干等一个采样周期
             while not stop_event.is_set():
@@ -127,13 +133,20 @@ class PluginRuntimeMixin:
                     break
 
                 try:
-                    # 进程级内存监控（同一状态 60s 只告警一次，避免刷屏）
+                    # 进程级内存监控：连续两次采样（约 6s）都超线才告警，
+                    # 避免一次瞬时就刷一条；同一状态 60s 内只报一次。
                     proc_mem = process.memory_info().rss / 1024 / 1024
-                    if proc_mem > max_mb * 1.5 and time.monotonic() - last_proc_warn > 60.0:
+                    if proc_mem > proc_warn_mb:
+                        over_streak += 1
+                    else:
+                        over_streak = 0
+                    if over_streak >= 2 and time.monotonic() - last_proc_warn > 60.0:
                         last_proc_warn = time.monotonic()
                         logger.warning(
-                            f"[内存监控] 进程内存 {proc_mem:.1f}MB 超过警戒线 "
-                            f"({max_mb * 1.5:.0f}MB)，可能存在插件泄漏"
+                            f"[内存监控] 进程内存 {proc_mem:.1f}MB 持续超过警戒线 "
+                            f"({proc_warn_mb:.0f}MB)，请排查插件泄漏"
+                            f"（该阈值是整进程，与单插件上限 {max_mb}MB 无关，"
+                            f"可用 plugin.process_warn_mb 调整）"
                         )
 
                     # 逐个插件估算内存（模块全局对象 + 一层容器内元素）
@@ -176,7 +189,9 @@ class PluginRuntimeMixin:
         t = threading.Thread(target=monitor, daemon=True, name="memory_monitor")
         self._memory_monitor_thread = t
         t.start()
-        logger.info(f"内存监控线程已启动 (采样间隔 3s, 单插件上限 {max_mb}MB, 估算含一层容器)")
+        logger.info(
+            f"内存监控线程已启动 (采样间隔 3s, 单插件上限 {max_mb}MB, "
+            f"整进程警戒线 {proc_warn_mb:.0f}MB, 估算含一层容器)")
 
     def _stop_memory_monitor(self):
         """停止内存监控线程（由 Framework.stop() 调用）。

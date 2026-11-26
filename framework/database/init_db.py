@@ -780,7 +780,7 @@ def _main():
     missing = missing_required_tables(db)
     if missing:
         print(f"数据库初始化未完成，仍缺失 {len(missing)} 张表: {', '.join(missing)}")
-        db.close()
+        db.shutdown()
         # 独立运行时把失败变成非零退出码，便于部署脚本/CI 直接判定
         sys.exit(1)
     if result:
@@ -788,7 +788,7 @@ def _main():
     else:
         print("数据库表已存在，无需初始化")
 
-    db.close()
+    db.shutdown()
 
 
 if __name__ == '__main__':

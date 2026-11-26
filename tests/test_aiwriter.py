@@ -1180,9 +1180,10 @@ def test_app_agent_add_quick():
 class _WriteAgent:
     """替身 Agent：跑一轮、写一个文件，用来验「服务层有没有真的记账」。"""
 
-    def __init__(self, cfg, tools, on_event=None):
+    def __init__(self, cfg, tools, on_event=None, should_stop=None):
         self.tools = tools
         self.events = on_event or (lambda k, p=None: None)
+        self._should_stop = should_stop or (lambda: False)
 
     def run(self, messages):
         self.tools.call('write', {'path': 'a.py', 'content': 'AI 写的新内容\n'})

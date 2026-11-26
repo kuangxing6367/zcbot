@@ -946,7 +946,12 @@ class _AgentService:
         # 最近一轮产生的改动编号；接口层据此告诉前端「去看哪一条」
         self.last_change_id = None
 
-    def run(self, text, on_event=None, session=None):
+    def run(self, text, on_event=None, session=None, should_stop=None):
+        """跑一轮。`should_stop` 是可选的协作式取消探针（返回 True 即收口）。
+
+        Web 端把它接到「停止」按钮上：工具之间、每个流式分片之间都会检查一次，
+        所以点了停止不会等到整轮跑完，已生成的内容也不会丢（照样落进会话历史）。
+        """
         key = (session or '').strip() or _session_key()
         if _STORE is not None and not _STORE.exists(key):
             _STORE.ensure(key, name=key)
@@ -970,7 +975,8 @@ class _AgentService:
             journal, tools = None, _TOOLS
         system = _system_prompt()
         messages = _STORE.build_messages(key, system, text)
-        agent = Agent(_effective_cfg(), tools, on_event=on_event)
+        agent = Agent(_effective_cfg(), tools, on_event=on_event,
+                      should_stop=should_stop)
         final = agent.run(messages)
         _STORE.append_turn(key, text, final)
         _STORE.save()
@@ -991,8 +997,106 @@ class _AgentService:
         return final
 
     # ── 会话（供 Web 界面：列 / 切 / 新建 / 改名 / 删）──────────────────
+    # ── 配置（供 Web 界面：查看 / 就地修改，写回 core_plugins.yaml）────
+    #  只暴露「改了立刻有意义」的键；密钥类只回是否已设置，不回明文。
+    CONFIG_KEYS = ('base_url', 'model', 'temperature', 'max_rounds', 'mode',
+                   'allow_exec', 'workspace', 'thinking', 'show_thinking',
+                   'show_tools', 'tool_detail', 'timeout', 'max_output',
+                   'shell_timeout', 'agent')
+
+    def config(self):
+        cfg = _effective_cfg()
+        out = {k: cfg.get(k, DEFAULTS.get(k)) for k in self.CONFIG_KEYS}
+        # 工作区显示绝对路径：用户在设置里改的就是这个值
+        out['workspace'] = _workspace_dir(cfg)
+        out['root'] = getattr(_TOOLS, 'root', '')
+        out['api_key_set'] = bool(cfg.get('api_key'))
+        out['agents'] = _agents()
+        out['active_agent'] = _active_agent().get('name')
+        return out
+
+    def configure(self, patch):
+        """就地改配置：校验 → 落 core_plugins.yaml → 立即重建工具集。
+
+        返回 (ok, 结果)。`api_key` 传空串或 `***` 表示「不动」——页面拿不到明文，
+        不能让它把脱敏占位符写回真配置。
+        """
+        global _CFG
+        patch = patch if isinstance(patch, dict) else {}
+        clean = {}
+        # api_key 单独收：能写、读不回来（config() 只回 api_key_set）
+        if 'api_key' in patch:
+            raw = str(patch.get('api_key') or '').strip()
+            if raw and raw != '***':
+                clean['api_key'] = raw
+        for k, v in patch.items():
+            if k not in self.CONFIG_KEYS:
+                continue
+            if v is None:
+                continue
+            clean[k] = v
+
+        # ── 校验：宁可拒绝，也不要写进一个跑不起来的值 ──
+        def _num(key, lo, hi, cast=float):
+            if key not in clean:
+                return None
+            try:
+                val = cast(clean[key])
+            except (TypeError, ValueError):
+                return '%s 必须是数字' % key
+            if not lo <= val <= hi:
+                return '%s 必须在 %s ~ %s 之间' % (key, lo, hi)
+            clean[key] = val
+            return None
+
+        for key, lo, hi, cast in (
+                ('temperature', 0.0, 2.0, float),
+                ('max_rounds', 1, 50, int),
+                ('timeout', 5, 600, int),
+                ('max_output', 500, 200000, int),
+                ('shell_timeout', 5, 1800, int)):
+            err = _num(key, lo, hi, cast)
+            if err:
+                return False, err
+        if 'mode' in clean and clean['mode'] not in ('readonly', 'workspace', 'full'):
+            return False, 'mode 只能是 readonly / workspace / full'
+        for key in ('thinking', 'show_thinking', 'show_tools', 'tool_detail', 'allow_exec'):
+            if key in clean:
+                clean[key] = bool(clean[key])
+        if 'model' in clean and not str(clean['model']).strip():
+            return False, 'model 不能为空'
+        if 'workspace' in clean:
+            ws = str(clean['workspace']).strip()
+            if ws:
+                ws = os.path.abspath(os.path.expanduser(ws))
+                if not os.path.isdir(ws):
+                    return False, '工作区目录不存在: %s' % ws
+                clean['workspace'] = ws
+        if 'agent' in clean:
+            names = [a['name'] for a in _agents()]
+            if clean['agent'] not in names:
+                return False, '没有这个人格：%s' % clean['agent']
+        if 'api_key' in clean and len(clean['api_key']) < 8:
+            return False, 'api_key 看起来太短，请检查是否复制完整'
+        if not clean:
+            return False, '没有可更新的配置项'
+
+        _CFG.update(clean)
+        # full 模式下才允许跑 shell：两者是绑定的，避免「选了 full 但跑不了命令」
+        if 'mode' in clean:
+            _CFG['allow_exec'] = (clean['mode'] == 'full')
+
+        if _FW is not None:
+            _persist_cfg(_FW, _CFG)
+        _rebuild_tools(_CFG)
+        return True, clean
+
     def workspace(self):
         return getattr(_TOOLS, 'root', '')
+
+    def model_name(self):
+        """当前生效的模型名（Web 端「开始」事件里带上，便于用户确认）。"""
+        return _effective_cfg().get('model', '')
 
     def active_session(self):
         return _session_key()

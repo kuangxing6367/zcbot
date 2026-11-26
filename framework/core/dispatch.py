@@ -24,6 +24,7 @@
 """Framework 事件分发 / 回复 / 原始消息 / notice·request / 群成员同步（自 core.py 剥离的 mixin）"""
 import asyncio
 import logging
+import time
 
 from framework.blackbox import new_event_id
 from framework.blackbox import record as _bb_record
@@ -136,6 +137,56 @@ class FrameworkDispatchMixin:
         except Exception as e:
             logger.error(f"message.after_send 扩展点异常: {e}")
         return result
+
+    # 群名解析缓存：OneBot 11 的群消息事件 sender 里只有 nickname/card/role，
+    # 没有 group_name（那是 get_group_info 才有的字段）。不补这一步，
+    # groups_info.group_name 会一直落空，群组管理里群名整列都是空的。
+    _GROUP_NAME_TTL = 1800          # 命中后缓存时长（秒）
+    _GROUP_NAME_TTL_MISS = 300      # 没取到名字时的重试间隔（秒）
+    _GROUP_NAME_CACHE_MAX = 2000    # 条目上限，防长期运行无界增长
+    _GROUP_NAME_TIMEOUT = 3.0       # 单次查询超时（秒），不能拖慢消息分发
+
+    async def _resolve_group_name(self, bot_name: str, group_id, adapter_key: str) -> str:
+        """取群名：先查缓存，再向适配器要 get_group_info。
+
+        全程吞异常并返回空串——群名只是展示用的附带信息，任何查询失败
+        都不该影响消息分发本身。
+        """
+        if group_id is None:
+            return ''
+        cache = getattr(self, '_group_name_cache', None)
+        if cache is None:
+            cache = self._group_name_cache = {}
+
+        key = (str(adapter_key or ''), str(group_id))
+        now = time.time()
+        hit = cache.get(key)
+        if hit is not None and hit[1] > now:
+            return hit[0]
+
+        name = ''
+        try:
+            adapter = self.services.adapter_for_source(bot_name)
+            if adapter is not None and hasattr(adapter, 'acall'):
+                info = await asyncio.wait_for(
+                    adapter.acall('get_group_info', bot=bot_name,
+                                  group_id=group_id, no_cache=False),
+                    timeout=self._GROUP_NAME_TIMEOUT)
+                if isinstance(info, dict):
+                    # 兼容 {"data": {...}} 与已解包的扁平两种返回形状
+                    data = info.get('data') if isinstance(info.get('data'), dict) else info
+                    name = str(data.get('group_name') or '')[:200]
+        except Exception as e:
+            logger.debug(f"查询群名失败 group={group_id}: {e}")
+
+        # 缓存清理：先清过期项，仍超限就整体重置（比逐条淘汰简单且够用）
+        if len(cache) >= self._GROUP_NAME_CACHE_MAX:
+            alive = {k: v for k, v in cache.items() if v[1] > now}
+            if len(alive) >= self._GROUP_NAME_CACHE_MAX:
+                alive = {}
+            self._group_name_cache = cache = alive
+        cache[key] = (name, now + (self._GROUP_NAME_TTL if name else self._GROUP_NAME_TTL_MISS))
+        return name
 
     async def dispatch_event(self, event: dict, wait: bool = False):
         """
@@ -492,6 +543,13 @@ class FrameworkDispatchMixin:
                                     'user_id': user_id, 'group_id': group_id})
 
                 adapter_key = event.get('adapter') or bot_name
+                # 群名回填：事件里没有就问适配器要一次（带缓存），否则群组管理
+                # 的群名一列永远是空。回填后同步写回 event，路由层也能读到。
+                if message_type == 'group' and not sender.get('group_name'):
+                    gname = await self._resolve_group_name(bot_name, group_id, adapter_key)
+                    if gname:
+                        sender = {**sender, 'group_name': gname}
+                        event['sender'] = sender
                 self.stats_writer.register_user(
                     user_id, sender, message_type, group_id, adapter_key=adapter_key)
                 # 注：message.classified 扩展点由 router.route() 内部发出——

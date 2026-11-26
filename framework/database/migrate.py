@@ -241,7 +241,7 @@ def main(argv=None) -> int:
             return 0
     finally:
         try:
-            db.close()
+            db.shutdown()
         except Exception as _exc:
             logger.debug('[main] 捕获异常后按降级路径继续: %s', _exc)
     return 0

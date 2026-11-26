@@ -260,6 +260,7 @@ plugin:
   heartbeat_interval: 60     # 插件注册心跳间隔（秒）
   auto_install_deps_on_startup: true  # 启动时自动安装缺失依赖到全局环境（移机自愈，版本冲突自动跳过）
   max_memory_mb: 64          # 单插件内存上限（MB），超限自动卸载
+  process_warn_mb: 512       # 整进程内存警戒线（MB），与单插件上限是两回事
   hot_reload: true           # 用户插件（plugins/）源码变更时自动全量热重载（unload+reload），改动的 handler 逻辑即时生效；false 则沿用旧行为（仅重新注册，不重跑模块代码）。仅作用于用户插件，核心插件不参与
 
 # ── 插件源码静态检查（启动期扫描同步阻塞 / 同步等待 / 同步退出）──
@@ -862,6 +863,7 @@ _CONFIG_SCHEMA = {
         'type': dict,
         'keys': {
             'max_memory_mb': {'int': True, 'min': 1},
+            'process_warn_mb': {'int': True, 'min': 32},
             'hot_reload': {'bool': True},
             'auto_install_deps_on_startup': {'bool': True},
         },

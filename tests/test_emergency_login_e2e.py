@@ -63,7 +63,7 @@ def env(tmp_path, monkeypatch):
     except Exception:
         pass
     try:
-        fw.db.close()
+        fw.db.shutdown()
     except Exception:
         pass
     for p in (db_path, db_path + '-wal', db_path + '-shm'):

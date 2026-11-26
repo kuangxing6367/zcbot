@@ -29,11 +29,45 @@ handler 既可以是普通函数，也可以是 `async def`：
   ⚠️ 并行 handler 不参与"串行短路"（竞态下无意义），需要短路语义请显式声明 `serial=True`。
 """
 import asyncio
+import inspect
 import logging
 import threading
 from typing import Callable, List, Tuple
 
 logger = logging.getLogger('zcbot')
+
+
+def _arity_of(handler):
+    """算出 handler 能接受几个位置参数、哪些关键字。
+
+    返回 ``(max_pos, free, allowed_kw)``：
+
+    - ``free=True``：handler 有 ``*args`` / ``**kwargs``，或签名读不出来
+      （内建函数、C 扩展、被装饰器包过）——原样传参，不做任何裁剪；
+    - ``max_pos``：可接受的位置参数个数上限（``None`` 表示不限）；
+    - ``allowed_kw``：可接受的参数名集合（``None`` 表示不限）。
+
+    存在的理由：扩展点由框架调用、handler 由插件写，双方的参数表很容易不同步。
+    `event.before_dispatch` 会传 `(event, bot_name)`，而 handler 只写 `def f(event)`
+    是极自然的写法；不做适配就是**每条消息一条 TypeError**，日志被刷屏、
+    功能静默失效。
+    """
+    try:
+        sig = inspect.signature(handler)
+    except (TypeError, ValueError):
+        return (None, True, None)
+    max_pos = 0
+    allowed = set()
+    for p in sig.parameters.values():
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD):
+            max_pos += 1
+            if p.kind is p.POSITIONAL_OR_KEYWORD:
+                allowed.add(p.name)
+        elif p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+            return (None, True, None)
+        elif p.kind is p.KEYWORD_ONLY:
+            allowed.add(p.name)
+    return (max_pos, False, allowed)
 
 
 class HookPoints:
@@ -127,7 +161,22 @@ class HookRegistry:
         self._framework = framework
         self._hooks = {}                 # point -> list[[priority, name, handler]]
         self._snapshots = {}             # point -> tuple((priority, name, handler))，写时复制
+        self._arity = {}                 # (point, name) -> _arity_of 的结果
         self._lock = threading.Lock()
+
+    def _fit_args(self, point: str, name: str, args: tuple, kwargs: dict):
+        """把参数裁剪到 handler 能接受的范围（注册时算好，热路径只查表）。"""
+        info = self._arity.get((point, name))
+        if info is None:
+            return args, kwargs
+        max_pos, free, allowed = info
+        if free:
+            return args, kwargs
+        if max_pos is not None and len(args) > max_pos:
+            args = args[:max_pos]
+        if kwargs and allowed is not None:
+            kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+        return args, kwargs
 
     def _invalidate(self, point: str):
         """失效指定扩展点快照（注册/注销后调用）"""
@@ -158,7 +207,9 @@ class HookRegistry:
         """
         if not callable(handler):
             raise TypeError(f"扩展点 [{point}] 的 handler 必须可调用: {name}")
+        arity = _arity_of(handler)
         with self._lock:
+            self._arity[(point, name)] = arity
             entries = self._hooks.setdefault(point, [])
             for entry in entries:
                 if entry[1] == name:
@@ -172,6 +223,7 @@ class HookRegistry:
     def unregister(self, point: str, name: str):
         """注销指定 name 的扩展点处理器。"""
         with self._lock:
+            self._arity.pop((point, name), None)
             entries = self._hooks.get(point)
             if entries:
                 self._hooks[point] = [e for e in entries if e[1] != name]
@@ -185,6 +237,9 @@ class HookRegistry:
                 kept = [e for e in entries if not e[1].startswith(prefix)]
                 if len(kept) != len(entries):
                     self._hooks[point] = kept
+                    for e in entries:
+                        if e[1].startswith(prefix):
+                            self._arity.pop((point, e[1]), None)
         # 涉及多个扩展点，简单起见全部失效
         self._snapshots.clear()
 
@@ -250,11 +305,12 @@ class HookRegistry:
 
         # 1) 串行组：顺序 await，保持短路语义（首个 False 即终止，并行组也不再触发）
         for _, name, handler in serial_entries:
+            hargs, hkwargs = self._fit_args(point, name, args, kwargs)
             try:
                 if asyncio.iscoroutinefunction(handler):
-                    results.append(await handler(*args, **kwargs))
+                    results.append(await handler(*hargs, **hkwargs))
                 else:
-                    results.append(handler(*args, **kwargs))
+                    results.append(handler(*hargs, **hkwargs))
                 if short_circuit and results[-1] is False:
                     return results
             except Exception as e:
@@ -263,10 +319,11 @@ class HookRegistry:
         # 2) 并行组：与本组其他 handler 并发执行（asyncio.gather），收集全部结果
         if parallel_entries:
             async def _run(name, handler):
+                hargs, hkwargs = self._fit_args(point, name, args, kwargs)
                 try:
                     if asyncio.iscoroutinefunction(handler):
-                        return await handler(*args, **kwargs)
-                    return handler(*args, **kwargs)
+                        return await handler(*hargs, **hkwargs)
+                    return handler(*hargs, **hkwargs)
                 except Exception as e:
                     logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}", exc_info=True)
                     return None
@@ -307,14 +364,15 @@ class HookRegistry:
 
         loop = getattr(self._framework, 'loop', None) if self._framework else None
         for _, name, handler, _serial in self._snapshot(point):
+            hargs, hkwargs = self._fit_args(point, name, args, kwargs)
             try:
                 if asyncio.iscoroutinefunction(handler):
                     if loop is not None and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(handler(*args, **kwargs), loop)
+                        asyncio.run_coroutine_threadsafe(handler(*hargs, **hkwargs), loop)
                     elif point not in _ALLOW_SKIP_ASYNC:
                         logger.warning(
                             f"扩展点 [{point}] 的 async 处理器 [{name}] 无可用事件循环，已跳过")
                 else:
-                    handler(*args, **kwargs)
+                    handler(*hargs, **hkwargs)
             except Exception as e:
                 logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}")

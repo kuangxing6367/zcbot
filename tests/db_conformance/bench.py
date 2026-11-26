@@ -185,7 +185,7 @@ def main(argv=None):
             db.execute("DROP TABLE IF EXISTS bench_users")
         except Exception:
             pass
-        db.close()
+        db.shutdown()
         backend.teardown()
     return 0
 

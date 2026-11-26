@@ -488,7 +488,30 @@ class DatabaseConnMixin:
         }
 
     def close(self):
-        """关闭连接：MySQL 关闭整个连接池；SQLite 关当前线程 + 已结束线程遗留的连接。"""
+        """安全关闭：只释放**当前线程**的连接，绝不动共享连接池。
+
+        这个方法是「谁都能调」的公开接口——插件里写数据库操作后顺手一句
+        `ctx._db.close()` / `db.close()` 是极常见的写法。而 `Database` 实例全进程
+        只有一份（`framework.db`），MySQL 连接池一旦被关就不会自动重建，后面
+        所有查询只会连番失败，只能重启进程。
+
+        所以这里刻意**不**关池：
+        - MySQL：什么都不做（池由 :meth:`shutdown` 在停机时关闭）；
+        - SQLite：关掉本线程那条连接并清掉线程本地状态，下次查询自动重连。
+
+        真正需要关整池的场合（框架退出、独立 CLI 收尾、测试拆解）调
+        :meth:`shutdown`。
+        """
+        if self.db_type == 'mysql':
+            logger.debug('忽略 Database.close()：共享连接池不在运行期关闭，停机请用 shutdown()')
+            return
+        self._close_thread_conn()
+
+    def shutdown(self):
+        """真正停机：关闭 MySQL 连接池 / 关闭所有已登记的 SQLite 连接。
+
+        只应由框架退出路径、独立 CLI 脚本收尾、测试拆解调用。
+        """
         if self.db_type == 'mysql':
             if self._pool is not None:
                 try:

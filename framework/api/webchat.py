@@ -33,7 +33,7 @@ def register(ctx):
     require_auth = ctx.require_auth
 
     # ---- 接收侧：镜像消息 ----
-    def mirror(event):
+    def mirror(event, bot_name=None):
         try:
             if event.get('post_type') != 'message':
                 return True

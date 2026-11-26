@@ -53,7 +53,7 @@ def schema_db(backend):
     auto_init_database(db)
     yield db
     try:
-        db.close()
+        db.shutdown()
     except Exception:
         pass
 

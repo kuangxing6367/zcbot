@@ -946,6 +946,15 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         except Exception as e:
             logger.warning(f"数据库线程池关闭异常: {e}")
 
+        # 真正关闭连接池。运行期任何地方调 db.close() 都只释放本线程连接
+        # （防止插件误调把全进程的库关掉），池只能由停机路径显式 shutdown。
+        try:
+            closer = getattr(self.db, 'shutdown', None)
+            if callable(closer):
+                closer()
+        except Exception as e:
+            logger.warning(f"数据库连接池关闭异常: {e}")
+
         # 触发系统事件
         await self.event_bus.aemit('system.plugin.unloaded', {})
 

@@ -41,7 +41,7 @@ def register(ctx):
     framework = ctx.framework
     require_auth = ctx.require_auth
 
-    def record(event):
+    def record(event, bot_name=None):
         try:
             if event.get('post_type') != 'message':
                 return True
