@@ -224,3 +224,27 @@ def test_ctx_sync_send_supports_reply_msg_id():
     api = _DynamicApi()
     _Ctx(api).send_msg(group_id='G1', message='hi', reply_msg_id='M2')
     assert api.calls[0]['reply_msg_id'] == 'M2'
+
+
+def test_send_api_wire_body_quotes_the_right_message():
+    """端到端：走 call_api → _send_group → _build_body，请求体里的 msg_id 是对的"""
+    async def run():
+        a = _adapter()
+        captured = {}
+
+        def fake_request(method, path, **kw):
+            captured['path'] = path
+            captured['body'] = kw.get('json_body') or {}
+            return {'id': 'OUT'}
+
+        a._api_request = fake_request
+        a._remember_pending('G1', 'MA', 'group', 'UA')
+        a._remember_pending('G1', 'MB', 'group', 'UB')
+        await a.call_api('send_msg', group_id='G1', user_id='UA', message='收到')
+        return captured
+
+    cap = asyncio.run(run())
+    assert cap['path'] == '/v2/groups/G1/messages'
+    assert cap['body']['msg_id'] == 'MA'
+    assert cap['body']['msg_seq'] == 1
+    assert cap['body']['content'] == '收到'
