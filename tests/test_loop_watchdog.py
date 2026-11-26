@@ -5,6 +5,7 @@
 阻塞时**必须**报且能指出卡在哪个文件哪一行。
 """
 import asyncio
+import logging
 import os
 import sys
 import time
@@ -114,15 +115,37 @@ def test_suspend_suppresses_warnings_but_records_peak():
     """启动期不报警（否则每次启动都刷 warning，真卡顿就没人看了），
     但启动期延迟要单独记账，且不能污染运行期的 max。"""
     wd = LoopWatchdog(interval=0.05, threshold=0.1)
+    # 全量并跑时其它测试留下的看门狗实例也会打 warning；若 logging 的 stderr
+    # handler 被改坏，logging.handleError 会 traceback.print_stack 同步阻塞事件
+    # 循环几百毫秒，污染本用例的运行期统计（实测 stalls=1 / max_lag=221ms，
+    # 栈正是 handleError→print_stack）。本用例只关心自己的记账语义，临时把
+    # zcbot logger 接到空 handler 上隔离外部日志噪音。
+    zlog = logging.getLogger('zcbot')
+    old_level, old_handlers = zlog.level, list(zlog.handlers)
+    zlog.handlers = [logging.NullHandler()]
+    zlog.setLevel(logging.CRITICAL)
+    try:
+        _run_suspend_case(wd)
+    finally:
+        zlog.handlers = old_handlers
+        zlog.setLevel(old_level)
 
+
+def _run_suspend_case(wd):
     async def main():
         wd.start(loop=asyncio.get_running_loop())
-        await asyncio.sleep(0.1)
+        # 只需让看门狗线程就绪；不能等到接近 threshold（0.1s），否则全量并跑时
+        # 这次 sleep 本身就可能超阈值，在 suspend() 之前先记一次 stall，
+        # 让「启动期不得计入卡顿次数」的断言随机失败。
+        await asyncio.sleep(0.02)
         wd.suspend()
         time.sleep(0.35)                 # 启动期阻塞
         await asyncio.sleep(0.1)
         peak = wd.resume()
-        await asyncio.sleep(0.15)        # 运行期空闲
+        # 运行期空闲要大于采样间隔(0.05s)以至少采一次，又必须明显短于
+        # threshold(0.1s)：原来 sleep(0.15) 本身就超阈值，单跑时恢复快不触发，
+        # 全量并跑时调度延迟稍大就记一次 stall（实测连续三轮全量都撞上）。
+        await asyncio.sleep(0.06)
         stats = wd.stats()
         wd.stop()
         return peak, stats

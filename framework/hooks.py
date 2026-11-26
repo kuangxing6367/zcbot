@@ -229,6 +229,25 @@ class HookRegistry:
                 self._hooks[point] = [e for e in entries if e[1] != name]
         self._invalidate(point)
 
+    def unregister_prefix(self, point: str, prefix: str):
+        """注销指定扩展点上所有 name 以 prefix 开头的处理器。
+
+        供 PluginContext.unhook() 用：ctx.hook() 现在允许同插件同点位注册多个
+        handler（名字带 #2/#3 后缀），精确 unregister 只能删一个。
+        """
+        with self._lock:
+            entries = self._hooks.get(point)
+            if not entries:
+                return
+            kept = [e for e in entries if not e[1].startswith(prefix)]
+            if len(kept) == len(entries):
+                return
+            self._hooks[point] = kept
+            for e in entries:
+                if e[1].startswith(prefix):
+                    self._arity.pop((point, e[1]), None)
+        self._invalidate(point)
+
     def clear_plugin(self, plugin_name: str):
         """插件卸载时清除其全部扩展点（按 name 前缀 `plugin_name:` 识别）。"""
         prefix = f"{plugin_name}:"
@@ -305,16 +324,24 @@ class HookRegistry:
 
         # 1) 串行组：顺序 await，保持短路语义（首个 False 即终止，并行组也不再触发）
         for _, name, handler in serial_entries:
-            hargs, hkwargs = self._fit_args(point, name, args, kwargs)
             try:
+                # 参数裁剪也放进 try：handler 签名畸形时不能让整个 trigger 崩掉
+                hargs, hkwargs = self._fit_args(point, name, args, kwargs)
                 if asyncio.iscoroutinefunction(handler):
-                    results.append(await handler(*hargs, **hkwargs))
+                    value = await handler(*hargs, **hkwargs)
                 else:
-                    results.append(handler(*hargs, **hkwargs))
-                if short_circuit and results[-1] is False:
+                    value = handler(*hargs, **hkwargs)
+                results.append(value)
+                if short_circuit and value is False:
                     return results
             except Exception as e:
                 logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}", exc_info=True)
+                # fail-closed：短路型点位上，Guard 自己崩了必须等同「否决」，
+                # 否则 `False in results` 判不出来，事件静默放行（原来就是这个问题）。
+                # 并行组不参与短路，仍按 None 处理。
+                if short_circuit:
+                    results.append(False)
+                    return results
 
         # 2) 并行组：与本组其他 handler 并发执行（asyncio.gather），收集全部结果
         if parallel_entries:
@@ -362,17 +389,29 @@ class HookRegistry:
         # .............................................
         #          佛祖保佑             永无BUG
 
+        results = []
+        short_circuit = point in _SHORT_CIRCUIT
         loop = getattr(self._framework, 'loop', None) if self._framework else None
         for _, name, handler, _serial in self._snapshot(point):
-            hargs, hkwargs = self._fit_args(point, name, args, kwargs)
             try:
+                hargs, hkwargs = self._fit_args(point, name, args, kwargs)
                 if asyncio.iscoroutinefunction(handler):
                     if loop is not None and loop.is_running():
                         asyncio.run_coroutine_threadsafe(handler(*hargs, **hkwargs), loop)
+                        results.append(None)
                     elif point not in _ALLOW_SKIP_ASYNC:
                         logger.warning(
                             f"扩展点 [{point}] 的 async 处理器 [{name}] 无可用事件循环，已跳过")
+                        results.append(None)
                 else:
-                    handler(*hargs, **hkwargs)
+                    value = handler(*hargs, **hkwargs)
+                    results.append(value)
+                    if short_circuit and value is False:
+                        return results
             except Exception as e:
                 logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}")
+                # 与 trigger_async 一致：短路型点位上 Guard 崩溃按「否决」处理
+                if short_circuit:
+                    results.append(False)
+                    return results
+        return results

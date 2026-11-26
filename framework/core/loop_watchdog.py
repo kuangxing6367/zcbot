@@ -136,6 +136,13 @@ class LoopWatchdog:
         startup_peak = self._stats['max_lag_ms']
         self._stats['startup_max_lag_ms'] = startup_peak
         self._stats['max_lag_ms'] = 0
+        # 启动期最后一次 probe 可能在 resume 之后才 _exit_stall，若不把
+        # 卡顿状态一起清掉，那次启动期阻塞会被计入运行期 stalls/peak。
+        # 实测全量并跑时 startup_max=313ms / max_lag=221ms，断言稳定失败。
+        self._in_stall = False
+        self._stall_peak_ms = 0.0
+        self._stats['stalls'] = 0
+        self._stats['total_stall_ms'] = 0
         # 启动完成时打这行：看门狗线程启动时框架的 logging 还没初始化，
         # 那时打 info 会被直接丢掉（实测真实启动日志里看不到）。
         logger.info(f"事件循环看门狗运行中（采样 {self.interval * 1000:.0f}ms，"

@@ -236,7 +236,23 @@ class PluginEventsMixin:
         """
         if not callable(handler):
             raise TypeError(f"hook 的 handler 必须可调用: {getattr(handler, '__name__', handler)}")
-        name = f"{self._plugin_name}:{point}"
+        # 同一 handler 重复注册仍去重（返回同一个 name），但不同 handler 必须
+        # 各有名字——旧版固定用 `plugin:point`，第二个 handler 会把第一个静默覆盖。
+        # 第一个仍用原名字，保持插件/日志里的旧形态；后续追加 `#2`、`#3`。
+        key = (point, handler)
+        registry = getattr(self, '_hook_names', None)
+        if registry is None:
+            registry = self._hook_names = {}
+        name = registry.get(key)
+        if name is None:
+            base = f"{self._plugin_name}:{point}"
+            used = set(registry.values())
+            name = base
+            suffix = 2
+            while name in used:
+                name = f"{base}#{suffix}"
+                suffix += 1
+            registry[key] = name
         self._framework.hooks.register(point, name, handler, priority, serial)
         self._journal('hook', f"{point} -> {handler.__name__}")
         return True
@@ -247,8 +263,13 @@ class PluginEventsMixin:
         :param point: 扩展点名称
         :return: True 表示已注销
         """
-        name = f"{self._plugin_name}:{point}"
-        self._framework.hooks.unregister(point, name)
+        # 按前缀删掉本插件在该点位的全部 handler（含 #2/#3… 后缀）
+        prefix = f"{self._plugin_name}:{point}"
+        registry = getattr(self, '_hook_names', None)
+        if registry is not None:
+            for key in [k for k in registry if k[0] == point]:
+                registry.pop(key, None)
+        self._framework.hooks.unregister_prefix(point, prefix)
         return True
 
     # ---- 统一 API 入口 ----

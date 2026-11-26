@@ -5,15 +5,9 @@
 """
 import asyncio
 
-import pytest
-
 from framework.hooks import HookPoints, HookRegistry
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="缺陷 A4：trigger_sync 完全忽略返回值，Guard 返回 False 后下游仍执行；见 FINDINGS.md",
-)
 def test_adv_oc_trigger_sync_ignores_short_circuit():
     """trigger_sync 必须和 trigger_async 一样尊重返回 False 的短路语义。
 
@@ -41,10 +35,6 @@ def test_adv_oc_trigger_sync_ignores_short_circuit():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="缺陷 A5：Guard 抛异常被吞后静默放行事件（fail-open）；见 FINDINGS.md",
-)
 def test_adv_oc_guard_exception_fails_open():
     """安全 Guard 抛异常时不能静默放行事件。
 

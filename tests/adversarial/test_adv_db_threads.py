@@ -1,11 +1,9 @@
 """底层破坏性测试：数据库连接与线程生命周期。
 
-xfail(strict=True) 的语义见 test_adv_hook_registry.py 顶部说明。
+用例说明见同目录 FINDINGS.md。
 """
 import os
 import threading
-
-import pytest
 
 from framework.database.db import Database
 
@@ -16,10 +14,6 @@ def _make_db(tmp_path):
     return db
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="缺陷 B1：短命线程创建的 SQLite 连接只在 shutdown() 时回收，运行期无限累积；见 FINDINGS.md",
-)
 def test_dead_thread_sqlite_conns_are_reclaimed_at_runtime(tmp_path):
     """每来一个短命线程查一次库，连接登记表就多一条，永远不掉。
 
@@ -84,3 +78,40 @@ def test_shutdown_then_query_self_heals_sqlite(tmp_path):
     db = _make_db(tmp_path)
     db.shutdown()
     assert db.query_one('SELECT 1 AS x')['x'] == 1
+
+
+def test_mysql_shutdown_then_query_rebuilds_pool():
+    """C2：MySQL 池被误关后查询应惰性重建，而不是让全框架查询挂死。"""
+    import types
+
+    from framework.database.db_conn import DatabaseConnMixin
+
+    class FakePool:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Db(DatabaseConnMixin):
+        def __init__(self):
+            self.db_type = 'mysql'
+            self._pool = FakePool()
+            self._pool_wait_timeout = 1
+            self._pool_max = 10
+            self._init_calls = 0
+
+        def _init_mysql(self):
+            self._init_calls += 1
+            self._pool = FakePool()
+
+        def _get_conn_mysql(self):
+            if self._pool is None:
+                self._init_mysql()
+            return self._pool
+
+    db = Db()
+    db.shutdown()
+    assert db._pool is None
+    assert db._get_conn_mysql() is not None
+    assert db._init_calls == 1

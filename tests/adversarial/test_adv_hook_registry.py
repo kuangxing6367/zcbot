@@ -18,17 +18,21 @@ def _fire(registry, point, *args):
     asyncio.run(registry.trigger_async(point, *args))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="缺陷 A1：同一插件在同一扩展点注册两个不同 handler，第一个被静默覆盖；见 FINDINGS.md",
-)
 def test_two_handlers_same_point_same_plugin_both_fire():
-    """ctx.hook() 用 f'{plugin}:{point}' 当注册名，同插件同点位只能存在一个 handler。
+    """插件作者写两行 ctx.hook(..., h1) / (..., h2) 是极自然的需求。
 
-    插件作者写两行 ctx.hook('event.before_dispatch', h1) / (..., h2) 是极自然的
-    需求，结果 h1 无声消失——没有警告、没有报错，排查起来非常痛苦。
+    旧版 ctx.hook() 固定用 f'{plugin}:{point}' 当注册名，h1 被 h2 静默覆盖；
+    修复后走真实 ctx 路径，两个 handler 都应触发。
     """
-    registry = HookRegistry(None)
+    from framework.ctx import PluginContext
+
+    class _FW:
+        db = None
+        services = None
+
+    fw = _FW()
+    fw.hooks = HookRegistry(fw)
+    ctx = PluginContext('p1', fw)
     hits = []
 
     def first(event, bot_name=None):
@@ -37,10 +41,10 @@ def test_two_handlers_same_point_same_plugin_both_fire():
     def second(event, bot_name=None):
         hits.append('second')
 
-    registry.register(HookPoints.EVENT_BEFORE_DISPATCH, 'p1:event.before_dispatch', first)
-    registry.register(HookPoints.EVENT_BEFORE_DISPATCH, 'p1:event.before_dispatch', second)
+    ctx.hook(HookPoints.EVENT_BEFORE_DISPATCH, first)
+    ctx.hook(HookPoints.EVENT_BEFORE_DISPATCH, second)
 
-    _fire(registry, HookPoints.EVENT_BEFORE_DISPATCH, {'id': 1}, 'default')
+    _fire(fw.hooks, HookPoints.EVENT_BEFORE_DISPATCH, {'id': 1}, 'default')
 
     assert hits == ['first', 'second'], (
         f'期望两个处理器都执行，实际只执行了 {hits}；第一个被同名注册静默覆盖'

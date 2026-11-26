@@ -6,6 +6,7 @@
 """
 import asyncio
 import logging
+import time
 
 from framework.messaging.adapter_registry import namespace_identity
 
@@ -26,6 +27,7 @@ class AsyncStatsWriter:
         # 有界队列：消息洪峰时丢弃多余注册请求（内存有上限），丢弃计数定期上报
         self._reg_queue = asyncio.Queue(maxsize=20000)   # 用户/群注册任务
         self._dropped = 0
+        self._last_drop_warn = 0.0   # 丢弃告警节流：首次立即报，之后每隔 60s 报一次
         self._cmd_hits = {}                 # cmd_id -> count（主循环线程访问）
         self._kw_hits = {}                  # dynamic_commands.id -> count
         self._task = None
@@ -72,8 +74,14 @@ class AsyncStatsWriter:
                 (user_id, dict(sender), message_type, group_id, adapter_key))
         except asyncio.QueueFull:
             self._dropped += 1
-            if self._dropped % 1000 == 1:
-                logger.warning(f"用户注册队列已满，已丢弃 {self._dropped} 条注册请求（消息量过大）")
+            # 原来只在第 1/1001/2001… 条才告警：突发高峰丢掉的前 999 个
+            # 新用户/新群完全静默，事后无从查起。改为首次立即报 + 时间节流。
+            now = time.monotonic()
+            if self._dropped == 1 or now - self._last_drop_warn >= 60.0:
+                self._last_drop_warn = now
+                logger.warning(
+                    f"用户注册队列已满，累计丢弃 {self._dropped} 条注册请求（消息量过大；"
+                    "对应新用户/新群不会出现在数据库中）")
 
     async def _run(self):
         """后台循环：周期性 flush。

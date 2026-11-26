@@ -236,6 +236,11 @@ class DatabaseConnMixin:
         if entries is None or lock is None:
             # 兼容未走 Database.__init__ 的子类/测试替身：不登记，行为退回原样
             return
+        # 运行期顺带回收：短命线程每查一次库就新建一条连接，若只在 shutdown()
+        # 统一清理，登记表会随线程数无限增长（fd 泄漏，Windows 上库文件删不掉）。
+        # 只在「登记新连接」这个低频点清扫，且 dead_only 保证不碰活线程手里的连接。
+        # 必须在加锁前调用——_close_tracked_conns 内部会拿同一把锁。
+        self._close_tracked_conns(dead_only=True)
         with lock:
             entries.append((threading.get_ident(), conn))
 
@@ -326,7 +331,13 @@ class DatabaseConnMixin:
         归还方式：调用方在 finally 中 conn.close()（对池而言是"归还"而非真关闭）。
         """
         if self._pool is None:
-            raise RuntimeError("MySQL 连接池未初始化")
+            # 惰性重建：插件误调 shutdown() 后池会被关掉，若无条件抛错，
+            # 后续所有查询都失败且只能重启进程（与 close() 那个坑同源）。
+            # 停机路径进程即将退出，不会再走到这里；运行期这里能自愈。
+            logger.warning('MySQL 连接池未初始化，正在惰性重建（此前可能被误关）')
+            self._init_mysql()
+            if self._pool is None:
+                raise RuntimeError("MySQL 连接池重建失败")
         deadline = time.time() + self._pool_wait_timeout
         last_err = None
         while True:
@@ -506,6 +517,9 @@ class DatabaseConnMixin:
             logger.debug('忽略 Database.close()：共享连接池不在运行期关闭，停机请用 shutdown()')
             return
         self._close_thread_conn()
+        # 顺带回收已结束线程遗留的连接：dead_only 保证不碰活线程手里的那条，
+        # 所以即使插件频繁调 close() 也不会误伤别的线程。
+        self._close_tracked_conns(dead_only=True)
 
     def shutdown(self):
         """真正停机：关闭 MySQL 连接池 / 关闭所有已登记的 SQLite 连接。
@@ -518,6 +532,10 @@ class DatabaseConnMixin:
                     self._pool.close()
                 except Exception as e:
                     logger.warning(f"关闭 MySQL 连接池失败: {e}")
+                finally:
+                    # 置空后 _get_conn_mysql 能察觉误关并惰性重建；停机路径
+                    # 进程即将退出，不会再有查询走到那里。
+                    self._pool = None
         else:
             self._close_thread_conn()
             self._close_tracked_conns()

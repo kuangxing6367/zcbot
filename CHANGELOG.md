@@ -26,6 +26,52 @@
 
 ---
 
+## [1.28.17] - 2026-11-26
+
+> 主题：把对抗性测试挖出来的底层缺陷顺着修掉——扩展点短路与 fail-closed、同点位多 handler、线程连接泄漏、MySQL 池自愈。
+
+### 修复
+
+1. **`trigger_sync` 完全忽略处理器返回值**（A4）：Web/线程路径上的 `http.before_request`
+   等短路型扩展点，Guard 返回 `False` 或 Response 后下游仍执行。现在收集返回值、
+   首个 `False` 立即短路，与 `trigger_async` 对齐；原来返回 `None` 的地方改成返回结果列表。
+2. **Guard 崩溃等于放行（fail-open）**（A5）：短路型扩展点的 handler 抛异常时只打日志，
+   调用方用 `False in results` 判不出来，事件静默下发。现在异常按「否决」处理，
+   追加 `False` 并立即短路；并行组不参与短路，仍按 `None`。参数裁剪也移进 try，
+   防止畸形签名把整次 trigger 打崩。
+3. **同插件同点位只能注册一个 handler**（A1）：`ctx.hook()` 原来固定用
+   `f'{plugin}:{point}'` 当注册名，第二个 handler 把第一个静默覆盖。
+   现在第一个仍用原名（兼容既有日志/外部观察），后续带 `#2/#3` 后缀；
+   同一个 handler 重复注册仍去重。`unhook()` 改按前缀注销，新增
+   `HookRegistry.unregister_prefix()`；`clear_plugin()` 的前缀语义不变。
+4. **短命线程的 SQLite 连接无限累积**（B1）：每个线程首次查询都会新建连接并登记，
+   线程结束后运行期没有任何回收点，实测 12 个线程后登记表从 1 涨到 13。
+   现在 `close()` 顺带做 `dead_only` 清扫（只关已结束线程的连接，不碰活线程）。
+5. **MySQL 连接池被误关后不可恢复**（C2）：`shutdown()` 把池关掉且 `_pool` 仍指向
+   已关闭对象，后续查询直接失败、只能重启。现在 `shutdown()` 将 `_pool` 置空，
+   `_get_conn_mysql()` 察觉未初始化时惰性重建。
+6. **用户注册队列丢弃前 999 条完全静默**（C3）：原来只在第 1/1001/2001… 条告警。
+   现在首次丢弃立即告警，之后按 60 秒节流，并明确提示「对应新用户/新群不会入库」。
+7. **看门狗启动期卡顿被错记进运行期**（全量测试稳定暴露）：`resume()` 只清了
+   `max_lag_ms`，没清 `_in_stall` / `_stall_peak_ms` / `stalls` / `total_stall_ms`。
+   启动期最后一次 probe 若在 resume 之后才 `_exit_stall`，那次阻塞就会计入运行期——
+   实测 `startup_max_lag_ms=313.6` 却 `max_lag_ms=221.4`、`stalls=1`。
+   现在 `resume()` 一并复位这些状态。对应测试里把就绪/空闲等待调到阈值以内，
+   并把 `zcbot` logger 临时接到 NullHandler——全量并跑时其它看门狗实例的
+   `logging.handleError → traceback.print_stack` 会同步阻塞事件循环几百毫秒，
+   污染本用例的运行期统计（连跑七轮全量才定位到这个串扰源）。
+
+### 设计取舍（保留 xfail 记录，不修）
+
+- **A2/A3 hook 无 owner 校验**、**C1 插件可拿 `ctx._framework`**：同进程插件本就是信任模型，
+  插件生态依赖这个引用；强加归属校验会破坏框架卸载插件等正常路径。详见
+  `tests/adversarial/FINDINGS.md`。
+
+### 验证
+
+新增 `test_ctx_multi_hook.py`、`test_mysql_pool_recovery.py`；对抗测试里 A1/A4/A5/B1/C2
+已转正，仅 A2/A3 保留 xfail。ruff 两道全过、全量测试通过。
+
 ## [1.28.16] - 2026-11-26
 
 > 主题：修一批「面板明明是空页 / 框架被一句 close 拖死」的实打实故障；智能体改成可中断的流式对话。
