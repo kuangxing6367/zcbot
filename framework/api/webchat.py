@@ -114,7 +114,7 @@ def register(ctx):
         if loop is not None and not loop.is_closed():
             try:
                 future = asyncio.run_coroutine_threadsafe(
-                    framework.dispatch.dispatch_event(raw, wait=True), loop)
+                    framework.dispatch_event(raw, wait=True), loop)
                 future.result(timeout=30)
             except Exception as e:
                 logger.warning('[webchat] 注入处理链失败: %s', e)

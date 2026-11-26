@@ -618,7 +618,7 @@ class _HostBridge:
         if loop is None or loop.is_closed():
             return "框架事件循环不可用，无法模拟消息"
         future = asyncio.run_coroutine_threadsafe(
-            self.fw.dispatch.dispatch_event(raw, wait=True), loop)
+            self.fw.dispatch_event(raw, wait=True), loop)
         future.result(timeout=30)
         return "已注入模拟消息：%s（user_id=%s, group_id=%s）" % (text[:80], user_id, group_id)
 

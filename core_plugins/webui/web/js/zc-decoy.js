@@ -11,6 +11,12 @@
       try{
         var x=new w.XMLHttpRequest();
         x.open('GET',p,true);
+        // 服务端按蜜罐策略可能对诱饵路径做 tarpit（故意不返回）。
+        // 这些请求只是混入正常流量的噪声，不应让浏览器标签页一直显示加载中。
+        x.timeout=1500;
+        x.ontimeout=function(){try{x.abort();}catch(e){}};
+        x.onerror=function(){};
+        x.onload=function(){};
         x.send();
       }catch(e){}
     }
