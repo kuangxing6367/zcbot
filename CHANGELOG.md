@@ -37,10 +37,11 @@
 3. **3.12 / 3.13 弃用项收口**：`llm_load` 三处 `asyncio.get_event_loop()` → `get_running_loop()`（3.14 起在无运行循环时会直接抛错）；环境信息优先用标准库 `importlib.metadata`，`pkg_resources` 退为兜底（精简 venv 常不含 setuptools）；测试里的 `asyncio.get_event_loop().run_until_complete()` 改 `asyncio.run()`；`startup.py` 在低于 3.12 时给一条明确提示。
 4. **测试依赖口径统一**：`pytest>=8.3`（8.3 起才正式支持 3.13）、`pytest-asyncio>=0.24,<1.0`、`pytest-timeout>=2.3`，`pyproject` dev 组、`requirements-dev.txt` 与 CI 工作流三处一致，不再出现「本地 1.x、CI 0.x」的错位。
 5. **AI 智能体 / Web 聊天按 dsh 真实源码重写**：直接迁入 DeepSeek Harness（MIT）的设计令牌（调色板、语义别名、圆角、排版阶梯、elevation、滚动条），由 `scripts/sync-dsh-tokens.py` 从上游 CSS 机械生成，数值不做主观调整。页面按源码几何重建：748px 内容列、用户气泡 20px 圆角 / 10+16 内距、助手正文全宽 14/24、浮动输入卡 28px 圆角 + `elevation-soft`。回复改为 markdown 渲染（markdown-it）。修掉主区全高计算错误（顶部提示条出现时输入卡被挤出视口），对话页产物 828 kB → 130 kB。
+6. **QQ 官方被动回复：引对人、不撞名额**：原来一个会话只缓存一条 `msg_id`，群里 A 说完 B 再说就把 A 顶掉——回 A 时引用的其实是 B 的消息，同一个 `msg_id` 还被反复消耗被动回复名额（官方：群聊一条消息最多回 5 次、单聊 4 次，用光即发送失败）。改为按会话保留最近 8 条、记下发信人：带 `user_id` 回复时优先引那个人的消息，不带时在未用过的消息间轮换。`msg_seq` 改为按 `msg_id` 递增并封顶：官方要求同一 `msg_id` + `msg_seq` 不可重复，且一条消息最多回 5 次 / 4 次；原来用的是全局计数器（1..9999 循环），既不按消息计数，也不追踪名额，超出上限只能等平台报错——现在名额用尽就退回主动消息。互动回调（按钮/菜单）的被动回复改走请求体的 `event_id` 字段——塞进 `msg_id` 平台会判「消息不存在」。`ctx.send_msg` / `asend_msg` 新增 `reply_msg_id` 与 `active`：QQ 官方走被动 `msg_id`，OneBot11 这类固定签名接入端自动转成标准 `reply` 段，插件不用再掉到 `ctx.aapi(...)` 那层。
 
 ### 验证
 
-干净副本全量 1552 passed / 9 skipped；ruff 两道、脚本式回归 19 文件 0 失败、`release_check` 全过。迁移账本用真实 12 版副本验证：改写成 3.11 形态后 `run_pending` → drift 0、重跑 0、全部升为 `ast-v2`。
+干净副本全量 1570 passed / 9 skipped；ruff 两道、脚本式回归 19 文件 0 失败、`release_check` 全过。迁移账本用真实 12 版副本验证：改写成 3.11 形态后 `run_pending` → drift 0、重跑 0、全部升为 `ast-v2`。
 
 ## [1.28.13] - 2026-11-26
 

@@ -210,7 +210,9 @@ def test_on_interaction_dispatches_and_acks():
     ev = ad.framework.events[0]
     assert ev['notice_type'] == 'interaction'
     # 互动 event_id 要进被动回复缓存，插件才能直接回这条回调
-    assert ad._pending_reply['G1'][0] == 'I1'
+    assert ad._pending_reply['G1'][0][0] == 'I1'
+    # 且必须按 event_id 字段发（不是 msg_id），否则平台判消息不存在
+    assert 'I1' in ad._interaction_ids
 
 
 def test_ack_only_for_button_and_menu_types():

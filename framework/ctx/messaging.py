@@ -3,11 +3,73 @@ import logging
 
 logger = logging.getLogger('zcbot')
 
+# 动作面是否接受某个发送关键字：按类型缓存（每次发送都做签名反射太浪费）
+_SEND_KWARG_SUPPORT = {}
+
+
 class PluginMessagingMixin:
     """协议中立快捷动作 / 身份判断 / 群级插件开关"""
 
     # 以下方法依赖 PluginContext.__init__ 建立的实例字段
     # 动作经 self.actions（ctx.actions）转发到当前接入端，不绑定具体协议
+
+    def _send_accepts(self, name: str) -> bool:
+        """当前动作面是否接受该关键字参数。
+
+        OneBot11 的 send_msg 是固定签名，多传关键字直接 TypeError；协议适配器
+        走 call_api(**, params) 则原样透传。按动作面类型缓存结果。
+        """
+        try:
+            act = self.actions
+        except Exception as _exc:
+            # 没有可用接入端：交给 send_msg 的正常失败路径去报
+            logger.debug('[_send_accepts] 取不到动作面: %s', _exc)
+            return False
+        key = (type(act), name)
+        cached = _SEND_KWARG_SUPPORT.get(key)
+        if cached is not None:
+            return cached
+        fn = getattr(type(act), 'send_msg', None)
+        if fn is None:
+            # ActionProxy / 动态动作面：_method(bot=None, **params) 原样转发
+            ok = True
+        else:
+            import inspect
+            try:
+                params = inspect.signature(fn).parameters
+                ok = name in params or any(
+                    p.kind is inspect.Parameter.VAR_KEYWORD
+                    for p in params.values())
+            except (TypeError, ValueError):
+                ok = False
+        _SEND_KWARG_SUPPORT[key] = ok
+        return ok
+
+    def _reply_kwargs(self, message, reply_msg_id, active):
+        """把「引用回复 / 强制主动」翻译成当前动作面能懂的形态。
+
+        QQ 官方接入端用请求体的 msg_id（被动回复），固定签名的一接入端
+        （OneBot11）改用标准 reply 段——两条路都能表达"引用这条消息"，
+        插件不必再为了传 reply_msg_id 掉到 ctx.aapi 那一层。
+        """
+        extra = {}
+        if active:
+            if self._send_accepts('active'):
+                extra['active'] = True
+            return message, extra
+        if reply_msg_id is None:
+            return message, extra
+        if self._send_accepts('reply_msg_id'):
+            extra['reply_msg_id'] = reply_msg_id
+            return message, extra
+        try:
+            from framework.messaging.segments import normalize_message
+            from framework.messaging.segments import reply as reply_segment
+            return [reply_segment(reply_msg_id), *normalize_message(message)], extra
+        except Exception as _exc:
+            # 段构造失败时不吞消息：退回原样发送（只是丢了引用）
+            logger.debug('[_reply_kwargs] 构造 reply 段失败，按无引用发送: %s', _exc)
+            return message, extra
 
     def _bb_send(self, user_id, group_id, message, bot):
         """黑匣子：记录发送动作（send）—— 事件流第 15 步，记录准备发给谁。"""
@@ -40,16 +102,23 @@ class PluginMessagingMixin:
     # ---- 最常用 API 快捷方法（省得每次都拼 params）----
 
     def send_msg(self, user_id: int = None, group_id: int = None,
-                 message=None, auto_escape: bool = False, bot: str = None):
-        """快捷发送消息，支持通过 user_id/group_id 自动判断私聊/群聊（同步桥接）"""
+                 message=None, auto_escape: bool = False, bot: str = None,
+                 reply_msg_id=None, active: bool = False):
+        """快捷发送消息，支持通过 user_id/group_id 自动判断私聊/群聊（同步桥接）
+
+        reply_msg_id：引用回复指定的那条消息（QQ 官方走被动回复 msg_id，
+        其它接入端转成 reply 段）。不传则各接入端按自己的默认规则补引用。
+        active=True：强制主动消息，不挂任何被动回复 id。
+        """
         # 未指定 bot 时，自动使用当前消息来源的 bot（由 router 注入 _current_bot）
         if bot is None:
             bot = getattr(self, '_current_bot', None)
         self._bb_send(user_id, group_id, message, bot)
+        message, _extra = self._reply_kwargs(message, reply_msg_id, active)
         try:
             return self.actions.send_msg(
                 user_id=user_id, group_id=group_id,
-                message=message, auto_escape=auto_escape, bot=bot
+                message=message, auto_escape=auto_escape, bot=bot, **_extra
             )
         except Exception as e:
             # 黑匣子：发送实际失败（适配器宕机 / 无可用接入端 / API 异常）
@@ -57,15 +126,20 @@ class PluginMessagingMixin:
             raise
 
     async def asend_msg(self, user_id: int = None, group_id: int = None,
-                        message=None, auto_escape: bool = False, bot: str = None):
-        """异步快捷发送消息（推荐 async handler 使用，不阻塞事件循环）"""
+                        message=None, auto_escape: bool = False, bot: str = None,
+                        reply_msg_id=None, active: bool = False):
+        """异步快捷发送消息（推荐 async handler 使用，不阻塞事件循环）
+
+        参数语义与 :meth:`send_msg` 一致（含 reply_msg_id / active）。
+        """
         if bot is None:
             bot = getattr(self, '_current_bot', None)
         self._bb_send(user_id, group_id, message, bot)
+        message, _extra = self._reply_kwargs(message, reply_msg_id, active)
         try:
             return await self.actions.acall(
                 'send_msg', user_id=user_id, group_id=group_id,
-                message=message, auto_escape=auto_escape, bot=bot
+                message=message, auto_escape=auto_escape, bot=bot, **_extra
             )
         except Exception as e:
             # 黑匣子：发送实际失败（适配器宕机 / 无可用接入端 / API 异常）

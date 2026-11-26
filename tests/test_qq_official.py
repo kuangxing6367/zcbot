@@ -65,13 +65,16 @@ def test_normalize_event_attachments_structured():
 # ── 被动回复窗口（群 5 分钟 / 单聊 60 分钟，分开清理） ───────────
 
 
+def _seed_pending(a, conv, msg_id, kind='group', author='', age=0.0):
+    """把一条待回复消息塞进缓存（结构见 QQOfficialAdapter._remember_pending）"""
+    a._pending_reply.setdefault(conv, []).append(
+        (msg_id, time.time() - age, kind, author))
+
+
 def test_reply_window_per_kind():
     a = _adapter()
-    now = time.time()
-    a._pending_reply = {
-        'G1': ('MG', now - 400, 'group'),    # 群窗口(300s)已过 → 清掉
-        'U1': ('MU', now - 400, 'private'),  # 单聊窗口(3600s)未过 → 保留
-    }
+    _seed_pending(a, 'G1', 'MG', 'group', age=400)      # 群窗口(300s)已过 → 清掉
+    _seed_pending(a, 'U1', 'MU', 'private', age=400)    # 单聊窗口(3600s)未过 → 保留
     assert a._reply_msg_id('G1') == ''
     assert 'G1' not in a._pending_reply
     assert a._reply_msg_id('U1') == 'MU'
@@ -105,7 +108,7 @@ def test_send_group_http_failure_wraps_failed():
 def test_active_flag_skips_msg_id():
     async def run():
         a = _adapter()
-        a._pending_reply = {'G1': ('MOLD', time.time(), 'group')}
+        _seed_pending(a, 'G1', 'MOLD')
         captured = {}
 
         async def fake_send_group(openid, message, reply_msg_id=''):

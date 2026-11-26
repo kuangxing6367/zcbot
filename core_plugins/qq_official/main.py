@@ -676,7 +676,12 @@ class QQOfficialAdapter(ProtocolAdapter):
         self._seq = None
         self._session_id = ''
         self._heartbeat_interval_ms = 41250
-        self._pending_reply = {}        # {会话key: (msg_id, ts, kind)} kind=group/private
+        # 被动回复缓存：{会话key: [(msg_id, ts, kind, author), ...]}
+        # 一个会话保留多条：群里多人几乎同时发言时不能只有一个槽位，
+        # 否则后来者会把前一条覆盖掉（引用错人 / 名额被同一个 msg_id 吃光）。
+        self._pending_reply = {}
+        self._reply_seq = {}            # {msg_id: 已回复次数}，官方按条计名额
+        self._interaction_ids = OrderedDict()  # 互动回调 id：被动回复要走 event_id 字段
         self._seen_events = OrderedDict()   # event_id 幂等去重（Resume 重放/服务重发）
         self._boot_waiting = False
         self._token_lock = threading.Lock()  # 双路径刷新共用（async / to_thread 同步）
@@ -1100,11 +1105,16 @@ class QQOfficialAdapter(ProtocolAdapter):
                     self._seen_events.popitem(last=False)
             # 被动回复缓存（kind 决定各自的被动窗口时长）
             is_group = bool(d.get('group_openid') or d.get('channel_id'))
+            _author = d.get('author') or {}
             key = d.get('group_openid') or d.get('channel_id') \
-                or (d.get('author') or {}).get('user_openid') or ''
+                or _author.get('user_openid') or ''
             if key and d.get('id'):
-                self._pending_reply[key] = (d['id'], time.time(),
-                                            'group' if is_group else 'private')
+                # 记下发信人：群里多人交错发言时，回复要引用「那个人」的消息，
+                # 不能拿会话里最新一条顶替（会引用错人）。
+                _sender = (_author.get('member_openid') or _author.get('id')
+                           or _author.get('user_openid') or '')
+                self._remember_pending(
+                    key, d['id'], 'group' if is_group else 'private', _sender)
             event = normalize_event(wrapped, self.bot_name)
             if event is None:
                 continue
@@ -1127,12 +1137,13 @@ class QQOfficialAdapter(ProtocolAdapter):
             self._seen_events[iid] = 1
             if len(self._seen_events) > 1024:
                 self._seen_events.popitem(last=False)
-            # 互动回调的 event_id 就是被动回复入口，窗口与群一致（5 分钟）
+            # 互动回调的 event_id 就是被动回复入口，窗口与群一致（5 分钟）。
+            # 注意：它走请求体的 event_id 字段，不是 msg_id（见 _build_body）。
             key = d.get('group_openid') or d.get('user_openid') or ''
             if key:
-                self._pending_reply[key] = (
-                    iid, time.time(),
-                    'group' if d.get('group_openid') else 'private')
+                self._remember_pending(
+                    key, iid, 'group' if d.get('group_openid') else 'private',
+                    '', is_interaction=True)
 
         # 只有按钮(11)/菜单(12)回调需要 ACK，其它互动类型回了会报"已回应"
         if self.auto_ack_interaction and int(d.get('type') or 0) in _ACK_INTERACTION_TYPES:
@@ -1211,20 +1222,90 @@ class QQOfficialAdapter(ProtocolAdapter):
     # ── OpenAPI 出站 ───────────────────────────────────────────
 
     _REPLY_WINDOW = {'group': 300, 'private': 3600}   # 群 5 分钟 / 单聊 60 分钟（按各自窗口清理）
+    _PENDING_PER_CONV = 8        # 每个会话保留最近几条待回复消息（群聊连发不互相覆盖）
+    _PENDING_MAX_CONV = 512      # 会话上限，防长期运行无限增长
+    _REPLY_CAP = {'group': 5, 'private': 4}   # 官方：群聊一条消息最多回 5 次 / 单聊 4 次
+    _REPLY_SEQ_MAX_KEYS = 2048   # 序号表上限
+
+    def _remember_pending(self, conv, msg_id, kind, author='', is_interaction=False):
+        """记下一条待回复的消息（同一会话可留多条）。
+
+        原来一个会话只有一个槽位，群里 A 说完 B 再说，B 会把 A 的位置顶掉：
+        回复 A 时引用的其实是 B 的消息（引用错人），同一个 msg_id 还被反复
+        消耗被动回复名额（官方：群聊 5 次 / 单聊 4 次，用光即发送失败）。
+        """
+        if not conv or not msg_id:
+            return
+        if is_interaction:
+            self._interaction_ids[msg_id] = time.time()
+            while len(self._interaction_ids) > self._REPLY_SEQ_MAX_KEYS:
+                self._interaction_ids.popitem(last=False)
+        bucket = self._pending_reply.setdefault(conv, [])
+        # Resume 重放 / 服务端重发：同一条消息不重复入列
+        bucket[:] = [e for e in bucket if e[0] != msg_id]
+        bucket.append((msg_id, time.time(), kind, str(author or '')))
+        if len(bucket) > self._PENDING_PER_CONV:
+            del bucket[:len(bucket) - self._PENDING_PER_CONV]
+        while len(self._pending_reply) > self._PENDING_MAX_CONV:
+            self._pending_reply.pop(next(iter(self._pending_reply)), None)
+
+    def _expire_pending(self):
+        now = time.time()
+        for conv, bucket in list(self._pending_reply.items()):
+            keep = [e for e in bucket
+                    if now - e[1] <= self._REPLY_WINDOW.get(e[2], 300)]
+            if keep:
+                self._pending_reply[conv] = keep
+            else:
+                del self._pending_reply[conv]
 
     def _reply_msg_id(self, group_id=None, user_id=None) -> str:
-        now = time.time()
-        # 按会话类型各自的被动窗口清理（原实现统一 5 分钟，单聊窗口被无声缩短）
-        for key, (_, ts, kind) in list(self._pending_reply.items()):
-            if now - ts > self._REPLY_WINDOW.get(kind, 300):
-                self._pending_reply.pop(key, None)
-        key = group_id or user_id or ''
-        hit = self._pending_reply.get(key)
-        if hit:
-            return hit[0]
-        # 不再回退到 _last_msg_id：那是别的会话的 msg_id，官方会以
-        # "msg_id 不匹配"拒绝整条消息。拿不到就按主动消息发（返回空串）。
-        return ''
+        """挑一条可引用的消息 id（空串 = 拿不到，按主动消息发）。
+
+        优先级：本次要回复的那个人 → 还没被引用过的消息 → 最新的消息。
+        挑完不打标记：真正用掉名额是在 _build_body 算 msg_seq 时，发送失败
+        不会白吃一次配额。
+        """
+        self._expire_pending()
+        conv = str(group_id or user_id or '')
+        if not conv:
+            return ''
+        cands = list(self._pending_reply.get(conv) or ())
+        if not cands:
+            return ''
+        if user_id:
+            mine = [e for e in cands if e[3] and e[3] == str(user_id)]
+            if mine:
+                cands = mine
+        # 互动回调的 id 走 event_id，不占 msg_id 名额
+        alive = [e for e in cands
+                 if e[0] in self._interaction_ids or self._reply_left(e[0], e[2])]
+        if not alive:
+            return ''
+        fresh = [e for e in alive if self._reply_seq.get(e[0], 0) == 0]
+        pool = fresh or alive
+        # 回最新的那条：burst 时先回最近发言，剩下的留给后续几轮
+        pool.sort(key=lambda e: e[1])
+        return pool[-1][0]
+
+    def _reply_left(self, msg_id: str, kind: str) -> bool:
+        """该 msg_id 还有没有被动回复名额。"""
+        return self._reply_seq.get(msg_id, 0) < self._REPLY_CAP.get(kind, 5)
+
+    def _next_reply_seq(self, msg_id: str, kind: str):
+        """按 msg_id 递增 msg_seq（官方要求：相同 msg_id + msg_seq 重复即失败）。
+
+        名额用光返回 None，调用方改按主动消息发，别硬塞一个注定被拒的 seq。
+        """
+        used = self._reply_seq.get(msg_id, 0)
+        cap = self._REPLY_CAP.get(kind, 5)
+        if used >= cap:
+            logger.debug('qq_official 被动回复名额已用完（%s 次）: %s', cap, msg_id)
+            return None
+        self._reply_seq[msg_id] = used + 1
+        while len(self._reply_seq) > self._REPLY_SEQ_MAX_KEYS:
+            self._reply_seq.pop(next(iter(self._reply_seq)), None)
+        return used + 1
 
     def _api_request(self, method: str, path: str, *,
                      json_body: dict = None, files=None, data=None,
@@ -1493,8 +1574,17 @@ class QQOfficialAdapter(ProtocolAdapter):
             _split_outgoing(message)
         body: dict = {}
         if reply_msg_id:
-            body['msg_id'] = reply_msg_id
-            body['msg_seq'] = _next_msg_seq()
+            if reply_msg_id in self._interaction_ids:
+                # 互动回调（按钮/菜单）的被动回复走 event_id 字段，
+                # 塞进 msg_id 会被平台判为「消息不存在」。
+                body['event_id'] = reply_msg_id
+            else:
+                _seq = self._next_reply_seq(
+                    reply_msg_id, 'group' if is_group else 'private')
+                if _seq is not None:
+                    body['msg_id'] = reply_msg_id
+                    body['msg_seq'] = _seq
+                # 名额用光：不带 msg_id 按主动消息发（带上去也一定会被拒）
 
         pk = build_keyboard(prompt_buttons) if prompt_buttons else None
 
@@ -1597,7 +1687,9 @@ class QQOfficialAdapter(ProtocolAdapter):
         """群状态失效（被移出/退群）时清掉对应被动回复缓存。"""
         for key in (group_id, user_id):
             if key:
-                self._pending_reply.pop(str(key), None)
+                for entry in self._pending_reply.pop(str(key), ()):
+                    self._reply_seq.pop(entry[0], None)
+                    self._interaction_ids.pop(entry[0], None)
 
     async def _send_group(self, group_openid: str, message,
                           reply_msg_id: str = '') -> dict:
