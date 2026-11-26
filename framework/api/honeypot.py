@@ -1464,6 +1464,9 @@ def register(ctx):
     do_blacklist = bool(hp.get('blacklist', True))
     ban_internal_ips = bool(hp.get('ban_internal_ips', False))
     blacklist_ttl = int(hp.get('blacklist_ttl', 3600) or 0)
+    # 软封禁时长：弱证据（旧缓存文件 / 未知路径）误封风险高，用短 TTL 让误封尽快自愈；
+    # 强证据（读 .env / 备份 / 陷阱 / 绕过）仍用 blacklist_ttl。0 表示沿用 blacklist_ttl。
+    soft_ban_ttl = int(hp.get('soft_ban_ttl', 300) or 0)
     log_body = bool(hp.get('log_body', True))
     max_body_log = int(hp.get('max_body_log', 2048) or 2048)
     unknown_api_decoy = bool(hp.get('unknown_api_decoy', True))
@@ -1603,17 +1606,22 @@ def register(ctx):
                         f"[蜜罐] 弱证据计数 {hits}/{need}（{ban_window}s 窗口）: {ip} {path}")
                 else:
                     try:
-                        # 绕过手法属于「已上钩」，加重处置：拉黑时长翻倍
-                        ttl = blacklist_ttl
+                        # 弱证据（未知路径 / 噪声 / 旧缓存 chunk）→ 软封禁 + 短 TTL；
+                        # 强证据（.env / 备份 / git / 陷阱 / 绕过手法）→ 硬封禁 + 长 TTL。
+                        weak = reason in _WEAK_REASONS
+                        ttl = (soft_ban_ttl if soft_ban_ttl > 0 else blacklist_ttl) if weak else blacklist_ttl
+                        # 绕过手法属于「已上钩」，加重处置：时长翻倍
                         if evasion and ttl > 0:
                             ttl *= 2
                         expires_at = (time.time() + ttl) if ttl > 0 else None
                         tag = f'蜜罐命中({evasion}): {path}' if evasion else f'蜜罐命中: {path}'
-                        dual_auth.blacklist(ip, reason=tag, source='honeypot', expires_at=expires_at)
+                        dual_auth.blacklist(ip, reason=tag, source='honeypot',
+                                            expires_at=expires_at, soft=weak)
                         _clear_strikes(ip)
                         with _stats_lock:
                             _stats['blacklisted'] += 1
-                        logger.warning(f"[蜜罐] 已拉黑 {ip}（{hits} 次命中，{ban_window}s 内）")
+                        kind = '软封禁' if weak else '硬封禁'
+                        logger.warning(f"[蜜罐] 已{kind} {ip}（{hits} 次命中，{ban_window}s 内，TTL={ttl}s）")
                     except Exception as e:
                         logger.warning(f"[蜜罐] 拉黑失败: {e}")
 
@@ -1761,8 +1769,10 @@ def register(ctx):
     def _make_frontend_handler(path, builder, benign_reason):
         def _handler():
             if request.method == 'GET':
-                # 前端正常调用：记录但不拉黑，返回确定性良性数据（绝不影响真实用户）
-                _hit(path, benign_reason, ban=False)
+                # 前端正常调用：记良性计数（ban=False + benign=True），不打 warning、
+                # 不写审计、不进威胁画像 TOP 榜。漏传 benign=True 会把正常用户
+                # 记成攻击者，刷满「命中诱饵」告警。
+                _hit(path, benign_reason, ban=False, benign=True)
                 return builder()
             # 非 GET：把伪端点当真 API 利用 → 判定攻击，拉黑
             _hit(path, '前端诱饵利用探测:' + benign_reason, ban=True)
@@ -1888,5 +1898,5 @@ def register(ctx):
     logger.info(
         f"[蜜罐] 安全等级={level}({sec['level_label']})，已注册 {registered} 个诱饵端点"
         f"（诱饵集={decoy_set}, tarpit={tarpit_ms}ms, 拉黑={do_blacklist}, "
-        f"ttl={blacklist_ttl}s, 弱证据阈值={ban_threshold}/{ban_window}s, "
+        f"ttl={blacklist_ttl}s, 软封禁ttl={soft_ban_ttl}s, 弱证据阈值={ban_threshold}/{ban_window}s, "
         f"canary={canary_enabled}, 绕过检测={evasion_detect}）")

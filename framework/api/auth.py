@@ -58,6 +58,8 @@ def register(ctx):
     # 应急登录：不查库，签发自包含 token，审计写独立日志（审计表此刻可能也不可用）
     def _emergency_login(client_ip, username):
         _clear_login_failures(client_ip)
+        # 登录成功即解除弱证据带来的软封禁，让用户能自救；硬封禁不受影响
+        dual_auth.clear_soft_blacklist(client_ip)
         timeout = (web_cfg.get('token_timeout') or
                    web_cfg.get('session_timeout', 86400))
         token = emergency_admin.issue_token(username, role='super', ttl=timeout)
@@ -146,8 +148,9 @@ def register(ctx):
                 return fallback
             return jsonify({'code': 500, 'msg': '密码验证失败'}), 500
 
-        # 登录成功，清除失败计数
+        # 登录成功，清除失败计数并解除弱证据软封禁（能登录即证明是真人，不必继续拦）
         _clear_login_failures(client_ip)
+        dual_auth.clear_soft_blacklist(client_ip)
 
         # 生成 2048 位随机 token：明文只随响应 / Cookie 返回客户端，库里只存哈希。
         # token 列显式置 NULL 是双保险（历史明文列恒空），token_hash 覆盖旧值即让

@@ -344,12 +344,33 @@ def create_web_app(framework) -> Flask:
     # 内部测试因此拿不到这个实例（封了 127.0.0.1 后无法自解）。
     app.dual_auth = dual_auth
 
+    # 软封禁的「登录自救通道」：旧缓存文件 / 未知路径 / 认证累计失败这类弱证据
+    # 误封风险高。一旦连登录页和登录接口都拦死，用户只能干等 TTL 到期，这才是
+    # 「拉黑太离谱」的根源。软封禁只拦业务 API，保留：登录页静态资源、登录接口、
+    # PoW 挑战接口，让真人能重新登录；登录成功后由 auth.login 自动解除软封禁。
+    _SELF_HELP_PATHS = ('/', '/login', '/eula', '/reset', '/index.html')
+
     @app.before_request
     def _global_blacklist_guard():
-        """全局黑名单拦截：被封禁的 IP 无法访问任何路由（白名单除外）"""
+        """全局黑名单拦截：硬封禁拦全部；软封禁放行登录自救链路"""
         ip = get_client_ip()
         if dual_auth.is_whitelisted(ip) or not dual_auth.is_blacklisted(ip):
             return None
+        if dual_auth.is_soft_blacklisted(ip):
+            path = request.path or ''
+            # 页面与静态资源（登录页能加载）。注意排除 /js/local.debug.js：
+            # 那是强证据陷阱，若随 /js/ 一起放行，软封禁 IP 命中它就会被升级成
+            # 硬封禁、失去自救能力；让它按蜜罐正常走（命中→硬封禁是应有行为）。
+            _static_ok = (
+                path.startswith('/js/') and path != '/js/local.debug.js'
+            ) or path.startswith('/css/') or path.startswith('/img/')
+            if (path in _SELF_HELP_PATHS or _static_ok
+                    or path in ('/favicon.ico', '/theme-init.js')):
+                return None
+            # 登录链路接口（能重新登录 + 完成 PoW）
+            if path in ('/api/login', '/api/challenge', '/api/challenge/verify',
+                        '/api/version', '/api/session/handshake', '/api/session/confirm'):
+                return None
         return jsonify({'code': 403, 'msg': '访问被拒绝'}), 403
 
     # ---- 全局 / 分级限速（此前仅个别端点有限速，其余 ~136 个 /api/* 零限速）----
@@ -458,7 +479,10 @@ def create_web_app(framework) -> Flask:
     _AUTH_FAIL_WINDOW = int(_hp_cfg.get('auth_fail_window', 300) or 300)
     _AUTH_TARPIT_MS = int(_hp_cfg.get('tarpit_auth_ms', 800) or 0)
     _AUTH_DECOY = bool(_hp_cfg.get('invalid_token_decoy', False))
-    _AUTH_BLACKLIST_TTL = int(_hp_cfg.get('blacklist_ttl', 3600) or 0)
+    # 认证失败属于弱证据（旧缓存带着过期 token 反复请求就会命中），用软封禁 +
+    # 短 TTL，避免真人被锁一小时。强证据诱饵仍用 blacklist_ttl。
+    _SOFT_BAN_TTL = int(_hp_cfg.get('soft_ban_ttl', 300) or 0)
+    _AUTH_BLACKLIST_TTL = _SOFT_BAN_TTL if _SOFT_BAN_TTL > 0 else int(_hp_cfg.get('blacklist_ttl', 3600) or 0)
     _auth_failures = {}      # ip -> list[timestamp]
     _auth_fail_lock = threading.Lock()
 
@@ -483,8 +507,8 @@ def create_web_app(framework) -> Flask:
             try:
                 expires_at = (time.time() + _AUTH_BLACKLIST_TTL) if _AUTH_BLACKLIST_TTL > 0 else None
                 dual_auth.blacklist(ip, reason=f'认证连续失败 {len(lst)} 次',
-                                    source='honeypot', expires_at=expires_at)
-                logger.warning(f"[认证防护] IP 因连续认证失败被拉黑: {ip}")
+                                    source='honeypot', expires_at=expires_at, soft=True)
+                logger.warning(f"[认证防护] IP 因连续认证失败被软封禁: {ip}")
             except Exception as e:
                 logger.warning(f"[认证防护] 拉黑失败 {ip}: {e}")
 

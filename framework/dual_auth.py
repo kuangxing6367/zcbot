@@ -32,6 +32,11 @@ logger = logging.getLogger('zcbot')
 # nonce 缓存上限：超过后清理过期条目并剔除最老一半（防内存无限增长）
 _MAX_NONCE_CACHE = 10000
 
+# 软封禁来源：弱证据（旧缓存 / 未知路径 / 认证累计失败）触发。
+# 与强证据（读 .env / git / 备份 / 陷阱 / 手动拉黑）区分开：
+# 软封禁不阻断登录自救链路，且登录成功后自动解除；强封禁维持原状。
+SOFT_BAN_SOURCES = frozenset({'honeypot_soft', 'auth_soft'})
+
 # 迷惑性数据默认值：认证通过后返回，诱导攻击者误以为得手（实际不可用于真实后台）
 _DEFAULT_FAKE_DATA = {
     "token": "ZCBOT-DEADBEEF-FAKE-SESSION-TOKEN-PLEASE-DONOT-USE-IT",
@@ -277,21 +282,33 @@ class DualRequestAuthSystem:
     # ------------------------------------------------------------------
 
     def blacklist(self, ip: str, reason: str = "", source: str = "honeypot",
-                  expires_at=None):
+                  expires_at=None, soft: bool = False):
         """
         将 IP 加入黑名单（持久化 + 内存缓存）
+
         :param ip: 目标 IP
         :param reason: 拉黑原因
         :param source: 来源（honeypot=蜜罐自动 / manual=手动）
         :param expires_at: 解封时间（epoch 秒，None=永久）
+        :param soft: 软封禁。弱证据（旧缓存 / 未知路径 / 认证累计失败）带来的误封
+                     风险高，用软封禁标记：不阻断登录自救链路，登录成功后自动解除。
+                     强证据（读 .env / git / 备份 / 陷阱 / 手动）保持硬封禁。
+
+        软硬标记编码进 source 字段（后缀 _soft），不新增 DB 列，重启后从库里
+        读回的 source 天然带标记。老数据 source='honeypot' 一律按硬封禁处理，
+        兼容既有部署。
         """
         if not self.blacklist_enabled or not ip:
             return
         # 内网 IP 默认豁免（不自动拉黑，避免误伤本机/局域网）；
-        # 开启 ban_internal_ips 后只认显式 whitelist_ips，内网/回环也会被拉黑
-        if source == 'honeypot' and self.is_internal(ip) and not self.ban_internal_ips:
+        # 开启 ban_internal_ips 后只认显式 whitelist_ips，内网/回环也会被拉黑。
+        # 用 startswith('honeypot') 覆盖硬/软两种蜜罐来源（honeypot / honeypot_soft），
+        # 否则软封禁会因 source 带后缀而绕过豁免，把本机/局域网误封。
+        if source.startswith('honeypot') and self.is_internal(ip) and not self.ban_internal_ips:
             logger.info(f"[双请求认证] 内网 IP 豁免拉黑: {ip}")
             return
+        if soft and not source.endswith('_soft'):
+            source = source + '_soft'
         with self._lock:
             self._blacklist[ip] = {
                 'reason': reason or '',
@@ -299,10 +316,32 @@ class DualRequestAuthSystem:
                 'expires_at': expires_at,
             }
         self._db_blacklist(ip, reason or '', source, self._fmt_expires(expires_at))
+        tag = '软封禁' if source in SOFT_BAN_SOURCES else '黑名单'
         if expires_at:
-            logger.warning(f"[双请求认证] IP 已加入黑名单（{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expires_at))} 解封）: {ip} ({reason})")
+            logger.warning(f"[双请求认证] IP 已加入{tag}（{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expires_at))} 解封）: {ip} ({reason})")
         else:
-            logger.warning(f"[双请求认证] IP 已加入永久黑名单: {ip} ({reason})")
+            logger.warning(f"[双请求认证] IP 已加入永久{tag}: {ip} ({reason})")
+
+    def is_soft_blacklisted(self, ip: str) -> bool:
+        """当前封禁是否为软封禁（弱证据 / 误封风险高，允许登录自救）"""
+        if not self.blacklist_enabled or not ip:
+            return False
+        if self.is_whitelisted(ip):
+            return False
+        with self._lock:
+            entry = self._blacklist.get(ip)
+            if entry is None:
+                return False
+            if entry.get('expires_at') is not None and entry['expires_at'] <= time.time():
+                return False
+            return entry.get('source') in SOFT_BAN_SOURCES
+
+    def clear_soft_blacklist(self, ip: str) -> bool:
+        """登录成功后调用：仅解除软封禁，硬封禁不受影响。返回是否真的解除。"""
+        if not self.is_soft_blacklisted(ip):
+            return False
+        logger.info(f"[双请求认证] 登录成功，自动解除软封禁: {ip}")
+        return self.unblacklist(ip)
 
     @staticmethod
     def _fmt_expires(expires_at) -> str | None:

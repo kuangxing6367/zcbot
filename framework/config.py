@@ -360,11 +360,12 @@ security:
   #   decoy_set: full          # 诱饵集：off / basic（核心 45 个）/ full（全量 125 个）
   #   tarpit_ms: 600           # 命中诱饵后的随机延迟上限（毫秒，0=不延迟）
   #   blacklist: true          # 命中是否自动拉黑来源 IP
-  #   blacklist_ttl: 3600      # 自动解封秒数（0=永久封禁）
+  #   blacklist_ttl: 3600      # 强证据封禁秒数（0=永久封禁）
+  #   soft_ban_ttl: 300        # 弱证据软封禁秒数，登录成功即解
   #   log_body: true           # 是否记录请求体（便于取证）
   #   max_body_log: 2048       # 请求体记录上限（字节）
   #   unknown_api_decoy: true  # 未知 /api 路径返回诱饵（false=普通 404）
-  #   auth_fail_blacklist: 20  # 同一 IP 认证连续失败多少次后拉黑（0=不拉黑）
+  #   auth_fail_blacklist: 40  # 同一 IP 认证连续失败多少次后软封禁（0=不拉黑）
   #   auth_fail_window: 300    # 认证失败统计窗口（秒）
   #   tarpit_auth_ms: 800      # 认证失败时的随机延迟上限（毫秒）
   #   invalid_token_decoy: false # true=无效 token 返回诱饵 200（会掩盖静默丢弃，慎用）
@@ -819,6 +820,8 @@ _CONFIG_SCHEMA = {
                     'tarpit_ms': {'int': True, 'min': 0},
                     'blacklist': {'bool': True},
                     'blacklist_ttl': {'int': True, 'min': 0},
+                    # 软封禁时长：弱证据（旧缓存/未知路径/认证失败）用短 TTL，登录成功即解
+                    'soft_ban_ttl': {'int': True, 'min': 0},
                     'log_body': {'bool': True},
                     'max_body_log': {'int': True, 'min': 0},
                     'unknown_api_decoy': {'bool': True},
