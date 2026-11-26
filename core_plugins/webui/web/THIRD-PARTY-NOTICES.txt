@@ -4,7 +4,7 @@ ZCBOT itself is licensed under MIT OR Apache-2.0 (see LICENSE and LICENSE-APACHE
 The following third-party components are bundled into this directory's js/ files.
 Their copyright notices are reproduced below, as required by the MIT License.
 
---- Element Plus (element-plus 2.14.4) ---
+--- Element Plus (element-plus 2.14.8) ---
 
 MIT License
 
@@ -52,7 +52,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
---- Vue.js (vue 3.5.41) ---
+--- Vue.js (vue 3.5.46) ---
 
 The MIT License (MIT)
 
@@ -76,7 +76,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
---- Vue Router (vue-router 4.6.4) ---
+--- Vue Router (vue-router 4.6.5) ---
 
 The MIT License (MIT)
 
@@ -221,7 +221,7 @@ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
---- entities (entities 7.0.1) ---
+--- entities (entities 4.5.0) ---
 
 Copyright (c) Felix Böhm
 All rights reserved.
