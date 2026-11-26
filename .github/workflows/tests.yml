@@ -57,10 +57,11 @@ jobs:
           done
       - name: Install test runners
         run: |
-          # pytest-asyncio 锁 <1.0：1.0 改了默认模式，与 ci.yml 保持同一口径。
+          # pytest-asyncio 锁 <1.0：1.0 改了默认模式，与 pyproject 的 dev 组、
+          # requirements-dev.txt 保持同一口径。
           # pytest-cov 只采集不设阈值——当前语句覆盖率约 50%，先在 CI 里沉淀
           # 历史曲线，等水位稳定再上 ratchet（只许升不许降）。
-          pip install pytest "pytest-asyncio>=0.21,<1.0" pytest-timeout pytest-cov
+          pip install "pytest>=8.3" "pytest-asyncio>=0.24,<1.0" "pytest-timeout>=2.3" pytest-cov
 
       # ── 脚本式回归 ────────────────────────────────────────────────
       # 断言写在 check() 里、失败时 sys.exit 的文件：pytest 要么收集 0 个用例
@@ -138,7 +139,7 @@ jobs:
             [ -f "$f" ] || continue
             pip install -r "$f" || failed="$failed $f"
           done
-          pip install pytest "pytest-asyncio>=0.21,<1.0" pytest-timeout
+          pip install "pytest>=8.3" "pytest-asyncio>=0.24,<1.0" "pytest-timeout>=2.3"
           if [ -n "$failed" ]; then
             echo "::warning title=插件依赖安装失败::未装成功:$failed"
           fi

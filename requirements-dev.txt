@@ -4,14 +4,15 @@
 # 与 pyproject.toml 的 [project.optional-dependencies].dev 保持同步。
 # ============================================================
 
-pytest>=7.4
+pytest>=8.3
 # 必需：pyproject 里 asyncio_mode = "auto" 只有装上它才生效。
 # 缺它时 tests/ 下所有裸 async def 用例会被判 "async def functions are not
 # natively supported" 失败（实测 28 条），而不是跳过——看起来像功能回归。
-pytest-asyncio>=0.23
+# 下限 0.24、上限 <1.0：与 pyproject.toml 的 dev 组、CI 工作流保持同一口径。
+pytest-asyncio>=0.24,<1.0
 
 # CI 用 `pytest --timeout=120` 防挂死，缺它该参数直接报错。
-pytest-timeout>=2.2
+pytest-timeout>=2.3
 
 # 静态检查：CI 的 static-contract 作业只跑 F821（未定义名）门禁；
 # 其余 lint 规则属历史技术债，不在门禁范围。

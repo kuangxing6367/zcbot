@@ -210,7 +210,7 @@ def main():
     async def _enqueue():
         fw_d_on._enqueue_member_sync("join",
             {"group_id": 999, "user_id": 12345, "adapter": key})
-    asyncio.get_event_loop().run_until_complete(_enqueue())
+    asyncio.run(_enqueue())
     fw_d_on._flush_member_sync()
     mrow2 = db.query_one(
         "SELECT group_id,user_id FROM group_members WHERE group_id=%s AND user_id=%s",
@@ -221,7 +221,7 @@ def main():
     async def _enqueue2():
         fw_d_off._enqueue_member_sync("join",
             {"group_id": 888, "user_id": 777, "adapter": "onebot"})
-    asyncio.get_event_loop().run_until_complete(_enqueue2())
+    asyncio.run(_enqueue2())
     fw_d_off._flush_member_sync()
     mrow3 = db.query_one(
         "SELECT group_id,user_id FROM group_members WHERE group_id=%s AND user_id=%s",

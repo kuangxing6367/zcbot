@@ -26,6 +26,22 @@
 
 ---
 
+## [开发中]
+
+> 主题：运行时下限升到 Python 3.12，并把 Web 面板的对话界面按 dsh 真实源码重建。
+
+### 变更
+
+1. **运行时下限 Python 3.10 → 3.12**：`requires-python` 改为 `>=3.12`，补 3.12 / 3.13 / 3.14 classifiers；CI 矩阵收敛为 3.12–3.14（`tests.yml` 的 3.14 仍观察一轮），安装文档、README 徽章、排错文档同步。3.10 / 3.11 环境 `pip` 会直接拒装。
+2. **迁移校验和改为跨解释器稳定（`ast-v1` → `ast-v2`）**：原来直接 `ast.dump()`，而它的输出随版本变——3.12 给 `def` / `class` 加了 `type_params`（空列表也打进 dump），3.13 又让它默认省略空列表与 `None`。同一份迁移源码在 3.10/3.11/3.12/3.13 上算出四种哈希，账本 `checksum_algo` 两边却都写 `ast-v1`，于是换解释器启动就落进「已按新算法记账 → drift」分支，把所有已应用迁移判成被篡改并打 error 日志。改为自写序列化（按 `_fields` 顺序、跳过空字段），3.10–3.14 输出一致；老账本由 `legacy_ast_checksums()` 按五种历史形态反推，命中即静默升级，不进 `reaccepted`。真改了已应用迁移的逻辑仍然报 `drift`。
+3. **3.12 / 3.13 弃用项收口**：`llm_load` 三处 `asyncio.get_event_loop()` → `get_running_loop()`（3.14 起在无运行循环时会直接抛错）；环境信息优先用标准库 `importlib.metadata`，`pkg_resources` 退为兜底（精简 venv 常不含 setuptools）；测试里的 `asyncio.get_event_loop().run_until_complete()` 改 `asyncio.run()`；`startup.py` 在低于 3.12 时给一条明确提示。
+4. **测试依赖口径统一**：`pytest>=8.3`（8.3 起才正式支持 3.13）、`pytest-asyncio>=0.24,<1.0`、`pytest-timeout>=2.3`，`pyproject` dev 组、`requirements-dev.txt` 与 CI 工作流三处一致，不再出现「本地 1.x、CI 0.x」的错位。
+5. **AI 智能体 / Web 聊天按 dsh 真实源码重写**：直接迁入 DeepSeek Harness（MIT）的设计令牌（调色板、语义别名、圆角、排版阶梯、elevation、滚动条），由 `scripts/sync-dsh-tokens.py` 从上游 CSS 机械生成，数值不做主观调整。页面按源码几何重建：748px 内容列、用户气泡 20px 圆角 / 10+16 内距、助手正文全宽 14/24、浮动输入卡 28px 圆角 + `elevation-soft`。回复改为 markdown 渲染（markdown-it）。修掉主区全高计算错误（顶部提示条出现时输入卡被挤出视口），对话页产物 828 kB → 130 kB。
+
+### 验证
+
+干净副本全量 1552 passed / 9 skipped；ruff 两道、脚本式回归 19 文件 0 失败、`release_check` 全过。迁移账本用真实 12 版副本验证：改写成 3.11 形态后 `run_pending` → drift 0、重跑 0、全部升为 `ast-v2`。
+
 ## [1.28.13] - 2026-11-26
 
 > 主题：修复「提示登录成功却不跳转」，并把蜜罐拉黑改为软/硬分层，避免旧缓存文件把真人锁在门外。
