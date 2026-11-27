@@ -51,7 +51,14 @@ class DatabaseConnMixin:
 
     def _init_sqlite(self):
         """初始化 SQLite"""
-        db_path = self.config.get('path', 'data/zcbot.db')
+        db_path = self.config.get('path') or 'data/zcbot.db'
+        # 显式 null / list / dict 不能靠 dict.get 默认值兜住（审计 D-2-1）：
+        # 原样交给 os.path.isabs 会裸崩，且栈只指向这里而非配置文件。
+        if not isinstance(db_path, (str, os.PathLike)) or not str(db_path).strip():
+            raise ValueError(
+                f"database.path 应为非空路径字符串，实际是 "
+                f"{type(db_path).__name__}: {db_path!r}")
+        db_path = os.fspath(db_path)
         # 相对路径必须解析到可写状态目录，不能依赖进程 cwd。
         # 日志路径早就 join 了项目根，唯独库路径漏了：systemd / cron 不设
         # WorkingDirectory 时，root 会把库建到 /data/zcbot.db（与 get_home()

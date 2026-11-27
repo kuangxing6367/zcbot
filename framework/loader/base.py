@@ -332,6 +332,9 @@ class PluginLoader(PluginDepsMixin, PluginUiExtensionsMixin, PluginWebuiMixin, P
         try:
             from framework.blackbox import record as _bb_record
             _journal = list(getattr(ctx, '_register_journal', []) or [])
+            # 快照后立即关记录：运行期继续 append 会无界增长（审计 D-9-2）
+            ctx._register_journal = []
+            ctx._journal_enabled = False
             if _journal:
                 _counts = {}
                 for _e in _journal:

@@ -125,3 +125,22 @@ if __name__ == '__main__':
                test_reload_updates_arity):
         fn()
         print('ok', fn.__name__)
+
+
+def test_keyword_only_param_is_filled_from_extra_positional():
+    """审计 D-1-3：def f(event, *, bot_name) 必须拿到第二个位置实参。
+
+    旧版 _fit_args 把多余位置参数直接截断，handler 抛 TypeError，
+    再被短路点的 fail-closed 转成 False 丢掉整条事件。
+    """
+    r = HookRegistry()
+    hits = []
+
+    def handler(event, *, bot_name):
+        hits.append((event, bot_name))
+
+    r.register('event.before_dispatch', 'p:kw', handler)
+    results = asyncio.run(r.trigger_async('event.before_dispatch', {'id': 1}, 'bot-a'))
+
+    assert hits == [({'id': 1}, 'bot-a')], f'keyword-only 未回填: hits={hits} results={results}'
+    assert False not in results

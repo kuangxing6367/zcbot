@@ -116,7 +116,10 @@ class ProtocolAdapter(ABC):
         try:
             return as_capabilities(self.capabilities()).supports(cap, direction)
         except Exception as _exc:
-            logger.debug('[supports] 捕获异常后按降级路径继续: %s', _exc)
+            # 适配器故障不等于「能力不支持」：DEBUG 级默认不可见，插件会
+            # 静默去掉图片/语音能力（审计 D-12-1）。提升到 WARNING 并保持
+            # 返回 False 的兼容性。
+            logger.warning('[supports] 能力查询失败（按不支持处理）: %s', _exc)
             return False
 
     def normalize_incoming(self, raw_message) -> list:

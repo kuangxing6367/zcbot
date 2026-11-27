@@ -26,6 +26,72 @@
 
 ---
 
+## [1.28.18] - 2026-11-27
+
+> 主题：opencode 16 轮审计挖出的 44 条底层缺陷，逐条核实后修复 41 条，剩 3 条策略性暂缓。
+
+### 来源
+
+`tools/opencode_audit/` 下 16 轮报告（16/16 完成、每轮 ruff 两道全过）与 `SUMMARY.md`。
+主理人逐条读报告 + 核对源码，**41 条确认为真缺陷并修复**；3 条暂缓并写明理由。
+
+### 修复（按模块）
+
+**扩展点 / 上下文**
+- D-1-1 短路点的 async handler 不再 fire-and-forget：同步触发时等待结果，无 loop 时 fail-closed
+- D-1-3 `_fit_args` 把多余位置实参回填到 keyword-only 参数，不再TypeError 丢事件（上轮回归）
+- D-1-4 短路判定认 Flask Response（`hasattr(status_code)`），守卫拒绝后不再跑后续 handler
+- D-4-1 有来源但查不到适配器时不再回落全局 onebot/api_caller，避免多接入端串线
+- D-4-2 `ctx.onebot` 只绑定 onebot_api，不再随事件来源串到其它协议
+- D-4-3 `_PluginLogger` 改 LoggerAdapter，先自行格式化，带字面 `%` 的日志不再丢
+- D-4-4 插件共享线程池加异常回调、停机回收
+- D-4-5 logger 补齐 critical/log/isEnabledFor 等标准方法
+- D-05-1 无 `__name__` 的可调用对象可注册命令
+- D-05-2 `methods='POST'` 不再被拆成逐字符
+- D-05-3 远程路由注册改用签名判断是否接受 plugin，不再全捕获 TypeError
+
+**数据库 / 缓冲 / 调度**
+- D-2-1 `database.path` 类型校验，显式 null/list/dict 不再裸崩且提示可操作
+- D-3-1 只读判定改用 sqlite_errorname / MySQL 错误码 + 完整短语，不再误判普通 SQL 错误
+- D-3-2 `_emergency_recover` 退出失败不再吞异常返回 True
+- D-6-1 `sender=None` 规范化为 dict，不再崩掉单条消息
+- D-7-1 统计批量写入用 shield 保护，取消不再丢在途批次
+- D-7-2 写库失败提升为 WARNING 并累计失败批次，不再静默
+- D-7-3 `adapter_key` 入队前收敛，一条坏键不再带崩整批注册
+- D-08-1 加载失败/卸载时清理 `sys.path` 残留
+- D-08-2 ImportError 重试后用最新依赖快照生成诊断
+- D-9-1 核心插件加载失败回滚 `sys.modules` 半初始化模块
+- D-9-2 `_register_journal` 加载后关闭并限额，不再无界增长
+- D-10-1 L2 压缩失败重开句柄或置 None，不再带坏句柄静默失败
+- D-10-2 `_file_size()` 失败返回 None，不再把未消费积压 truncate 清空
+- D-11-2 单用户权限失效不再全清全局缓存
+- D-12-1 `supports()` 能力查询异常从 DEBUG 提到 WARNING
+
+**API 层**
+- D-13-1/2 畸形 role 与分页参数返回 JSON 400，不再 HTML 500
+- D-13-3 用户管理路由改 `<string:user_id>`，命名空间 ID 可编辑/删除
+- D-13-4 改角色/拉黑/删除后按用户粒度失效权限缓存，撤权不再等 60s
+- D-13-5 删除用户同时清理 `group_members` 孤立数据
+- D-14-1 脱敏占位符递归剥离，嵌套凭据不再被写成 `***`
+- D-14-2 配置段 PUT 加 RLock，消除并发 lost update
+- D-14-3 `token_bits` / `*_len` 等数值参数不再误打码
+- D-14-4 插件配置段发现失败从 DEBUG 提到 WARNING
+- D-15-1 XFF 从右起跳过可信代理并做 ipaddress 校验，伪造最左值不再绕过 IP 风控
+- D-15-2 `http.after_request` 返回值生效，插件可改写响应
+- D-15-3 IP 状态字典加硬上限 LRU 淘汰，轮换 IP 不再无限撑内存
+- D-16-1 单个 plugin.yaml 结构异常不再让整个列表接口 500
+- D-16-2 命令/任务计数失败标记 None + WARNING，不再伪装成 0
+
+### 暂缓（3 条）
+
+- D-1-5 混合 serial/parallel 破坏段位优先级：需重构 trigger_async 执行模型，单独排期
+- D-6-2 工作流解析失败 fail-open：安全策略取舍，已有 warning，待产品决策
+- D-11-1 权限 TTL 承诺与下层 60s 缓存不符：D-13-4 已补主动失效，风险缓解
+
+### 验证
+
+新增 `tests/test_audit_fixes.py` 13 条回归；分批跑对应测试全过，ruff 两道门禁全过。
+
 ## [1.28.17] - 2026-11-26
 
 > 主题：把对抗性测试挖出来的底层缺陷顺着修掉——扩展点短路与 fail-closed、同点位多 handler、线程连接泄漏、MySQL 池自愈。

@@ -12,9 +12,18 @@ class PluginEventsMixin:
     """命令 / 定时任务 / 事件订阅 / 扩展点 / 协议 API"""
 
     def _journal(self, kind: str, detail: str):
-        """记录一次 ctx 注册动作（加载期流水，供黑匣子 plugin_loaded 摘要）。"""
+        """记录一次 ctx 注册动作（仅加载期，供黑匣子 plugin_loaded 摘要）。
+
+        运行期必须关掉（审计 D-9-2）：否则每次 db_execute / command 都 append，
+        长跑进程内存无界增长。
+        """
+        if not getattr(self, '_journal_enabled', True):
+            return
         try:
-            self._register_journal.append({'kind': kind, 'detail': detail})
+            entries = self._register_journal
+            if len(entries) >= 500:
+                return
+            entries.append({'kind': kind, 'detail': detail})
         except Exception as _exc:
             logger.debug('[_journal] 捕获异常后按降级路径继续: %s', _exc)
 
@@ -44,7 +53,12 @@ class PluginEventsMixin:
             require_admin = False  # super 优先级更高
 
         if not callable(handler):
-            raise TypeError(f"handler '{handler.__name__ if hasattr(handler, '__name__') else handler}' 不可调用")
+            raise TypeError(f"handler '{getattr(handler, '__name__', handler)}' 不可调用")
+        # partial / callable 对象没有 __name__，不能假定存在（审计 D-05-1）
+        handler_name = getattr(handler, '__name__', None)
+        if handler_name is None:
+            inner = getattr(handler, 'func', None)
+            handler_name = getattr(inner, '__name__', None) or type(handler).__name__
 
         # 规范化 alias 为字符串
         if alias is not None:
@@ -65,12 +79,12 @@ class PluginEventsMixin:
             'description': description,
             'priority': priority,
             'handler': handler,
-            'handler_name': handler.__name__,
+            'handler_name': handler_name,
             'is_dynamic': 1 if dynamic else 0,
             'require_level': 'super' if require_superuser else ('admin' if require_admin else ''),
             'require_perm': (require_perm or '').strip().lower(),
         })
-        self._journal('command', f"{pattern} -> {handler.__name__}")
+        self._journal('command', f"{pattern} -> {handler_name}")
 
     # ---- 插件自定义 API 路由（Web 后台 / REST，复用框架鉴权）----
 
@@ -92,18 +106,29 @@ class PluginEventsMixin:
         from framework.api import registry as _api_registry
         if methods is None:
             methods = ['GET']
-        methods = [m.upper() for m in methods]
+        # 单个字符串要包成列表，否则 'POST' 被拆成 ['P','O','S','T']（审计 D-05-2）
+        if isinstance(methods, str):
+            methods = [methods]
+        methods = [str(m).strip().upper() for m in methods]
+        if not methods or any(not m for m in methods):
+            raise ValueError(f"methods 含空方法名: {methods!r}")
         self._journal('api', f"{','.join(methods)} {path}")
 
         # 双进程宿主模式：Web 在核心进程，走远程路由（handler 契约 fn(params)->dict/(status,dict)）
         rr = getattr(self._framework, '_remote_routes', None)
         if rr is not None:
             try:
-                rr.register_route(path, methods, handler, auth,
-                                  plugin=self._plugin_name)
-            except TypeError:
-                # 老版本注册器不收 plugin：退回三参调用，保证插件不因框架升级失配
-                rr.register_route(path, methods, handler, auth)
+                # 用签名判断注册器是否接受 plugin，而不是捕获所有 TypeError——
+                # 后者会把真实的参数/契约错误也吞掉并重复注册（审计 D-05-3）
+                import inspect as _inspect
+                try:
+                    _accepts_plugin = 'plugin' in _inspect.signature(rr.register_route).parameters
+                except (TypeError, ValueError):
+                    _accepts_plugin = True
+                if _accepts_plugin:
+                    rr.register_route(path, methods, handler, auth, plugin=self._plugin_name)
+                else:
+                    rr.register_route(path, methods, handler, auth)
             except Exception as e:
                 self.log(f"远程 API 路由注册失败 {path} {methods}: {e}")
                 return False
@@ -181,7 +206,7 @@ class PluginEventsMixin:
         if not callable(handler):
             raise TypeError(f"handler '{getattr(handler, '__name__', handler)}' 不可调用")
         self._raw_message_handlers.append(handler)
-        self._journal('on_raw_message', handler.__name__)
+        self._journal('on_raw_message', getattr(handler, '__name__', type(handler).__name__))
 
     def emit(self, event_name: str, payload: dict = None, targets=None,
              parallel: bool = False):
@@ -254,7 +279,7 @@ class PluginEventsMixin:
                 suffix += 1
             registry[key] = name
         self._framework.hooks.register(point, name, handler, priority, serial)
-        self._journal('hook', f"{point} -> {handler.__name__}")
+        self._journal('hook', f"{point} -> {getattr(handler, '__name__', type(handler).__name__)}")
         return True
 
     def unhook(self, point: str):

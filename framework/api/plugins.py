@@ -81,10 +81,16 @@ def register(ctx):
                     os.path.join(framework.plugin_loader.plugins_dat_dir, r['plugin_name'], 'README.md')
                 )
                 yaml_data = framework.plugin_loader.read_plugin_yaml(r['plugin_name'])
+                # 单个 plugin.yaml 结构异常不能让整个列表接口 500（审计 D-16-1）
+                if not isinstance(yaml_data, dict):
+                    yaml_data = {}
+                gh = yaml_data.get('github')
+                gh = gh if isinstance(gh, dict) else {}
+                cfg = yaml_data.get('config')
                 r['has_yaml'] = bool(yaml_data)
-                r['has_github'] = bool(yaml_data.get('github', {}).get('repo'))
-                r['github_repo'] = yaml_data.get('github', {}).get('repo', '')
-                r['config_items'] = yaml_data.get('config', [])
+                r['has_github'] = bool(gh.get('repo'))
+                r['github_repo'] = gh.get('repo', '')
+                r['config_items'] = cfg if isinstance(cfg, list) else []
                 schema = framework.plugin_loader.read_config_schema(r['plugin_name'])
                 r['has_schema'] = bool(schema)
                 dep_info = framework.plugin_loader.get_dep_status(r['plugin_name'])
@@ -99,8 +105,9 @@ def register(ctx):
                     )
                     r['command_count'] = cmd_cnt['cnt'] if cmd_cnt else 0
                 except Exception as _exc:
-                    logger.debug('[list_plugins] 捕获异常后按降级路径继续: %s', _exc)
-                    r['command_count'] = 0
+                    logger.warning('[list_plugins] 命令计数查询失败 [%s]: %s',
+                                   r['plugin_name'], _exc)
+                    r['command_count'] = None   # 区分「真的 0」与「查询失败」（审计 D-16-2）
                 try:
                     task_cnt = db.query_one(
                         "SELECT COUNT(*) as cnt FROM tasks WHERE plugin_name = %s AND is_active = 1",
@@ -108,8 +115,9 @@ def register(ctx):
                     )
                     r['task_count'] = task_cnt['cnt'] if task_cnt else 0
                 except Exception as _exc:
-                    logger.debug('[list_plugins] 捕获异常后按降级路径继续: %s', _exc)
-                    r['task_count'] = 0
+                    logger.warning('[list_plugins] 任务计数查询失败 [%s]: %s',
+                                   r['plugin_name'], _exc)
+                    r['task_count'] = None
                 return jsonify({'code': 0, 'data': rows})
         except Exception as e:
             logger.error(f"获取插件列表失败: {e}")

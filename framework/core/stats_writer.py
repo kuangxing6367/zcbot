@@ -27,6 +27,7 @@ class AsyncStatsWriter:
         # 有界队列：消息洪峰时丢弃多余注册请求（内存有上限），丢弃计数定期上报
         self._reg_queue = asyncio.Queue(maxsize=20000)   # 用户/群注册任务
         self._dropped = 0
+        self._write_failures = 0     # 批量写库失败批次数（审计 D-7-2 可观测）
         self._last_drop_warn = 0.0   # 丢弃告警节流：首次立即报，之后每隔 60s 报一次
         self._cmd_hits = {}                 # cmd_id -> count（主循环线程访问）
         self._kw_hits = {}                  # dynamic_commands.id -> count
@@ -69,6 +70,11 @@ class AsyncStatsWriter:
         if isinstance(group_id, int) and not (-(1 << 63) <= group_id <= (1 << 63) - 1):
             logger.debug("忽略超出 BIGINT 范围的 group_id")
             group_id = None
+        # 第三个身份键 adapter_key 也要收敛：不可哈希的 dict/list 会让整批
+        # 注册在 _namespace_id 处抛 TypeError，带崩同批所有正常用户（审计 D-7-3）
+        if adapter_key is not None and not isinstance(adapter_key, str):
+            logger.debug("忽略非法 adapter_key 类型: %s", type(adapter_key).__name__)
+            adapter_key = None
         try:
             self._reg_queue.put_nowait(
                 (user_id, dict(sender), message_type, group_id, adapter_key))
@@ -96,12 +102,18 @@ class AsyncStatsWriter:
                 fns = self._drain_to_fns()
                 if not fns:
                     continue
-                results = await asyncio.gather(
+                # shield 保护在途批次：stop() 的 cancel 不能把已出队的统计数据
+                # 连同 write future 一起丢掉（审计 D-7-1）
+                results = await asyncio.shield(asyncio.gather(
                     *[self._run_in_db_thread(fn) for fn in fns],
-                    return_exceptions=True)
+                    return_exceptions=True))
                 for r in results:
                     if isinstance(r, Exception):
-                        logger.error(f"统计批量写库异常: {r}")
+                        # 数据已从内存移除且失败后不回填——至少让运维看得见
+                        # （审计 D-7-2）；彻底补偿需改 _drain_to_fns 的返回结构。
+                        self._write_failures += 1
+                        logger.warning(
+                            f"统计批量写库失败（本批已丢弃，累计 {self._write_failures} 批）: {r}")
             except asyncio.CancelledError:
                 raise
             except Exception as e:

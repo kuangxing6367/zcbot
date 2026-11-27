@@ -77,8 +77,21 @@ def _is_readonly_error(err) -> bool:
     这类错误与"SQL 写错、唯一约束冲突"有本质区别——它意味着**本次运行的写入
     不会落盘**，必须让运维看见，而不是让它混在普通异常里。
     """
+    # 精确错误码优先（审计 D-3-1）：原来的 'readonly' in str(err) 会把
+    # "Unknown column 'readonly'" 这类普通 SQL 错误误升级为全局只读降级。
+    sqlite_name = getattr(err, 'sqlite_errorname', None)
+    if sqlite_name == 'SQLITE_READONLY':
+        return True
+    args = getattr(err, 'args', None)
+    if args and isinstance(args[0], int):
+        # MySQL 1290=--read-only, 1036=table is read only
+        if args[0] in (1290, 1036):
+            return True
     s = str(err).lower()
-    return 'readonly' in s or 'read-only' in s
+    # 文本兜底只认完整固定短语，不匹配用户回显值里的子串
+    return ('attempt to write a readonly database' in s
+            or 'is running with the --read-only option' in s
+            or 'table is read only' in s)
 
 
 def _emergency_recover(err, db_path, source='db'):
@@ -117,8 +130,11 @@ def _emergency_recover(err, db_path, source='db'):
         recovery.perform_exit(report)
     except Exception as exit_exc:
         # 正常情况下 perform_exit 用 os._exit 不会返回；到这里说明是测试替身
-        # 或退出被拦截，不能吞掉原异常，调用方仍要看到最初的损坏。
+        # 或退出被拦截。不能吞掉后返回 True——那会诱导调用方以为已处理（审计 D-3-2）。
         logger.error('退出动作失败（%s: %s）', type(exit_exc).__name__, exit_exc)
+        raise RuntimeError(
+            f'应急恢复的退出动作失败: {type(exit_exc).__name__}: {exit_exc}'
+        ) from exit_exc
     return True
 
 

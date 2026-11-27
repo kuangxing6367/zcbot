@@ -584,12 +584,17 @@ class MessageRouter(RouterMatchMixin, KeywordReplyMixin):
         try:
             from framework.messaging import event as _event_mod
             _event_mod.invalidate_user_role_cache(user_id)
-            _event_mod.invalidate_group_role_cache()
+            # 单用户失效时按 user_id 清群角色，不要全清（审计 D-11-2）：
+            # 原实现无条件全清会让所有在线用户重新解析权限，形成 DB 风暴。
+            _event_mod.invalidate_group_role_cache(user_id=user_id)
         except Exception as _exc:
             logger.debug('清理事件角色缓存失败: %s', _exc)
         try:
             from framework import perm as _perm_mod
-            _perm_mod.invalidate_all()
+            if user_id is None:
+                _perm_mod.invalidate_all()
+            else:
+                _perm_mod.invalidate_user(user_id)
         except Exception as _exc:
             logger.debug('清理权限插件缓存失败: %s', _exc)
 

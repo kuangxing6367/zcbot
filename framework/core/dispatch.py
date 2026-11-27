@@ -529,7 +529,11 @@ class FrameworkDispatchMixin:
                 message_type = event.get('message_type', 'unknown')
                 user_id = event.get('user_id', 0)
                 group_id = event.get('group_id')
-                sender = event.get('sender', {})
+                # sender 键存在但值为 None（或非 dict）时 event.get 不会回退，
+                # 后续 .get()/dict(sender) 会崩掉整条消息（审计 D-6-1）
+                sender = event.get('sender')
+                if not isinstance(sender, dict):
+                    sender = {}
 
                 log_raw = self.config.get('log', {}).get('log_raw_message', True)
                 if log_raw:

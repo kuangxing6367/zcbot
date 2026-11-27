@@ -501,6 +501,11 @@ def create_web_app(framework) -> Flask:
                          if not v or now - v[-1] >= _AUTH_FAIL_WINDOW]
                 for k in stale:
                     _auth_failures.pop(k, None)
+                # 全是新 IP（轮换伪造）时 stale 为空，仍需硬上限淘汰（审计 D-15-3）
+                while len(_auth_failures) > 4096:
+                    oldest = min(_auth_failures,
+                                 key=lambda k: (_auth_failures[k][-1] if _auth_failures[k] else 0))
+                    _auth_failures.pop(oldest, None)
             if _AUTH_FAIL_LIMIT > 0 and len(lst) >= _AUTH_FAIL_LIMIT:
                 hit = True
         if hit:
@@ -551,6 +556,10 @@ def create_web_app(framework) -> Flask:
                 stale = [k for k, v in _refresh_windows.items() if not v or now - v[-1] >= 600]
                 for k in stale:
                     _refresh_windows.pop(k, None)
+                while len(_refresh_windows) > 2048:
+                    oldest = min(_refresh_windows,
+                                 key=lambda k: (_refresh_windows[k][-1] if _refresh_windows[k] else 0))
+                    _refresh_windows.pop(oldest, None)
         if count >= _REFRESH_LIMIT and path != '/reset':
             from flask import redirect
             return redirect('/reset', code=302)
@@ -580,7 +589,12 @@ def create_web_app(framework) -> Flask:
         hooks = getattr(fw, 'hooks', None) if fw else None
         if hooks is not None:
             try:
-                hooks.trigger_sync('http.after_request', request, resp)
+                results = hooks.trigger_sync('http.after_request', request, resp) or []
+                # 插件可改写响应：取最后一个有效 Response（审计 D-15-2）
+                for r in reversed(results):
+                    if r is not None and hasattr(r, 'status_code'):
+                        resp = r
+                        break
             except Exception as e:
                 logger.warning(f"http.after_request 扩展点异常: {e}")
         return resp
@@ -616,13 +630,23 @@ def create_web_app(framework) -> Flask:
         # .............................................
         #          佛祖保佑             永无BUG
 
+        import ipaddress
+
         remote = request.remote_addr or 'unknown'
         if _trusted_proxies and remote in _trusted_proxies:
             xff = request.headers.get('X-Forwarded-For', '')
             if xff:
+                # 从右往左跳过可信代理跳，取第一个不可信的跳（审计 D-15-1）。
+                # 原来的 parts[0] 是客户端自己写的最左值，伪造 127.0.0.1
+                # 即可命中白名单绕过所有 IP 风控。
                 parts = [p.strip() for p in xff.split(',') if p.strip()]
-                if parts:
-                    return parts[0]
+                for candidate in reversed(parts):
+                    try:
+                        ipaddress.ip_address(candidate)
+                    except ValueError:
+                        continue                      # 非合法 IP：跳过，不采信
+                    if candidate not in _trusted_proxies:
+                        return candidate
         return remote
 
     def audit_log(admin_id, admin_name, action, target_type=None, target_name=None,

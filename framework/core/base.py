@@ -946,6 +946,13 @@ class Framework(FrameworkDispatchMixin, FrameworkRuntimeMixin):
         except Exception as e:
             logger.warning(f"数据库线程池关闭异常: {e}")
 
+        # 回收插件共享异步线程池（审计 D-4-4）：否则卡住的任务会拖住 atexit
+        try:
+            from framework.ctx.base import shutdown_async_executor
+            shutdown_async_executor()
+        except Exception as e:
+            logger.warning(f"插件异步线程池关闭异常: {e}")
+
         # 真正关闭连接池。运行期任何地方调 db.close() 都只释放本线程连接
         # （防止插件误调把全进程的库关掉），池只能由停机路径显式 shutdown。
         try:

@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 
 import yaml
@@ -21,8 +22,11 @@ _SENSITIVE_KEY = re.compile(
     r'credential|jwt|cookie|dsn|auth[_-]?key)', re.IGNORECASE)
 # token_timeout / secret_length 之类是普通数值，不能当凭据打码
 _SAFE_KEY_HINT = re.compile(
-    r'(timeout|expire|ttl|interval|count|limit|enabled|length|size|level)', re.IGNORECASE)
+    r'(timeout|expire|ttl|interval|count|limit|enabled|length|size|level|'
+    r'bits|_bits|_len)', re.IGNORECASE)
 _MASK = '***'
+# 配置段 PUT 的读-改-写必须串行（审计 D-14-2）：两个并发 PUT 会互相覆盖
+_CONFIG_WRITE_LOCK = threading.RLock()
 
 
 def _mask_sensitive(value):
@@ -48,9 +52,19 @@ def _is_super() -> bool:
     return (getattr(request, 'admin', None) or {}).get('role') == 'super'
 
 
-def _strip_masks(values: dict) -> dict:
-    """PUT 回写时剔除脱敏占位符，避免前端把 '***' 当真实值覆盖进 config.yaml。"""
-    return {k: v for k, v in values.items() if v != _MASK}
+def _strip_masks(values):
+    """PUT 回写时剔除脱敏占位符，递归处理嵌套结构。
+
+    GET 侧 _mask_sensitive 是递归的，旧实现只过滤顶层：onebot.instances[].
+    access_token 这类嵌套凭据的 '***' 会被原样写回，重启后认证失败（审计 D-14-1）。
+    """
+    if isinstance(values, dict):
+        return {k: _strip_masks(v) for k, v in values.items() if v != _MASK}
+    if isinstance(values, list):
+        return [_strip_masks(v) for v in values if v != _MASK]
+    if isinstance(values, tuple):
+        return tuple(_strip_masks(v) for v in values if v != _MASK)
+    return values
 
 
 def register(ctx):
@@ -383,7 +397,7 @@ def register(ctx):
             from framework.config import list_core_plugins_state
             extra = {it['section'] for it in list_core_plugins_state()}
         except Exception as _exc:
-            logger.debug('[_yaml_sections] 捕获异常后按降级路径继续: %s', _exc)
+            logger.warning('官方插件配置段发现失败，面板可能无法保存这些段: %s', _exc)
             extra = set()
         return base + tuple(sorted(extra - set(base)))
 
@@ -413,7 +427,7 @@ def register(ctx):
                     merged.update(cur)      # config.yaml 已有值优先
                 doc[sec] = merged
         except Exception as e:
-            logger.debug(f"补充官方插件配置段失败（不影响读取）: {e}")
+            logger.warning(f"补充官方插件配置段失败（面板展示可能不完整）: {e}")
         return doc
 
     @app.route('/api/config/yaml', methods=['GET'])
@@ -460,10 +474,11 @@ def register(ctx):
             return jsonify({'code': 0, 'msg': '无字段需要更新（脱敏占位符已忽略）',
                             'data': {'notes': [], 'restart_required': False}})
 
-        merged = dict(_read_yaml_section(section))
-        merged.update(values)
-        if not _update_yaml_section(section, merged):
-            return jsonify({'code': 500, 'msg': '写入 config.yaml 失败'}), 500
+        with _CONFIG_WRITE_LOCK:
+            merged = dict(_read_yaml_section(section))
+            merged.update(values)
+            if not _update_yaml_section(section, merged):
+                return jsonify({'code': 500, 'msg': '写入 config.yaml 失败'}), 500
 
         # 写盘成功后再应用到运行中的框架（内存配置 + 运行时副作用），并回报哪些字段即时生效
         from framework import hotapply

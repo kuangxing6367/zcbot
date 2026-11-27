@@ -126,10 +126,14 @@ class FrameworkRuntimeMixin:
                     # 行为对齐——回答"加载时调了哪些 ctx 函数 / 订阅了哪些事件 / 注册了哪些命令任务"）。
                     # module.register(ctx) 与 flush 已完成，此刻 ctx._register_journal 仅含加载期调用；
                     # 读完即清空，避免运行时调用混入。
+                    _journal = list(getattr(ctx, '_register_journal', []) or [])
+                    # 快照后立即关记录并清空（放到 finally，避免记录过程抛错时
+                    # 不清空导致加载期条目混入运行期无限增长——审计 D-9-2）
                     try:
-                        from framework.blackbox import record as _bb_record
-                        _journal = list(getattr(ctx, '_register_journal', []) or [])
+                        ctx._register_journal = []
+                        ctx._journal_enabled = False
                         if _journal:
+                            from framework.blackbox import record as _bb_record
                             _counts = {}
                             for _e in _journal:
                                 _counts[_e['kind']] = _counts.get(_e['kind'], 0) + 1
@@ -139,7 +143,6 @@ class FrameworkRuntimeMixin:
                             for _e in _journal:
                                 _bb_record('load_ctx', plugin=name, fn=_e['kind'],
                                            msg=_e['detail'][:120])
-                            ctx._register_journal = []
                     except Exception as _exc:
                         logger.debug('[_load_core_plugins] 捕获异常后按降级路径继续: %s', _exc)
 
@@ -188,6 +191,13 @@ class FrameworkRuntimeMixin:
                 else:
                     logger.warning(f"官方插件 [{name}] 无 register 函数")
             except Exception as e:
+                # 加载失败时回滚半初始化的模块：sys.modules 里的名字仍指向只
+                # 执行到一半的 module，其它插件按公开契约取它会拿到残缺对象
+                # （审计 D-9-1）。自愈重试前也必须先清掉。
+                try:
+                    sys.modules.pop(f"core_plugin_{name}", None)
+                except Exception:
+                    pass
                 info = classify_load_error(e)
                 if info['kind'] == 'missing_module':
                     # 依赖缺失是**预期内**的可恢复状态：登记后由启动自愈

@@ -40,7 +40,7 @@ logger = logging.getLogger('zcbot')
 def _arity_of(handler):
     """算出 handler 能接受几个位置参数、哪些关键字。
 
-    返回 ``(max_pos, free, allowed_kw)``：
+    返回 ``(max_pos, free, allowed_kw, kwonly)``：
 
     - ``free=True``：handler 有 ``*args`` / ``**kwargs``，或签名读不出来
       （内建函数、C 扩展、被装饰器包过）——原样传参，不做任何裁剪；
@@ -58,6 +58,7 @@ def _arity_of(handler):
         return (None, True, None)
     max_pos = 0
     allowed = set()
+    kwonly = []              # 按声明顺序的 keyword-only 参数名，供多余位置实参回填
     for p in sig.parameters.values():
         if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD):
             max_pos += 1
@@ -67,7 +68,8 @@ def _arity_of(handler):
             return (None, True, None)
         elif p.kind is p.KEYWORD_ONLY:
             allowed.add(p.name)
-    return (max_pos, False, allowed)
+            kwonly.append(p.name)
+    return (max_pos, False, allowed, kwonly)
 
 
 class HookPoints:
@@ -135,6 +137,17 @@ class HookPriority:
 
 
 # 各扩展点约定返回 False 时是否触发"短路"语义
+def _is_veto(value) -> bool:
+    """短路判定：False 或形如 Flask Response 的对象都算「否决」。
+
+    HTTP_BEFORE_REQUEST 的契约是返回 Response 即短路，但原实现只认 `is False`，
+    registry 不提前终止链，后续 handler 的副作用照常发生（审计 D-1-4）。
+    """
+    if value is False:
+        return True
+    return hasattr(value, 'status_code')
+
+
 _SHORT_CIRCUIT = {
     HookPoints.HTTP_BEFORE_REQUEST: True,     # 返回 Flask Response 即短路
     HookPoints.EVENT_BEFORE_DISPATCH: True,   # 返回 False 丢弃事件
@@ -157,6 +170,19 @@ class HookRegistry:
     注册变更时失效快照，触发热路径无锁读不可变 tuple，零拷贝。
     """
 
+    # 同步触发短路点时等待 async guard 的超时（秒）：Guard 卡死不能挂住 HTTP 请求
+    _SYNC_HOOK_TIMEOUT = 5.0
+
+    @staticmethod
+    def _log_future_error(fut):
+        """fire-and-forget future 的异常兜底，否则异常只留在 Future 里无人看见。"""
+        try:
+            exc = fut.exception()
+        except Exception:
+            return
+        if exc is not None:
+            logger.error(f"扩展点 async 处理器异常: {exc}", exc_info=exc)
+
     def __init__(self, framework=None):
         self._framework = framework
         self._hooks = {}                 # point -> list[[priority, name, handler]]
@@ -169,12 +195,23 @@ class HookRegistry:
         info = self._arity.get((point, name))
         if info is None:
             return args, kwargs
-        max_pos, free, allowed = info
+        # 兼容旧的 3 元组缓存（热更新场景）
+        if len(info) == 3:
+            max_pos, free, allowed, kwonly = info[0], info[1], info[2], []
+        else:
+            max_pos, free, allowed, kwonly = info
         if free:
             return args, kwargs
+        kwargs = dict(kwargs) if kwargs else {}
+        # 多余的位置实参按声明顺序回填到 keyword-only 参数，而不是直接丢弃。
+        # 否则 `def f(event, *, bot_name)` 这类签名会 TypeError，再被短路点
+        # 的 fail-closed 转成 False，把整条事件丢掉（审计 D-1-3）。
         if max_pos is not None and len(args) > max_pos:
+            extra = args[max_pos:]
+            for key, value in zip(kwonly, extra):
+                kwargs.setdefault(key, value)
             args = args[:max_pos]
-        if kwargs and allowed is not None:
+        if allowed is not None:
             kwargs = {k: v for k, v in kwargs.items() if k in allowed}
         return args, kwargs
 
@@ -332,7 +369,7 @@ class HookRegistry:
                 else:
                     value = handler(*hargs, **hkwargs)
                 results.append(value)
-                if short_circuit and value is False:
+                if short_circuit and _is_veto(value):
                     return results
             except Exception as e:
                 logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}", exc_info=True)
@@ -397,8 +434,23 @@ class HookRegistry:
                 hargs, hkwargs = self._fit_args(point, name, args, kwargs)
                 if asyncio.iscoroutinefunction(handler):
                     if loop is not None and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(handler(*hargs, **hkwargs), loop)
-                        results.append(None)
+                        fut = asyncio.run_coroutine_threadsafe(handler(*hargs, **hkwargs), loop)
+                        if short_circuit:
+                            # 短路点的 async handler 必须等到结果：fire-and-forget
+                            # 会让 Guard 的否决永远不参与判定，等于 fail-open。
+                            value = fut.result(timeout=self._SYNC_HOOK_TIMEOUT)
+                            results.append(value)
+                            if _is_veto(value):
+                                return results
+                        else:
+                            results.append(None)
+                            fut.add_done_callback(self._log_future_error)
+                    elif short_circuit:
+                        # 无 loop 且是短路点：不能静默跳过，fail-closed
+                        logger.warning(
+                            f"扩展点 [{point}] 的 async 处理器 [{name}] 无可用事件循环，按否决处理")
+                        results.append(False)
+                        return results
                     elif point not in _ALLOW_SKIP_ASYNC:
                         logger.warning(
                             f"扩展点 [{point}] 的 async 处理器 [{name}] 无可用事件循环，已跳过")
@@ -406,7 +458,7 @@ class HookRegistry:
                 else:
                     value = handler(*hargs, **hkwargs)
                     results.append(value)
-                    if short_circuit and value is False:
+                    if short_circuit and _is_veto(value):
                         return results
             except Exception as e:
                 logger.error(f"扩展点 [{point}] 处理器 [{name}] 异常: {e}")

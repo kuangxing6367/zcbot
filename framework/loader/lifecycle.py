@@ -324,6 +324,17 @@ class PluginLifecycleMixin:
         #          佛祖保佑             永无BUG
 
         plugin_path = plugin_path or os.path.join(self.plugins_dir, plugin_name)
+        # 加载失败/卸载时把插件目录从 sys.path 移除（审计 D-08-1）：
+        # 只清 sys.modules 会留下路径，后续导入可能解析到陈旧插件文件。
+        # 只移除本次加入的那个条目，不动其它逻辑共享的同路径。
+        try:
+            abs_plugin = os.path.abspath(plugin_path)
+            while plugin_path in sys.path:
+                sys.path.remove(plugin_path)
+            while abs_plugin in sys.path:
+                sys.path.remove(abs_plugin)
+        except (ValueError, OSError):
+            pass
         try:
             abs_plugin = os.path.abspath(plugin_path)
             removed = []
@@ -558,6 +569,9 @@ class PluginLifecycleMixin:
                     dep_result2 = self.check_dependencies(plugin_name)
                     if dep_result2.get('missing'):
                         pip_install_all(plugin_name, dep_result2['missing'])
+                    # 用最新快照更新外层：终态诊断不能拿安装前的过期缺依赖清单
+                    # （审计 D-08-2）
+                    dep_result = dep_result2
                     continue
                 else:
                     # 终态失败：优先给出平台化诊断（缺失模块 / 版本不兼容 / 原生扩展等）

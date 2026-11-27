@@ -26,6 +26,22 @@ _async_executor = ThreadPoolExecutor(
     thread_name_prefix='async_plugin'
 )
 
+
+def _log_async_task_error(fut):
+    """插件异步任务异常兜底：不取 Future 结果时也要在日志里留痕。"""
+    try:
+        exc = fut.exception()
+    except Exception:
+        return
+    if exc is not None:
+        logger.error(f"插件异步任务异常: {exc}", exc_info=exc)
+
+
+def shutdown_async_executor():
+    """框架停机时回收插件共享线程池（非阻塞，取消排队未开始的任务）。"""
+    _async_executor.shutdown(wait=False, cancel_futures=True)
+
+
 from framework.ctx.db import PluginDatabaseMixin
 from framework.ctx.events import PluginEventsMixin
 from framework.ctx.messaging import PluginMessagingMixin
@@ -35,28 +51,32 @@ from framework.ctx.webui import PluginWebuiMixin
 class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, PluginDatabaseMixin):
     """插件上下文，传递给 register(ctx) 函数"""
 
-    class _PluginLogger:
-        """插件日志适配器：提供 .info/.warning/.error/.debug 接口，自动加插件名前缀"""
+    class _PluginLogger(logging.LoggerAdapter):
+        """插件日志适配器：真正的标准 logger 接口，自动加插件名前缀。
+
+        旧实现先 f-string 拼消息、又把 *args 交给 logger，消息里带字面 `%`
+        时 LogRecord 会二次格式化抛 ValueError 丢日志（审计 D-4-3）；
+        且缺 critical/log/isEnabledFor 等标准方法（D-4-5）。
+        LoggerAdapter 原生支持 `%(plugin)s` 风格前缀与全部标准方法。
+        """
         def __init__(self, plugin_name: str):
-            self._name = plugin_name
+            super().__init__(logger, {'plugin': plugin_name})
 
-        def info(self, msg, *args, **kwargs):
-            logger.info(f"[{self._name}] {msg}", *args, **kwargs)
+        def process(self, msg, kwargs):
+            return f'[{self.extra["plugin"]}] {msg}', kwargs
 
-        def warning(self, msg, *args, **kwargs):
-            logger.warning(f"[{self._name}] {msg}", *args, **kwargs)
-
-        def error(self, msg, *args, **kwargs):
-            logger.error(f"[{self._name}] {msg}", *args, **kwargs)
-
-        def debug(self, msg, *args, **kwargs):
-            logger.debug(f"[{self._name}] {msg}", *args, **kwargs)
-
-        def warn(self, msg, *args, **kwargs):
-            logger.warning(f"[{self._name}] {msg}", *args, **kwargs)
-
-        def exception(self, msg, *args, **kwargs):
-            logger.exception(f"[{self._name}] {msg}", *args, **kwargs)
+        def log(self, level, msg, *args, **kwargs):
+            # LoggerAdapter.log 直接转发给底层 logger.log（不走 _log），
+            # 必须在这里先完成 % 格式化再清空 args，否则带字面 % 的消息
+            # （如 '进度 100%: %s'）会被 LogRecord 二次格式化抛 ValueError
+            # 而整条日志丢失（审计 D-4-3）。
+            if args:
+                try:
+                    msg = msg % args
+                except (TypeError, ValueError):
+                    msg = f'{msg} {args}'
+                args = ()
+            super().log(level, msg, *args, **kwargs)
 
     def __init__(self, plugin_name: str, framework):
         self._plugin_name = plugin_name
@@ -89,11 +109,13 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
             logger.debug('[actions] 捕获异常后按降级路径继续: %s', _exc)
             source = None
         if source:
-            try:
-                adapter = services.adapter_for_source(source)
-            except Exception as _exc:
-                logger.debug('[actions] 捕获异常后按降级路径继续: %s', _exc)
-                adapter = None
+            # 有明确来源却查不到适配器，不能回落到全局 onebot_api/api_caller：
+            # 那会把消息发到别的协议端（审计 D-4-1）。宁可显式失败。
+            adapter = services.adapter_for_source(source)
+            if adapter is None:
+                raise RuntimeError(
+                    f"事件来源 [{source}] 没有可用适配器，拒绝回落到全局 API "
+                    "（多接入端串线风险）")
             if adapter is not None:
                 # OneBot 来源：优先类型化 onebot_api（旧 ctx.onebot 写法）
                 if getattr(adapter, 'adapter_id', '') == 'onebot' or \
@@ -114,12 +136,16 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
 
     @property
     def onebot(self):
+        """OneBot 11 兼容别名：只绑定 onebot_api，不随事件来源串到其它协议。
+
+        旧实现 `return self.actions` 会按 current_source_var 路由——在
+        Telegram/Discord 事件里调 ctx.onebot 会打到错误适配器（审计 D-4-2）。
         """
-        兼容别名：等价于 ctx.actions（历史插件便捷面）。
-        OneBot 11 API 封装优先返回 services['onebot_api']；
-        否则回落到协议无关的 ActionProxy。
-        """
-        return self.actions
+        services = self._framework.services
+        api = services.get('onebot_api')
+        if api is None:
+            raise RuntimeError("OneBot 适配器未启用，ctx.onebot 不可用")
+        return api
     @property
     def logger(self):
         """获取插件日志记录器（标准 logger 接口）"""
@@ -313,7 +339,10 @@ class PluginContext(PluginMessagingMixin, PluginEventsMixin, PluginWebuiMixin, P
 
             ctx.run_async(render_and_send)
         """
-        return _async_executor.submit(func, *args, **kwargs)
+        fut = _async_executor.submit(func, *args, **kwargs)
+        # 异常留在 Future 里无人取就静默失败（审计 D-4-4）：补一个兜底日志。
+        fut.add_done_callback(_log_async_task_error)
+        return fut
 
     def audit_log(self, action: str, target_type: str = None,
                   target_name: str = None, detail: dict = None,

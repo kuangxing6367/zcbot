@@ -8,6 +8,25 @@ from flask import jsonify, request
 logger = logging.getLogger('zcbot')
 
 
+def _invalidate_user_perms(user_id):
+    """按用户粒度失效权限/角色缓存（审计 D-13-4）。
+
+    撤权、拉黑、删除后若不失效，旧权限在 60 秒 TTL 内仍生效。不能用
+    router.invalidate_permissions()——那个会全清全局缓存。
+    """
+    try:
+        from framework import perm as _perm
+        _perm.invalidate_user(user_id)
+    except Exception as e:
+        logger.warning(f"失效权限缓存失败 [{user_id}]: {e}")
+    try:
+        from framework.messaging import event as _event
+        _event.invalidate_user_role_cache(user_id)
+        _event.invalidate_group_role_cache(user_id=user_id)
+    except Exception as e:
+        logger.warning(f"失效角色缓存失败 [{user_id}]: {e}")
+
+
 def register(ctx):
     app = ctx.app
     db = ctx.db
@@ -21,8 +40,14 @@ def register(ctx):
     @require_auth
     def list_users():
         """获取用户列表（含角色信息）"""
-        page = int(request.args.get('page', 1))
-        size = min(int(request.args.get('size', 50)), 200)
+        # 畸形分页参数不能打穿接口返回 HTML 500（审计 D-13-2）
+        try:
+            page = int(request.args.get('page', 1))
+            size = int(request.args.get('size', 50))
+        except (TypeError, ValueError):
+            return jsonify({'code': 400, 'msg': '分页参数必须是整数'}), 400
+        page = max(1, page)
+        size = max(1, min(size, 200))
         offset = (page - 1) * size
         keyword = request.args.get('keyword', '').strip()
 
@@ -83,7 +108,7 @@ def register(ctx):
             logger.error(f"create_user 内部错误: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
-    @app.route('/api/users/<int:user_id>', methods=['PUT'])
+    @app.route('/api/users/<string:user_id>', methods=['PUT'])
     @require_super
     def update_user(user_id):
         """修改机器人用户的昵称/备注（仅超管）"""
@@ -102,26 +127,33 @@ def register(ctx):
             logger.error(f"update_user 内部错误: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
-    @app.route('/api/users/<int:user_id>', methods=['DELETE'])
+    @app.route('/api/users/<string:user_id>', methods=['DELETE'])
     @require_super
     def delete_user(user_id):
         """删除机器人用户（仅超管）"""
         admin = request.admin
         try:
             db.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+            # 清理群成员孤立数据（审计 D-13-5）：无外键级联，必须显式删
+            db.execute("DELETE FROM group_members WHERE user_id = %s", (user_id,))
+            _invalidate_user_perms(user_id)
             audit_log(admin['id'], admin['username'], 'delete_user', 'user', str(user_id))
             return jsonify({'code': 0, 'msg': '用户已删除'})
         except Exception as e:
             logger.error(f"delete_user 内部错误: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
-    @app.route('/api/users/<int:user_id>/role', methods=['PUT'])
+    @app.route('/api/users/<string:user_id>/role', methods=['PUT'])
     @require_super
     def set_user_role(user_id):
         """设置用户角色（仅超级管理员）"""
         admin = request.admin
         data = request.get_json(silent=True) or {}
-        role = data.get('role', '').strip()
+        raw_role = data.get('role', '')
+        # 非字符串 role 直接 .strip() 会抛未捕获 500（审计 D-13-1）
+        if not isinstance(raw_role, str):
+            return jsonify({'code': 400, 'msg': '角色值必须是字符串'}), 400
+        role = raw_role.strip()
 
         if role not in ('super', ''):
             return jsonify({'code': 400, 'msg': '角色值无效，仅支持 super 或空字符串'}), 400
@@ -132,6 +164,7 @@ def register(ctx):
                 return jsonify({'code': 404, 'msg': '用户不存在'}), 404
 
             db.execute("UPDATE users SET role = %s WHERE user_id = %s", (role, user_id))
+            _invalidate_user_perms(user_id)
             label = '超级管理员' if role == 'super' else '普通用户'
             audit_log(admin['id'], admin['username'], 'set_user_role', 'user', str(user_id),
                       {'role': role, 'nickname': row['nickname']})
@@ -140,7 +173,7 @@ def register(ctx):
             logger.error(f"set_user_role 内部错误: {e}")
             return jsonify({'code': 500, 'msg': '服务器内部错误'}), 500
 
-    @app.route('/api/users/<int:user_id>/blacklist', methods=['POST'])
+    @app.route('/api/users/<string:user_id>/blacklist', methods=['POST'])
     @require_auth
     def toggle_user_blacklist(user_id):
         """拉黑/取消拉黑用户"""
@@ -150,6 +183,7 @@ def register(ctx):
 
         try:
             db.execute("UPDATE users SET is_blacklist = %s WHERE user_id = %s", (is_blacklist, user_id))
+            _invalidate_user_perms(user_id)
             action = 'blacklist_user' if is_blacklist else 'unblacklist_user'
             audit_log(admin['id'], admin['username'], action, 'user', str(user_id))
             return jsonify({'code': 0, 'msg': f'已{"拉黑" if is_blacklist else "取消拉黑"}'})

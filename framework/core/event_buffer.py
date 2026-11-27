@@ -82,13 +82,18 @@ class _FileL2Backend:
             logger.debug('L2 行数统计失败，按 0 处理: %s', _exc)
             return 0
 
-    def _file_size(self) -> int:
+    def _file_size(self) -> int | None:
+        """取文件大小；失败返回 None（不是 0）。
+
+        返回 0 会被消费端解释成「已读完」并 truncate(0)，把未消费的积压
+        全部抹掉（审计 D-10-2）。
+        """
         try:
             self._fh.flush()
             return os.path.getsize(self._path)
         except Exception as _exc:
-            logger.debug('事件缓冲文件大小获取失败，按 0 处理: %s', _exc)
-            return 0
+            logger.warning('事件缓冲文件大小获取失败，保留积压不截断: %s', _exc)
+            return None
 
     def _compact(self):
         """把未读部分（read_offset..EOF）重写进临时文件并原子替换，归还已读空洞"""
@@ -107,14 +112,24 @@ class _FileL2Backend:
             self._fh = open(self._path, 'a+', encoding='utf-8', newline='')
             self._read_offset = 0
         except Exception as e:
-            logger.warning(f"L2 文件缓冲压缩失败（忽略，继续顺序读）: {e}")
+            # 失败后 _fh 可能已关闭但没重开，守卫 `is None` 拦不住已关闭句柄，
+            # 后续所有 L2 读写静默失败（审计 D-10-1）。显式重开或置 None
+            # 让上层走 L3/L4 回落，而不是带着坏句柄继续服务。
+            logger.warning(f"L2 文件缓冲压缩失败，尝试重开句柄: {e}")
+            try:
+                if self._fh is not None and self._fh.closed:
+                    self._fh = open(self._path, 'a+', encoding='utf-8', newline='')
+                    self._read_offset = 0
+            except Exception as reopen_exc:
+                logger.warning(f"L2 句柄重开失败，禁用 L2: {reopen_exc}")
+                self._fh = None
 
     def write(self, event) -> bool:
         """线程内追加一条（独立文件句柄 + 锁，不阻塞主库）"""
         payload = _l2_serialize(event)
         try:
             with self._lock:
-                if self._fh is None:
+                if self._fh is None or self._fh.closed:
                     return False
                 self._fh.write(payload + '\n')
                 self._fh.flush()
@@ -133,7 +148,7 @@ class _FileL2Backend:
             for ev, _ in events:
                 lines.append(_l2_serialize(ev) + '\n')
             with self._lock:
-                if self._fh is None:
+                if self._fh is None or self._fh.closed:
                     return False
                 self._fh.write(''.join(lines))
                 self._fh.flush()
@@ -150,7 +165,7 @@ class _FileL2Backend:
         """
         try:
             with self._lock:
-                if self._fh is None:
+                if self._fh is None or self._fh.closed:
                     return []
                 self._fh.seek(self._read_offset)
                 items = []
@@ -176,12 +191,16 @@ class _FileL2Backend:
                     except Exception:
                         logger.warning("L2 文件缓冲中存在损坏行，已跳过")
                 self._read_offset = self._fh.tell()
-                if self._read_offset >= self._file_size():
+                size = self._file_size()
+                if size is None:
+                    # 大小查询失败：不能当成「已读完」而截断，保留积压（审计 D-10-2）
+                    pass
+                elif self._read_offset >= size:
                     # 已全部消化：截断复位，归还磁盘空间
                     self._fh.truncate(0)
                     self._fh.seek(0)
                     self._read_offset = 0
-                elif self._read_offset > self._file_size() / 2:
+                elif self._read_offset > size / 2:
                     self._compact()
                 self._rows = max(0, self._rows - len(items))
             return items
